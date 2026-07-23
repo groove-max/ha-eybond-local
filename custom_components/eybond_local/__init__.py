@@ -16,8 +16,13 @@ except ModuleNotFoundError:  # Local tooling imports the package without Home As
     cv = None
 
 try:
-    from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP
-except ModuleNotFoundError:  # Local tooling imports the package without Home Assistant installed.
+    from homeassistant.const import (
+        EVENT_COMPONENT_LOADED,
+        EVENT_HOMEASSISTANT_STARTED,
+        EVENT_HOMEASSISTANT_STOP,
+    )
+except (ImportError, ModuleNotFoundError):  # Local tooling imports without HA.
+    EVENT_COMPONENT_LOADED = "component_loaded"
     EVENT_HOMEASSISTANT_STARTED = "homeassistant_started"
     EVENT_HOMEASSISTANT_STOP = "homeassistant_stop"
 
@@ -74,6 +79,7 @@ logger = logging.getLogger(__name__)
 _SETUP_INITIAL_REFRESH_TIMEOUT = 20.0
 _STOP_SHUTDOWN_TIMEOUT = 15.0
 _EXPERT_ENTITY_MIGRATION_SETTLE_TIMEOUT = 1.0
+_COMPONENT_SETUP_COMPLETE_KEY = "component_setup_complete"
 _FLOAT_PRECISION_DEVICE_CLASSES = {
     "current",
     "frequency",
@@ -324,6 +330,27 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
     from .support.download import async_register_support_package_download_view
     from .passive_discovery import async_start_passive_callback_discovery
 
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    domain_data[_COMPONENT_SETUP_COMPLETE_KEY] = False
+
+    def _component_loaded(event) -> None:
+        if event.data.get("component") != DOMAIN:
+            return
+        if hass.loop.is_closed():
+            return
+        # The event is fired at the end of HA's integration setup. Updating on
+        # the next ready turn avoids mutating the listener list while it is
+        # being iterated and gives deferred entry reloads one stable boundary.
+        hass.loop.call_soon_threadsafe(_mark_component_setup_complete)
+
+    def _mark_component_setup_complete() -> None:
+        domain_data[_COMPONENT_SETUP_COMPLETE_KEY] = True
+        remove_component_listener()
+
+    remove_component_listener = hass.bus.async_listen(
+        EVENT_COMPONENT_LOADED, _component_loaded
+    )
+
     try:
         _configure_local_metadata_roots(hass)
         await hass.async_add_executor_job(
@@ -333,6 +360,7 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
         async_register_support_package_download_view(hass)
         await async_start_passive_callback_discovery(hass)
     except Exception:
+        remove_component_listener()
         logger.exception("Failed to initialize EyeBond Local integration bootstrap")
         raise
     return True

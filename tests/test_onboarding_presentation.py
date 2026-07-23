@@ -11,13 +11,16 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.connection.ui import EYBOND_CONNECTION_DISPLAY_METADATA
+from custom_components.eybond_local.connection.admission import ObservedCollectorSession
+from custom_components.eybond_local.connection.recovery.verification import (
+    CallbackRecoveryRoute,
+)
 from custom_components.eybond_local.models import (
     CollectorCandidate,
     CollectorInfo,
     DriverMatch,
     OnboardingResult,
     ProbeTarget,
-    TargetDetectionEvidence,
 )
 from custom_components.eybond_local.onboarding.presentation import (
     build_choose_placeholders,
@@ -83,9 +86,12 @@ class OnboardingPresentationTests(unittest.TestCase):
             )
         )
 
-    def test_status_code_and_label_follow_result_shape(self) -> None:
-        self.assertEqual(scan_result_status_code(self._matched_result()), "ready")
-        self.assertEqual(scan_result_status_code(self._matched_result(confidence="medium")), "review")
+    def test_status_code_and_label_follow_collector_first_addability(self) -> None:
+        self.assertEqual(scan_result_status_code(self._matched_result()), "found")
+        self.assertEqual(
+            scan_result_status_code(self._matched_result(confidence="medium")),
+            "found",
+        )
         ambiguous = OnboardingResult(
             collector=CollectorCandidate(
                 target_ip="192.168.1.55",
@@ -110,12 +116,15 @@ class OnboardingPresentationTests(unittest.TestCase):
                 ),
             ),
         )
-        self.assertEqual(scan_result_status_code(ambiguous), "driver_choice")
-        self.assertEqual(scan_result_status_label(ambiguous), "Driver choice")
+        self.assertEqual(scan_result_status_code(ambiguous), "found")
+        self.assertEqual(scan_result_status_label(ambiguous), "Found")
         self.assertTrue(has_smartess_collector_hint(self._smartess_hint_result()))
-        self.assertEqual(scan_result_status_code(self._smartess_hint_result()), "smartess_hint")
-        self.assertEqual(scan_result_status_code(self._collector_only_result()), "collector_only")
-        self.assertEqual(scan_result_status_code(self._collector_only_result(replied=True)), "collector_replied")
+        self.assertEqual(scan_result_status_code(self._smartess_hint_result()), "found")
+        self.assertEqual(scan_result_status_code(self._collector_only_result()), "found")
+        self.assertEqual(
+            scan_result_status_code(self._collector_only_result(replied=True)),
+            "address_found",
+        )
         identified_reply = OnboardingResult(
             collector=CollectorCandidate(
                 target_ip="192.168.1.56",
@@ -126,64 +135,63 @@ class OnboardingPresentationTests(unittest.TestCase):
                 collector=CollectorInfo(collector_pn="PN456"),
             )
         )
-        self.assertEqual(scan_result_status_code(identified_reply), "collector_only")
-        timed_out = OnboardingResult(
+        self.assertEqual(scan_result_status_code(identified_reply), "found")
+        passive = OnboardingResult(
             collector=CollectorCandidate(
-                target_ip="192.168.1.58",
-                source="deep_scan",
-                ip="192.168.1.58",
+                target_ip="192.168.1.50",
+                source="callback_listener",
+                ip="198.51.100.10",
                 connected=True,
+                collector=CollectorInfo(collector_pn="PN456"),
             ),
-            detection=TargetDetectionEvidence(
-                depth="deep",
-                status="target_timeout",
-                reason="deadline_exhausted",
-                budget_exhausted=True,
-            ),
-        )
-        self.assertEqual(scan_result_status_code(timed_out), "detection_timeout")
-        self.assertEqual(scan_result_status_label(timed_out), "Detection ran out of time")
-        timed_out_after_reply = OnboardingResult(
-            collector=CollectorCandidate(
-                target_ip="192.168.1.55",
-                source="subnet_unicast",
-                ip="192.168.1.55",
-                udp_reply="rsp>server=1;",
-            ),
-            detection=TargetDetectionEvidence(
-                depth="fast",
-                status="target_timeout",
-                reason="deadline_exhausted",
-                budget_exhausted=True,
+            observed_session=ObservedCollectorSession(
+                collector_pn="PN456",
+                identity_source="fc2_parameter_2",
+                session_id="listener-1",
+                listener_port=8899,
+                peer_hint="198.51.100.10",
             ),
         )
-        self.assertEqual(
-            scan_result_status_code(timed_out_after_reply), "collector_replied"
+        self.assertEqual(scan_result_status_code(passive), "address_required")
+        self.assertEqual(scan_result_status_label(passive), "Needs confirmation")
+        active = OnboardingResult(
+            collector=passive.collector,
+            observed_session=passive.observed_session,
+            callback_route=CallbackRecoveryRoute(
+                bind_ip="192.168.1.50",
+                trigger_target_ip="192.168.1.55",
+                trigger_udp_port=58899,
+                advertised_ha_host="192.168.1.50",
+                advertised_ha_port=8899,
+                listener_port=8899,
+            ),
         )
-        self.assertEqual(scan_result_status_label(self._smartess_hint_result()), "SmartESS hint")
-        self.assertEqual(scan_result_status_label(self._matched_result()), "Ready")
+        self.assertEqual(scan_result_status_code(active), "found")
+        self.assertEqual(scan_result_status_label(active), "Found")
+        self.assertEqual(scan_result_status_label(self._smartess_hint_result()), "Found")
+        self.assertEqual(scan_result_status_label(self._matched_result()), "Found")
         self.assertEqual(scan_result_status_label(self._matched_result(), already_added=True), "Already added")
 
-    def test_sort_key_prioritizes_ready_before_collector_only(self) -> None:
-        ready_key = scan_result_sort_key(self._matched_result())
-        collector_only_key = scan_result_sort_key(self._collector_only_result())
-        self.assertLess(ready_key, collector_only_key)
+    def test_sort_key_prioritizes_addable_before_address_only(self) -> None:
+        found_key = scan_result_sort_key(self._matched_result())
+        address_key = scan_result_sort_key(self._collector_only_result(replied=True))
+        self.assertLess(found_key, address_key)
 
     def test_result_label_and_placeholders_are_branch_aware(self) -> None:
         result = self._matched_result(confidence="medium")
         label = result_label(result, display=EYBOND_CONNECTION_DISPLAY_METADATA)
         placeholders = result_placeholders(result, display=EYBOND_CONNECTION_DISPLAY_METADATA)
 
-        self.assertIn("Review", label)
-        self.assertIn("SMG 6200", label)
+        self.assertIn("Found", label)
+        self.assertIn("PN PN123", label)
         self.assertIn("192.168.1.55", label)
         self.assertEqual(placeholders["collector_pn"], "PN123")
         self.assertEqual(placeholders["confidence"], "Medium confidence")
         self.assertEqual(placeholders["control_summary"], "The integration will start in **monitoring-only** mode.")
 
         smartess_label = result_label(self._smartess_hint_result(), display=EYBOND_CONNECTION_DISPLAY_METADATA)
-        self.assertIn("SmartESS hint", smartess_label)
-        self.assertIn("SmartESS metadata", smartess_label)
+        self.assertIn("Found", smartess_label)
+        self.assertIn("PN PN789", smartess_label)
 
     def test_scan_results_placeholders_cover_empty_and_ready_states(self) -> None:
         empty = build_scan_results_placeholders(
@@ -203,13 +211,13 @@ class OnboardingPresentationTests(unittest.TestCase):
             ready_model_names=["SMG 6200", "SMG 6200", "PowMr 4.2kW"],
         )
 
-        self.assertIn("No reachable collectors or inverters", empty["scan_summary"])
+        self.assertIn("No compatible devices", empty["scan_summary"])
         self.assertIn("2", ready["scan_summary"])
-        self.assertIn("SMG 6200, PowMr 4.2kW", ready["scan_summary"])
-        self.assertIn("Pick the inverter you want to add", ready["scan_next_hint"])
+        self.assertNotIn("SMG 6200", ready["scan_summary"])
+        self.assertIn("Choose a device or address", ready["scan_next_hint"])
 
-    def test_scan_results_placeholders_cover_pending_smartess_state(self) -> None:
-        pending = build_scan_results_placeholders(
+    def test_scan_results_placeholders_ignore_runtime_inverter_preview(self) -> None:
+        placeholders = build_scan_results_placeholders(
             display=EYBOND_CONNECTION_DISPLAY_METADATA,
             selected_scan_interface="eth0 - 192.168.1.50",
             detected_count=1,
@@ -218,8 +226,9 @@ class OnboardingPresentationTests(unittest.TestCase):
             ready_model_names=[],
         )
 
-        self.assertIn("local inverter matching is still pending", pending["scan_summary"])
-        self.assertIn("save the Pending Device now", pending["scan_next_hint"])
+        self.assertIn("Ready to set up", placeholders["scan_summary"])
+        self.assertNotIn("inverter", placeholders["scan_summary"].lower())
+        self.assertNotIn("pending", placeholders["scan_next_hint"].lower())
 
     def test_scan_result_line_includes_existing_entry_hint(self) -> None:
         line = build_scan_result_line(
@@ -236,8 +245,8 @@ class OnboardingPresentationTests(unittest.TestCase):
             self._smartess_hint_result(),
             display=EYBOND_CONNECTION_DISPLAY_METADATA,
         )
-        self.assertIn("SmartESS hint", smartess_line)
-        # The chip already says it: the details must not repeat it.
+        self.assertIn("Found", smartess_line)
+        # Scan presentation does not expose runtime-only SmartESS/driver hints.
         self.assertNotIn("SmartESS metadata", smartess_line)
         self.assertNotIn("connected", smartess_line)
 

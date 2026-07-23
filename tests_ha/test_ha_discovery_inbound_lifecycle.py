@@ -299,6 +299,13 @@ async def test_discovery_inbound_full_ha_lifecycle(
             # The discovery flow proved INBOUND -- the user's intent for a
             # passively-dialing collector -- and stored a real RecoveryContract.
             assert data["connection_strategy"] == "inbound"
+            # Admission creates one collector-first entry regardless of source.
+            # The scan-time heartbeat/probe never becomes inverter authority.
+            assert data["driver_hint"] == "auto"
+            assert data["detected_model"] == ""
+            assert data["detected_serial"] == ""
+            assert data["detection_confidence"] == "none"
+            assert data["control_mode"] == "read_only"
             contract = RecoveryContract.from_entry_data(data)
             assert contract is not None and contract.inbound_verified
             # Inbound entries persist no unverified peer address as identity.

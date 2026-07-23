@@ -17,7 +17,8 @@ from types import SimpleNamespace
 from typing import Any
 
 from homeassistant.components import persistent_notification
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.const import EVENT_COMPONENT_LOADED
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -42,6 +43,7 @@ from ..collector.cloud_family import (
     default_collector_cloud_host,
 )
 from ..collector.capabilities import (
+    COLLECTOR_KIND_UNKNOWN,
     CollectorCapabilityProfile,
     collector_capability_profile_from_runtime,
     collector_profile_entry_fields,
@@ -53,6 +55,7 @@ from ..collector.transport_profile import (
     normalize_collector_session_protocol,
     resolve_collector_transport_profile,
 )
+from ..connection.confirmed_session_protocol import ConfirmedSessionProtocolEvidence
 from ..metadata.collector_cloud_profile_catalog_loader import (
     resolve_collector_cloud_provider,
 )
@@ -81,12 +84,14 @@ from ..const import (
     CONF_ENDPOINT_WRITTEN_AT,
     CONF_ENDPOINT_WRITTEN_VALUE,
     CONF_STRATEGY_TRANSITION_STATE,
+    CONF_DETECTED_DRIVER,
     CONF_DETECTED_MODEL,
     CONF_DETECTED_SERIAL,
     CONF_DETECTION_CONFIDENCE,
     CONF_DISCOVERY_INTERVAL,
     CONF_DISCOVERY_TARGET,
     CONF_DRIVER_HINT,
+    CONF_DRIVER_DETECTION_STRATEGY,
     CONF_HEARTBEAT_INTERVAL,
     CONF_POLL_INTERVAL,
     CONF_POLL_MODE,
@@ -121,6 +126,8 @@ from ..const import (
     ENDPOINT_CONTROL_INTEGRATION_MANAGED,
     DOMAIN,
     DRIVER_HINT_AUTO,
+    DEFAULT_DRIVER_DETECTION_STRATEGY,
+    DRIVER_DETECTION_STRATEGIES,
     LOCAL_METADATA_DIR,
     MAX_PROXY_CAPTURE_DURATION_MINUTES,
     MIN_PROXY_CAPTURE_DURATION_MINUTES,
@@ -253,6 +260,8 @@ from ..support.workflow import build_support_workflow_state
 
 logger = logging.getLogger(__name__)
 
+_COMPONENT_SETUP_COMPLETE_KEY = "component_setup_complete"
+
 _PENDING_COLLECTOR_OPERATION_SYNC_STATUSES: frozenset[str] = frozenset(
     {"applied", "waiting_for_collector", "cooldown"}
 )
@@ -363,6 +372,16 @@ _LOCALIZED_RUNTIME_TEXT: dict[str, dict[str, str]] = {
         "en": "The device polling cycle is using about {utilization_percent}% of the configured {poll_interval}s interval. If updates are delayed, increase the manual polling interval or switch Sensor refresh mode to Automatic. Recommended minimum for this device is about {recommended_interval}s.",
         "ru": "Цикл опроса устройства использует около {utilization_percent}% настроенного интервала {poll_interval}s. Если обновления задерживаются, увеличьте ручной интервал опроса или переключите режим обновления сенсоров на автоматический. Рекомендуемый минимум для этого устройства — около {recommended_interval}s.",
         "uk": "Цикл опитування пристрою використовує близько {utilization_percent}% налаштованого інтервалу {poll_interval}s. Якщо оновлення затримуються, збільште ручний інтервал опитування або перемкніть режим оновлення сенсорів на автоматичний. Рекомендований мінімум для цього пристрою — близько {recommended_interval}s.",
+    },
+    "inverter_protocol_ambiguous_title": {
+        "en": "EyeBond Local needs an inverter protocol choice",
+        "ru": "EyeBond Local: нужно выбрать протокол инвертора",
+        "uk": "EyeBond Local: потрібно вибрати протокол інвертора",
+    },
+    "inverter_protocol_ambiguous_body": {
+        "en": "The collector is connected, but the inverter answered using {count} supported protocols. Open this EyeBond Local entry's settings and choose **Inverter protocol**. Inverter entities will be created after the selected protocol is confirmed on the active connection.",
+        "ru": "Коллектор подключён, но инвертор ответил по {count} поддерживаемым протоколам. Откройте настройки этой записи EyeBond Local и выберите **Протокол инвертора**. Сущности инвертора появятся после проверки выбранного протокола через активное подключение.",
+        "uk": "Колектор підключено, але інвертор відповів через {count} підтримувані протоколи. Відкрийте налаштування цього запису EyeBond Local і виберіть **Протокол інвертора**. Сутності інвертора з’являться після перевірки вибраного протоколу через активне підключення.",
     },
 }
 
@@ -849,9 +868,35 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self.config_entry = entry
         connection_spec = build_connection_spec(entry.data, entry.options)
         self._connection_spec = connection_spec
+        driver_intent = str(
+            entry.options.get(
+                CONF_DRIVER_HINT,
+                entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
+            )
+            or DRIVER_HINT_AUTO
+        ).strip()
+        detected_driver = str(entry.data.get(CONF_DETECTED_DRIVER) or "").strip()
+        runtime_driver_key = (
+            driver_intent
+            if driver_intent != DRIVER_HINT_AUTO
+            else detected_driver or DRIVER_HINT_AUTO
+        )
+        driver_detection_strategy = entry.options.get(
+            CONF_DRIVER_DETECTION_STRATEGY,
+            entry.data.get(
+                CONF_DRIVER_DETECTION_STRATEGY,
+                DEFAULT_DRIVER_DETECTION_STRATEGY,
+            ),
+        )
+        if (
+            type(driver_detection_strategy) is not str
+            or driver_detection_strategy not in DRIVER_DETECTION_STRATEGIES
+        ):
+            driver_detection_strategy = DEFAULT_DRIVER_DETECTION_STRATEGY
         self._runtime: RuntimeManager = create_runtime_manager(
             connection_spec,
-            driver_hint=entry.options.get(CONF_DRIVER_HINT, entry.data.get(CONF_DRIVER_HINT, "auto")),
+            driver_hint=runtime_driver_key,
+            driver_detection_strategy=driver_detection_strategy,
             connection_mode=entry.data.get(CONF_CONNECTION_MODE, ""),
         )
         # The runtime inverter is built from built-in detection and never carries the
@@ -1002,6 +1047,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._collector_operation_pending_target_endpoint = ""
         self._entity_platforms_initialized = False
         self._entity_platform_reload_requested = False
+        self._entity_platform_reload_dispatched = False
+        self._entry_loaded_reload_unsub = None
+        self._component_loaded_reload_unsub = None
         self._entity_platforms_loaded_with_inverter_identity = False
         self._entity_platforms_loaded_with_driver_fallback = False
         self._platform_loaded_effective_metadata_signature: tuple[str, str, str] = (
@@ -1032,11 +1080,11 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         self._collector_poll_high_utilization_streak = 0
         self._poll_normal_utilization_streak = 0
         self._poll_notification_active = False
+        self._inverter_protocol_notification_active = False
         self._poll_last_notification_monotonic = 0.0
         self._poll_non_runtime_retry_interval_seconds = 0
         self._poll_scheduler_driver_key = str(
-            entry.options.get(CONF_DRIVER_HINT, entry.data.get(CONF_DRIVER_HINT, "auto"))
-            or "auto"
+            runtime_driver_key or DRIVER_HINT_AUTO
         )
         self._poll_scheduler = PollScheduler(
             policy=poll_policy_for_driver_key(self._poll_scheduler_driver_key),
@@ -1264,6 +1312,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             )
             or ""
         ).strip()
+        if not driver_key or driver_key == DRIVER_HINT_AUTO:
+            driver_key = str(
+                self.config_entry.data.get(CONF_DETECTED_DRIVER) or ""
+            ).strip()
         if not getattr(snapshot, "is_valid", False) and (
             not driver_key or driver_key == DRIVER_HINT_AUTO
         ):
@@ -1651,6 +1703,18 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             if self._shutdown_complete:
                 return
             self._shutdown_complete = True
+            if self._entry_loaded_reload_unsub is not None:
+                self._entry_loaded_reload_unsub()
+                self._entry_loaded_reload_unsub = None
+            if self._component_loaded_reload_unsub is not None:
+                self._component_loaded_reload_unsub()
+                self._component_loaded_reload_unsub = None
+            if getattr(self, "_inverter_protocol_notification_active", False):
+                self._inverter_protocol_notification_active = False
+                persistent_notification.async_dismiss(
+                    self.hass,
+                    f"{DOMAIN}_inverter_protocol_ambiguous_{self.config_entry.entry_id}",
+                )
             await self._async_cancel_diagnostic_run()
             await self._support_package_flight.cancel()
             self._cancel_proxy_capture_deadline_refresh()
@@ -1997,17 +2061,15 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return changed
 
     async def _async_reconcile_collector_session_profile(self, *, reason: str) -> bool:
-        """Align the runtime link with the best known collector cloud profile.
+        """Align dialect metadata with an independently confirmed live wire.
 
-        BOOTSTRAP-ONLY. Cloud-family / persisted / options-data are transport
-        hints used only until the link has confirmed a live wire binding. Once a
-        live wire is confirmed, the live session is the sole transport authority:
+        Cloud family never chooses the wire. Once a live or persisted PN-bound
+        observation establishes the protocol, provider metadata may refine that
+        confirmed protocol's forwarding dialect. The live session remains the
+        sole transport authority:
         a real framed<->at_text change is applied in place by the link's
         SessionHandle wire negotiation (no destructive rebuild), and this per-
-        poll cloud-profile computation must never tear transports down. This is
-        the removal of the steady-state competing authority: without this gate,
-        a momentary reconnect gap let the cloud-family bootstrap flip the profile
-        and rebuild the transport (the framed->at_text->framed flap).
+        poll profile computation must never tear transports down.
         """
 
         has_confirmed_binding = getattr(
@@ -2143,6 +2205,72 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 "/".join(setup_signature),
                 "/".join(runtime_signature),
             )
+        self._dispatch_entry_reload_when_loaded()
+
+    def _dispatch_entry_reload_when_loaded(self) -> None:
+        """Dispatch one requested reload only after the current setup is complete."""
+
+        if getattr(self, "_entity_platform_reload_dispatched", False) or getattr(
+            self, "_shutdown_complete", False
+        ):
+            return
+        domain_data = getattr(self.hass, "data", {}).get(DOMAIN, {})
+        if domain_data.get(_COMPONENT_SETUP_COMPLETE_KEY, True) is not True:
+            if getattr(self, "_component_loaded_reload_unsub", None) is None:
+
+                def _component_loaded(event) -> None:
+                    if event.data.get("component") != DOMAIN:
+                        return
+                    if self.hass.loop.is_closed():
+                        return
+                    self.hass.loop.call_soon_threadsafe(
+                        self._dispatch_entry_reload_when_loaded
+                    )
+
+                self._component_loaded_reload_unsub = self.hass.bus.async_listen(
+                    EVENT_COMPONENT_LOADED, _component_loaded
+                )
+            return
+        if getattr(self, "_component_loaded_reload_unsub", None) is not None:
+            self._component_loaded_reload_unsub()
+            self._component_loaded_reload_unsub = None
+        entry_state = getattr(self.config_entry, "state", None)
+        on_state_change = getattr(self.config_entry, "async_on_state_change", None)
+        if entry_state is None or entry_state is ConfigEntryState.LOADED:
+            self._entity_platform_reload_dispatched = True
+            self.hass.async_create_task(
+                self.hass.config_entries.async_reload(self.config_entry.entry_id)
+            )
+            return
+        if not callable(on_state_change):
+            return
+        if getattr(self, "_entry_loaded_reload_unsub", None) is not None:
+            return
+
+        def _entry_state_changed() -> None:
+            if (
+                getattr(self, "_shutdown_complete", False)
+                or getattr(self, "_entity_platform_reload_dispatched", False)
+                or self.config_entry.state is not ConfigEntryState.LOADED
+            ):
+                return
+            self._entity_platform_reload_dispatched = True
+            # A zero-delay timer runs in the next event-loop iteration, after
+            # the ready queue has finished unwinding both ConfigEntry setup and
+            # (on first load) the enclosing integration-component setup. Using
+            # call_soon or eager task creation can race their success return.
+            self.hass.loop.call_later(0, self._start_deferred_entry_reload)
+
+        self._entry_loaded_reload_unsub = on_state_change(_entry_state_changed)
+
+    def _start_deferred_entry_reload(self) -> None:
+        """Start a state-gated reload after the current HA setup lifecycle."""
+
+        if (
+            getattr(self, "_shutdown_complete", False)
+            or self.config_entry.state is not ConfigEntryState.LOADED
+        ):
+            return
         self.hass.async_create_task(
             self.hass.config_entries.async_reload(self.config_entry.entry_id)
         )
@@ -2159,9 +2287,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "Reloading EyeBond entry %s after late runtime inverter confirmation",
             self.config_entry.entry_id,
         )
-        self.hass.async_create_task(
-            self.hass.config_entries.async_reload(self.config_entry.entry_id)
-        )
+        self._dispatch_entry_reload_when_loaded()
 
     def _request_entry_reload_for_collector_capability_change(self) -> None:
         """Reload once when collector kind changes after entity platforms loaded."""
@@ -2175,9 +2301,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "Reloading EyeBond entry %s after collector capability profile changed",
             self.config_entry.entry_id,
         )
-        self.hass.async_create_task(
-            self.hass.config_entries.async_reload(self.config_entry.entry_id)
-        )
+        self._dispatch_entry_reload_when_loaded()
 
     def _cancel_proxy_capture_deadline_refresh(self) -> None:
         """Cancel one scheduled deadline-triggered refresh if it exists."""
@@ -2347,21 +2471,20 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         """
 
         capabilities = self.collector_capabilities
-        if not capabilities.ha_only_required:
+        if capabilities.collector_kind == COLLECTOR_KIND_UNKNOWN:
             return
 
         data = dict(self.config_entry.data)
         options = dict(self.config_entry.options)
         changed = False
+        hardware_version = str(
+            self.data.values.get("collector_hardware_version") or ""
+        ).strip()
+        profile_fields = collector_profile_entry_fields(
+            capabilities,
+            hardware_version=hardware_version,
+        )
         if capabilities.virtual_bridge:
-            hardware_version = str(
-                self.data.values.get("collector_hardware_version")
-                or ""
-            ).strip()
-            profile_fields = collector_profile_entry_fields(
-                capabilities,
-                hardware_version=hardware_version,
-            )
             bridge_version = str(
                 getattr(self.data.collector, "collector_bridge_version", "")
                 or self.data.values.get("collector_bridge_version")
@@ -2370,13 +2493,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             ).strip()
             if bridge_version:
                 profile_fields["collector_bridge_version"] = bridge_version
-            for key, value in profile_fields.items():
-                if data.get(key) != value:
-                    data[key] = value
-                    changed = True
-                if options.get(key) != value:
-                    options[key] = value
-                    changed = True
+        for key, value in profile_fields.items():
+            if data.get(key) != value:
+                data[key] = value
+                changed = True
+            if options.get(key) != value:
+                options[key] = value
+                changed = True
         if changed:
             self._async_update_entry_without_reload(data=data, options=options)
             if capabilities.virtual_bridge:
@@ -2939,10 +3062,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             if updated_options.get(CONF_CONTROL_MODE) == CONTROL_MODE_READ_ONLY:
                 updated_options[CONF_CONTROL_MODE] = DEFAULT_CONTROL_MODE
             if driver_key:
-                if str(updated_data.get(CONF_DRIVER_HINT) or "").strip() in {"", DRIVER_HINT_AUTO}:
-                    updated_data[CONF_DRIVER_HINT] = driver_key
-                if str(updated_options.get(CONF_DRIVER_HINT) or "").strip() in {"", DRIVER_HINT_AUTO}:
-                    updated_options[CONF_DRIVER_HINT] = driver_key
+                # ``driver_hint`` is user intent (auto or an explicit choice).
+                # Runtime detection is a separate fact and must never silently
+                # turn automatic mode into a forced protocol selection.
+                updated_data[CONF_DETECTED_DRIVER] = driver_key
 
         current_effective_snapshot = effective_metadata_snapshot_from_dict(
             current_options.get(_EFFECTIVE_METADATA_SNAPSHOT_OPTION_KEY)
@@ -3908,8 +4031,37 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         from .. import _async_self_heal_sensor_display_precision
 
         await _async_self_heal_sensor_display_precision(self.hass, self.config_entry)
+        self._sync_inverter_protocol_ambiguity_notification()
         self.async_sync_device_registry(snapshot)
         return snapshot
+
+    def _sync_inverter_protocol_ambiguity_notification(self) -> None:
+        """Tell the user when runtime deliberately remains collector-only."""
+
+        notification_id = (
+            f"{DOMAIN}_inverter_protocol_ambiguous_{self.config_entry.entry_id}"
+        )
+        candidates = self.inverter_protocol_candidates
+        if len(candidates) > 1:
+            self._inverter_protocol_notification_active = True
+            persistent_notification.async_create(
+                self.hass,
+                _localized_runtime_text(
+                    self.hass,
+                    "inverter_protocol_ambiguous_body",
+                    count=len(candidates),
+                ),
+                title=_localized_runtime_text(
+                    self.hass,
+                    "inverter_protocol_ambiguous_title",
+                ),
+                notification_id=notification_id,
+            )
+            return
+        if not getattr(self, "_inverter_protocol_notification_active", False):
+            return
+        self._inverter_protocol_notification_active = False
+        persistent_notification.async_dismiss(self.hass, notification_id)
 
     async def _async_prepare_runtime_snapshot_profile(
         self,
@@ -5733,25 +5885,25 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
     @property
     def collector_session_protocol(self) -> str:
-        """Return the callback session protocol implied by the cloud profile."""
+        """Return the callback protocol selected by confirmed wire evidence."""
 
         return self.collector_transport_profile.session_protocol
 
     @property
     def collector_identity_strategy(self) -> str:
-        """Return the collector identity strategy implied by the cloud profile."""
+        """Return the identity strategy for the confirmed callback wire."""
 
         return self.collector_transport_profile.identity_strategy
 
     @property
     def collector_raw_passthrough_bootstrap(self) -> str:
-        """Return the raw inverter payload bootstrap mode implied by the cloud profile."""
+        """Return forwarding setup for an already-confirmed AT wire."""
 
         return self.collector_transport_profile.raw_passthrough_bootstrap
 
     @property
     def collector_raw_passthrough_frame_format(self) -> str:
-        """Return the raw inverter payload frame format implied by the cloud profile."""
+        """Return forwarding framing for an already-confirmed AT wire."""
 
         return self.collector_transport_profile.raw_passthrough_frame_format
 
@@ -5770,9 +5922,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             runtime_owner_key=self._collector_runtime_owner_key(),
             virtual_bridge=self._collector_is_virtual_bridge(),
         )
-        # A live-observed session protocol is stronger than the cloud-family
-        # bootstrap hint; the protocol -> transport-profile map is owned by the
-        # transport-profile authority, not the coordinator.
+        # Only a live/PN-bound protocol can turn the neutral profile into a wire
+        # profile. The protocol map is owned by the transport-profile authority.
         return apply_observed_collector_session_protocol(
             resolved, self._observed_collector_session_protocol()
         )
@@ -5780,9 +5931,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def _observed_collector_session_protocol(self) -> str:
         """Return a positive callback-session protocol observed from this entry.
 
-        Live callback inventory is stronger than cloud-family/profile fallback:
-        the same ESP bridge can transport either framed FC traffic or raw
-        AT/ASCII passthrough depending on the inverter behind it.
+        The same ESP bridge can transport either framed FC traffic or raw
+        AT/ASCII passthrough, so only live or persisted PN-bound evidence counts.
         """
 
         runtime = getattr(self, "_runtime", None)
@@ -5806,19 +5956,20 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
         values = getattr(self.data, "values", {})
         if isinstance(values, Mapping):
-            for key in (
-                "collector_runtime_link_session_protocol",
-                "collector_session_protocol",
-            ):
-                protocol = normalize_collector_session_protocol(values.get(key))
-                if protocol:
-                    return protocol
-        for source in (self.config_entry.options, self.config_entry.data):
+            # Runtime-owned live observation only. Generic configured protocol
+            # values are intentionally not trusted here.
             protocol = normalize_collector_session_protocol(
-                source.get("collector_session_protocol")
+                values.get("collector_runtime_link_session_protocol")
             )
             if protocol:
                 return protocol
+        evidence = ConfirmedSessionProtocolEvidence.from_entry(
+            self.config_entry.data,
+            self.config_entry.options,
+            entry_pn=self.config_entry.data.get(CONF_COLLECTOR_PN),
+        )
+        if evidence is not None:
+            return evidence.protocol
         return ""
 
     @staticmethod
@@ -5827,8 +5978,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     ) -> str:
         """Return observed protocol from live listener inventory diagnostics.
 
-        ``collector_callback_session_protocol`` is the link manager's configured
-        protocol, not a byte-shape observation.  The actual observation lives in
+        ``collector_configured_session_protocol`` is the link manager's configured
+        protocol, not a byte-shape observation. The actual observation lives in
         ``collector_callback_session_inventory``.  Prefer it so a newly-added
         inbound collector can switch from a stale/persisted profile to the
         protocol proven by the current TCP session before runtime claims it.
@@ -5852,7 +6003,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return ""
 
     def _collector_runtime_owner_key(self) -> str:
-        """Return the best known local inverter runtime owner for transport choice."""
+        """Return the best known inverter owner for profile diagnostics."""
 
         for source in (self.config_entry.options, self.config_entry.data):
             driver_hint = str(
@@ -6898,6 +7049,13 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         except KeyError:
             pass
         return None
+
+    @property
+    def inverter_protocol_candidates(self):
+        """Return protocols observed by runtime on this entry's owned session."""
+
+        candidates = getattr(self._runtime, "inverter_protocol_candidates", ())
+        return candidates if isinstance(candidates, tuple) else ()
 
     @property
     def identified_inverter(self):
@@ -8978,7 +9136,12 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                         getattr(connection, "collector_cloud_family", "") or ""
                     ),
                     "collector_connection_session_protocol": str(
-                        getattr(connection, "collector_session_protocol", "") or ""
+                        getattr(
+                            connection,
+                            "collector_configured_session_protocol",
+                            "",
+                        )
+                        or ""
                     ),
                     "collector_connection_identity_strategy": str(
                         getattr(connection, "collector_identity_strategy", "") or ""
@@ -8994,7 +9157,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 values["collector_runtime_link_diagnostics_error"] = type(exc).__name__
             else:
                 values["collector_runtime_link_session_protocol"] = str(
-                    diagnostics.get("collector_callback_session_protocol") or ""
+                    diagnostics.get("collector_configured_session_protocol") or ""
                 )
                 values["collector_runtime_link_identity_strategy"] = str(
                     diagnostics.get("collector_callback_identity_strategy") or ""

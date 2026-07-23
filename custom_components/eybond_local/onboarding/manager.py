@@ -35,6 +35,7 @@ class OnboardingManager(Protocol):
         attempts: int = 3,
         attempt_delay: float = 0.75,
         enrich_runtime_details: bool = True,
+        identify_collector_only: bool = False,
         total_timeout: float | None = None,
     ) -> tuple[OnboardingResult, ...]:
         ...
@@ -68,6 +69,7 @@ class OnboardingManager(Protocol):
         attempts: int = 3,
         attempt_delay: float = 0.75,
         enrich_runtime_details: bool = True,
+        identify_collector_only: bool = False,
         total_timeout: float | None = None,
     ) -> tuple[OnboardingResult, ...]:
         ...

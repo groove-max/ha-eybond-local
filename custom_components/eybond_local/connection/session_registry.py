@@ -1175,7 +1175,11 @@ class CallbackSessionRegistry:
                 1 if session.has_strong_identity else 0,
                 len(session.collector_pn),
             )
-            if best_rank is None or rank > best_rank:
+            # Inventory is acceptance-ordered.  A same-quality replacement
+            # socket must win over an older socket whose EOF/closed callback is
+            # still in flight; otherwise runtime keeps targeting the stale
+            # session id while every fresh callback remains visibly unbound.
+            if best_rank is None or rank >= best_rank:
                 best_rank = rank
                 best_handle = handle
         return best_handle
@@ -1250,7 +1254,10 @@ class CallbackSessionRegistry:
                 1 if session.has_strong_identity else 0,
                 len(session.collector_pn),
             )
-            if best_rank is None or rank > best_rank:
+            # Same tie rule as current_session_for_pn/session_handle_for_pn:
+            # later acceptance wins when identity, state and strength are
+            # otherwise equal.  Peer IP is deliberately not part of ranking.
+            if best_rank is None or rank >= best_rank:
                 best_rank = rank
                 best = session
         return best

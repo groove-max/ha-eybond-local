@@ -90,7 +90,7 @@ _FORBIDDEN_ROUTE_TOKENS = (
     "peer_ip",
     "collector_ip",
     "driver_key",
-    "_expected_collector_session_protocol",
+    "_configured_collector_session_protocol",
 )
 
 

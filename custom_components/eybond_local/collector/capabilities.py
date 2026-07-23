@@ -193,7 +193,11 @@ def collector_capability_profile_from_runtime(
     )
     is_known_factory = bool(
         persisted_kind == COLLECTOR_KIND_FACTORY_EYBOND
-        or (persisted_kind == "" and has_inverter_identity and not is_bridge)
+        or (
+            persisted_kind in {"", COLLECTOR_KIND_UNKNOWN}
+            and has_inverter_identity
+            and not is_bridge
+        )
     )
     if not is_bridge and not is_known_factory:
         return collector_capability_profile(collector_kind=COLLECTOR_KIND_UNKNOWN)
@@ -217,9 +221,14 @@ def collector_profile_entry_fields(
     compatibility evidence for existing code and support packages.
     """
 
-    fields: dict[str, object] = {
-        COLLECTOR_KIND_ENTRY_KEY: profile.collector_kind,
-    }
+    # ``unknown`` means that classification has not happened yet; persisting it
+    # would turn an absence of evidence into a sticky negative fact and block
+    # runtime promotion after the inverter is identified. Only positive kinds
+    # cross the config-entry boundary.
+    if profile.collector_kind == COLLECTOR_KIND_UNKNOWN:
+        return {}
+
+    fields: dict[str, object] = {COLLECTOR_KIND_ENTRY_KEY: profile.collector_kind}
     hardware = str(hardware_version or "").strip()
     if hardware:
         fields[COLLECTOR_HARDWARE_VERSION_ENTRY_KEY] = hardware

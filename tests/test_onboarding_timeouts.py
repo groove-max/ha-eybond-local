@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import inspect
 import sys
 import unittest
 
@@ -37,33 +38,30 @@ class OnboardingTimeoutPolicyTests(unittest.TestCase):
         self.assertGreaterEqual(policy.driver_detection_attempts, 1)
         self.assertGreaterEqual(policy.driver_retry_delay, 0)
 
-    def test_default_policy_derives_slash24_deep_scan_budget_from_estimate_and_buffer(self) -> None:
+    def test_default_policy_derives_slash24_budget_from_collector_batches(self) -> None:
         policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY
 
         self.assertAlmostEqual(
             deep_scan_timeout_seconds(253),
             estimate_deep_scan_seconds(253) + policy.deep_scan_timeout_buffer,
         )
-        self.assertGreaterEqual(
-            deep_scan_timeout_seconds(253),
-            auto_scan_timeout_seconds() + 60.0,
+        batches = (253 + policy.deep_scan_concurrency - 1) // policy.deep_scan_concurrency
+        self.assertAlmostEqual(
+            estimate_deep_scan_seconds(253),
+            auto_scan_timeout_seconds()
+            + batches * policy.deep_scan_batch_timeout
+            + policy.deep_scan_identity_settle_seconds,
         )
 
-    def test_deep_scan_budget_derives_from_registered_driver_sweep(self) -> None:
-        policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY
+    def test_deep_scan_budget_has_no_driver_sweep_input(self) -> None:
         sweep = default_deep_driver_sweep_seconds()
 
-        # The registry currently carries 7 drivers with real probe budgets;
-        # the derived sweep must cover them all, not a hand-picked constant.
+        # Driver budgets still exist for the optional non-config-flow detector,
+        # but cannot enter collector-only full-network search calculations.
         self.assertGreaterEqual(sweep, 60.0)
-        self.assertGreaterEqual(
-            estimate_deep_scan_seconds(253),
-            estimate_deep_scan_seconds(253, driver_sweep_seconds=0.0),
-        )
-        self.assertAlmostEqual(
-            estimate_deep_scan_seconds(253, driver_sweep_seconds=sweep + 100.0)
-            - estimate_deep_scan_seconds(253, driver_sweep_seconds=0.0),
-            sweep + 100.0 - policy.deep_scan_followup_estimated_seconds,
+        self.assertNotIn(
+            "driver_sweep_seconds",
+            inspect.signature(estimate_deep_scan_seconds).parameters,
         )
 
 

@@ -537,7 +537,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             discovery_target="192.168.1.255",
             discovery_interval=3,
             heartbeat_interval=60,
-            collector_expected_session_protocol="at_text",
+            collector_configured_session_protocol="at_text",
             collector_identity_strategy="at_dtupn",
         )
 

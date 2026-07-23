@@ -107,12 +107,11 @@ class SupportPackageTests(unittest.TestCase):
                 "collector_heartbeat_devcode": "0x0000",
                 "collector_last_frame_devcode": "0x0994",
                 "inverter_route_devcode": "0x0994",
-                "collector_expected_session_protocol": "at_text",
+                "collector_configured_session_protocol": "at_text",
                 "collector_confirmed_session_protocol": "eybond_framed",
                 "collector_live_session_protocol": "eybond_framed",
                 "collector_current_live_session": "active",
                 "collector_confirmed_wire_binding": "eybond_framed",
-                "collector_callback_session_protocol": "at_text",
                 "collector_callback_wire_framing": "eybond_framed",
                 "collector_callback_identity_sources": "framed_heartbeat",
                 "collector_callback_inverter_forward_adapter": "framed_forward",
@@ -149,7 +148,7 @@ class SupportPackageTests(unittest.TestCase):
             "eybond_framed",
         )
         self.assertEqual(
-            diag["session"]["collector_expected_session_protocol"],
+            diag["session"]["collector_configured_session_protocol"],
             "at_text",
         )
         self.assertNotIn("collector_callback_session_protocol", diag["session"])

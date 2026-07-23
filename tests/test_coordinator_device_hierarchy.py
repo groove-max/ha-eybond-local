@@ -48,6 +48,7 @@ def _install_coordinator_stubs() -> None:
         "homeassistant.components.persistent_notification"
     )
     config_entries = _ensure_module("homeassistant.config_entries")
+    ha_const = _ensure_module("homeassistant.const")
     helpers = _ensure_module("homeassistant.helpers")
     device_registry = _ensure_module("homeassistant.helpers.device_registry")
     network = _ensure_module("homeassistant.helpers.network")
@@ -58,6 +59,10 @@ def _install_coordinator_stubs() -> None:
 
     class ConfigEntry:
         pass
+
+    class ConfigEntryState:
+        LOADED = "loaded"
+        SETUP_IN_PROGRESS = "setup_in_progress"
 
     class DeviceInfo(dict):
         def __init__(self, **kwargs):
@@ -71,6 +76,8 @@ def _install_coordinator_stubs() -> None:
             self.hass = args[0] if args else kwargs.get("hass")
 
     config_entries.ConfigEntry = ConfigEntry
+    config_entries.ConfigEntryState = ConfigEntryState
+    ha_const.EVENT_COMPONENT_LOADED = "component_loaded"
     device_registry.DeviceInfo = DeviceInfo
     device_registry.async_get = lambda hass: None
     update_coordinator.DataUpdateCoordinator = DataUpdateCoordinator
@@ -88,6 +95,7 @@ def _install_coordinator_stubs() -> None:
     eybond_local.runtime = runtime_package
     homeassistant.components = components
     homeassistant.config_entries = config_entries
+    homeassistant.const = ha_const
     homeassistant.helpers = helpers
     homeassistant.util = util
     components.persistent_notification = persistent_notification
@@ -124,11 +132,15 @@ def _install_coordinator_stubs() -> None:
     const.ENTRY_ROLE_PENDING_COLLECTOR = "pending_collector"
     const.CONF_CONTROL_MODE = "control_mode"
     const.CONF_DETECTED_MODEL = "detected_model"
+    const.CONF_DETECTED_DRIVER = "detected_driver"
     const.CONF_DETECTED_SERIAL = "detected_serial"
     const.CONF_DETECTION_CONFIDENCE = "detection_confidence"
     const.CONF_DISCOVERY_INTERVAL = "discovery_interval"
     const.CONF_DISCOVERY_TARGET = "discovery_target"
     const.CONF_DRIVER_HINT = "driver_hint"
+    const.CONF_DRIVER_DETECTION_STRATEGY = "driver_detection_strategy"
+    const.DEFAULT_DRIVER_DETECTION_STRATEGY = "first_match"
+    const.DRIVER_DETECTION_STRATEGIES = frozenset({"first_match", "full_scan"})
     const.CONF_HEARTBEAT_INTERVAL = "heartbeat_interval"
     const.CONF_POLL_INTERVAL = "poll_interval"
     const.CONF_POLL_MODE = "poll_mode"
@@ -3458,6 +3470,48 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_runtime_identity_promotes_unknown_collector_to_factory(self) -> None:
+        updates: list[dict[str, object]] = []
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "collector_kind": "unknown",
+                "connection_strategy": "callback_on_demand",
+                "collector_operation_mode": "home_assistant_only",
+            },
+            options={"collector_kind": "unknown"},
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            values={
+                "model_name": "SMG 6200",
+                "serial_number": "SMGSYN240001",
+            },
+            collector=None,
+        )
+        coordinator._async_update_entry_without_reload = lambda **kwargs: updates.append(kwargs)
+
+        self.assertTrue(coordinator.collector_capabilities.proxy_capture)
+        self.assertTrue(coordinator.collector_capabilities.shadow_learning)
+        self.assertEqual(
+            coordinator.collector_operation_mode,
+            "smartess_cloud_home_assistant",
+        )
+
+        coordinator._sync_collector_capability_profile()
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0]["data"]["collector_kind"], "factory_eybond")
+        self.assertEqual(updates[0]["options"]["collector_kind"], "factory_eybond")
+        # Capability enrichment never rewrites either architecture axis.
+        self.assertEqual(
+            updates[0]["data"]["connection_strategy"], "callback_on_demand"
+        )
+        self.assertEqual(
+            updates[0]["data"]["collector_operation_mode"],
+            "home_assistant_only",
+        )
+
     def test_runtime_bridge_syncs_profile_without_persisting_operation_mode(self) -> None:
         updates: list[dict[str, object]] = []
 
@@ -4122,6 +4176,8 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             inverter=types.SimpleNamespace(
                 model_name="PowMr 4.2kW",
                 serial_number="55355535553555",
+                driver_key="pi30",
+                variant_key="default",
             ),
             collector=types.SimpleNamespace(
                 collector_pn="Q0000000000001",
@@ -4149,6 +4205,8 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator.config_entry.data["detected_serial"],
             "55355535553555",
         )
+        self.assertEqual(coordinator.config_entry.data["detected_driver"], "pi30")
+        self.assertNotIn("driver_hint", coordinator.config_entry.data)
         self.assertEqual(
             coordinator.config_entry.data["collector_cloud_profile_key"],
             "smartess_at",
@@ -4881,6 +4939,69 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertFalse(coordinator._entity_platforms_loaded_with_inverter_identity)
         self.assertTrue(coordinator._entity_platform_reload_requested)
         self.assertEqual(reload_requests, ["entry-4"])
+
+    def test_identity_reload_waits_until_config_entry_is_loaded(self) -> None:
+        reload_requests: list[str] = []
+        state_callbacks: list[object] = []
+        config_entry_state = sys.modules[
+            "homeassistant.config_entries"
+        ].ConfigEntryState
+
+        class _ConfigEntries:
+            async def async_reload(self, entry_id: str) -> None:
+                reload_requests.append(entry_id)
+
+        entry = types.SimpleNamespace(
+            entry_id="entry-setup-race",
+            state=config_entry_state.SETUP_IN_PROGRESS,
+        )
+
+        def _on_state_change(callback):
+            state_callbacks.append(callback)
+            return lambda: state_callbacks.remove(callback)
+
+        entry.async_on_state_change = _on_state_change
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(
+            config_entries=_ConfigEntries(),
+            async_create_task=lambda coro: asyncio.create_task(coro),
+            loop=types.SimpleNamespace(
+                call_later=lambda delay, callback: asyncio.get_running_loop().call_later(
+                    delay, callback
+                )
+            ),
+        )
+        coordinator.config_entry = entry
+        coordinator.data = self.RuntimeSnapshot(
+            inverter=types.SimpleNamespace(
+                model_name="PowMr 4.2kW",
+                serial_number="55355535553555",
+            )
+        )
+        coordinator._entity_platforms_initialized = False
+        coordinator._entity_platform_reload_requested = False
+        coordinator._entity_platform_reload_dispatched = False
+        coordinator._entry_loaded_reload_unsub = None
+        coordinator._shutdown_complete = False
+
+        async def _run() -> None:
+            coordinator.mark_entity_platforms_initialized(
+                has_inverter_identity=False
+            )
+            await asyncio.sleep(0)
+            self.assertEqual(reload_requests, [])
+            self.assertEqual(len(state_callbacks), 1)
+
+            entry.state = config_entry_state.LOADED
+            state_callbacks[0]()
+            self.assertEqual(reload_requests, [])
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        asyncio.run(_run())
+
+        self.assertEqual(reload_requests, ["entry-setup-race"])
+        self.assertTrue(coordinator._entity_platform_reload_dispatched)
 
     def test_remember_runtime_identity_requests_reload_on_effective_metadata_drift(self) -> None:
         reload_requests: list[str] = []
@@ -7560,7 +7681,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertIsNotNone(coordinator.data.inverter)
         self.assertEqual(coordinator.data.inverter.capabilities, (capability,))
 
-    def test_collector_onboarding_values_include_transport_profile_mismatch(self) -> None:
+    def test_collector_onboarding_values_keep_cloud_metadata_wire_neutral(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator.config_entry = types.SimpleNamespace(
             entry_id="entry-1",
@@ -7573,13 +7694,13 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator.data = self.RuntimeSnapshot(values={})
         coordinator._connection_spec = types.SimpleNamespace(
             collector_cloud_family="smartess_at",
-            collector_session_protocol="at_text",
+            collector_configured_session_protocol="at_text",
             collector_identity_strategy="at_dtupn",
         )
         coordinator._runtime = types.SimpleNamespace(
             collector_server_endpoint_rollback_target="",
             listener_diagnostics=lambda: {
-                "collector_callback_session_protocol": "",
+                "collector_configured_session_protocol": "",
                 "collector_callback_identity_strategy": "",
             },
         )
@@ -7588,8 +7709,8 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         values = coordinator._collector_transport_profile_runtime_values()
 
         self.assertEqual(values["collector_resolved_cloud_family"], "smartess_at")
-        self.assertEqual(values["collector_resolved_session_protocol"], "at_text")
-        self.assertEqual(values["collector_resolved_identity_strategy"], "at_dtupn")
+        self.assertEqual(values["collector_resolved_session_protocol"], "")
+        self.assertEqual(values["collector_resolved_identity_strategy"], "")
         self.assertEqual(values["collector_connection_session_protocol"], "at_text")
         self.assertEqual(values["collector_connection_identity_strategy"], "at_dtupn")
         self.assertEqual(values["collector_runtime_link_session_protocol"], "")
@@ -7614,7 +7735,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 # This configured value is not the observation; the live
                 # inventory below is. A framed ESP bridge must be allowed to
                 # override an at_text cloud-family default.
-                "collector_callback_session_protocol": "eybond_framed",
+                "collector_configured_session_protocol": "eybond_framed",
                 "collector_callback_identity_strategy": "framed_heartbeat_then_fc2_pn",
                 "collector_callback_session_inventory": [
                     {
@@ -7650,7 +7771,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator.data = self.RuntimeSnapshot(values={})
         coordinator._runtime = types.SimpleNamespace(
             listener_diagnostics=lambda: {
-                "collector_callback_session_protocol": "eybond_framed",
+                "collector_configured_session_protocol": "eybond_framed",
                 "collector_callback_observed_session_protocol": "at_text",
                 "collector_callback_session_inventory": [
                     {
@@ -7689,7 +7810,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             listener_diagnostics=lambda: {
                 # This is the link manager's configured protocol, not an
                 # observation. It must not mask the live byte-shape inventory.
-                "collector_callback_session_protocol": "eybond_framed",
+                "collector_configured_session_protocol": "eybond_framed",
                 "collector_callback_identity_strategy": "framed_heartbeat_then_fc2_pn",
                 "collector_callback_session_inventory": [
                     {
@@ -7722,7 +7843,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator.data = self.RuntimeSnapshot(values={})
         coordinator._runtime = types.SimpleNamespace(
             listener_diagnostics=lambda: {
-                "collector_callback_session_protocol": "at_text",
+                "collector_configured_session_protocol": "at_text",
                 "collector_callback_observed_session_protocol": "",
                 "collector_callback_session_inventory": [
                     {
@@ -7737,8 +7858,8 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         profile = coordinator.collector_transport_profile
 
-        self.assertEqual(profile.session_protocol, "at_text")
-        self.assertEqual(profile.identity_strategy, "at_dtupn")
+        self.assertEqual(profile.session_protocol, "")
+        self.assertEqual(profile.identity_strategy, "")
 
     def test_owned_observed_session_protocol_overrides_entry_with_pn(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
@@ -7754,7 +7875,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator.data = self.RuntimeSnapshot(values={})
         coordinator._runtime = types.SimpleNamespace(
             listener_diagnostics=lambda: {
-                "collector_callback_session_protocol": "at_text",
+                "collector_configured_session_protocol": "at_text",
                 "collector_callback_observed_session_protocol": "eybond_framed",
                 "collector_callback_session_inventory": [
                     {
@@ -7830,7 +7951,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                     _async_reconcile_collector_session_profile
                 ),
                 listener_diagnostics=lambda: {
-                    "collector_callback_session_protocol": "",
+                    "collector_configured_session_protocol": "",
                     "collector_callback_identity_strategy": "",
                 },
             )
@@ -7894,13 +8015,10 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             ):
                 snapshot = await coordinator._async_update_data_with_runtime_lock()
 
-            self.assertEqual(refresh_count, 2)
-            self.assertIn(
-                ("at_text", "at_dtupn", "post_refresh_profile_discovery"),
-                reconcile_calls,
-            )
+            self.assertEqual(refresh_count, 1)
+            self.assertEqual(reconcile_calls, [])
             self.assertEqual(snapshot.values["collector_cloud_family"], "smartess_at")
-            self.assertEqual(snapshot.values["refresh_count"], 2)
+            self.assertEqual(snapshot.values["refresh_count"], 1)
 
         asyncio.run(_run())
 

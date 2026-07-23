@@ -83,7 +83,7 @@ _FORBIDDEN_SELECTION_TOKENS = (
     "hostname",
     "peer_ip",
     "driver_key",
-    "_expected_collector_session_protocol",
+    "_configured_collector_session_protocol",
 )
 
 

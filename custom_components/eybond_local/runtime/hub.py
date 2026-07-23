@@ -14,6 +14,8 @@ from ..canonical_telemetry import (
 )
 from ..const import (
     CONNECTION_TYPE_EYBOND,
+    DEFAULT_DRIVER_DETECTION_STRATEGY,
+    DRIVER_DETECTION_FULL_SCAN,
     DRIVER_HINT_AUTO,
 )
 from ..connection.models import EybondConnectionSpec
@@ -48,7 +50,12 @@ from ..drivers.command_support import (
     seed_unsupported_commands,
 )
 from ..drivers.registry import iter_drivers
-from ..onboarding.driver_detection import async_detect_inverter
+from ..onboarding.driver_detection import (
+    DetectedDriverContext,
+    DriverSweepNoMatch,
+    async_detect_inverter,
+    async_detect_inverter_candidates,
+)
 from ..link_models import EybondLinkRoute
 from ..link_transport import async_send_payload, select_payload_route
 from ..models import CapabilityBlocker, DetectedInverter, RuntimeSnapshot, WriteCapability
@@ -59,6 +66,7 @@ from .collector_metadata import (
     CollectorMetadataService,
 )
 from .link import EybondRuntimeLinkManager, resolve_server_ip
+from .manager import RuntimeInverterCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +165,7 @@ RUNTIME_INVERTER_STATE_DETECTING = "detecting"
 RUNTIME_INVERTER_STATE_PROVISIONAL = "provisional"
 RUNTIME_INVERTER_STATE_LIVE_CONFIRMED = "live_confirmed"
 RUNTIME_INVERTER_STATE_CONFLICT = "conflict"
+RUNTIME_INVERTER_STATE_AMBIGUOUS = "ambiguous"
 
 RUNTIME_POLL_STATE_OFFLINE = "offline"
 RUNTIME_POLL_STATE_DETECTING = "detecting"
@@ -481,9 +490,15 @@ class EybondHub:
         *,
         connection: EybondConnectionSpec,
         driver_hint: str = DRIVER_HINT_AUTO,
+        driver_detection_strategy: str = DEFAULT_DRIVER_DETECTION_STRATEGY,
         connection_mode: str = "",
     ) -> None:
         self._driver_hint = driver_hint
+        self._driver_detection_strategy = (
+            driver_detection_strategy
+            if driver_detection_strategy == DRIVER_DETECTION_FULL_SCAN
+            else DEFAULT_DRIVER_DETECTION_STRATEGY
+        )
         self._connection = connection
         self._connection_mode = connection_mode
         self._link_manager = EybondRuntimeLinkManager(
@@ -491,11 +506,8 @@ class EybondHub:
             advertised_server_ip=connection.advertised_server_ip,
             collector_ip=connection.collector_ip,
             collector_pn=connection.collector_pn,
-            # EXPECTED (inferred cloud-family) hint only -- read the explicit
-            # expected field, never the legacy read-only alias, and never as a
-            # confirmed owner.
-            collector_expected_session_protocol=(
-                connection.collector_expected_session_protocol
+            collector_configured_session_protocol=(
+                connection.collector_configured_session_protocol
             ),
             collector_identity_strategy=connection.collector_identity_strategy,
             collector_raw_passthrough_bootstrap=connection.collector_raw_passthrough_bootstrap,
@@ -517,10 +529,19 @@ class EybondHub:
         )
         self._driver: InverterDriver | None = None
         self._inverter: DetectedInverter | None = None
+        self._inverter_protocol_candidates: tuple[RuntimeInverterCandidate, ...] = ()
+        self._inverter_protocol_candidate_generation = -1
         self._inverter_binding_needs_live_detection_refresh = False
         self._inverter_binding_refresh_attempts = 0
         self._inverter_identity_conflict = ""
         self._last_driver_bound_identity = ""
+        # Sanitized evidence from the most recent runtime inverter-driver
+        # sweep.  This is diagnostic state only: it never influences ordering,
+        # budgets or binding.  The generation lets support distinguish a log
+        # produced on the current session from one retained across reconnect.
+        self._inverter_detection_probe_log: tuple[dict[str, object], ...] = ()
+        self._inverter_detection_probe_budget_exhausted = False
+        self._inverter_detection_probe_generation = -1
         self._state_transition_history: deque[str] = deque(
             maxlen=_RUNTIME_STATE_TRANSITION_HISTORY_MAX
         )
@@ -593,6 +614,18 @@ class EybondHub:
         self._inverter_detection_observer = None
         self.set_collector_connection_watcher(None)
         await self._link_manager.async_stop()
+
+    @property
+    def inverter_protocol_candidates(self) -> tuple[RuntimeInverterCandidate, ...]:
+        """Return ambiguity candidates observed on the current owned session."""
+
+        if (
+            self._inverter_protocol_candidates
+            and self._inverter_protocol_candidate_generation
+            != self._owned_session_generation()
+        ):
+            return ()
+        return self._inverter_protocol_candidates
 
     async def async_reconcile_network(self, *, reason: str = "network_change") -> bool:
         """Re-resolve listener network state after HA/network readiness changes."""
@@ -747,8 +780,11 @@ class EybondHub:
 
         if self._driver is not None or self._inverter is not None:
             return
+        inverter.details.pop("probe_log", None)
         self._driver = driver
         self._inverter = inverter
+        self._inverter_protocol_candidates = ()
+        self._inverter_protocol_candidate_generation = -1
         self._accept_inverter_binding_identity()
         details = getattr(inverter, "details", {}) or {}
         self._inverter_binding_needs_live_detection_refresh = (
@@ -1393,6 +1429,56 @@ class EybondHub:
                 self._runtime_read_state,
                 self._persistent_unsupported_commands,
             )
+
+    def _record_inverter_detection_probe_log(
+        self,
+        entries: object,
+        *,
+        budget_exhausted: bool,
+        generation: int,
+    ) -> None:
+        """Store one non-sensitive projection of the latest driver sweep."""
+
+        allowed_outcomes = {
+            "matched",
+            "no_match",
+            "probe_timeout",
+            "inverter_link_down",
+            "skipped_budget_exhausted",
+        }
+        sanitized: list[dict[str, object]] = []
+        if isinstance(entries, (tuple, list)):
+            for entry in entries:
+                if type(entry) is not dict:
+                    continue
+                driver = entry.get("driver")
+                if type(driver) is not str or not driver or driver != driver.strip():
+                    driver = "unknown"
+                elapsed_ms = entry.get("elapsed_ms")
+                if type(elapsed_ms) is not int or elapsed_ms < 0:
+                    elapsed_ms = 0
+                outcome = entry.get("outcome")
+                if type(outcome) is not str:
+                    outcome = "unknown"
+                elif outcome.startswith("error:"):
+                    # Exception text can contain route details; diagnostics need
+                    # the class of outcome, never the raw exception string.
+                    outcome = "error"
+                elif outcome not in allowed_outcomes:
+                    outcome = "unknown"
+                sanitized.append(
+                    {
+                        "driver": driver,
+                        "elapsed_ms": elapsed_ms,
+                        "outcome": outcome,
+                        "saw_response": entry.get("saw_response") is True,
+                    }
+                )
+        self._inverter_detection_probe_log = tuple(sanitized)
+        self._inverter_detection_probe_budget_exhausted = (
+            type(budget_exhausted) is bool and budget_exhausted
+        )
+        self._inverter_detection_probe_generation = generation
 
     def _reset_runtime_measurement_cache(self) -> None:
         """Drop last-good runtime measurements (a different device/driver)."""
@@ -2159,12 +2245,12 @@ class EybondHub:
         read-only sweep records what each query actually got back.
         """
 
-        # EXPECTED (inferred) hint only -- gates whether to attempt the ASCII
-        # probe at all; it is never treated as confirmed wire evidence here.
-        expected_session_protocol = str(
-            self._connection.collector_expected_session_protocol or ""
+        # This probe is available only when PN-bound live evidence configured an
+        # AT session. Cloud family alone never reaches this branch.
+        configured_session_protocol = str(
+            self._connection.collector_configured_session_protocol or ""
         ).strip().lower()
-        if expected_session_protocol != "at_text":
+        if configured_session_protocol != "at_text":
             return None
 
         transport = self._link_manager.transport
@@ -2208,7 +2294,7 @@ class EybondHub:
 
         collector = self._link_manager.collector_info
         return {
-            "session_protocol": expected_session_protocol,
+            "session_protocol": configured_session_protocol,
             "raw_passthrough_frame_format": collector.raw_last_frame_format,
             "raw_request_count": collector.raw_request_count,
             "raw_response_count": collector.raw_response_count,
@@ -2364,10 +2450,41 @@ class EybondHub:
         )
 
     async def _async_detect_driver(self) -> str:
+        detection_generation = self._owned_session_generation()
+        existing_driver_key = str(
+            getattr(self._inverter, "driver_key", "") or ""
+        ).strip()
+        detection_hint = existing_driver_key or self._driver_hint
+        if (
+            detection_hint == DRIVER_HINT_AUTO
+            and len(self._inverter_protocol_candidates) > 1
+            and self._inverter_protocol_candidate_generation == detection_generation
+        ):
+            # One complete all-driver sweep already proved the ambiguity on this
+            # exact owned session.  Do not repeat an expensive wire sweep every
+            # poll while waiting for explicit user intent.
+            return "inverter_protocol_ambiguous"
+
+        self._record_inverter_detection_probe_log(
+            (),
+            budget_exhausted=False,
+            generation=detection_generation,
+        )
+        detect_all_candidates = bool(
+            detection_hint == DRIVER_HINT_AUTO
+            and self._driver_detection_strategy == DRIVER_DETECTION_FULL_SCAN
+        )
         detection_task = asyncio.create_task(
-            async_detect_inverter(
-                self._link_manager.transport,
-                driver_hint=self._driver_hint,
+            (
+                async_detect_inverter_candidates(
+                    self._link_manager.transport,
+                    driver_hint=DRIVER_HINT_AUTO,
+                )
+                if detect_all_candidates
+                else async_detect_inverter(
+                    self._link_manager.transport,
+                    driver_hint=detection_hint,
+                )
             ),
             name="eybond_inverter_detection",
         )
@@ -2378,16 +2495,13 @@ class EybondHub:
         )
         session_change_task: asyncio.Task[None] | None = None
         if callable(wait_for_session_change):
-            generation = int(
-                getattr(self._link_manager, "owned_session_generation", 0) or 0
-            )
             session_change_task = asyncio.create_task(
-                wait_for_session_change(generation),
+                wait_for_session_change(detection_generation),
                 name="eybond_detection_session_guard",
             )
         try:
             if session_change_task is None:
-                context = await detection_task
+                detection_result = await detection_task
             else:
                 done, _pending = await asyncio.wait(
                     (detection_task, session_change_task),
@@ -2403,7 +2517,14 @@ class EybondHub:
                         "Discarding inverter detection after owned collector session changed"
                     )
                     return "collector_session_changed"
-                context = await detection_task
+                detection_result = await detection_task
+        except DriverSweepNoMatch as exc:
+            self._record_inverter_detection_probe_log(
+                exc.probe_log,
+                budget_exhausted=False,
+                generation=detection_generation,
+            )
+            return str(exc)
         except RuntimeError as exc:
             return str(exc)
         finally:
@@ -2413,6 +2534,51 @@ class EybondHub:
                     await session_change_task
                 except asyncio.CancelledError:
                     pass
+
+        if detect_all_candidates:
+            self._record_inverter_detection_probe_log(
+                detection_result.probe_log,
+                budget_exhausted=detection_result.budget_exhausted,
+                generation=detection_generation,
+            )
+            contexts = tuple(detection_result.candidates)
+        else:
+            context = detection_result
+            self._record_inverter_detection_probe_log(
+                context.inverter.details.get("probe_log", ()),
+                budget_exhausted=False,
+                generation=detection_generation,
+            )
+
+        if self._owned_session_generation() != detection_generation:
+            return "collector_session_changed"
+
+        if detect_all_candidates:
+            if len(contexts) > 1:
+                self._inverter_protocol_candidates = tuple(
+                    RuntimeInverterCandidate(
+                        driver_key=context.match.driver_key,
+                        protocol_family=context.match.protocol_family,
+                        model_name=context.match.model_name,
+                        serial_number=context.match.serial_number,
+                    )
+                    for context in contexts
+                )
+                self._inverter_protocol_candidate_generation = detection_generation
+                logger.warning(
+                    "Inverter answered on multiple protocols: %s; waiting for user selection",
+                    ", ".join(
+                        candidate.driver_key
+                        for candidate in self._inverter_protocol_candidates
+                    ),
+                )
+                return "inverter_protocol_ambiguous"
+            if not contexts:
+                return "no_supported_driver_matched"
+            context: DetectedDriverContext = contexts[0]
+
+        self._inverter_protocol_candidates = ()
+        self._inverter_protocol_candidate_generation = -1
 
         # Identity-conflict guard: a durable/provisional binding is sticky. When
         # live detection reports a DIFFERENT full identity, report the conflict
@@ -2439,6 +2605,10 @@ class EybondHub:
             return "inverter_identity_conflict"
 
         self._inverter_identity_conflict = ""
+        # The raw driver log may contain exception text.  Its sanitized copy is
+        # already stored above; do not retain the raw form in the bound model or
+        # support-bundle inverter payload.
+        context.inverter.details.pop("probe_log", None)
         self._driver = context.driver
         self._inverter = context.inverter
         self._accept_inverter_binding_identity()
@@ -2537,6 +2707,8 @@ class EybondHub:
 
         if self._inverter_identity_conflict:
             inverter_state = RUNTIME_INVERTER_STATE_CONFLICT
+        elif len(self.inverter_protocol_candidates) > 1:
+            inverter_state = RUNTIME_INVERTER_STATE_AMBIGUOUS
         elif not identity_present:
             inverter_state = (
                 RUNTIME_INVERTER_STATE_DETECTING
@@ -2573,6 +2745,16 @@ class EybondHub:
         values["runtime_inverter_state"] = inverter_state
         values["runtime_driver_state"] = driver_state
         values["runtime_poll_state"] = poll_state
+
+        candidates = self.inverter_protocol_candidates
+        if len(candidates) > 1:
+            values["runtime_inverter_candidate_count"] = len(candidates)
+            values["runtime_inverter_candidate_drivers"] = ", ".join(
+                candidate.driver_key for candidate in candidates
+            )
+        else:
+            values.pop("runtime_inverter_candidate_count", None)
+            values.pop("runtime_inverter_candidate_drivers", None)
 
         if self._inverter_identity_conflict:
             values["runtime_identity_conflict"] = self._inverter_identity_conflict
@@ -2635,6 +2817,9 @@ class EybondHub:
                 and key not in _VOLATILE_COLLECTOR_VALUE_KEYS
             )
         }
+        # Older single-driver detection could copy the raw probe log from
+        # ``DetectedInverter.details``.  Keep only the sanitized runtime view.
+        values.pop("probe_log", None)
         for key in _VOLATILE_COLLECTOR_VALUE_KEYS:
             values.pop(key, None)
         collector = self._link_manager.collector_info
@@ -2895,10 +3080,14 @@ class EybondHub:
             owned = self._runtime_measurement_owned_keys
             if owned:
                 for key, value in self._inverter.details.items():
-                    if key not in owned:
+                    if key != "probe_log" and key not in owned:
                         values[key] = value
             else:
-                values.update(self._inverter.details)
+                values.update(
+                    (key, value)
+                    for key, value in self._inverter.details.items()
+                    if key != "probe_log"
+                )
             # Last-good runtime measurements are authoritative for their keys on
             # EVERY snapshot build (including error / last-known-good paths), so a
             # cycle that omitted a measurement keeps the previous live value.
@@ -2906,6 +3095,27 @@ class EybondHub:
 
         if extra_values:
             values.update(extra_values)
+
+        if self._inverter_detection_probe_log:
+            values["runtime_inverter_probe_log"] = [
+                dict(entry) for entry in self._inverter_detection_probe_log
+            ]
+            values["runtime_inverter_probe_total_ms"] = sum(
+                int(entry["elapsed_ms"])
+                for entry in self._inverter_detection_probe_log
+            )
+            values["runtime_inverter_probe_budget_exhausted"] = (
+                self._inverter_detection_probe_budget_exhausted
+            )
+            values["runtime_inverter_probe_current_session"] = (
+                self._inverter_detection_probe_generation
+                == self._owned_session_generation()
+            )
+        else:
+            values.pop("runtime_inverter_probe_log", None)
+            values.pop("runtime_inverter_probe_total_ms", None)
+            values.pop("runtime_inverter_probe_budget_exhausted", None)
+            values.pop("runtime_inverter_probe_current_session", None)
 
         callback_endpoint = values.get("collector_server_endpoint")
         if callback_endpoint:

@@ -33,6 +33,7 @@ from custom_components.eybond_local.support.cloud_evidence_providers import (  #
     resolve_cloud_evidence_provider,
     supported_cloud_evidence_providers,
 )
+from custom_components.eybond_local.collector import transport_profile  # noqa: E402
 
 _CC = REPO_ROOT / "custom_components" / "eybond_local"
 _COORDINATOR = _CC / "runtime" / "coordinator.py"
@@ -149,9 +150,29 @@ class TransportProfileAuthorityGuardTests(unittest.TestCase):
                 literal, source, msg=f"coordinator must not hold transport-policy literal {literal}"
             )
 
-    def test_transport_profile_authority_owns_the_map(self) -> None:
+    def test_confirmed_protocol_authority_owns_the_map(self) -> None:
+        neutral_source = inspect.getsource(
+            transport_profile.resolve_collector_transport_profile
+        )
+        observed_source = inspect.getsource(
+            transport_profile.apply_observed_collector_session_protocol
+        )
+
+        # Entry/cloud metadata alone is deliberately wire-neutral.
+        for literal in ("at_dtupn", "framed_heartbeat_then_fc2_pn"):
+            self.assertNotIn(literal, neutral_source)
+        for resolver in (
+            "resolve_collector_cloud_raw_passthrough_bootstrap",
+            "resolve_collector_cloud_raw_passthrough_frame_format",
+            "resolve_collector_cloud_raw_passthrough_min_interval_ms",
+        ):
+            self.assertNotIn(resolver, neutral_source)
+            # Cloud metadata may refine forwarding details only inside the
+            # function that already received a confirmed observed protocol.
+            self.assertIn(resolver, observed_source)
+
         source = _read(_TRANSPORT_PROFILE)
-        for literal in ("at_dtupn", "uart_write_same_value", "framed_heartbeat_then_fc2_pn"):
+        for literal in ("at_dtupn", "framed_heartbeat_then_fc2_pn"):
             self.assertIn(literal, source)
 
 

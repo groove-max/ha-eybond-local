@@ -144,6 +144,15 @@ class SupportBundleTests(unittest.TestCase):
                 "smartess_protocol_asset_id": "0925",
                 "integration_build_git_describe": "v0.2.0-beta.2-75-gabcdef0",
                 "runtime_reconnect_count": 1,
+                "runtime_inverter_probe_log": [
+                    {
+                        "driver": "pi30",
+                        "elapsed_ms": 1234,
+                        "outcome": "matched",
+                        "saw_response": True,
+                    }
+                ],
+                "runtime_inverter_probe_total_ms": 1234,
                 "last_error": "",
                 "operating_mode": "Off-Grid",
             },
@@ -157,6 +166,18 @@ class SupportBundleTests(unittest.TestCase):
         self.assertIn("smartess_protocol_asset_id", raw["roles"]["collector"]["values"])
         self.assertIn("integration_build_git_describe", raw["roles"]["integration"]["values"])
         self.assertIn("runtime_reconnect_count", raw["roles"]["integration"]["values"])
+        self.assertEqual(
+            raw["roles"]["integration"]["values"]["runtime_inverter_probe_log"][0][
+                "driver"
+            ],
+            "pi30",
+        )
+        self.assertEqual(
+            raw["roles"]["integration"]["values"][
+                "runtime_inverter_probe_total_ms"
+            ],
+            1234,
+        )
         self.assertIn("last_error", raw["roles"]["integration"]["values"])
         self.assertIn("operating_mode", raw["roles"]["inverter"]["values"])
 

@@ -21,13 +21,20 @@ from custom_components.eybond_local.collector.management import (
 from custom_components.eybond_local.models import (
     CollectorInfo,
     DetectedInverter,
+    DriverMatch,
     ProbeTarget,
     RuntimeSnapshot,
+)
+from custom_components.eybond_local.onboarding.driver_detection import (
+    DetectedDriverContext,
+    DriverCandidateScan,
+    DriverSweepNoMatch,
 )
 from custom_components.eybond_local.drivers.modbus_write_error import ModbusWriteErrorMixin
 from custom_components.eybond_local.payload.modbus import ModbusError
 from custom_components.eybond_local.runtime.hub import EybondHub
 from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
+from custom_components.eybond_local.const import DRIVER_DETECTION_FULL_SCAN
 
 
 class _FakeLinkManager:
@@ -126,7 +133,7 @@ class _FakeLinkManager:
 
     def listener_diagnostics(self) -> dict[str, object]:
         return {
-            "collector_callback_session_protocol": "at_text",
+            "collector_configured_session_protocol": "at_text",
             "collector_callback_identity_strategy": "at_dtupn",
         }
 
@@ -623,7 +630,7 @@ class HubSnapshotTests(unittest.TestCase):
 
         diagnostics = hub.listener_diagnostics()
 
-        self.assertEqual(diagnostics["collector_callback_session_protocol"], "at_text")
+        self.assertEqual(diagnostics["collector_configured_session_protocol"], "at_text")
         self.assertEqual(diagnostics["collector_callback_identity_strategy"], "at_dtupn")
 
     def test_initial_inverter_binding_seeds_runtime_driver_state(self) -> None:
@@ -638,7 +645,7 @@ class HubSnapshotTests(unittest.TestCase):
                 discovery_interval=30,
                 heartbeat_interval=60,
                 request_timeout=5.0,
-                collector_expected_session_protocol="at_text",
+                collector_configured_session_protocol="at_text",
             ),
         )
         hub._link_manager = _FakeLinkManager()
@@ -2430,7 +2437,7 @@ class HubAtTextAsciiProbeTests(unittest.TestCase):
                 discovery_interval=30,
                 heartbeat_interval=60,
                 request_timeout=5.0,
-                collector_expected_session_protocol=session_protocol,
+                collector_configured_session_protocol=session_protocol,
             ),
         )
 
@@ -2510,7 +2517,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
     _SERIAL = "92632500000001"
     _OTHER_SERIAL = "92632599999999"
 
-    def _hub(self) -> EybondHub:
+    def _hub(self, *, full_scan: bool = False) -> EybondHub:
         hub = EybondHub(
             connection=EybondConnectionSpec(
                 server_ip="192.168.1.10",
@@ -2522,6 +2529,9 @@ class RuntimeStateMachineTests(unittest.TestCase):
                 discovery_interval=30,
                 heartbeat_interval=60,
                 request_timeout=5.0,
+            ),
+            driver_detection_strategy=(
+                DRIVER_DETECTION_FULL_SCAN if full_scan else "first_match"
             ),
         )
         hub._link_manager = _FakeLinkManager()
@@ -2556,6 +2566,262 @@ class RuntimeStateMachineTests(unittest.TestCase):
             )
 
         return _detect
+
+    def _candidate_context(
+        self,
+        *,
+        driver_key: str,
+        protocol_family: str,
+        model: str,
+    ) -> DetectedDriverContext:
+        inverter = self._inverter(
+            driver_key=driver_key,
+            model=model,
+            serial=self._SERIAL,
+        )
+        inverter.protocol_family = protocol_family
+        return DetectedDriverContext(
+            driver=SimpleNamespace(key=driver_key),
+            inverter=inverter,
+            match=DriverMatch(
+                driver_key=driver_key,
+                protocol_family=protocol_family,
+                model_name=model,
+                serial_number=self._SERIAL,
+                probe_target=inverter.probe_target,
+            ),
+        )
+
+    def test_default_detection_stops_at_first_confirmed_match(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            context = self._candidate_context(
+                driver_key="smartess_local",
+                protocol_family="0925",
+                model="Hybrid 5K",
+            )
+            with (
+                patch(
+                    "custom_components.eybond_local.runtime.hub.async_detect_inverter",
+                    return_value=context,
+                ) as first_match,
+                patch(
+                    "custom_components.eybond_local.runtime.hub.async_detect_inverter_candidates",
+                    side_effect=AssertionError("full scan must not run"),
+                ),
+            ):
+                result = await hub._async_detect_driver()
+
+            self.assertEqual(result, "")
+            first_match.assert_awaited_once()
+            self.assertIs(hub._driver, context.driver)
+            self.assertEqual(hub.inverter_protocol_candidates, ())
+
+        asyncio.run(_run())
+
+    def test_auto_detection_keeps_multi_protocol_result_unbound(self) -> None:
+        async def _run() -> None:
+            hub = self._hub(full_scan=True)
+            hub._link_manager.owned_session_generation = 7
+            scan_calls = 0
+            scan = DriverCandidateScan(
+                candidates=(
+                    self._candidate_context(
+                        driver_key="smartess_local",
+                        protocol_family="0925",
+                        model="Hybrid 5K",
+                    ),
+                    self._candidate_context(
+                        driver_key="pi30",
+                        protocol_family="pi30",
+                        model="Hybrid 5K",
+                    ),
+                ),
+                probe_log=(
+                    {
+                        "driver": "smartess_local",
+                        "elapsed_ms": 800,
+                        "outcome": "matched",
+                        "saw_response": True,
+                    },
+                    {
+                        "driver": "pi30",
+                        "elapsed_ms": 900,
+                        "outcome": "matched",
+                        "saw_response": True,
+                    },
+                ),
+            )
+
+            async def _scan(*_args, **_kwargs):
+                nonlocal scan_calls
+                scan_calls += 1
+                return scan
+
+            with patch(
+                "custom_components.eybond_local.runtime.hub.async_detect_inverter_candidates",
+                side_effect=_scan,
+            ):
+                first = await hub._async_detect_driver()
+                second = await hub._async_detect_driver()
+
+            self.assertEqual(first, "inverter_protocol_ambiguous")
+            self.assertEqual(second, "inverter_protocol_ambiguous")
+            self.assertEqual(scan_calls, 1)
+            self.assertIsNone(hub._driver)
+            self.assertIsNone(hub._inverter)
+            self.assertEqual(
+                [item.driver_key for item in hub.inverter_protocol_candidates],
+                ["smartess_local", "pi30"],
+            )
+            snapshot = hub._build_snapshot(last_error=first)
+            self.assertEqual(snapshot.values["runtime_inverter_state"], "ambiguous")
+            self.assertEqual(snapshot.values["runtime_inverter_candidate_count"], 2)
+            self.assertEqual(snapshot.values["runtime_inverter_probe_total_ms"], 1700)
+
+        asyncio.run(_run())
+
+    def test_auto_detection_binds_the_only_runtime_candidate(self) -> None:
+        async def _run() -> None:
+            hub = self._hub(full_scan=True)
+            context = self._candidate_context(
+                driver_key="pi30",
+                protocol_family="pi30",
+                model="Hybrid 5K",
+            )
+            with patch(
+                "custom_components.eybond_local.runtime.hub.async_detect_inverter_candidates",
+                return_value=DriverCandidateScan(candidates=(context,)),
+            ):
+                result = await hub._async_detect_driver()
+
+            self.assertEqual(result, "")
+            self.assertIs(hub._driver, context.driver)
+            self.assertIs(hub._inverter, context.inverter)
+            self.assertEqual(hub.inverter_protocol_candidates, ())
+
+        asyncio.run(_run())
+
+    def test_runtime_probe_log_is_sanitized_and_published_for_support(self) -> None:
+        async def _run() -> None:
+            hub = self._hub(full_scan=True)
+            hub._link_manager.owned_session_generation = 7
+            context = self._candidate_context(
+                driver_key="pi30",
+                protocol_family="pi30",
+                model="Hybrid 5K",
+            )
+            # A raw details log must never bypass the runtime diagnostics
+            # projection, even if a driver supplied it.
+            context.inverter.details["probe_log"] = [
+                {"outcome": "error:route 192.0.2.10"}
+            ]
+            scan = DriverCandidateScan(
+                candidates=(context,),
+                budget_exhausted=True,
+                probe_log=(
+                    {
+                        "driver": "modbus_smg",
+                        "elapsed_ms": 45000,
+                        "outcome": "error:route 192.0.2.10 refused",
+                        "saw_response": False,
+                    },
+                    {
+                        "driver": "pi30",
+                        "elapsed_ms": 1234,
+                        "outcome": "matched",
+                        "saw_response": True,
+                    },
+                ),
+            )
+
+            with patch(
+                "custom_components.eybond_local.runtime.hub.async_detect_inverter_candidates",
+                return_value=scan,
+            ):
+                self.assertEqual(await hub._async_detect_driver(), "")
+
+            snapshot = hub._build_snapshot()
+            self.assertNotIn("probe_log", context.inverter.details)
+            self.assertNotIn("probe_log", snapshot.values)
+            self.assertEqual(
+                snapshot.values["runtime_inverter_probe_log"],
+                [
+                    {
+                        "driver": "modbus_smg",
+                        "elapsed_ms": 45000,
+                        "outcome": "error",
+                        "saw_response": False,
+                    },
+                    {
+                        "driver": "pi30",
+                        "elapsed_ms": 1234,
+                        "outcome": "matched",
+                        "saw_response": True,
+                    },
+                ],
+            )
+            self.assertEqual(
+                snapshot.values["runtime_inverter_probe_total_ms"], 46234
+            )
+            self.assertTrue(
+                snapshot.values["runtime_inverter_probe_budget_exhausted"]
+            )
+            self.assertTrue(
+                snapshot.values["runtime_inverter_probe_current_session"]
+            )
+            self.assertNotIn("192.0.2.10", str(snapshot.values))
+
+            hub._link_manager.owned_session_generation = 8
+            self.assertFalse(
+                hub._build_snapshot().values[
+                    "runtime_inverter_probe_current_session"
+                ]
+            )
+
+        asyncio.run(_run())
+
+    def test_failed_runtime_sweep_keeps_probe_log_in_snapshot(self) -> None:
+        async def _run() -> None:
+            hub = self._hub(full_scan=True)
+            failure = DriverSweepNoMatch(
+                "pi30:probe_timeout",
+                silent=True,
+                probe_log=(
+                    {
+                        "driver": "modbus_smg",
+                        "elapsed_ms": 45000,
+                        "outcome": "probe_timeout",
+                        "saw_response": False,
+                    },
+                    {
+                        "driver": "pi30",
+                        "elapsed_ms": 45000,
+                        "outcome": "probe_timeout",
+                        "saw_response": False,
+                    },
+                ),
+            )
+            with patch(
+                "custom_components.eybond_local.runtime.hub.async_detect_inverter_candidates",
+                side_effect=failure,
+            ):
+                result = await hub._async_detect_driver()
+
+            self.assertEqual(result, "pi30:probe_timeout")
+            snapshot = hub._build_snapshot(last_error=result)
+            self.assertEqual(
+                snapshot.values["runtime_inverter_probe_total_ms"], 90000
+            )
+            self.assertEqual(
+                [
+                    entry["outcome"]
+                    for entry in snapshot.values["runtime_inverter_probe_log"]
+                ],
+                ["probe_timeout", "probe_timeout"],
+            )
+
+        asyncio.run(_run())
 
     # 1. detected inverter + first poll timeout keeps inverter identity.
     def test_first_poll_timeout_after_detection_keeps_inverter_identity(self) -> None:
@@ -2825,7 +3091,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
 
     def test_driver_detection_is_cancelled_when_owned_session_changes(self) -> None:
         async def _run() -> None:
-            hub = self._hub()
+            hub = self._hub(full_scan=True)
 
             class _SessionChangingLink(_FakeLinkManager):
                 def __init__(self) -> None:
@@ -2851,7 +3117,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
                     raise
 
             with patch(
-                "custom_components.eybond_local.runtime.hub.async_detect_inverter",
+                "custom_components.eybond_local.runtime.hub.async_detect_inverter_candidates",
                 side_effect=_slow_detection,
             ):
                 detection = asyncio.create_task(hub._async_detect_driver())

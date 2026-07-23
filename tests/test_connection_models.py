@@ -93,16 +93,12 @@ class ConnectionModelsTests(unittest.TestCase):
         self.assertEqual(spec.server_ip, "192.168.1.50")
         self.assertEqual(spec.collector_pn, "E5000020000000")
         self.assertEqual(spec.collector_cloud_family, "smartess_at")
-        self.assertEqual(spec.collector_session_protocol, "at_text")
-        self.assertEqual(spec.collector_identity_strategy, "at_dtupn")
+        self.assertEqual(spec.collector_configured_session_protocol, "")
+        self.assertEqual(spec.collector_identity_strategy, "")
         self.assertEqual(spec.effective_advertised_server_ip, "203.0.113.10")
         self.assertEqual(spec.effective_advertised_tcp_port, 9889)
 
-    def test_build_connection_spec_bootstrap_ignores_driver_key(self) -> None:
-        # Phase-2 invariant: the driver hint (modbus_smg) must NOT pick the
-        # bootstrap transport. The pre-live ConnectionSpec follows the cloud
-        # family legacy hint only; the live SessionHandle later negotiates the
-        # SMG collector's real framed wire.
+    def test_build_connection_spec_metadata_is_wire_neutral(self) -> None:
         spec = build_connection_spec(
             {
                 CONF_SERVER_IP: "192.168.1.50",
@@ -119,13 +115,10 @@ class ConnectionModelsTests(unittest.TestCase):
         )
 
         self.assertEqual(spec.collector_cloud_family, "smartess_at")
-        self.assertEqual(spec.collector_session_protocol, "at_text")
-        self.assertEqual(spec.collector_identity_strategy, "at_dtupn")
+        self.assertEqual(spec.collector_configured_session_protocol, "")
+        self.assertEqual(spec.collector_identity_strategy, "")
 
-    def test_build_connection_spec_virtual_bridge_follows_cloud_family_as_legacy_hint(self) -> None:
-        # A community bridge marker is metadata/capability only. ConnectionSpec
-        # stores the pre-live legacy callback hint; live SessionHandle adapter
-        # negotiation later decides inverter payload forwarding.
+    def test_build_connection_spec_virtual_bridge_does_not_choose_wire(self) -> None:
         spec = build_connection_spec(
             {
                 CONF_SERVER_IP: "192.168.1.50",
@@ -144,14 +137,13 @@ class ConnectionModelsTests(unittest.TestCase):
         )
 
         self.assertEqual(spec.collector_cloud_family, "smartess_at")
-        self.assertEqual(spec.collector_session_protocol, "at_text")
-        self.assertEqual(spec.collector_identity_strategy, "at_dtupn")
+        self.assertEqual(spec.collector_configured_session_protocol, "")
+        self.assertEqual(spec.collector_identity_strategy, "")
 
     def test_build_connection_spec_virtual_bridge_driver_hint_does_not_select_framed(self) -> None:
         # Neither the driver hint nor the collector/bridge kind may pick the
         # transport. On an esp-collector bridge with a modbus_smg hint the
-        # bootstrap still follows the cloud-family legacy hint; the live
-        # SessionHandle negotiates the real framed wire afterwards.
+        # protocol remains unset until a live session proves it.
         spec = build_connection_spec(
             {
                 CONF_SERVER_IP: "192.168.1.50",
@@ -170,8 +162,8 @@ class ConnectionModelsTests(unittest.TestCase):
         )
 
         self.assertEqual(spec.collector_cloud_family, "smartess_at")
-        self.assertEqual(spec.collector_session_protocol, "at_text")
-        self.assertEqual(spec.collector_identity_strategy, "at_dtupn")
+        self.assertEqual(spec.collector_configured_session_protocol, "")
+        self.assertEqual(spec.collector_identity_strategy, "")
 
     def test_build_connection_spec_recovers_cloud_family_from_remembered_endpoint_options(self) -> None:
         spec = build_connection_spec(
@@ -192,12 +184,12 @@ class ConnectionModelsTests(unittest.TestCase):
         )
 
         self.assertEqual(spec.collector_cloud_family, "smartess_at")
-        self.assertEqual(spec.collector_session_protocol, "at_text")
-        self.assertEqual(spec.collector_identity_strategy, "at_dtupn")
+        self.assertEqual(spec.collector_configured_session_protocol, "")
+        self.assertEqual(spec.collector_identity_strategy, "")
 
     def test_build_connection_spec_bootstrap_ignores_effective_owner_key(self) -> None:
         # An effective owner key (driver) from the metadata snapshot must not
-        # pick the transport either: bootstrap follows the cloud family only.
+        # pick the transport either.
         spec = build_connection_spec(
             {
                 CONF_SERVER_IP: "192.168.1.50",
@@ -217,7 +209,7 @@ class ConnectionModelsTests(unittest.TestCase):
         )
 
         self.assertEqual(spec.collector_cloud_family, "smartess_at")
-        self.assertEqual(spec.collector_session_protocol, "at_text")
+        self.assertEqual(spec.collector_configured_session_protocol, "")
 
     def test_build_connection_spec_keeps_data_driver_when_options_driver_is_auto(self) -> None:
         spec = build_connection_spec(
@@ -235,10 +227,8 @@ class ConnectionModelsTests(unittest.TestCase):
             {CONF_DRIVER_HINT: "auto"},
         )
 
-        # The driver hint no longer affects the transport; bootstrap follows the
-        # cloud family. (Data-vs-options driver precedence is exercised by the
-        # driver-resolution tests, not the transport protocol.)
-        self.assertEqual(spec.collector_session_protocol, "at_text")
+        # Data-vs-options driver precedence is unrelated to wire authority.
+        self.assertEqual(spec.collector_configured_session_protocol, "")
 
     def test_resolve_connection_type_reads_explicit_type(self) -> None:
         connection_type = resolve_connection_type({CONF_CONNECTION_TYPE: "eybond"})
@@ -287,6 +277,14 @@ class ConnectionModelsTests(unittest.TestCase):
         self.assertEqual(evidence.protocol, "eybond_framed")
         self.assertEqual(evidence.collector_pn, "E50000200000009777")
         self.assertEqual(evidence.source, "live_session")
+        self.assertEqual(
+            spec.collector_configured_session_protocol,
+            "eybond_framed",
+        )
+        self.assertEqual(
+            spec.collector_identity_strategy,
+            "framed_heartbeat_then_fc2_pn",
+        )
 
     def test_confirmed_protocol_without_live_provenance_is_fail_closed(self) -> None:
         # Migration is fail-closed: a persisted protocol whose provenance is NOT
@@ -310,9 +308,31 @@ class ConnectionModelsTests(unittest.TestCase):
                 spec.confirmed_session_protocol_evidence, f"source={source!r}"
             )
 
-    def test_legacy_inferred_session_protocol_is_never_confirmed(self) -> None:
-        # The legacy inferred collector_session_protocol has no provenance and is
-        # never promoted to confirmed evidence; it stays the EXPECTED hint only.
+    def test_confirmed_at_wire_allows_cloud_dialect_refinement(self) -> None:
+        spec = build_connection_spec(
+            {
+                CONF_SERVER_IP: "192.168.1.50",
+                CONF_TCP_PORT: 8899,
+                CONF_UDP_PORT: 58899,
+                CONF_COLLECTOR_IP: "192.168.1.55",
+                CONF_COLLECTOR_PN: "E50000200000009777",
+                CONF_COLLECTOR_CLOUD_FAMILY: "smartess_at",
+                CONF_DISCOVERY_TARGET: "192.168.1.255",
+                CONF_HEARTBEAT_INTERVAL: 60,
+                "collector_confirmed_session_protocol": "at_text",
+                "collector_confirmed_session_protocol_pn": "E50000200000009777",
+                "collector_confirmed_session_protocol_source": "live_session",
+            },
+            {},
+        )
+
+        self.assertEqual(spec.collector_configured_session_protocol, "at_text")
+        self.assertEqual(spec.collector_identity_strategy, "at_dtupn")
+        self.assertEqual(spec.collector_raw_passthrough_frame_format, "transparent")
+
+    def test_legacy_inferred_session_protocol_is_ignored(self) -> None:
+        # The legacy field has no provenance. It neither becomes confirmed
+        # evidence nor supplies a preliminary runtime protocol.
         spec = build_connection_spec(
             {
                 CONF_SERVER_IP: "192.168.1.50",
@@ -328,9 +348,8 @@ class ConnectionModelsTests(unittest.TestCase):
             {},
         )
         self.assertIsNone(spec.confirmed_session_protocol_evidence)
-        # The read-only compatibility alias still reflects the inferred hint.
-        self.assertEqual(spec.collector_expected_session_protocol, "at_text")
-        self.assertEqual(spec.collector_session_protocol, "at_text")
+        self.assertEqual(spec.collector_configured_session_protocol, "")
+        self.assertFalse(hasattr(spec, "collector_session_protocol"))
 
 
 if __name__ == "__main__":

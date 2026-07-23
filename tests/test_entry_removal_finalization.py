@@ -34,8 +34,8 @@ from custom_components.eybond_local.const import DOMAIN
 from custom_components.eybond_local.passive_discovery import PassiveCallbackDiscovery
 
 
-PN = "E50000253884199645"
-OTHER_PN = "V90110737282291016"
+PN = "E50000200000000001"
+OTHER_PN = "V0000000000001"
 
 
 def _session(*, session_id: str, pn: str, peer_ip: str = "192.168.1.1"):

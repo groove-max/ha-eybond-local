@@ -35,10 +35,9 @@ class EybondConnectionSpec(ConnectionSpec):
     collector_ip: str
     collector_pn: str
     collector_cloud_family: str
-    # INFERRED (cloud-family) callback-session protocol hint. Diagnostic ONLY --
-    # never an authority for wire/adapter/probe. Renamed to make that explicit;
-    # ``collector_session_protocol`` remains a read-only compatibility alias.
-    collector_expected_session_protocol: str
+    # Session profile selected from validated, PN-bound live wire evidence.
+    # Cloud/driver/endpoint metadata can never populate this field by itself.
+    collector_configured_session_protocol: str
     collector_identity_strategy: str
     collector_raw_passthrough_bootstrap: str
     collector_raw_passthrough_frame_format: str
@@ -65,7 +64,7 @@ class EybondConnectionSpec(ConnectionSpec):
         collector_ip: str = "",
         collector_pn: str = "",
         collector_cloud_family: str = "",
-        collector_expected_session_protocol: str = "",
+        collector_configured_session_protocol: str = "",
         collector_identity_strategy: str = "",
         collector_raw_passthrough_bootstrap: str = "",
         collector_raw_passthrough_frame_format: str = "",
@@ -87,8 +86,8 @@ class EybondConnectionSpec(ConnectionSpec):
         object.__setattr__(self, "collector_cloud_family", collector_cloud_family)
         object.__setattr__(
             self,
-            "collector_expected_session_protocol",
-            collector_expected_session_protocol,
+            "collector_configured_session_protocol",
+            collector_configured_session_protocol,
         )
         object.__setattr__(self, "collector_identity_strategy", collector_identity_strategy)
         object.__setattr__(
@@ -123,17 +122,6 @@ class EybondConnectionSpec(ConnectionSpec):
         object.__setattr__(self, "discovery_interval", int(discovery_interval))
         object.__setattr__(self, "heartbeat_interval", int(heartbeat_interval))
         object.__setattr__(self, "request_timeout", float(request_timeout))
-
-    @property
-    def collector_session_protocol(self) -> str:
-        """Read-only compatibility alias for the INFERRED expected protocol.
-
-        Diagnostic only. Generic runtime logic must use
-        ``collector_expected_session_protocol`` (inferred) or the validated
-        ``confirmed_session_protocol_evidence`` -- never this alias as authority.
-        """
-
-        return self.collector_expected_session_protocol
 
     @property
     def effective_advertised_server_ip(self) -> str:

@@ -200,11 +200,12 @@ class OnboardingWireProbeIntent:
 
 @dataclass(frozen=True, slots=True)
 class ObservedSessionWireProbeIntent:
-    """Zero-send identity capability for one exact observed scan session.
+    """Zero-send identity capability backed by one exact observed scan wire.
 
     This is not identity evidence and not a protocol guess. It is bound to the
-    active scan's exact session id and observed wire, and lets the ONE callback
-    identity transaction claim/re-read that socket without another trigger.
+    active scan's exact source session and observed wire. Its target is either
+    that same socket or the exact silent-session offer causally produced by the
+    following addressed attempt; it never follows a peer IP or another socket.
     ``collector_pn`` and ``identity_source`` are only the observation the
     authoritative read must reconcile with; a weak heartbeat source is allowed
     precisely so FC=2/DTUPN can upgrade it on that same socket. Only the read's
@@ -215,7 +216,29 @@ class ObservedSessionWireProbeIntent:
     session_id: str
     collector_pn: str
     identity_source: str
+    wire_source_session_id: str
     source: str = BOOTSTRAP_SOURCE_OBSERVED_SCAN
+
+    @classmethod
+    def for_silent_offer(
+        cls,
+        offer: "SilentSessionBootstrapOffer",
+        *,
+        observed: "ObservedSessionWireProbeIntent",
+    ) -> "ObservedSessionWireProbeIntent":
+        """Retarget observed wire authority to one causally-bound silent socket."""
+
+        if type(offer) is not SilentSessionBootstrapOffer:
+            raise TypeError("silent_bootstrap_offer_required")
+        if type(observed) is not cls:
+            raise TypeError("observed_wire_probe_intent_required")
+        return cls(
+            protocol=observed.protocol,
+            session_id=offer.session_id,
+            collector_pn=observed.collector_pn,
+            identity_source=observed.identity_source,
+            wire_source_session_id=observed.wire_source_session_id,
+        )
 
     def __post_init__(self) -> None:
         if type(self.protocol) is not str or self.protocol not in (
@@ -226,6 +249,7 @@ class ObservedSessionWireProbeIntent:
         for label, value in (
             ("session", self.session_id),
             ("collector_pn", self.collector_pn),
+            ("wire_source_session", self.wire_source_session_id),
         ):
             if type(value) is not str:
                 raise TypeError(f"observed_wire_probe_{label}_must_be_str")

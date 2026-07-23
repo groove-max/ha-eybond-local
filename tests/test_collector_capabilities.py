@@ -18,6 +18,7 @@ from custom_components.eybond_local.collector.capabilities import (  # noqa: E40
     EspCollectorHardwareToken,
     collector_capability_profile,
     collector_capability_profile_from_runtime,
+    collector_profile_entry_fields,
     parse_esp_collector_hardware_token,
 )
 from custom_components.eybond_local.const import (  # noqa: E402
@@ -116,6 +117,23 @@ class CollectorCapabilityProfileTests(unittest.TestCase):
         self.assertFalse(profile.virtual_bridge)
         self.assertEqual(profile.collector_kind, COLLECTOR_KIND_FACTORY_EYBOND)
         self.assertTrue(profile.proxy_capture)
+
+    def test_persisted_unknown_is_promoted_by_runtime_inverter_identity(self) -> None:
+        profile = collector_capability_profile_from_runtime(
+            values={"model_name": "SMG 6200", "serial_number": "SMGSYN240001"},
+            data={"collector_kind": COLLECTOR_KIND_UNKNOWN},
+            options={"collector_kind": COLLECTOR_KIND_UNKNOWN},
+        )
+
+        self.assertEqual(profile.collector_kind, COLLECTOR_KIND_FACTORY_EYBOND)
+        self.assertFalse(profile.ha_only_required)
+        self.assertTrue(profile.proxy_capture)
+        self.assertTrue(profile.shadow_learning)
+
+    def test_unknown_profile_is_not_persisted_as_a_negative_fact(self) -> None:
+        profile = collector_capability_profile(collector_kind=COLLECTOR_KIND_UNKNOWN)
+
+        self.assertEqual(collector_profile_entry_fields(profile), {})
 
     def test_runtime_driver_key_without_inverter_identity_stays_unknown(self) -> None:
         profile = collector_capability_profile_from_runtime(

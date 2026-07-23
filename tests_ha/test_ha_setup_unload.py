@@ -137,6 +137,67 @@ async def test_setup_and_unload_is_repeatable(
     assert entry.state is ConfigEntryState.NOT_LOADED
 
 
+async def test_collector_first_entry_is_enriched_by_runtime_detection(
+    hass: HomeAssistant,
+    fake_runtime,
+    monkeypatch,
+) -> None:
+    """A new entry starts collector-only; the runtime owns inverter identity."""
+
+    from conftest import FakeRuntimeManager
+    from custom_components.eybond_local.models import (
+        CollectorInfo,
+        DetectedInverter,
+        ProbeTarget,
+        RuntimeSnapshot,
+    )
+
+    async def _detected_refresh(
+        self,
+        *,
+        poll_interval: float | None = None,
+    ) -> RuntimeSnapshot:
+        del self, poll_interval
+        return RuntimeSnapshot(
+            connected=True,
+            collector=CollectorInfo(
+                remote_ip=SYNTHETIC_COLLECTOR_IP,
+                collector_pn=SYNTHETIC_COLLECTOR_PN,
+            ),
+            inverter=DetectedInverter(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="92632500000001",
+                probe_target=ProbeTarget(
+                    devcode=1,
+                    collector_addr=1,
+                    device_addr=1,
+                ),
+            ),
+            values={"runtime_detection_status": "autodetected_high_confidence"},
+        )
+
+    monkeypatch.setattr(FakeRuntimeManager, "async_refresh", _detected_refresh)
+    entry = _collector_entry(hass)
+    assert entry.data.get("driver_hint") == "auto"
+    assert not entry.data.get("detected_model")
+    assert not entry.data.get("detected_serial")
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data["detected_model"] == "SMG 6200"
+    assert entry.data["detected_serial"] == "92632500000001"
+    assert entry.data["driver_hint"] == "auto"
+    assert entry.data["detected_driver"] == "modbus_smg"
+    assert entry.data["detection_confidence"] == "high"
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
 async def test_reload_through_home_assistant(hass: HomeAssistant, fake_runtime) -> None:
     """`async_reload` (the update-listener path) works end to end."""
 

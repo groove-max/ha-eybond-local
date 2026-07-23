@@ -17,6 +17,7 @@ from custom_components.eybond_local.const import (
     DOMAIN,
     ENTRY_ROLE_LISTENER,
 )
+from custom_components.eybond_local.runtime.manager import RuntimeInverterCandidate
 
 from synthetic import (
     SYNTHETIC_COLLECTOR_IP,
@@ -222,6 +223,54 @@ async def test_runtime_options_commit_strategy_to_data_with_one_reload(
     assert "connection_strategy" not in collector_entry.options
     assert collector_entry.state is ConfigEntryState.LOADED
     assert len(fake_runtime) == 2, "runtime options must schedule exactly one reload"
+
+    await hass.config_entries.async_unload(collector_entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_runtime_ambiguity_is_resolved_post_entry_with_one_reload(
+    hass: HomeAssistant, collector_entry: MockConfigEntry, fake_runtime
+) -> None:
+    """A real HA options flow stores intent; runtime facts remain unproven."""
+
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    fake_runtime[0].inverter_protocol_candidates = (
+        RuntimeInverterCandidate(
+            driver_key="smartess_local",
+            protocol_family="0925",
+            model_name="Hybrid 5K",
+            serial_number="12345",
+        ),
+        RuntimeInverterCandidate(
+            driver_key="pi30",
+            protocol_family="pi30",
+            model_name="Hybrid 5K",
+            serial_number="12345",
+        ),
+    )
+
+    result = await hass.config_entries.options.async_init(collector_entry.entry_id)
+    assert result["type"] is FlowResultType.MENU
+    assert "inverter_protocol" in result["menu_options"]
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "inverter_protocol"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "inverter_protocol"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"driver_hint": "pi30"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+
+    assert collector_entry.options["driver_hint"] == "pi30"
+    assert collector_entry.data["detected_driver"] == ""
+    assert collector_entry.data["detected_model"] == ""
+    assert collector_entry.data["detected_serial"] == ""
+    assert collector_entry.data["detection_confidence"] == "none"
+    assert collector_entry.state is ConfigEntryState.LOADED
+    assert len(fake_runtime) == 2, "the protocol choice must cause exactly one reload"
 
     await hass.config_entries.async_unload(collector_entry.entry_id)
     await hass.async_block_till_done()

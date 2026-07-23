@@ -448,7 +448,7 @@ class EybondRuntimeLinkManager:
         advertised_server_ip: str = "",
         advertised_tcp_port: int = 0,
         collector_pn: str = "",
-        collector_expected_session_protocol: str = "",
+        collector_configured_session_protocol: str = "",
         collector_identity_strategy: str = "",
         collector_raw_passthrough_bootstrap: str = "",
         collector_raw_passthrough_frame_format: str = "",
@@ -459,12 +459,10 @@ class EybondRuntimeLinkManager:
         self._configured_advertised_server_ip = advertised_server_ip.strip()
         self._collector_ip = collector_ip
         self._collector_pn = str(collector_pn or "").strip()
-        # EXPECTED (inferred) callback-session protocol: derived from cloud
-        # family / profile / legacy endpoint. Diagnostic/display ONLY. It must
-        # never choose a wire, an inverter adapter, or an active identity probe,
-        # and is NEVER handed to a transport as a confirmed protocol owner.
-        self._expected_collector_session_protocol = str(
-            collector_expected_session_protocol or ""
+        # Configuration derived only from PN-bound confirmed live evidence.
+        # The evidence object below remains the authority handed to transports.
+        self._configured_collector_session_protocol = str(
+            collector_configured_session_protocol or ""
         ).strip().lower()
         self._collector_identity_strategy = str(collector_identity_strategy or "").strip().lower()
         self._collector_raw_passthrough_bootstrap = (
@@ -935,16 +933,13 @@ class EybondRuntimeLinkManager:
             ),
             "collector_listener_rebind_count": self._listener_rebind_count,
             "collector_listener_last_error": self._listener_last_error,
-            "collector_callback_session_protocol": self._expected_collector_session_protocol,
             "collector_callback_observed_session_protocol": (
                 self._owned_observed_session_protocol()
             ),
-            # Three-tier protocol view, reported SEPARATELY so support can see the
-            # provenance of every claim: EXPECTED (inferred cloud-family hint,
-            # never authority), CONFIRMED (PN-validated durable binding), and LIVE
-            # (the current trusted session's own wire). Never collapsed together.
-            "collector_expected_session_protocol": (
-                self._expected_collector_session_protocol
+            # Configured, confirmed and live remain separate. There is no
+            # cloud-derived preliminary/expected protocol tier.
+            "collector_configured_session_protocol": (
+                self._configured_collector_session_protocol
             ),
             "collector_confirmed_session_protocol": (
                 binding.session_protocol if binding is not None else ""
@@ -1183,7 +1178,7 @@ class EybondRuntimeLinkManager:
             int(collector_raw_passthrough_min_interval_ms or 0),
         )
         if (
-            normalized_protocol == self._expected_collector_session_protocol
+            normalized_protocol == self._configured_collector_session_protocol
             and normalized_strategy == self._collector_identity_strategy
             and normalized_raw_bootstrap == self._collector_raw_passthrough_bootstrap
             and normalized_raw_frame == self._collector_raw_passthrough_frame_format
@@ -1193,10 +1188,9 @@ class EybondRuntimeLinkManager:
 
         # A live conflict (contradictory wire observation) blocks any profile
         # rebuild until new NON-contradictory positive live evidence appears.
-        # Tearing transports down on top of a conflict, on a cloud-family guess,
-        # would both destroy a working listener and act on evidence we have
-        # explicitly rejected. The conflict is preserved; the bootstrap is not
-        # applied.
+        # Tearing transports down on top of a conflict would destroy a working
+        # listener and act on evidence we have explicitly rejected. Preserve
+        # the conflict until a positive wire observation resolves it.
         live = self._live_session_handle()
         if live.conflict:
             logger.debug(
@@ -1209,15 +1203,11 @@ class EybondRuntimeLinkManager:
 
         # Live session handover is NOT a profile change. The confirmed wire
         # binding is the authority: a reconcile request whose protocol
-        # contradicts it is a cloud-family/persisted bootstrap guess (e.g.
-        # smartess_at implying at_text) filling the momentary gap while a same-PN
-        # socket reconnects. Tearing down transports for it caused the
-        # framed->at_text->framed flap and the ~17s re-onboarding. Only rebuild
-        # when either no live wire has ever been confirmed (genuine
-        # pre-observation bootstrap) or the link currently observes the requested
-        # protocol live (positive live evidence). This is the bootstrap/handover
-        # split; steady-state live wire changes go through set_negotiated_wire,
-        # not a rebuild.
+        # contradicts it is untrusted configuration, not wire evidence. Tearing
+        # transports down for it caused framed->at_text->framed flapping and
+        # needless re-onboarding. Rebuild only when no wire has been confirmed
+        # yet or when the requested protocol is positively observed live.
+        # Steady-state live wire changes go through set_negotiated_wire.
         binding = self._effective_wire_binding()
         confirmed_protocol = binding.session_protocol if binding is not None else ""
         if (
@@ -1239,7 +1229,7 @@ class EybondRuntimeLinkManager:
         logger.warning(
             "EyeBond callback session profile changed after %s: protocol %s -> %s, identity %s -> %s, raw_bootstrap %s -> %s, raw_frame %s -> %s, raw_min_interval_ms %s -> %s; rebuilding transport",
             reason or "collector_session_profile_change",
-            self._expected_collector_session_protocol or "unknown",
+            self._configured_collector_session_protocol or "unknown",
             normalized_protocol or "unknown",
             self._collector_identity_strategy or "unknown",
             normalized_strategy or "unknown",
@@ -1255,7 +1245,7 @@ class EybondRuntimeLinkManager:
             await self._announcer.stop()
             await self._stop_all_transports()
 
-        self._expected_collector_session_protocol = normalized_protocol
+        self._configured_collector_session_protocol = normalized_protocol
         self._collector_identity_strategy = normalized_strategy
         self._collector_raw_passthrough_bootstrap = normalized_raw_bootstrap
         self._collector_raw_passthrough_frame_format = normalized_raw_frame
@@ -2337,13 +2327,13 @@ class EybondRuntimeLinkManager:
         return binding
 
     def _confirmed_session_protocol(self) -> str:
-        """Return the CONFIRMED session protocol, else "" (never the inferred hint).
+        """Return the confirmed session protocol, else an empty string.
 
         Confirmed evidence only: a trusted live-observed wire (strongest) or the
         confirmed wire binding (live-derived this session, or persisted
         confirmed-live seeded for the same durable PN). This is what may register
-        a listener protocol owner and seed a bootstrap adapter -- the inferred
-        cloud-family ``_expected_collector_session_protocol`` is NEVER returned here.
+        a listener protocol owner and seed a bootstrap adapter. No preliminary
+        cloud-family protocol exists at this boundary.
         Construction-safe: falls back to the pure binding read if the live
         handle cannot be resolved yet (transports not built).
         """
@@ -2366,7 +2356,7 @@ class EybondRuntimeLinkManager:
         """Return whether a live wire has ever been confirmed for this collector.
 
         Once true, the live session is the transport authority: cloud-family /
-        persisted / options-data are bootstrap hints only and must not drive a
+        configuration metadata must not drive a
         steady-state destructive transport rebuild.
         """
 
@@ -2447,7 +2437,7 @@ class EybondRuntimeLinkManager:
             # a PN-validated persisted confirmed-live protocol.
             return binding.inverter_forward_adapter
         # No confirmed evidence. FAIL CLOSED. The inverter adapter is never
-        # chosen from an inferred cloud-family / persisted / bootstrap protocol,
+        # chosen from cloud-family, endpoint, driver, or unproven persisted data,
         # and there is no legacy "unknown -> framed_fc4" fallback: a connected
         # socket without an observed/confirmed wire is not safe to forward.
         return ADAPTER_NONE
@@ -2939,9 +2929,8 @@ class EybondRuntimeLinkManager:
             heartbeat_interval=float(self._heartbeat_interval),
             collector_ip=self._collector_ip,
             collector_pn=self._collector_pn,
-            # Only a CONFIRMED protocol is handed to the shared listener, so an
-            # inferred cloud-family hint can never register a protocol owner or
-            # drive an active identity probe. "" => passive observation only.
+            # Only a CONFIRMED protocol is handed to the shared listener.
+            # "" means passive observation only.
             collector_session_protocol=self._confirmed_session_protocol(),
             collector_identity_strategy=self._collector_identity_strategy,
             collector_raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
@@ -2956,9 +2945,8 @@ class EybondRuntimeLinkManager:
             request_timeout=DEFAULT_REQUEST_TIMEOUT,
             collector_ip=self._collector_ip,
             collector_pn=self._collector_pn,
-            # Only a CONFIRMED protocol is handed to the shared listener, so an
-            # inferred cloud-family hint can never register a protocol owner or
-            # drive an active identity probe. "" => passive observation only.
+            # Only a CONFIRMED protocol is handed to the shared listener.
+            # "" means passive observation only.
             collector_session_protocol=self._confirmed_session_protocol(),
             collector_identity_strategy=self._collector_identity_strategy,
             collector_raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,

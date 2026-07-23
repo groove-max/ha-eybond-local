@@ -29,6 +29,7 @@ from ..const import (
     CONF_TCP_PORT,
     CONF_UDP_PORT,
     CONNECTION_TYPE_EYBOND,
+    DEFAULT_DRIVER_DETECTION_STRATEGY,
     DEFAULT_COLLECTOR_IP,
     DEFAULT_DISCOVERY_INTERVAL,
     DEFAULT_DISCOVERY_TARGET,
@@ -38,6 +39,7 @@ from ..const import (
     DEFAULT_UDP_PORT,
 )
 from ..collector.transport_profile import (
+    apply_observed_collector_session_protocol,
     resolve_collector_transport_profile_from_entry_context,
 )
 from ..onboarding.eybond import OnboardingDetector
@@ -77,15 +79,22 @@ def _build_eybond_connection_spec(
     data: Mapping[str, object],
     options: Mapping[str, object],
 ) -> EybondConnectionSpec:
-    transport_profile = resolve_collector_transport_profile_from_entry_context(
-        data,
-        options,
-    )
     confirmed_evidence = ConfirmedSessionProtocolEvidence.from_entry(
         data,
         options,
         entry_pn=str(data.get(CONF_COLLECTOR_PN, "") or ""),
     )
+    transport_profile = resolve_collector_transport_profile_from_entry_context(
+        data,
+        options,
+    )
+    if confirmed_evidence is not None:
+        # The validated, PN-bound live observation chooses the wire. Cloud
+        # metadata may only refine the dialect of that already-confirmed wire.
+        transport_profile = apply_observed_collector_session_protocol(
+            transport_profile,
+            confirmed_evidence.protocol,
+        )
     return EybondConnectionSpec(
         server_ip=str(options.get(CONF_SERVER_IP, data.get(CONF_SERVER_IP, ""))),
         advertised_server_ip=str(
@@ -106,7 +115,7 @@ def _build_eybond_connection_spec(
         collector_ip=str(options.get(CONF_COLLECTOR_IP, data.get(CONF_COLLECTOR_IP, DEFAULT_COLLECTOR_IP))),
         collector_pn=str(data.get(CONF_COLLECTOR_PN, "") or ""),
         collector_cloud_family=transport_profile.cloud_family,
-        collector_expected_session_protocol=transport_profile.session_protocol,
+        collector_configured_session_protocol=transport_profile.session_protocol,
         collector_identity_strategy=transport_profile.identity_strategy,
         collector_raw_passthrough_bootstrap=transport_profile.raw_passthrough_bootstrap,
         collector_raw_passthrough_frame_format=transport_profile.raw_passthrough_frame_format,
@@ -140,6 +149,7 @@ def _create_eybond_runtime_manager(
     connection: ConnectionSpec,
     *,
     driver_hint: str,
+    driver_detection_strategy: str = DEFAULT_DRIVER_DETECTION_STRATEGY,
     connection_mode: str = "",
 ) -> RuntimeManager:
     if not isinstance(connection, EybondConnectionSpec):
@@ -147,6 +157,7 @@ def _create_eybond_runtime_manager(
     return EybondHub(
         connection=connection,
         driver_hint=driver_hint,
+        driver_detection_strategy=driver_detection_strategy,
         connection_mode=connection_mode,
     )
 

@@ -2,9 +2,35 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ..models import RuntimeSnapshot
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeInverterCandidate:
+    """One inverter protocol observed on the entry-owned collector session.
+
+    This is a read model, not persisted identity and not a recovery proof.  It
+    exists so post-entry UX can present an ambiguity without exposing driver
+    objects or transport handles outside the runtime boundary.
+    """
+
+    driver_key: str
+    protocol_family: str
+    model_name: str
+    serial_number: str
+
+    def __post_init__(self) -> None:
+        for name in ("driver_key", "protocol_family", "model_name", "serial_number"):
+            value = getattr(self, name)
+            if type(value) is not str:
+                raise TypeError(f"{name}_must_be_string")
+            if value != value.strip():
+                raise ValueError(f"{name}_must_be_normalized")
+        if not self.driver_key:
+            raise ValueError("driver_key_required")
 
 
 class RuntimeManager(Protocol):
@@ -30,6 +56,11 @@ class RuntimeManager(Protocol):
 
     @property
     def collector_server_endpoint_rollback_target(self) -> str:
+        ...
+
+    @property
+    def inverter_protocol_candidates(self) -> tuple[RuntimeInverterCandidate, ...]:
+        """Return all protocols proven on the current owned session."""
         ...
 
     async def async_start(self) -> None:

@@ -1305,6 +1305,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
             BOOTSTRAP_SOURCE_OBSERVED_SCAN,
             OnboardingWireProbeIntent,
             ObservedSessionWireProbeIntent,
+            SilentSessionBootstrapOffer,
         )
 
         OnboardingWireProbeIntent(protocol="eybond_framed", session_id="s-1")
@@ -1328,13 +1329,29 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
             session_id="s-1",
             collector_pn=FULL_PN,
             identity_source="fc2_parameter_2",
+            wire_source_session_id="s-1",
         )
         self.assertEqual(observed.source, BOOTSTRAP_SOURCE_OBSERVED_SCAN)
+        continuation = ObservedSessionWireProbeIntent.for_silent_offer(
+            SilentSessionBootstrapOffer("s-callback"), observed=observed
+        )
+        self.assertEqual(continuation.session_id, "s-callback")
+        self.assertEqual(continuation.wire_source_session_id, "s-1")
+        self.assertEqual(continuation.protocol, "eybond_framed")
+        with self.assertRaises(TypeError):
+            ObservedSessionWireProbeIntent.for_silent_offer(
+                object(), observed=observed
+            )
+        with self.assertRaises(TypeError):
+            ObservedSessionWireProbeIntent.for_silent_offer(
+                SilentSessionBootstrapOffer("s-callback"), observed=object()
+            )
         weak = ObservedSessionWireProbeIntent(
             protocol="eybond_framed",
             session_id="s-weak",
             collector_pn=SHORT_PN,
             identity_source="framed_heartbeat",
+            wire_source_session_id="s-weak",
         )
         self.assertEqual(weak.identity_source, "framed_heartbeat")
         unknown_source = ObservedSessionWireProbeIntent(
@@ -1342,6 +1359,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
             session_id="s-unknown-source",
             collector_pn=SHORT_PN,
             identity_source="",
+            wire_source_session_id="s-unknown-source",
         )
         self.assertEqual(unknown_source.identity_source, "")
         for changes in (
@@ -1349,6 +1367,8 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
             {"session_id": " s-1 "},
             {"identity_source": " framed_heartbeat "},
             {"identity_source": object()},
+            {"wire_source_session_id": " source "},
+            {"wire_source_session_id": object()},
             {"protocol": "unknown"},
             {"source": "explicit_user_selection"},
         ):
@@ -1357,6 +1377,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
                 "session_id": "s-1",
                 "collector_pn": FULL_PN,
                 "identity_source": "fc2_parameter_2",
+                "wire_source_session_id": "s-1",
                 **changes,
             }
             with self.assertRaises((TypeError, ValueError)):
@@ -1486,6 +1507,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     session_id="s-observed",
                     collector_pn=FULL_PN,
                     identity_source="fc2_parameter_2",
+                    wire_source_session_id="s-observed",
                 )
             ),
             reader=reader,
@@ -1494,6 +1516,39 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(outcome.identity_certified, outcome.result)
         self.assertEqual(sender.calls, 0)
         self.assertEqual(listener.identify_calls, [("s-observed", "eybond_framed")])
+
+    async def test_observed_wire_retargets_only_the_typed_silent_offer(self) -> None:
+        from custom_components.eybond_local.connection.callback_identity import (
+            ObservedSessionWireProbeIntent,
+            SilentSessionBootstrapOffer,
+        )
+
+        observed = ObservedSessionWireProbeIntent(
+            protocol="eybond_framed",
+            session_id="s-observed",
+            collector_pn=FULL_PN,
+            identity_source="fc2_parameter_2",
+            wire_source_session_id="s-observed",
+        )
+        continuation = ObservedSessionWireProbeIntent.for_silent_offer(
+            SilentSessionBootstrapOffer("s-callback"), observed=observed
+        )
+        live = _Live(())
+        listener = self._FakeListener(
+            live, silent_ids=["s-callback"], identify_pn=FULL_PN
+        )
+        sender = _Sender()
+        outcome, _registry = await self._run(
+            listener=listener,
+            request=_request(bootstrap_probe=continuation),
+            reader=_Reader(pn=FULL_PN, source="fc2_parameter_2"),
+            sender=sender,
+        )
+
+        self.assertTrue(outcome.identity_certified, outcome.result)
+        self.assertEqual(sender.calls, 0)
+        self.assertEqual(listener.identify_calls, [("s-callback", "eybond_framed")])
+        self.assertEqual(continuation.wire_source_session_id, "s-observed")
 
     async def test_weak_readable_scan_session_is_upgraded_on_exact_socket_without_trigger(
         self,
@@ -1527,6 +1582,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     session_id="s-weak-readable",
                     collector_pn=SHORT_PN,
                     identity_source="framed_heartbeat",
+                    wire_source_session_id="s-weak-readable",
                 ),
             ),
             reader=reader,
@@ -1568,6 +1624,7 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     session_id="s-weak-unverified",
                     collector_pn=SHORT_PN,
                     identity_source="framed_heartbeat",
+                    wire_source_session_id="s-weak-unverified",
                 ),
             ),
             reader=reader,

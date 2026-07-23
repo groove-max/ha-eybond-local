@@ -328,6 +328,9 @@ from custom_components.eybond_local.collector.smartess_local import (
     SET_TARGET_PASSWORD,
     SET_TARGET_SSID,
 )
+from custom_components.eybond_local.collector.capabilities import (
+    COLLECTOR_KIND_UNKNOWN,
+)
 from custom_components.eybond_local.const import (
     COLLECTOR_OPERATION_HA_ONLY,
     COLLECTOR_OPERATION_SMARTESS_AND_HA,
@@ -338,10 +341,12 @@ from custom_components.eybond_local.const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
     CONF_COLLECTOR_OPERATION_MODE,
     CONF_CONNECTION_STRATEGY,
+    CONF_DRIVER_DETECTION_STRATEGY,
     CONF_PROXY_ENABLED,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
     DOMAIN,
+    DRIVER_DETECTION_FULL_SCAN,
     CONF_DRIVER_HINT,
     CONF_SMARTESS_COLLECTOR_VERSION,
     CONF_SMARTESS_DEVICE_ADDRESS,
@@ -372,6 +377,7 @@ from custom_components.eybond_local.models import (
 from custom_components.eybond_local.onboarding.detection import DiscoveryTarget
 from custom_components.eybond_local.support.workflow import build_support_workflow_state
 from custom_components.eybond_local.support.cloud_evidence import CloudEvidenceRecord, build_cloud_evidence_payload
+from custom_components.eybond_local.runtime.manager import RuntimeInverterCandidate
 
 
 class _FakeEntry:
@@ -689,6 +695,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     def _make_options_flow(self) -> EybondLocalOptionsFlow:
         entry = type("_Entry", (), {})()
+        entry.entry_id = "entry-options"
         entry.data = {
             "connection_type": "eybond",
             "server_ip": "192.168.1.50",
@@ -715,179 +722,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         selector = _poll_interval_selector("pi30")
 
         self.assertEqual(selector.config.kwargs["min"], 2)
-
-    def test_selected_result_with_driver_choice_promotes_selected_match(self) -> None:
-        flow = self._make_flow()
-        pi30 = DriverMatch(
-            driver_key="pi30",
-            protocol_family="pi30",
-            model_name="PowMr 4.2kW",
-            serial_number="VMII-NXPW5KW",
-            probe_target=ProbeTarget(devcode=0x0994, collector_addr=255, device_addr=0),
-        )
-        smg = DriverMatch(
-            driver_key="modbus_smg",
-            protocol_family="modbus_smg",
-            model_name="SMG-compatible",
-            serial_number="VMII-NXPW5KW",
-            probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
-        )
-        result = OnboardingResult(
-            collector=CollectorCandidate(
-                target_ip="192.168.1.55",
-                source="deep_scan",
-                ip="192.168.1.55",
-            ),
-            match=pi30,
-            alternative_matches=(smg,),
-        )
-
-        self.assertEqual(
-            [match.driver_key for match in flow._driver_choice_candidates(result)],
-            ["pi30", "modbus_smg"],
-        )
-        selected = flow._selected_result_with_match(result, smg)
-
-        self.assertEqual(selected.match.driver_key, "modbus_smg")
-        self.assertEqual([match.driver_key for match in selected.alternative_matches], ["pi30"])
-
-    def test_driver_choice_presentation_is_human_readable(self) -> None:
-        flow = self._make_flow()
-        pi30 = DriverMatch(
-            driver_key="pi30",
-            protocol_family="pi30",
-            model_name="PI30 4200",
-            serial_number="X1",
-            probe_target=ProbeTarget(devcode=0x0102, collector_addr=255, device_addr=0),
-            details={"probe_elapsed_ms": 4086},
-        )
-        smartess = DriverMatch(
-            driver_key="smartess_local",
-            protocol_family="smartess_local",
-            model_name="PowMr 4.2kW (SmartESS 0925)",
-            serial_number="X1",
-            probe_target=ProbeTarget(devcode=1, collector_addr=5, device_addr=5),
-            details={"probe_elapsed_ms": 6220},
-        )
-        result = OnboardingResult(
-            collector=CollectorCandidate(
-                target_ip="192.168.1.14",
-                source="deep_scan",
-                ip="192.168.1.14",
-            ),
-            match=pi30,
-            alternative_matches=(smartess,),
-        )
-        candidates = flow._driver_choice_candidates(result)
-
-        primary_label = flow._driver_choice_label(candidates[0], recommended=True)
-        alternative_label = flow._driver_choice_label(candidates[1])
-        self.assertEqual(primary_label, "PI30 4200 (recommended)")
-        self.assertEqual(alternative_label, "PowMr 4.2kW (SmartESS 0925)")
-        # No raw route digits anywhere in the labels.
-        self.assertNotIn("255", primary_label + alternative_label)
-        self.assertNotIn("258", primary_label + alternative_label)
-
-        placeholders = flow._driver_choice_placeholders(result)
-        lines = placeholders["driver_choice_candidates"].splitlines()
-        self.assertIn("answered in 4.1s", lines[0])
-        self.assertIn("recommended", lines[0])
-        self.assertIn("answered in 6.2s", lines[1])
-        self.assertNotIn("recommended", lines[1])
-        self.assertNotIn("255", placeholders["driver_choice_candidates"])
-
-    def test_driver_choice_shows_device_address_only_for_same_driver_duplicates(self) -> None:
-        flow = self._make_flow()
-        first = DriverMatch(
-            driver_key="modbus_smg",
-            protocol_family="modbus_smg",
-            model_name="SMG 6200",
-            serial_number="X1",
-            probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
-        )
-        second = DriverMatch(
-            driver_key="modbus_smg",
-            protocol_family="modbus_smg",
-            model_name="SMG 6200",
-            serial_number="X1",
-            probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=4),
-        )
-        result = OnboardingResult(
-            collector=CollectorCandidate(
-                target_ip="192.168.1.14",
-                source="deep_scan",
-                ip="192.168.1.14",
-            ),
-            match=first,
-            alternative_matches=(second,),
-        )
-        candidates = flow._driver_choice_candidates(result)
-        self.assertTrue(flow._driver_choice_needs_address(candidates))
-
-        label = flow._driver_choice_label(candidates[1], include_address=True)
-        self.assertEqual(label, "SMG 6200 (device address 4)")
-
-    def test_driver_choice_appends_driver_name_only_when_model_lacks_it(self) -> None:
-        flow = self._make_flow()
-        match = DriverMatch(
-            driver_key="modbus_smg",
-            protocol_family="modbus_smg",
-            model_name="Anenji 4200",
-            serial_number="X1",
-            probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
-        )
-
-        self.assertEqual(
-            flow._driver_choice_base_label(match),
-            "Anenji 4200 — SMG / Modbus",
-        )
-
-    async def test_driver_choice_submit_updates_autodetect_registry_and_refresh_state(self) -> None:
-        from custom_components.eybond_local.config_flow import CONF_DRIVER_MATCH_KEY
-
-        flow = self._make_flow()
-        pi30 = DriverMatch(
-            driver_key="pi30",
-            protocol_family="pi30",
-            model_name="PowMr 4.2kW",
-            serial_number="VMII-NXPW5KW",
-            probe_target=ProbeTarget(devcode=0x0994, collector_addr=255, device_addr=0),
-        )
-        smg = DriverMatch(
-            driver_key="modbus_smg",
-            protocol_family="modbus_smg",
-            model_name="SMG-compatible",
-            serial_number="VMII-NXPW5KW",
-            probe_target=ProbeTarget(devcode=1, collector_addr=255, device_addr=1),
-        )
-        result = OnboardingResult(
-            collector=CollectorCandidate(
-                target_ip="192.168.1.55",
-                source="deep_scan",
-                ip="192.168.1.55",
-            ),
-            match=pi30,
-            alternative_matches=(smg,),
-        )
-        flow._autodetect_results = {"result_1": result}
-        flow._set_selected_result(result)
-        flow._selected_result_runtime_details_attempted = True
-        flow._selected_result_collector_capabilities_attempted = True
-
-        with patch.object(
-            flow,
-            "async_step_detection_summary",
-            new=AsyncMock(return_value={"type": "form", "step_id": "detection_summary"}),
-        ):
-            step_result = await flow.async_step_driver_choice(
-                {CONF_DRIVER_MATCH_KEY: flow._driver_choice_key(smg)}
-            )
-
-        self.assertEqual(step_result["step_id"], "detection_summary")
-        self.assertEqual(flow._selected_result.match.driver_key, "modbus_smg")
-        self.assertIs(flow._autodetect_results["result_1"], flow._selected_result)
-        self.assertFalse(flow._selected_result_runtime_details_attempted)
-        self.assertFalse(flow._selected_result_collector_capabilities_attempted)
 
     async def test_scanning_without_results_routes_to_scan_results(self) -> None:
         flow = self._make_flow()
@@ -2853,9 +2687,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._scan_mode = SETUP_MODE_DEEP_SCAN
         flow._autodetect_results = {}
 
-        self.assertEqual(flow._refresh_scan_action_label(), "Repeat deep scan")
+        self.assertEqual(
+            flow._refresh_scan_action_label(), "Search the full network again"
+        )
         placeholders = flow._scan_results_placeholders()
-        self.assertIn("Repeat deep scan", placeholders["scan_next_hint"])
+        self.assertIn(
+            "Search the full network again", placeholders["scan_next_hint"]
+        )
 
         flow._scan_mode = "auto"
         self.assertEqual(
@@ -2890,17 +2728,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("scan_summary", result["description_placeholders"])
 
-        with (
-            patch.object(
-                flow,
-                "async_step_detection_summary",
-                new=AsyncMock(return_value={"type": "form", "step_id": "detection_summary"}),
-            ),
-            patch.object(flow, "_existing_entry_for_result", return_value=None),
-        ):
+        with patch.object(flow, "_existing_entry_for_result", return_value=None):
             submit = await flow.async_step_scan_results({"result_key": "0"})
 
-        self.assertEqual(submit["step_id"], "detection_summary")
+        self.assertEqual(submit["step_id"], "confirm")
         self.assertIs(flow._selected_result, flow._autodetect_results["0"])
 
     async def test_scan_results_udp_only_route_is_selectable_for_identification(self) -> None:
@@ -2926,20 +2757,20 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options = _schema_select_options(result["data_schema"], "result_key")
         self.assertIn("0", options)
         self.assertIn(
-            "Identify collector at 192.168.1.14",
+            "Check address 192.168.1.14",
             flow._result_label(flow._autodetect_results["0"]),
         )
         self.assertIn("action:refresh_scan", options)
         self.assertIn("192.168.1.14", result["description_placeholders"]["candidate_list"])
         self.assertIn(
-            "no collector has been identified",
+            "no device has been identified yet",
             result["description_placeholders"]["scan_summary"],
         )
 
     async def test_scan_results_nat_peer_and_route_have_distinct_safe_actions(self) -> None:
         flow = self._make_flow()
         flow.hass.config.language = "uk"
-        full_pn = "E50000253884199645"
+        full_pn = "E50000200000000001"
         flow._autodetect_results = {
             "0": OnboardingResult(
                 collector=CollectorCandidate(
@@ -2983,16 +2814,17 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("0", options)
         self.assertIn("1", options)
         self.assertIn(
-            "Ідентифікувати колектор за адресою 192.168.1.55",
+            "Перевірити адресу 192.168.1.55",
             flow._result_label(flow._autodetect_results["1"]),
         )
         candidate_list = result["description_placeholders"]["candidate_list"]
         self.assertIn(f"PN {full_pn}", candidate_list)
         self.assertIn("з’єднання від 192.168.1.1", candidate_list)
-        self.assertIn("Адреса відповіла", candidate_list)
-        self.assertIn("адреса 192.168.1.55", candidate_list)
+        self.assertIn("Потребує уточнення", candidate_list)
+        self.assertNotIn("вкажіть адресу", candidate_list)
+        self.assertIn("192.168.1.55", candidate_list)
         self.assertIn(
-            "1** ідентифікованих колекторів",
+            "Доступні для налаштування: **1**",
             result["description_placeholders"]["scan_summary"],
         )
 
@@ -3056,6 +2888,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "confirm")
+        self.assertIn(CONF_DRIVER_DETECTION_STRATEGY, result["data_schema"].schema)
         self.assertIn("poll_mode", result["data_schema"].schema)
         self.assertNotIn("poll_interval", result["data_schema"].schema)
         self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data_schema"].schema)
@@ -3066,7 +2899,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manual_result["step_id"], "confirm_poll_interval")
         self.assertIn("poll_interval", manual_result["data_schema"].schema)
 
-    async def test_confirm_step_placeholders_render_split_collector_and_inverter_tables(self) -> None:
+    async def test_confirm_step_defers_scan_time_inverter_identity_to_runtime(self) -> None:
         flow = self._make_flow()
         flow._selected_result = OnboardingResult(
             collector=CollectorCandidate(
@@ -3101,22 +2934,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("| Collector IP | 192.168.1.55 |", placeholders["collector_confirm_table"])
         self.assertNotIn("Collector Signal Strength", placeholders["collector_confirm_table"])
         self.assertIn("**Inverter**", placeholders["inverter_confirm_table"])
-        self.assertIn("| Model | SMG 6200 |", placeholders["inverter_confirm_table"])
-        self.assertIn("| Rated Power | 6200 W |", placeholders["inverter_confirm_table"])
-        self.assertIn(
-            "| Serial Number | 92632500000001 |",
-            placeholders["inverter_confirm_table"],
-        )
-        self.assertIn(
-            "| Detection Confidence | High confidence |",
-            placeholders["inverter_confirm_table"],
-        )
-        self.assertIn(
-            "| Protocol Family | modbus_smg |",
-            placeholders["inverter_confirm_table"],
-        )
-        self.assertNotIn("Battery Connection", placeholders["inverter_confirm_table"])
-        self.assertNotIn("Battery Percent", placeholders["inverter_confirm_table"])
+        self.assertIn("will detect the connected inverter", placeholders["inverter_confirm_table"])
+        self.assertNotIn("SMG 6200", placeholders["inverter_confirm_table"])
+        self.assertNotIn("92632500000001", placeholders["inverter_confirm_table"])
 
     async def test_confirm_step_passive_callback_without_match_defers_inverter_table(self) -> None:
         flow = self._make_flow()
@@ -3139,7 +2959,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         placeholders = result["description_placeholders"]
         self.assertIn("**Колектор**", placeholders["collector_confirm_table"])
         self.assertIn("**Інвертор**", placeholders["inverter_confirm_table"])
-        self.assertIn("після створення запису", placeholders["inverter_confirm_table"])
+        self.assertIn("Після додавання пристрою", placeholders["inverter_confirm_table"])
         self.assertNotIn("| Модель |", placeholders["inverter_confirm_table"])
         self.assertNotIn("Непідтверджений інвертор", placeholders["inverter_confirm_table"])
         self.assertEqual(placeholders["control_summary"], "")
@@ -3216,7 +3036,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         bind.assert_not_awaited()
 
-    async def test_confirm_step_placeholders_keep_rated_power_missing_visible(self) -> None:
+    async def test_confirm_step_does_not_present_missing_scan_time_inverter_fields(self) -> None:
         flow = self._make_flow()
         flow._selected_result = OnboardingResult(
             collector=CollectorCandidate(
@@ -3241,12 +3061,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         placeholders = result["description_placeholders"]
         self.assertNotIn("Collector Signal Strength", placeholders["collector_confirm_table"])
-        self.assertIn(
-            "| Rated Power | Not available yet |",
-            placeholders["inverter_confirm_table"],
-        )
-        self.assertNotIn("Battery Connection", placeholders["inverter_confirm_table"])
-        self.assertNotIn("Battery Percent", placeholders["inverter_confirm_table"])
+        self.assertIn("will detect the connected inverter", placeholders["inverter_confirm_table"])
+        self.assertNotIn("Rated Power", placeholders["inverter_confirm_table"])
 
     async def test_confirm_step_uses_collector_pn_from_enriched_match_details(self) -> None:
         flow = self._make_flow()
@@ -3307,9 +3123,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         placeholders = result["description_placeholders"]
         self.assertNotIn("Collector Signal Strength", placeholders["collector_confirm_table"])
-        self.assertNotIn("Battery Connection", placeholders["inverter_confirm_table"])
-        self.assertNotIn("Battery Percent", placeholders["inverter_confirm_table"])
-        self.assertIn("| Rated Power | Not available yet |", placeholders["inverter_confirm_table"])
+        self.assertIn("will detect the connected inverter", placeholders["inverter_confirm_table"])
+        self.assertNotIn("Rated Power", placeholders["inverter_confirm_table"])
         create_manager.assert_not_called()
 
     async def test_confirm_step_skips_smartess_cloud_assist_for_low_confidence_result(self) -> None:
@@ -3386,12 +3201,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await flow.async_step_choose({CONF_RESULT_KEY: "1"})
 
         self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "detection_summary")
+        self.assertEqual(result["step_id"], "confirm")
         self.assertIsNotNone(flow._selected_result)
         self.assertEqual(flow._selected_result.match.model_name, "SMG 6200")
-
-        result = await flow.async_step_detection_summary({})
-        self.assertEqual(result["step_id"], "confirm")
 
     async def test_choose_step_udp_only_route_enters_callback_identification(self) -> None:
         flow = self._make_flow()
@@ -3712,12 +3524,21 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             connection_mode="known_ip",
         )
 
-        interval_form = await flow.async_step_confirm({"poll_mode": "manual"})
+        interval_form = await flow.async_step_confirm(
+            {
+                "poll_mode": "manual",
+                CONF_DRIVER_DETECTION_STRATEGY: DRIVER_DETECTION_FULL_SCAN,
+            }
+        )
         self.assertEqual(interval_form["step_id"], "confirm_poll_interval")
         result = await flow.async_step_confirm_poll_interval({"poll_interval": 15})
 
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(result["options"]["poll_interval"], 15)
+        self.assertEqual(
+            result["data"][CONF_DRIVER_DETECTION_STRATEGY],
+            DRIVER_DETECTION_FULL_SCAN,
+        )
         self.assertEqual(result["data"][CONF_SMARTESS_COLLECTOR_VERSION], "1.2.3")
         self.assertEqual(result["data"][CONF_SMARTESS_PROTOCOL_ASSET_ID], "0925")
         self.assertEqual(result["data"][CONF_SMARTESS_PROFILE_KEY], "smartess_0925")
@@ -4351,6 +4172,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(captured_kwargs["attempts"], 1)
         self.assertFalse(captured_kwargs["enrich_runtime_details"])
+        self.assertTrue(captured_kwargs["identify_collector_only"])
+        self.assertEqual(
+            captured_kwargs["total_timeout"],
+            max(5.0, flow._scan_timeout_seconds - 5.0),
+        )
+        self.assertLess(
+            captured_kwargs["total_timeout"],
+            config_flow_module._ONBOARDING_TIMEOUT_POLICY.deep_scan_hard_ceiling_seconds,
+        )
         self.assertFalse(captured_kwargs["return_after_first_match"])
 
     async def test_do_scan_scopes_active_probe_against_passive_discovery(self) -> None:
@@ -4671,7 +4501,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, {"type": "abort", "reason": "already_configured"})
 
-    async def test_do_scan_keeps_runtime_enrichment_for_deep_scan(self) -> None:
+    async def test_do_scan_keeps_deep_scan_collector_only(self) -> None:
         flow = self._make_flow()
         flow._set_scan_mode(SETUP_MODE_DEEP_SCAN)
         captured_kwargs: dict[str, object] = {}
@@ -4687,7 +4517,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             await flow._async_do_scan()
 
-        self.assertTrue(captured_kwargs["enrich_runtime_details"])
+        self.assertFalse(captured_kwargs["enrich_runtime_details"])
+        self.assertTrue(captured_kwargs["identify_collector_only"])
 
     async def test_do_scan_preserves_new_collector_only_result_alongside_existing_matched_entry(self) -> None:
         existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
@@ -5663,7 +5494,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         # Pending identity is synthetic, never derived from an address.
         self.assertTrue(flow._test_unique_id.startswith("pending:"))
 
-    async def test_manual_high_confidence_entry_defaults_to_auto_control_mode(self) -> None:
+    async def test_manual_entry_defers_inverter_identity_and_controls_to_runtime(self) -> None:
         flow = self._make_flow()
         flow._manual_config = {
             "server_ip": "192.168.1.50",
@@ -5697,8 +5528,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await flow.async_step_manual_create_pending()
 
         self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"]["control_mode"], "auto")
-        self.assertEqual(result["data"]["detection_confidence"], "high")
+        self.assertEqual(result["data"]["control_mode"], "read_only")
+        self.assertEqual(result["data"]["detection_confidence"], "none")
+        self.assertEqual(result["data"]["detected_model"], "")
+        self.assertEqual(result["data"]["detected_serial"], "")
+        self.assertEqual(result["data"][CONF_DRIVER_HINT], "auto")
 
     async def test_manual_success_routes_to_manual_confirm_without_detection(self) -> None:
         # The manual callback attempt proves a COLLECTOR and nothing else: no
@@ -5743,7 +5577,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         owner = registry.owner_for_pn(answered_pn)
         self.assertTrue(owner.startswith("callback_verification:"))
 
-    async def test_auto_entry_persists_device_catalog_metadata(self) -> None:
+    async def test_auto_entry_does_not_persist_scan_time_inverter_metadata(self) -> None:
         flow = self._make_flow()
         flow._auto_config = {
             "server_ip": "192.168.1.104",
@@ -5783,11 +5617,16 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await flow._async_create_entry_from_result({"poll_interval": 30})
 
         self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"]["device_catalog_kind"], "family")
-        self.assertEqual(result["data"]["device_catalog_tier"], "partial")
-        self.assertEqual(result["data"]["device_catalog_entry_key"], "")
+        self.assertNotIn("device_catalog_kind", result["data"])
+        self.assertNotIn("device_catalog_tier", result["data"])
+        self.assertNotIn("device_catalog_entry_key", result["data"])
+        self.assertEqual(result["data"]["detected_model"], "")
+        self.assertEqual(result["data"]["detected_serial"], "")
+        self.assertEqual(result["data"]["detection_confidence"], "none")
+        self.assertEqual(result["data"][CONF_DRIVER_HINT], "auto")
+        self.assertEqual(result["data"]["control_mode"], "read_only")
 
-    async def test_smartess_cloud_assist_persists_inferred_metadata_on_pending_entry(self) -> None:
+    async def test_smartess_cloud_assist_preview_does_not_bind_runtime_driver(self) -> None:
         flow = self._make_flow()
         with tempfile.TemporaryDirectory() as tempdir:
             flow.hass.config.config_dir = tempdir
@@ -5915,9 +5754,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             created = await flow.async_step_confirm({"poll_mode": "auto"})
 
             self.assertEqual(created["type"], "create_entry")
-            self.assertEqual(created["data"][CONF_SMARTESS_PROTOCOL_ASSET_ID], "0925")
-            self.assertEqual(created["data"][CONF_SMARTESS_PROFILE_KEY], "smartess_0925")
-            self.assertEqual(created["data"][CONF_DRIVER_HINT], "pi30")
+            self.assertEqual(created["data"][CONF_SMARTESS_PROTOCOL_ASSET_ID], "0000")
+            self.assertNotEqual(created["data"].get(CONF_SMARTESS_PROFILE_KEY), "smartess_0925")
+            self.assertEqual(created["data"][CONF_DRIVER_HINT], "auto")
 
     async def test_scan_results_placeholders_use_localized_select_hint(self) -> None:
         flow = self._make_flow()
@@ -5940,8 +5779,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         placeholders = flow._scan_results_placeholders()
 
-        self.assertIn("Выберите в списке ниже инвертор", placeholders["scan_next_hint"])
-        self.assertNotIn("Pick the inverter", placeholders["scan_next_hint"])
+        self.assertIn("Выберите нужное устройство или адрес", placeholders["scan_next_hint"])
+        self.assertNotIn("инвертор", placeholders["scan_summary"].lower())
 
     async def test_scan_results_placeholders_use_localized_retry_actions(self) -> None:
         flow = self._make_flow()
@@ -5993,10 +5832,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         placeholders = flow._scan_results_placeholders()
         result_label = flow._result_label(flow._autodetect_results["0"])
 
-        self.assertIn("локальное сопоставление инвертора пока не подтверждено", placeholders["scan_summary"])
+        self.assertIn("Доступны для настройки", placeholders["scan_summary"])
+        self.assertNotIn("инвертор", placeholders["scan_summary"].lower())
         self.assertNotIn("ожидающее", placeholders["scan_next_hint"].lower())
         self.assertIn("ввести адрес вручную", placeholders["scan_next_hint"].lower())
-        self.assertIn("Есть признаки SmartESS", result_label)
+        self.assertIn("Готово к настройке", result_label)
+        self.assertNotIn("SmartESS", result_label)
 
     async def test_scan_result_labels_name_passive_callback_peer_address_explicitly(self) -> None:
         flow = self._make_flow()
@@ -6042,6 +5883,77 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             ["runtime", "shadow_learning", "collector_wifi", "diagnostics"],
         )
 
+    async def test_options_runtime_ambiguity_requires_post_entry_protocol_choice(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            inverter_protocol_candidates=(
+                RuntimeInverterCandidate(
+                    driver_key="smartess_local",
+                    protocol_family="0925",
+                    model_name="Hybrid 5K",
+                    serial_number="12345",
+                ),
+                RuntimeInverterCandidate(
+                    driver_key="pi30",
+                    protocol_family="pi30",
+                    model_name="Hybrid 5K",
+                    serial_number="12345",
+                ),
+            ),
+            data=types.SimpleNamespace(collector=None, values={}),
+        )
+
+        menu = await options.async_step_init()
+        self.assertEqual(menu["menu_options"][0], "inverter_protocol")
+
+        form = await options.async_step_inverter_protocol()
+        self.assertEqual(form["step_id"], "inverter_protocol")
+        self.assertEqual(
+            _schema_select_options(form["data_schema"], "driver_hint"),
+            ["smartess_local", "pi30"],
+        )
+
+        result = await options.async_step_inverter_protocol(
+            {"driver_hint": "pi30"}
+        )
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(options._config_entry.options["driver_hint"], "pi30")
+        self.assertEqual(options._config_entry.data["detected_driver"], "")
+        self.assertEqual(options._config_entry.data["detected_model"], "")
+        self.assertEqual(options._config_entry.data["detected_serial"], "")
+        self.assertEqual(options._config_entry.data["detection_confidence"], "none")
+        self.assertEqual(options._config_entry.data["control_mode"], "read_only")
+        self.assertEqual(len(options.hass.config_entries.updates), 1)
+        self.assertEqual(options.hass.config_entries.reloaded, [])
+
+    async def test_options_protocol_choice_rejects_unobserved_driver(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            inverter_protocol_candidates=(
+                RuntimeInverterCandidate(
+                    driver_key="pi30",
+                    protocol_family="pi30",
+                    model_name="Hybrid 5K",
+                    serial_number="12345",
+                ),
+                RuntimeInverterCandidate(
+                    driver_key="smartess_local",
+                    protocol_family="0925",
+                    model_name="Hybrid 5K",
+                    serial_number="12345",
+                ),
+            ),
+            data=types.SimpleNamespace(collector=None, values={}),
+        )
+
+        result = await options.async_step_inverter_protocol(
+            {"driver_hint": "modbus_smg"}
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["errors"]["driver_hint"], "invalid_selection")
+        self.assertEqual(options.hass.config_entries.updates, [])
+
     async def test_options_init_menu_hides_shadow_learning_for_virtual_bridge(self) -> None:
         options = self._make_options_flow()
         options._config_entry.runtime_data = types.SimpleNamespace(
@@ -6077,6 +5989,37 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("shadow_learning", result["menu_options"])
         self.assertNotIn("collector_uart", result["menu_options"])
         self.assertEqual(result["description_placeholders"]["bridge_note"], "")
+
+    async def test_runtime_identity_unlocks_factory_tools_for_legacy_unknown_entry(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.data = {
+            **dict(options._config_entry.data),
+            "collector_kind": COLLECTOR_KIND_UNKNOWN,
+            CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        }
+        options._config_entry.options = {
+            "collector_kind": COLLECTOR_KIND_UNKNOWN,
+        }
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={
+                    "model_name": "SMG 6200",
+                    "serial_number": "SMGSYN240001",
+                },
+            ),
+        )
+
+        menu = await options.async_step_init()
+        with tempfile.TemporaryDirectory() as tempdir:
+            options.hass.config.config_dir = tempdir
+            diagnostics = options._diagnostics_menu_options(
+                "create_support_package"
+            )
+
+        self.assertIn("shadow_learning", menu["menu_options"])
+        self.assertIn("proxy_capture", diagnostics)
+        self.assertFalse(options._collector_capabilities().ha_only_required)
 
     async def test_options_init_offers_repair_for_degraded_virtual_bridge(self) -> None:
         # Recovery beats capability filtering: a DEGRADED virtual bridge (recovery
@@ -6497,11 +6440,16 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(result["data"]["poll_mode"], "manual")
         self.assertEqual(result["data"]["poll_interval"], 15)
-        self.assertEqual(result["data"]["control_mode"], "full")
+        # Changing driver is user intent, not detected identity.  The new
+        # runtime must confirm it before controls can leave read-only mode.
+        self.assertEqual(result["data"]["control_mode"], "read_only")
         self.assertEqual(result["data"]["advertised_server_ip"], "203.0.113.10")
         self.assertEqual(result["data"]["advertised_tcp_port"], 9443)
         self.assertEqual(result["data"]["driver_hint"], "modbus_smg")
         self.assertNotIn("connection", result["data"])
+        self.assertEqual(options._config_entry.data["detected_driver"], "")
+        self.assertEqual(options._config_entry.data["detected_model"], "")
+        self.assertEqual(options._config_entry.data["detected_serial"], "")
 
     async def test_options_runtime_auto_mode_hides_poll_interval_and_preserves_fallback(self) -> None:
         options = self._make_options_flow()
@@ -6929,7 +6877,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             set(options._transition_options_payload),
-            {"poll_mode", "poll_interval", "control_mode"},
+            {
+                "driver_detection_strategy",
+                "poll_mode",
+                "poll_interval",
+                "control_mode",
+            },
         )
         self.assertNotIn(
             CONF_PROXY_ENABLED, options._transition_options_payload
@@ -9775,6 +9728,84 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("did not call back", explanation)
         self.assertNotIn("could not verify the collector connection", explanation)
 
+    async def test_silent_addressed_callback_reuses_observed_wire_without_second_trigger(
+        self,
+    ) -> None:
+        """E500: a typed silent offer inherits only the selected session's wire."""
+
+        from custom_components.eybond_local.connection.callback_identity import (
+            CallbackIdentityOutcome,
+            IDENTITY_SESSION_SILENT,
+            IDENTITY_SILENT_SESSION_STALE,
+            IDENTITY_WIRE_PROBE_FAILED,
+            ObservedSessionWireProbeIntent,
+            SilentSessionBootstrapOffer,
+        )
+
+        flow = self._make_flow()
+        observed = ObservedCollectorSession(
+            collector_pn=self.FULL_PN,
+            identity_source="fc2_parameter_2",
+            session_id=self.OLD_SESSION,
+            listener_port=8899,
+            protocol_shape="eybond_framed",
+            peer_hint="192.168.1.55",
+        )
+        flow._selected_result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.55",
+                source="subnet_unicast",
+                ip="192.168.1.55",
+                connected=True,
+                collector=CollectorInfo(collector_pn=self.FULL_PN),
+            ),
+            observed_session=observed,
+            callback_route=CallbackRecoveryRoute(
+                bind_ip="192.168.1.50",
+                trigger_target_ip="192.168.1.55",
+                trigger_udp_port=58899,
+                advertised_ha_host="192.168.1.50",
+                advertised_ha_port=8899,
+                listener_port=8899,
+            ),
+        )
+        await flow.async_step_scan_collector_route(
+            {"collector_ip": "192.168.1.55"}
+        )
+        transaction = flow._admission_transaction
+        captured = []
+
+        async def _identity(_hass, request):
+            captured.append(request)
+            if len(captured) == 1:
+                return CallbackIdentityOutcome(
+                    result=IDENTITY_SILENT_SESSION_STALE
+                )
+            if len(captured) == 2:
+                return CallbackIdentityOutcome(
+                    result=IDENTITY_SESSION_SILENT,
+                    silent_bootstrap_offer=SilentSessionBootstrapOffer(
+                        "s-silent-callback"
+                    ),
+                )
+            return CallbackIdentityOutcome(result=IDENTITY_WIRE_PROBE_FAILED)
+
+        with patch.object(
+            admission_transaction_module,
+            "async_run_callback_identity_transaction",
+            side_effect=_identity,
+        ):
+            await flow._async_run_observed_callback_admission(transaction)
+
+        self.assertEqual(len(captured), 3)
+        self.assertIsNone(captured[1].bootstrap_probe)
+        continuation = captured[2].bootstrap_probe
+        self.assertIs(type(continuation), ObservedSessionWireProbeIntent)
+        self.assertEqual(continuation.session_id, "s-silent-callback")
+        self.assertEqual(continuation.wire_source_session_id, self.OLD_SESSION)
+        self.assertEqual(continuation.protocol, "eybond_framed")
+        self.assertEqual(flow._admission_callback_error, IDENTITY_WIRE_PROBE_FAILED)
+
     def test_identified_scan_session_keeps_route_addresses_independent(self) -> None:
         flow = self._make_flow()
         observed = ObservedCollectorSession(
@@ -9863,7 +9894,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 source="subnet_unicast",
                 ip="192.168.1.1",
                 connected=True,
-                collector=CollectorInfo(collector_pn="E50000253884199645"),
+                collector=CollectorInfo(collector_pn="E50000200000000001"),
             ),
             connection_mode="subnet_unicast",
             next_action="manual_driver_selection",
@@ -9872,8 +9903,9 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         await flow._async_ensure_translation_bundle()
         label = flow._result_label(result)
 
-        self.assertIn("PN E50000253884199645", label)
+        self.assertIn("PN E50000200000000001", label)
         self.assertIn("192.168.1.1", label)
+        self.assertNotIn("виберіть", label.lower())
 
     def _flow_with_verified_selected_callback_route(self):
         """Model the exact post-recovery state of a NAT/hairpin scan result."""
@@ -9955,6 +9987,23 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(self.PEER_IP, table)
         self.assertEqual(placeholders["collector_ip"], route.trigger_target_ip)
 
+    async def test_matching_callback_route_and_tcp_peer_are_presented_once(
+        self,
+    ) -> None:
+        flow, route = self._flow_with_verified_selected_callback_route()
+        flow._selected_result.collector.ip = route.trigger_target_ip
+        flow.hass.config.language = "uk"
+        await flow._async_ensure_translation_bundle()
+
+        table = flow._result_placeholders(flow._selected_result)[
+            "collector_confirm_table"
+        ]
+
+        self.assertIn("IP колектора", table)
+        self.assertEqual(table.count(route.trigger_target_ip), 1)
+        self.assertNotIn("Адреса для callback", table)
+        self.assertNotIn("Джерело вхідного з’єднання", table)
+
     async def test_verified_callback_route_not_tcp_peer_is_persisted_for_runtime(
         self,
     ) -> None:
@@ -9963,6 +10012,18 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         flow, route = self._flow_with_verified_selected_callback_route()
+        flow._selected_result = replace(
+            flow._selected_result,
+            observed_session=ObservedCollectorSession(
+                collector_pn=self.FULL_PN,
+                identity_source="fc2_parameter_2",
+                session_id=self.OLD_SESSION,
+                listener_port=8899,
+                protocol_shape="eybond_framed",
+                peer_hint=self.PEER_IP,
+            ),
+        )
+        flow._selected_result.collector.session_protocol = ""
         flow._collector_operation_mode = COLLECTOR_OPERATION_HA_ONLY
 
         def _run_terminal(_pn, terminal, *, recovery):
@@ -9988,6 +10049,17 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             data[config_flow_module.CONF_CONNECTION_STRATEGY],
             CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
         )
+        self.assertNotIn("collector_session_protocol", data)
+        self.assertEqual(
+            data["collector_confirmed_session_protocol"], "eybond_framed"
+        )
+        self.assertEqual(
+            data["collector_confirmed_session_protocol_source"], "live_session"
+        )
+        self.assertEqual(
+            data["collector_confirmed_session_protocol_pn"], self.FULL_PN
+        )
+        self.assertTrue(data["collector_confirmed_session_protocol_observed_at"])
         contract = RecoveryContract.from_entry_data(data)
         self.assertIsNotNone(contract)
         self.assertEqual(contract.callback_proof.trigger_target, route.trigger_target)
@@ -10871,7 +10943,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         # Success continues the normal passive-candidate routing.
         self.assertIn(result["type"], {"form", "menu"})
-        self.assertIn(result["step_id"], {"driver_choice", "detection_summary"})
+        self.assertEqual(result["step_id"], "confirm")
         # Strategy is the flow's INTENT; the verifier produced a typed PROOF
         # and no legacy evidence.
         self.assertEqual(flow._verified_connection_strategy, "inbound")
@@ -11702,6 +11774,16 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(CONF_CONNECTION_STRATEGY, created.get("options") or {})
         self.assertNotIn("connection_strategy_evidence", created["data"])
         self.assertIn("callback", created["data"]["recovery_contract"])
+        # The exact callback identity transaction also persists the PN-bound
+        # wire evidence runtime needs to identify a fully-silent reconnect.
+        self.assertEqual(
+            created["data"]["collector_confirmed_session_protocol"],
+            "eybond_framed",
+        )
+        self.assertEqual(
+            created["data"]["collector_confirmed_session_protocol_pn"],
+            self.FULL_PN,
+        )
 
     async def test_generic_manual_inbound_never_adopts_a_foreign_candidate(self) -> None:
         # Item 3 regression: ONE unclaimed strong collector exists globally, but
@@ -13563,6 +13645,7 @@ class CollectorOnlyResultTests(unittest.TestCase):
         settings = {
             "server_ip": self.HA_IP,          # HA: where the collector dials IN
             "collector_ip": self.COLLECTOR_IP,  # the collector: what we trigger
+            "tcp_port": 18899,
         }
         outcome = CallbackIdentityOutcome(
             result="",
@@ -13687,7 +13770,7 @@ class ManualSilentBootstrapFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("manual_create_pending", options)
         # The summary is honest: the session ARRIVED (never "did not call back").
         summary = result["description_placeholders"]["probe_summary"]
-        self.assertIn("CONNECTED", summary)
+        self.assertIn("collector connected", summary.lower())
 
     async def test_plain_timeout_offers_no_bootstrap_options(self) -> None:
         from custom_components.eybond_local.connection.callback_identity import (

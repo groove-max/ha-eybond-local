@@ -21,8 +21,7 @@ CONF_COLLECTOR_CLOUD_FAMILY = "collector_cloud_family"
 # entry. It may seed a same-PN reconnect/startup bootstrap; a live SessionHandle
 # always overrides it. Cloud family / endpoint / collector kind / driver key /
 # peer IP can never create it. The legacy ``collector_session_protocol`` field is
-# an INFERRED cloud-family hint (diagnostic only) and must never be treated as
-# confirmed -- migration is fail-closed (no provenance invented for old data).
+# ignored; migration is fail-closed and invents no provenance for old data.
 CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL = "collector_confirmed_session_protocol"
 CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE = "collector_confirmed_session_protocol_source"
 CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_PN = "collector_confirmed_session_protocol_pn"
@@ -38,6 +37,7 @@ CONF_CONNECTION_TYPE = "connection_type"
 CONF_CONNECTION_MODE = "connection_mode"
 CONF_CONTROL_MODE = "control_mode"
 CONF_DETECTION_CONFIDENCE = "detection_confidence"
+CONF_DETECTED_DRIVER = "detected_driver"
 CONF_DETECTED_MODEL = "detected_model"
 CONF_DETECTED_SERIAL = "detected_serial"
 CONF_DEVICE_CATALOG_KIND = "device_catalog_kind"
@@ -56,6 +56,7 @@ CONF_HEARTBEAT_INTERVAL = "heartbeat_interval"
 CONF_POLL_INTERVAL = "poll_interval"
 CONF_POLL_MODE = "poll_mode"
 CONF_DRIVER_HINT = "driver_hint"
+CONF_DRIVER_DETECTION_STRATEGY = "driver_detection_strategy"
 CONF_PROXY_CAPTURE_DURATION_MINUTES = "proxy_capture_duration_minutes"
 CONF_ENTRY_ROLE = "entry_role"
 
@@ -141,6 +142,12 @@ MIN_PROXY_CAPTURE_DURATION_MINUTES = 1
 MAX_PROXY_CAPTURE_DURATION_MINUTES = 120
 
 DRIVER_HINT_AUTO = "auto"
+DRIVER_DETECTION_FIRST_MATCH = "first_match"
+DRIVER_DETECTION_FULL_SCAN = "full_scan"
+DRIVER_DETECTION_STRATEGIES = frozenset(
+    {DRIVER_DETECTION_FIRST_MATCH, DRIVER_DETECTION_FULL_SCAN}
+)
+DEFAULT_DRIVER_DETECTION_STRATEGY = DRIVER_DETECTION_FIRST_MATCH
 CONNECTION_TYPE_EYBOND = "eybond"
 CONTROL_MODE_AUTO = "auto"
 CONTROL_MODE_READ_ONLY = "read_only"

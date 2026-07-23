@@ -17,8 +17,8 @@ The regression this pins (synthetic identities, no user pcap material):
    alone; the NEXT callback socket is again silent -- and the persisted
    confirmed-protocol owner makes the listener actively FC=2-probe it instead
    of deadlocking in ``waiting_for_route_identity``;
-7. the runtime reconnects and at least one REAL PI30 FC=4 poll returns valid
-   live values.
+7. the runtime reconnects, identifies the synthetic E500 as SMG, and at least
+   one REAL Modbus FC=4 poll returns valid live values.
 
 Load-bearing wiring: the flow steps call the PRODUCTION
 ``async_run_callback_recovery_transaction`` (removing that call breaks phase
@@ -74,6 +74,11 @@ if not hasattr(_persistent, "async_dismiss"):
 _config_entries = _ensure_stub_module("homeassistant.config_entries")
 if not hasattr(_config_entries, "ConfigEntry"):
     _config_entries.ConfigEntry = type("ConfigEntry", (), {})
+_ha_const = _ensure_stub_module("homeassistant.const")
+if not hasattr(_ha_const, "EVENT_COMPONENT_LOADED"):
+    _ha_const.EVENT_COMPONENT_LOADED = "component_loaded"
+if not hasattr(_ha_const, "EVENT_HOMEASSISTANT_STOP"):
+    _ha_const.EVENT_HOMEASSISTANT_STOP = "homeassistant_stop"
 _helpers = _ensure_stub_module("homeassistant.helpers")
 _device_registry = _ensure_stub_module("homeassistant.helpers.device_registry")
 if not hasattr(_device_registry, "DeviceInfo"):
@@ -124,10 +129,14 @@ from custom_components.eybond_local.runtime.factory import (  # noqa: E402
     create_runtime_manager,
 )
 from fake_collector import FakeCollectorService  # noqa: E402
-from fake_collector_lib import CollectorProfile, resolve_scenario  # noqa: E402
+from fake_collector_lib import (  # noqa: E402
+    PRESET_MODBUS_SMG_READONLY,
+    CollectorProfile,
+    resolve_scenario,
+)
 
-# Synthetic identity only: 18 chars, heartbeat carries just the 14-char prefix.
-FULL_PN = "V001020SYN62344022"
+# Synthetic E500 identity only: heartbeat carries just the 14-char prefix.
+FULL_PN = "E500002SYN62344022"
 
 _E2E_TIMEOUT = 150.0  # the whole scenario, hard-bounded
 
@@ -173,8 +182,15 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
             connect_timeout=2.0,
             udp_reply="",
             scenario=resolve_scenario(
-                preset="collector_only",
-                profile=CollectorProfile(pn=FULL_PN),
+                preset=PRESET_MODBUS_SMG_READONLY,
+                profile=CollectorProfile(
+                    mode=PRESET_MODBUS_SMG_READONLY,
+                    pn=FULL_PN,
+                    serial_number="SMGSYN240001",
+                    model_name="SMG II 6200",
+                    rated_power=6200,
+                    protocol_number=1,
+                ),
                 set_29_mode="reboot_silent",
                 # EVERY socket in this scenario is FULLY silent: no unsolicited
                 # byte ever fires (the delay exceeds the whole run). All
@@ -182,7 +198,6 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
                 # link liveness comes from the runtime's own FC=1 requests,
                 # which a real collector answers like any other query.
                 first_heartbeat_delay=3600.0,
-                pi30_mode="success",
             ),
         )
         await self._service.start()
@@ -229,7 +244,7 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
             "discovery_target": "127.0.0.1",
             "discovery_interval": 3,
             "heartbeat_interval": 60,
-            "driver_hint": "pi30",
+            "driver_hint": "auto",
             "connection_strategy": "callback_on_demand",
         }
 
@@ -444,8 +459,14 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
                 f"spec None: ct={entry.data.get('connection_type')!r} "
                 f"keys={sorted(entry.data)}"
             )
-        self.assertIsNone(spec.confirmed_session_protocol_evidence)
-        runtime1 = create_runtime_manager(spec, driver_hint="pi30")
+        admission_evidence = spec.confirmed_session_protocol_evidence
+        self.assertIsNotNone(
+            admission_evidence,
+            "the exact-session identity proof must seed first runtime setup",
+        )
+        self.assertEqual(admission_evidence.protocol, "eybond_framed")
+        self.assertEqual(admission_evidence.collector_pn, FULL_PN)
+        runtime1 = create_runtime_manager(spec, driver_hint="auto")
         await runtime1.async_start()
         try:
             snapshot = await self._bounded_refresh(runtime1, timeout=45.0)
@@ -454,7 +475,8 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(protocol, "eybond_framed")
             self.assertEqual(pn, FULL_PN)
 
-            # The REAL coordinator write path persists the live evidence.
+            # The REAL coordinator write path remains idempotent when admission
+            # already persisted the same PN-bound live evidence.
             stub = type(
                 "_CoordinatorStub",
                 (),
@@ -514,7 +536,7 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence.source, "live_session")
         self.assertEqual(evidence.collector_pn, FULL_PN)
 
-        runtime2 = create_runtime_manager(spec2, driver_hint="pi30")
+        runtime2 = create_runtime_manager(spec2, driver_hint="auto")
         await runtime2.async_start()
         try:
             rx_before = self._service.discovery_rx_count
@@ -534,8 +556,11 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(live, "no new live session observed")
             self.assertEqual(live[0].identity_source, "fc2_parameter_2")
             self.assertEqual(live[0].collector_pn, FULL_PN)
-            # At least one REAL PI30 FC=4 poll parsed valid live values.
-            self.assertTrue(snapshot2.values, "no PI30 values polled")
+            # Runtime, not config flow, identifies the inverter through the
+            # real SMG Modbus driver and parses at least one live FC=4 poll.
+            self.assertEqual(snapshot2.inverter.driver_key, "modbus_smg")
+            self.assertEqual(snapshot2.inverter.model_name, "SMG 6200")
+            self.assertTrue(snapshot2.values, "no SMG values polled")
             self.assertIn("battery_voltage", snapshot2.values)
             # And no unsolicited pre-probe bytes on this socket either.
             self.assertEqual(getattr(self._service, "pre_rx_heartbeats", 0), 0)

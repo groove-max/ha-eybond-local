@@ -244,7 +244,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_ip["192.168.1.55"].collector.udp_reply, "rsp>server=1;")
         self.assertEqual(
             {scan_result_status_code(result) for result in results},
-            {"collector_replied"},
+            {"address_found"},
         )
 
     def test_build_driver_match_keeps_family_fallback_at_medium_confidence(self) -> None:
@@ -1092,7 +1092,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result.collector.udp_reply_from, "192.168.1.55:58899"
         )
-        self.assertEqual(scan_result_status_code(result), "collector_replied")
+        self.assertEqual(scan_result_status_code(result), "address_found")
 
     async def test_detect_target_preserves_attempted_route_over_reply_source(self) -> None:
         detector = OnboardingDetector(server_ip="192.168.1.50")

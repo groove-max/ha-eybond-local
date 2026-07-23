@@ -24,6 +24,7 @@ from pathlib import Path
 import socket
 import sys
 import unittest
+from unittest.mock import AsyncMock, patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -127,6 +128,20 @@ def _result_pns(results) -> set[str]:
         if pn:
             pns.add(pn)
     return pns
+
+
+def _result_with_pn(results, expected_pn: str):
+    """Return the one result carrying the exact synthetic collector PN."""
+
+    matches = []
+    for result in results:
+        collector = getattr(result, "collector", None)
+        info = getattr(collector, "collector", None) if collector is not None else None
+        if getattr(info, "collector_pn", None) == expected_pn:
+            matches.append(result)
+    if len(matches) > 1:
+        raise AssertionError(f"duplicate collector result for PN {expected_pn}")
+    return matches[0] if matches else None
 
 
 class SilentScanIdentityHarness(unittest.IsolatedAsyncioTestCase):
@@ -353,10 +368,6 @@ class SilentFramedScanRegressionTests(SilentScanIdentityHarness):
         self.assertNotIn(STALE_PN, _result_pns(results))
         # Exactly one collector was identified, and it is the fresh target.
         self.assertEqual(_result_pns(results), {TARGET_PN})
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 # Synthetic AT PN (allowlisted in test_no_real_identifiers) for the AT-parity case.
@@ -1202,7 +1213,14 @@ class UnionSelectorFullCallGraphTests(SilentScanIdentityHarness):
     """Full ``async_auto_detect`` call graph for the weak-heartbeat and
     already-strong cases -- route != peer, stale same-peer S1 present."""
 
-    async def _scan_target(self, target_service, route, s2_udp):
+    async def _scan_target(
+        self,
+        target_service,
+        route,
+        s2_udp,
+        *,
+        identify_collector_only: bool = False,
+    ):
         redirect = f"set>server=127.0.0.1:{self._tcp_port};".encode("ascii")
         stale = _silent_framed_service(
             udp_port=_free_port(socket.SOCK_DGRAM),
@@ -1224,6 +1242,7 @@ class UnionSelectorFullCallGraphTests(SilentScanIdentityHarness):
                     discovery_targets=(DiscoveryTarget(ip=route, source="unicast"),),
                     attempts=1,
                     enrich_runtime_details=False,
+                    identify_collector_only=identify_collector_only,
                     total_timeout=_HARNESS_TIMEOUT,
                 ),
                 timeout=_HARNESS_TIMEOUT + 2.0,
@@ -1259,6 +1278,43 @@ class UnionSelectorFullCallGraphTests(SilentScanIdentityHarness):
         self.assertEqual(result.collector.collector.remote_ip, "127.0.0.1")
         self.assertNotIn(STALE_PN, _result_pns(results))
         self.assertIn(stale_sid, post_silent)                        # S1 survived
+
+    async def test_collector_only_scan_stops_before_every_driver_probe(self) -> None:
+        """The setup scan proves the exact collector and leaves inversion to runtime."""
+
+        route = "127.0.0.2"
+        s2_udp = _free_port(socket.SOCK_DGRAM)
+        target = _silent_framed_service(
+            udp_port=s2_udp,
+            pn=TARGET_PN,
+            listen_ip=route,
+            tcp_bind_ip="127.0.0.1",
+            first_heartbeat_delay=0.05,
+        )
+        with patch.object(
+            OnboardingDetector,
+            "_async_detect_driver_with_retries",
+            new=AsyncMock(
+                side_effect=AssertionError(
+                    "collector-only setup scan must not probe inverter drivers"
+                )
+            ),
+        ) as driver_probe:
+            results, stale_sid, post_silent = await self._scan_target(
+                target,
+                route,
+                s2_udp,
+                identify_collector_only=True,
+            )
+
+        result = _result_with_pn(results, TARGET_PN)
+        self.assertIsNotNone(result)
+        self.assertIsNone(result.match)
+        self.assertEqual(result.next_action, "confirm_collector")
+        self.assertEqual(result.detection.reason, "collector_identity_only_scan")
+        self.assertEqual(result.collector.ip, route)
+        self.assertIn(stale_sid, post_silent)
+        driver_probe.assert_not_awaited()
 
     async def test_strong_fc2_session_is_accepted_full_pn(self) -> None:
         """B: S2 announces a STRONG framed FC=2 identity as its first bytes (and
@@ -1604,3 +1660,7 @@ class ChannelStrongBoundaryTests(SilentScanIdentityHarness):
             "s2", session_protocol=WIRE_FRAMED
         )
         self.assertEqual(result, "")
+
+
+if __name__ == "__main__":
+    unittest.main()

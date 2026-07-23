@@ -4,12 +4,12 @@
     "step": {
       "user": {
         "title": "Welcome",
-        "description": "EyeBond Local will help you add an inverter with as little manual setup as possible.\n\n{welcome_hint}",
+        "description": "EyeBond Local will help you find and add a compatible device with as little manual setup as possible.\n\n{welcome_hint}",
         "data": {
           "connection_type": "Connection type"
         },
         "data_description": {
-          "connection_type": "Choose how Home Assistant should reach the inverter."
+          "connection_type": "Choose how Home Assistant should reach the device."
         },
         "menu_options": {
           "auto": "Continue"
@@ -26,12 +26,12 @@
       },
       "auto": {
         "title": "Choose Scan Interface",
-        "description": "Choose the Home Assistant network interface (the one on the same subnet as your inverter), then start the scan.",
+        "description": "Choose the Home Assistant network interface connected to the device network, then start the scan.",
         "data": {
           "server_ip": "Home Assistant interface"
         },
         "data_description": {
-          "server_ip": "The network interface that the collector will connect back to. Pick the one on the same subnet as your inverter."
+          "server_ip": "Choose the interface on the same network as the device."
         }
       },
       "bluetooth_setup": {
@@ -51,17 +51,17 @@
         }
       },
       "deep_scan": {
-        "title": "Deep Scan",
-        "description": "Deep scan checks the selected IPv4 network using **{selected_scan_interface}**.\n\n**Network:** {deep_scan_network}\n**Direct targets:** {deep_scan_target_count}\n\n{deep_scan_warning}",
+        "title": "Search the full local network",
+        "description": "Home Assistant will check each address in the selected IPv4 network using **{selected_scan_interface}**.\n\n**Network:** {deep_scan_network}\n**Addresses to check:** {deep_scan_target_count}\n\n{deep_scan_warning}",
         "menu_options": {
-          "start_deep_scan": "Start deep scan",
+          "start_deep_scan": "Search the full network",
           "change_scan_interface": "Change scan interface",
           "manual": "Manual setup"
         }
       },
       "scanning": {
         "title": "Scanning Network",
-        "description": "Looking for EyeBond collectors and inverters on the local network using **{selected_scan_interface}**.\n\n**{scan_progress_phase}**\n`{scan_progress_bar}`\n{scan_progress_detail}\n\n{scan_progress_hint}"
+        "description": "Looking for compatible devices on the local network using **{selected_scan_interface}**.\n\n**{scan_progress_phase}**\n`{scan_progress_bar}`\n{scan_progress_detail}\n\n{scan_progress_hint}"
       },
       "scan_results": {
         "title": "Detected Devices",
@@ -100,22 +100,12 @@
       },
       "choose": {
         "title": "Select Device To Add",
-        "description": "{choose_summary}\n\nReady devices are shown first.",
+        "description": "{choose_summary}",
         "data": {
           "result_key": "Detected device"
         },
         "data_description": {
-          "result_key": "Choose the inverter you want to add to Home Assistant."
-        }
-      },
-      "driver_choice": {
-        "title": "Choose Inverter Driver",
-        "description": "{driver_choice_summary}\n\n{driver_choice_candidates}",
-        "data": {
-          "driver_match_key": "Driver / protocol"
-        },
-        "data_description": {
-          "driver_match_key": "If you are not sure, keep the recommended option."
+          "result_key": "Choose the device you want to add to Home Assistant."
         }
       },
       "detection_summary": {
@@ -127,25 +117,29 @@
         }
       },
       "confirm": {
-        "title": "Confirm Detection",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
+        "title": "Add Device",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_operation_mode_note}",
         "data": {
+          "driver_detection_strategy": "Inverter protocol detection",
           "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval"
         },
         "data_description": {
+          "driver_detection_strategy": "Fast mode stops at the first confirmed protocol. Full scan checks every supported protocol and can reveal devices that answer through more than one driver.",
           "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "How often to read sensor values from the inverter after the device is added."
         }
       },
       "confirm_without_cloud_assist": {
-        "title": "Confirm Detection",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
+        "title": "Add Device",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_operation_mode_note}",
         "data": {
+          "driver_detection_strategy": "Inverter protocol detection",
           "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval"
         },
         "data_description": {
+          "driver_detection_strategy": "Fast mode stops at the first confirmed protocol. Full scan checks every supported protocol and can reveal devices that answer through more than one driver.",
           "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "How often to read sensor values from the inverter after the device is added."
         }
@@ -187,13 +181,15 @@
           "server_ip": "Local listener IP",
           "collector_ip": "Collector IP",
           "driver_hint": "Driver",
-          "connection_strategy": "How the collector connects"
+          "connection_strategy": "How the collector connects",
+          "driver_detection_strategy": "Inverter protocol detection"
         },
         "data_description": {
           "server_ip": "Local Home Assistant IPv4 address used to bind the EyeBond TCP listener. For normal LAN setups, choose the interface on the same subnet as the collector.",
           "collector_ip": "Collector IPv4 address to probe directly. Leave empty for local broadcast discovery. For remote or NAT setups, set the public or forwarded IPv4 that reaches the collector.",
           "driver_hint": "Auto-detect works for most inverters. Override only if instructed.",
-          "connection_strategy": "Choose “Collector connects to Home Assistant on its own” if the collector already points at Home Assistant. Choose “Ask the collector to connect when needed” to have Home Assistant send a single request to the address above each time it needs data."
+          "connection_strategy": "Choose “Collector connects to Home Assistant on its own” if the collector already points at Home Assistant. Choose “Ask the collector to connect when needed” to have Home Assistant send a single request to the address above each time it needs data.",
+          "driver_detection_strategy": "Fast mode is recommended. Use full scan when an inverter may answer through several supported protocols and you want to choose between them."
         },
         "sections": {
           "advanced_connection": {
@@ -234,9 +230,9 @@
       },
       "advanced_setup": {
         "title": "Advanced setup",
-        "description": "Use these only if the automatic scan did not find your inverter.",
+        "description": "Use these options if the automatic scan did not find your device.",
         "menu_options": {
-          "deep_scan": "Deep scan (whole subnet)",
+          "deep_scan": "Search the full local network",
           "change_scan_interface": "Change network interface",
           "manual": "Enter address manually",
           "refresh_scan": "Scan again"
@@ -322,7 +318,7 @@
       }
     },
     "progress": {
-      "scanning_network": "Scanning the local network for EyeBond collectors…",
+      "scanning_network": "Scanning the local network for EyeBond devices…",
       "shadow_learning": "{control_discovery_hint}",
       "verify_connection": "Restarting collector {collector_pn}. After the current connection closes, Home Assistant waits up to one minute for the replacement.",
       "active_scan_recovery_verify": "Checking the connection to collector {collector_pn}…",
@@ -427,10 +423,21 @@
           "shadow_learning": "Expand device support",
           "collector_wifi": "Change collector Wi-Fi",
           "collector_uart": "Change inverter UART speed",
+          "inverter_protocol": "Choose inverter protocol",
           "diagnostics": "Diagnostics and service tools",
           "strategy_transition_repair": "Finish the connection switch (recovery required)",
           "strategy_transition_activation_retry": "Load the verified connection",
           "strategy_transition_cancel": "Cancel"
+        }
+      },
+      "inverter_protocol": {
+        "title": "Choose inverter protocol",
+        "description": "The inverter answered using {count} supported protocols. Choose which protocol Home Assistant should use. The selected protocol will be checked again on the collector's active connection before inverter entities are created.",
+        "data": {
+          "driver_hint": "Inverter protocol"
+        },
+        "data_description": {
+          "driver_hint": "Choose the protocol that best matches this inverter. If both work, prefer the one you normally use to manage the device."
         }
       },
       "collector_wifi": {
@@ -464,12 +471,14 @@
         "title": "Runtime Settings",
         "description": "**{model_name}** — serial {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
+          "driver_detection_strategy": "Inverter protocol detection",
           "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval",
           "connection_strategy": "How the collector connects",
           "control_mode": "Control mode"
         },
         "data_description": {
+          "driver_detection_strategy": "Fast mode stops at the first confirmed protocol. Full scan checks all supported protocols on the owned collector session.",
           "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "Manual mode only. This is the target start-to-start refresh interval. If the device needs longer to answer, EyeBond Local will warn about high poll utilization; use Automatic mode to let the integration choose a safe interval.",
           "connection_strategy": "\"Collector connects to Home Assistant on its own\" if the collector already points at Home Assistant — no callback is sent. \"Ask the collector to connect when needed\" sends the collector one connection request per attempt; use this for a collector that normally talks to its cloud.",
@@ -929,6 +938,12 @@
       "options": {
         "auto": "Automatic",
         "manual": "Manual"
+      }
+    },
+    "driver_detection_strategy": {
+      "options": {
+        "first_match": "Fast: first confirmed protocol",
+        "full_scan": "Full scan: check all protocols"
       }
     }
   }

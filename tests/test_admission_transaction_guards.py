@@ -112,15 +112,17 @@ class AdmissionTransactionGuards(unittest.TestCase):
     def test_admission_mutable_fields_shrank(self):
         attrs = _init_assigned_attrs(self.cf, "EybondLocalConfigFlow")
         # The new, smaller admission surface exists ...
-        for present in ("_admission_transaction", "_admission_task", "_admission_next_step"):
+        for present in ("_admission_transaction", "_admission_task"):
             self.assertIn(present, attrs, msg=f"{present} should be a flow field")
-        # ... and the old admission-specific fields are gone (replaced, not renamed
-        # 1:1). 4 admission-specific fields -> 3.
+        # ... and the old admission-specific fields are gone. There is no
+        # source-specific post-admission branch: every verified collector uses
+        # the same collector confirmation.
         for gone in (
             "_admission_request",
             "_verification_task",
             "_verification_result",
             "_verification_next_step",
+            "_admission_next_step",
         ):
             self.assertNotIn(
                 gone, attrs, msg=f"{gone} must no longer be a flow field"
@@ -179,6 +181,51 @@ class AdmissionTransactionGuards(unittest.TestCase):
                     attrs,
                     msg=f"{method} must not read {banned!r}",
                 )
+
+    def test_verified_collector_has_one_post_admission_continuation(self):
+        self.assertIsNone(
+            _class_method(self.cf, "EybondLocalConfigFlow", "async_step_driver_choice"),
+            msg="scan-time driver choice is dead after collector-first admission",
+        )
+        for method in (
+            "_async_continue_selected_scan_result",
+            "_async_continue_after_verification",
+        ):
+            node = _class_method(self.cf, "EybondLocalConfigFlow", method)
+            self.assertIsNotNone(node, msg=method)
+            called = _called_names(node)
+            self.assertNotIn("async_step_driver_choice", called, msg=method)
+            self.assertNotIn("async_step_detection_summary", called, msg=method)
+        continuation = _class_method(
+            self.cf,
+            "EybondLocalConfigFlow",
+            "_async_continue_after_verification",
+        )
+        self.assertIn("async_step_confirm", _called_names(continuation))
+
+    def test_every_normal_entry_terminal_applies_collector_first_boundary(self):
+        for method in (
+            "_async_create_entry_from_result",
+            "_async_create_manual_entry",
+        ):
+            node = _class_method(self.cf, "EybondLocalConfigFlow", method)
+            self.assertIsNotNone(node, msg=method)
+            self.assertIn(
+                "_apply_collector_first_entry_semantics",
+                _called_names(node),
+                msg=f"{method} must not persist pre-entry inverter identity",
+            )
+
+    def test_confirm_time_inverter_refresh_does_not_return(self):
+        for gone in (
+            "_async_refresh_selected_result_runtime_details",
+            "_merge_selected_result_runtime_details",
+            "_selected_result_needs_runtime_details",
+        ):
+            self.assertIsNone(
+                _class_method(self.cf, "EybondLocalConfigFlow", gone),
+                msg=f"{gone} would create a second pre-entry inverter authority",
+            )
 
 
 if __name__ == "__main__":

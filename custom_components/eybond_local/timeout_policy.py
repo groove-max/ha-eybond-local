@@ -75,17 +75,19 @@ class OnboardingTimeoutPolicy:
     # return its partial result after its own deadline expires.  This is not
     # additional probe/driver-detection time.
     result_finalization_grace: float = 2.0
-    auto_total_timeout: float = 45.0
-    auto_scan_estimated_seconds: float = 12.5
-    deep_scan_followup_estimated_seconds: float = 75.0
+    # Collector-only quick scan: broadcast/addressed discovery, callback session
+    # observation and exact-session identity. Inverter drivers are runtime work
+    # and consume none of this budget.
+    auto_total_timeout: float = 30.0
     deep_scan_batch_timeout: float = 0.35
     deep_scan_concurrency: int = 32
-    deep_scan_timeout_buffer: float = 20.0
+    # One final post-sweep window for callbacks opened by the last unicast batch.
+    deep_scan_identity_settle_seconds: float = 5.0
+    deep_scan_timeout_buffer: float = 5.0
     unicast_fallback_probe_timeout: float = 0.35
     unicast_fallback_concurrency: int = 32
-    # Absolute runaway guard for one deep scan. The working deadline grows as
-    # connected collectors are admitted for identification; this is the wall
-    # it can never grow past.
+    # Legacy non-collector deep-detection API guard. Config flow always requests
+    # collector-only discovery and therefore never adds this headroom.
     deep_scan_hard_ceiling_seconds: float = 900.0
 
 

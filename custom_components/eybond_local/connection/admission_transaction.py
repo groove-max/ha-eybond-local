@@ -749,6 +749,7 @@ class CollectorAdmissionTransaction(CallbackContinuation):
             session_id=observed.session_id,
             collector_pn=observed.collector_pn,
             identity_source=observed.identity_source,
+            wire_source_session_id=observed.session_id,
         )
 
     def _reset_callback_attempt(self) -> None:

@@ -1,9 +1,8 @@
 """Collector callback transport profile resolution.
 
-The cloud endpoint family describes how a collector calls back to its server,
-but the local inverter runtime can further constrain the payload transport. For
-example, a known SMG runtime still uses the legacy framed EyeBond tunnel even
-when the collector's original cloud endpoint belongs to the SmartESS AT family.
+The callback wire is selected only from confirmed session evidence.  A cloud
+endpoint family may refine the forwarding dialect of an already-confirmed AT
+session, but it must never infer ``at_text`` or ``eybond_framed`` by itself.
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ from ..const import (
 )
 from ..metadata.collector_cloud_profile_catalog_loader import (
     load_collector_cloud_profile_catalog,
-    resolve_collector_cloud_identity_strategy,
     resolve_collector_cloud_raw_passthrough_bootstrap,
     resolve_collector_cloud_raw_passthrough_frame_format,
     resolve_collector_cloud_raw_passthrough_min_interval_ms,
@@ -163,10 +161,9 @@ def resolve_collector_transport_profile(
 
     The ``runtime_owner_key`` (the local inverter driver key) is retained ONLY as
     a diagnostic provenance field; it must never influence ``session_protocol``,
-    ``identity_strategy``, or any wire/adapter selection. Driver keys deciding
-    transport was the exact coupling removed in the phase-2 refactor. The cloud
-    family remains a legacy pre-live-observation hint that a live SessionHandle
-    always overrides.
+    ``identity_strategy``, or any wire/adapter selection.  The cloud family is
+    likewise metadata only at this boundary: no live/confirmed wire means no
+    transport profile.
     """
 
     normalized_family = known_collector_cloud_family(cloud_family)
@@ -174,37 +171,27 @@ def resolve_collector_transport_profile(
     return CollectorTransportProfile(
         cloud_family=normalized_family,
         runtime_owner_key=normalized_owner,
-        session_protocol=resolve_collector_cloud_session_protocol(normalized_family),
-        identity_strategy=resolve_collector_cloud_identity_strategy(normalized_family),
-        raw_passthrough_bootstrap=resolve_collector_cloud_raw_passthrough_bootstrap(
-            normalized_family
-        ),
-        raw_passthrough_frame_format=resolve_collector_cloud_raw_passthrough_frame_format(
-            normalized_family
-        ),
-        raw_passthrough_min_interval_ms=resolve_collector_cloud_raw_passthrough_min_interval_ms(
-            normalized_family
-        ),
+        session_protocol="",
+        identity_strategy="",
+        raw_passthrough_bootstrap="",
+        raw_passthrough_frame_format="",
+        raw_passthrough_min_interval_ms=0,
     )
 
 
 # A live-observed callback session protocol IMPLIES its transport profile. This
-# protocol -> (identity strategy, raw-passthrough bootstrap/frame/interval) map is
-# transport POLICY and lives here, in the transport-profile authority, never in
-# the runtime coordinator. ``reset_min_interval`` selects between keeping the
-# cloud-family base interval (AT text) and clearing it (framed).
+# protocol -> identity/adapter map is transport POLICY and lives here, never in
+# the runtime coordinator.  Cloud metadata is consulted only after ``at_text``
+# has independently been confirmed, and only to refine that AT wire's known
+# forwarding dialect.
 _OBSERVED_SESSION_PROTOCOL_PROFILES: dict[str, dict[str, object]] = {
     "at_text": {
         "identity_strategy": "at_dtupn",
-        "raw_passthrough_bootstrap": "uart_write_same_value",
-        "raw_passthrough_frame_format": "transparent",
-        "reset_min_interval": False,
     },
     "eybond_framed": {
         "identity_strategy": "framed_heartbeat_then_fc2_pn",
         "raw_passthrough_bootstrap": "",
         "raw_passthrough_frame_format": "",
-        "reset_min_interval": True,
     },
 }
 
@@ -215,30 +202,40 @@ def apply_observed_collector_session_protocol(
 ) -> CollectorTransportProfile:
     """Return the transport profile a LIVE-observed session protocol implies.
 
-    Live observation is always stronger than the cloud-family bootstrap hint, so
-    a confirmed observed protocol replaces the base profile's protocol-specific
-    fields. Returns ``base`` unchanged when there is no observation, the
-    observation matches the base, or the observed protocol is unknown. The
-    runtime coordinator passes the observed protocol; the map itself is owned
-    here so the neutral runtime holds no protocol->policy table.
+    With no confirmed observation the base remains wire-neutral. For an
+    observed AT session, a matching cloud profile may refine only the AT
+    forwarding dialect; it never supplies the wire observation itself.
     """
 
     protocol = str(observed_protocol or "").strip().lower()
-    if not protocol or protocol == base.session_protocol:
+    if not protocol:
         return base
     override = _OBSERVED_SESSION_PROTOCOL_PROFILES.get(protocol)
     if override is None:
         return base
+    raw_bootstrap = str(override.get("raw_passthrough_bootstrap", ""))
+    raw_frame_format = str(override.get("raw_passthrough_frame_format", ""))
+    raw_min_interval_ms = 0
+    if protocol == "at_text" and (
+        resolve_collector_cloud_session_protocol(base.cloud_family) == "at_text"
+    ):
+        raw_bootstrap = resolve_collector_cloud_raw_passthrough_bootstrap(
+            base.cloud_family
+        )
+        raw_frame_format = resolve_collector_cloud_raw_passthrough_frame_format(
+            base.cloud_family
+        )
+        raw_min_interval_ms = resolve_collector_cloud_raw_passthrough_min_interval_ms(
+            base.cloud_family
+        )
     return CollectorTransportProfile(
         cloud_family=base.cloud_family,
         runtime_owner_key=base.runtime_owner_key,
         session_protocol=protocol,
         identity_strategy=str(override["identity_strategy"]),
-        raw_passthrough_bootstrap=str(override["raw_passthrough_bootstrap"]),
-        raw_passthrough_frame_format=str(override["raw_passthrough_frame_format"]),
-        raw_passthrough_min_interval_ms=(
-            0 if override["reset_min_interval"] else base.raw_passthrough_min_interval_ms
-        ),
+        raw_passthrough_bootstrap=raw_bootstrap,
+        raw_passthrough_frame_format=raw_frame_format,
+        raw_passthrough_min_interval_ms=raw_min_interval_ms,
     )
 
 

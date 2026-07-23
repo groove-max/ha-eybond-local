@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from ..connection.recovery.verification import CallbackRecoveryRoute
 from ..connection.ui import ConnectionDisplayMetadata
 from ..const import DRIVER_HINT_AUTO
 from ..models import OnboardingResult
@@ -59,47 +60,37 @@ def has_smartess_collector_hint(result: OnboardingResult) -> bool:
 
 
 def scan_result_status_code(result: OnboardingResult, already_added: bool = False) -> str:
-    """Return the UI status code for one onboarding result."""
+    """Return the collector-first UI status for one scan result.
+
+    Search establishes whether a device can continue through admission; inverter
+    model/driver detection belongs to runtime.  Consequently a preview match,
+    confidence and detection timeout must not create separate scan states.
+    """
 
     collector = result.collector
     if already_added or result.last_error == "already_configured":
         return "already_added"
-    if result.match is not None and result.alternative_matches:
-        return "driver_choice"
-    if result.match is not None and result.confidence == "high":
-        return "ready"
+    if (
+        result.observed_session is not None
+        and type(result.callback_route) is not CallbackRecoveryRoute
+    ):
+        return "address_required"
     if result.match is not None:
-        return "review"
-    # A later identity/driver deadline does not undo a route observation that
-    # already completed successfully. Keep an unidentified UDP responder
-    # actionable as an address result while retaining the timeout in typed
-    # diagnostics. Connected or PN-bearing candidates continue through their
-    # stronger status paths below.
+        return "found"
     if (
         collector is not None
-        and not collector.connected
-        and collector.udp_reply
-        and not (
-            collector.collector is not None
-            and collector.collector.collector_pn
+        and (
+            collector.connected
+            or (
+                collector.collector is not None
+                and collector.collector.collector_pn
+            )
         )
     ):
-        return "collector_replied"
-    if result.detection is not None and result.detection.budget_exhausted:
-        return "detection_timeout"
-    if collector is not None and collector.connected and has_smartess_collector_hint(result):
-        return "smartess_hint"
-    if collector is not None and collector.connected:
-        return "collector_only"
-    if (
-        collector is not None
-        and collector.collector is not None
-        and collector.collector.collector_pn
-    ):
-        return "collector_only"
+        return "found"
     if collector is not None and collector.udp_reply:
-        return "collector_replied"
-    return "unknown"
+        return "address_found"
+    return "not_ready"
 
 
 def scan_result_status_label(result: OnboardingResult, already_added: bool = False) -> str:
@@ -107,16 +98,12 @@ def scan_result_status_label(result: OnboardingResult, already_added: bool = Fal
 
     status_code = scan_result_status_code(result, already_added)
     return {
-        "ready": "Ready",
-        "review": "Review",
+        "found": "Found",
+        "address_required": "Needs confirmation",
+        "address_found": "Check address",
         "already_added": "Already added",
-        "driver_choice": "Driver choice",
-        "detection_timeout": "Detection ran out of time",
-        "smartess_hint": "SmartESS hint",
-        "collector_only": "Collector only",
-        "collector_replied": "Address replied",
-        "unknown": "Unknown",
-    }.get(status_code, "Unknown")
+        "not_ready": "Not identified",
+    }.get(status_code, "Not identified")
 
 
 def scan_result_sort_key(
@@ -128,49 +115,37 @@ def scan_result_sort_key(
 
     status_code = scan_result_status_code(result, already_added)
     status_rank = {
-        "ready": 0,
-        "driver_choice": 1,
-        "review": 2,
-        "already_added": 3,
-        "detection_timeout": 4,
-        "smartess_hint": 5,
-        "collector_only": 6,
-        "collector_replied": 7,
-        "unknown": 8,
+        "found": 0,
+        "address_required": 1,
+        "already_added": 2,
+        "address_found": 3,
+        "not_ready": 4,
     }.get(status_code, 99)
-    collector_ip = result.collector.ip if result.collector is not None else ""
-    model_name = result.match.model_name if result.match is not None else ""
-    serial_number = result.match.serial_number if result.match is not None else ""
+    collector = result.collector
+    collector_ip = collector.ip if collector is not None else ""
+    collector_pn = ""
+    if collector is not None and collector.collector is not None:
+        collector_pn = collector.collector.collector_pn or ""
+    target_ip = collector.target_ip if collector is not None else ""
     return (
         status_rank,
-        -confidence_sort_score(result.confidence),
-        model_name,
-        serial_number,
+        0,
+        collector_pn,
         collector_ip,
+        target_ip,
     )
 
 
 def result_label(result: OnboardingResult, *, display: ConnectionDisplayMetadata) -> str:
-    """Return one compact selector label for one onboarding result."""
+    """Return one compact, collector-first selector label."""
 
-    match = result.match
     collector = result.collector
     collector_ip = collector.ip if collector is not None else "unknown"
     status_label = scan_result_status_label(result)
-    if match is None:
-        suffix = (
-            "SmartESS metadata"
-            if has_smartess_collector_hint(result)
-            else f"{display.peer_label} connected"
-            if collector is not None and collector.connected
-            else f"{display.peer_label} only"
-        )
-        return f"{status_label}: {collector_ip} ({suffix})"
-    serial = match.serial_number or "unknown serial"
-    return (
-        f"{status_label}: {match.model_name} ({serial}) on {collector_ip} — "
-        f"{confidence_label(result.confidence)}"
-    )
+    collector_info = collector.collector if collector is not None else None
+    collector_pn = collector_info.collector_pn if collector_info is not None else ""
+    identity = f"PN {collector_pn} — " if collector_pn else ""
+    return f"{status_label}: {identity}{collector_ip}"
 
 
 def result_placeholders(
@@ -206,40 +181,34 @@ def build_scan_results_placeholders(
     already_added_count: int,
     ready_model_names: Sequence[str],
 ) -> dict[str, str]:
-    """Return scan-results step placeholders."""
+    """Return collector-first scan-results placeholders.
+
+    ``ready_model_names`` remains in the compatibility signature for callers,
+    but runtime owns inverter identification and the scan UI never reads it.
+    """
+
+    del ready_model_names
 
     if detected_count == 0:
-        scan_summary = f"No reachable {display.peer_label_plural} or inverters were found."
+        scan_summary = "No compatible devices were found."
         next_hint = "Refresh the scan or switch to manual setup."
     elif available_count == 0 and already_added_count == detected_count:
-        scan_summary = (
-            f"Found **{detected_count}** device candidate(s), but all of them are already configured."
-        )
+        scan_summary = f"Devices found: **{detected_count}**. All are already added."
         next_hint = (
             "Use **Refresh scan** to look again, or **Manual setup** if you intentionally "
             "need a different connection path."
         )
     elif available_count == 0:
         scan_summary = (
-            f"Found **{detected_count}** device candidate(s), but none are ready to add yet."
+            f"Responses received: **{detected_count}**, but no device has been identified yet."
         )
-        next_hint = "Use **Refresh scan** to try again, or **Manual setup** to override the connection settings."
-    elif not ready_model_names:
-        scan_summary = (
-            f"Found **{detected_count}** device candidate(s). **{available_count}** collector candidate(s) "
-            f"can be added now, but local inverter matching is still pending."
-        )
-        next_hint = (
-            "Pick a device below to save the Pending Device now, or use **Refresh scan** "
-            "or **Manual setup** to retry the local match."
-        )
+        next_hint = "Select a responding address to identify it, refresh the scan, or use manual setup."
     else:
-        ready_summary = ", ".join(dict.fromkeys(ready_model_names[:5])) or "detected inverters"
         scan_summary = (
-            f"Found **{detected_count}** device candidate(s). **{available_count}** can be added now, "
-            f"**{already_added_count}** already configured. Ready now: {ready_summary}."
+            f"Devices found: **{detected_count}**. Ready to set up: **{available_count}**. "
+            f"Already added: **{already_added_count}**."
         )
-        next_hint = "Pick the inverter you want to add from the list below."
+        next_hint = "Choose a device or address from the list."
 
     return {
         "scan_summary": scan_summary,
@@ -253,8 +222,8 @@ def build_choose_placeholders(available_count: int) -> dict[str, str]:
 
     return {
         "choose_summary": (
-            f"**{available_count}** detected device candidate(s) can be added right now. "
-            "Already configured devices are excluded."
+            f"Ready to set up: **{available_count}**. "
+            "Already added devices are hidden."
         ),
     }
 
@@ -275,31 +244,16 @@ def build_scan_result_line(
     status_label = scan_result_status_label(result, existing_entry_title is not None)
 
     status_code = scan_result_status_code(result, existing_entry_title is not None)
-    if result.match is not None:
-        confidence = confidence_label(result.confidence)
-        parts = [
-            result.match.model_name or display.unconfirmed_inverter_label,
-            f"{display.peer_label} {collector_ip}",
-        ]
-        if result.match.serial_number:
-            parts.append(f"serial {result.match.serial_number}")
-        parts.append(confidence[:1].lower() + confidence[1:])
-    else:
-        # The status chip already names the situation: details carry only
-        # what the chip does not say.
-        parts = [f"{display.peer_label} {collector_ip}"]
+    if status_code == "address_required":
+        parts = []
         if collector_pn:
             parts.append(f"PN {collector_pn}")
-        if status_code not in ("smartess_hint", "already_added") and has_smartess_collector_hint(result):
-            parts.append("SmartESS metadata")
-        if (
-            status_code in ("detection_timeout", "unknown")
-            and collector is not None
-            and collector.connected
-        ):
-            parts.append(f"{display.peer_label} connected")
-        elif status_code == "unknown" and collector is not None and collector.udp_reply:
-            parts.append(f"{display.peer_label} replied, waiting for reverse connection")
+        parts.append(f"connection from {collector_ip}")
+    else:
+        parts = []
+        if collector_pn:
+            parts.append(f"PN {collector_pn}")
+        parts.append(f"address {collector_ip}")
 
     line = f"{index}. **{status_label}** — " + " · ".join(parts)
     if existing_entry_title is not None:

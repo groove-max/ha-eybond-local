@@ -108,7 +108,7 @@ def _bare_link(
     link._collector_ip = collector_ip
     # persisted_protocol is the INFERRED (cloud-family) expected hint: diagnostic
     # only, it must never drive the adapter/probe/owner.
-    link._expected_collector_session_protocol = persisted_protocol
+    link._configured_collector_session_protocol = persisted_protocol
     link._transport = _FakeTransport(sessions)
     link._at_transport = _FakeAtTransport()
     link._unavailable_payload_transport = _UnavailablePayloadTransport()
@@ -551,9 +551,9 @@ class SessionHandoverLifecycleTests(unittest.TestCase):
         _observe(link)
         self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
 
-    # B. Full gap (no session observed) + cloud-family bootstrap cannot switch to
-    # at_text: the confirmed wire holds and the reconcile refuses the guess.
-    def test_gap_holds_confirmed_wire_and_reconcile_refuses_bootstrap(self) -> None:
+    # B. A full observation gap cannot let untrusted configuration replace the
+    # confirmed wire.
+    def test_gap_holds_confirmed_wire_and_refuses_unobserved_protocol(self) -> None:
         link = _bare_link(
             collector_pn=FULL_PN,
             collector_ip="",
@@ -570,9 +570,8 @@ class SessionHandoverLifecycleTests(unittest.TestCase):
         self.assertEqual(link._owned_observed_session_protocol(), "eybond_framed")
         self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
 
-        # The coordinator's cloud-family bootstrap (smartess_at -> at_text) tries
-        # to reconcile during the gap. It must be a no-op: no rebuild, no
-        # downgrade of the confirmed live wire.
+        # An unobserved contradictory reconcile request must be a no-op: no
+        # rebuild and no downgrade of the confirmed live wire.
         changed = asyncio.run(
             link.async_reconcile_collector_session_profile(
                 collector_session_protocol="at_text",
@@ -581,12 +580,12 @@ class SessionHandoverLifecycleTests(unittest.TestCase):
             )
         )
         self.assertFalse(changed)
-        self.assertEqual(link._expected_collector_session_protocol, "eybond_framed")
+        self.assertEqual(link._configured_collector_session_protocol, "eybond_framed")
         self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
 
-    # Conflict + attempted bootstrap reconcile: a live conflict blocks the rebuild
-    # entirely; conflict preserved, configured protocol unchanged, no bootstrap.
-    def test_live_conflict_blocks_bootstrap_reconcile(self) -> None:
+    # A live conflict blocks reconciliation entirely; the conflict and the
+    # configured protocol are preserved.
+    def test_live_conflict_blocks_untrusted_reconcile(self) -> None:
         from custom_components.eybond_local.connection.session_handle import ADAPTER_NONE
 
         link = _bare_link(
@@ -616,7 +615,7 @@ class SessionHandoverLifecycleTests(unittest.TestCase):
             )
         )
         self.assertFalse(changed)
-        self.assertEqual(link._expected_collector_session_protocol, "eybond_framed")
+        self.assertEqual(link._configured_collector_session_protocol, "eybond_framed")
         # Conflict is still surfaced; bootstrap not applied.
         self.assertTrue(link._live_session_handle().conflict)
         self.assertEqual(link._inverter_forward_adapter(), ADAPTER_NONE)
@@ -736,6 +735,16 @@ class SessionHandoverLifecycleTests(unittest.TestCase):
 
         # New socket accepted for the same PN.
         sessions.append(_observed("new", FULL_PN, state="routed_framed", source="framed_heartbeat"))
+        # EOF for the old socket may lag behind acceptance of its replacement.
+        # Equal-quality selection must already follow the later accepted socket,
+        # otherwise runtime keeps waiting on the stale session id indefinitely.
+        owned = registry.owned_session_location("entry-1")
+        self.assertIsNotNone(owned)
+        self.assertEqual(owned.session_id, "new")
+        handle = registry.session_handle_for_entry("entry-1")
+        self.assertTrue(handle.observed)
+        self.assertEqual(handle.session_id, "new")
+
         # Delayed close callback for the OLD socket arrives: it becomes terminal.
         sessions[0]["state"] = SESSION_STATE_CLOSED
 
@@ -1177,7 +1186,7 @@ class PersistedConfirmedProtocolBootstrapTests(unittest.TestCase):
             tcp_port=8899,
             udp_port=58899,
             collector_pn=FULL_PN,
-            collector_expected_session_protocol="eybond_framed",
+            collector_configured_session_protocol="eybond_framed",
             confirmed_session_protocol_evidence=None,
             discovery_interval=30,
             heartbeat_interval=60,
@@ -1213,7 +1222,7 @@ class PersistedConfirmedProtocolBootstrapTests(unittest.TestCase):
 
     def test_confirmed_only_protocol_is_handed_to_transport_not_inferred(self) -> None:
         # The link hands ONLY the confirmed protocol to the shared listener, so
-        # an inferred cloud-family hint can never register a probe owner.
+        # an unconfirmed configured value can never register a probe owner.
         inferred = _bare_link(
             collector_pn=FULL_PN,
             collector_ip="",

@@ -165,10 +165,9 @@ def _build_diagnostics_split(
         "session": _present(
             values,
             "collector_remote_ip",
-            # Protocol authority is intentionally split.  The legacy
-            # collector_callback_session_protocol is only an expected/profile
-            # hint and must not masquerade as the active session protocol.
-            "collector_expected_session_protocol",
+            # Protocol authority is intentionally split into configured
+            # PN-bound evidence, current confirmed binding, and live wire.
+            "collector_configured_session_protocol",
             "collector_confirmed_session_protocol",
             "collector_live_session_protocol",
             "collector_current_live_session",

@@ -4,12 +4,12 @@
     "step": {
       "user": {
         "title": "Ласкаво просимо",
-        "description": "EyeBond Local допоможе вам додати інвертор з мінімальним ручним налаштуванням.\n\n{welcome_hint}",
+        "description": "EyeBond Local допоможе знайти й додати сумісний пристрій з мінімальним ручним налаштуванням.\n\n{welcome_hint}",
         "data": {
           "connection_type": "Тип підключення"
         },
         "data_description": {
-          "connection_type": "Виберіть, яким способом Home Assistant має підключатися до інвертора."
+          "connection_type": "Виберіть, яким способом Home Assistant має підключатися до пристрою."
         },
         "menu_options": {
           "auto": "Продовжити"
@@ -26,12 +26,12 @@
       },
       "auto": {
         "title": "Виберіть інтерфейс сканування",
-        "description": "Виберіть мережевий інтерфейс Home Assistant (той, що в одній підмережі з інвертором) і запустіть сканування.",
+        "description": "Виберіть мережевий інтерфейс Home Assistant, підключений до мережі пристрою, і запустіть сканування.",
         "data": {
           "server_ip": "Інтерфейс Home Assistant"
         },
         "data_description": {
-          "server_ip": "Мережевий інтерфейс, до якого колектор підключиться у відповідь. Виберіть той, що знаходиться в тій самій підмережі, що й ваш інвертор."
+          "server_ip": "Виберіть інтерфейс у тій самій мережі, що й пристрій."
         }
       },
       "bluetooth_setup": {
@@ -51,17 +51,17 @@
         }
       },
       "deep_scan": {
-        "title": "Глибоке сканування",
-        "description": "Глибоке сканування перевіряє вибрану IPv4-мережу через **{selected_scan_interface}**.\n\n**Мережа:** {deep_scan_network}\n**Прямих адрес:** {deep_scan_target_count}\n\n{deep_scan_warning}",
+        "title": "Пошук у всій локальній мережі",
+        "description": "Home Assistant перевірить кожну адресу у вибраній IPv4-мережі через **{selected_scan_interface}**.\n\n**Мережа:** {deep_scan_network}\n**Адрес для перевірки:** {deep_scan_target_count}\n\n{deep_scan_warning}",
         "menu_options": {
-          "start_deep_scan": "Запустити глибоке сканування",
+          "start_deep_scan": "Перевірити всю мережу",
           "change_scan_interface": "Змінити інтерфейс сканування",
           "manual": "Ручне налаштування"
         }
       },
       "scanning": {
         "title": "Сканування мережі",
-        "description": "Пошук колекторів EyeBond та інверторів у локальній мережі через **{selected_scan_interface}**.\n\n**{scan_progress_phase}**\n`{scan_progress_bar}`\n{scan_progress_detail}\n\n{scan_progress_hint}"
+        "description": "Пошук сумісних пристроїв у локальній мережі через **{selected_scan_interface}**.\n\n**{scan_progress_phase}**\n`{scan_progress_bar}`\n{scan_progress_detail}\n\n{scan_progress_hint}"
       },
       "scan_results": {
         "title": "Виявлені пристрої",
@@ -100,22 +100,12 @@
       },
       "choose": {
         "title": "Виберіть пристрій для додавання",
-        "description": "{choose_summary}\n\nСпочатку показуються готові до додавання пристрої.",
+        "description": "{choose_summary}",
         "data": {
           "result_key": "Виявлений пристрій"
         },
         "data_description": {
-          "result_key": "Виберіть інвертор, який хочете додати до Home Assistant."
-        }
-      },
-      "driver_choice": {
-        "title": "Вибір драйвера інвертора",
-        "description": "{driver_choice_summary}\n\n{driver_choice_candidates}",
-        "data": {
-          "driver_match_key": "Драйвер / протокол"
-        },
-        "data_description": {
-          "driver_match_key": "Якщо не впевнені — залиште рекомендований варіант."
+          "result_key": "Виберіть пристрій, який хочете додати до Home Assistant."
         }
       },
       "detection_summary": {
@@ -127,25 +117,29 @@
         }
       },
       "confirm": {
-        "title": "Підтвердьте виявлення",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
+        "title": "Додати пристрій",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_operation_mode_note}",
         "data": {
+          "driver_detection_strategy": "Пошук протоколу інвертора",
           "poll_mode": "Режим оновлення сенсорів",
           "poll_interval": "Інтервал опитування"
         },
         "data_description": {
+          "driver_detection_strategy": "Швидкий режим зупиняється після першого підтвердженого протоколу. Повне сканування перевіряє всі підтримувані протоколи та може знайти кілька сумісних варіантів.",
           "poll_mode": "Автоматичний режим дозволяє EyeBond Local вибрати безпечний інтервал за часом відповіді пристрою. Ручний режим використовує інтервал нижче.",
           "poll_interval": "Як часто зчитувати значення датчиків з інвертора після додавання пристрою."
         }
       },
       "confirm_without_cloud_assist": {
-        "title": "Підтвердьте виявлення",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
+        "title": "Додати пристрій",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_operation_mode_note}",
         "data": {
+          "driver_detection_strategy": "Пошук протоколу інвертора",
           "poll_mode": "Режим оновлення сенсорів",
           "poll_interval": "Інтервал опитування"
         },
         "data_description": {
+          "driver_detection_strategy": "Швидкий режим зупиняється після першого підтвердженого протоколу. Повне сканування перевіряє всі підтримувані протоколи та може знайти кілька сумісних варіантів.",
           "poll_mode": "Автоматичний режим дозволяє EyeBond Local вибрати безпечний інтервал за часом відповіді пристрою. Ручний режим використовує інтервал нижче.",
           "poll_interval": "Як часто зчитувати значення датчиків з інвертора після додавання пристрою."
         }
@@ -187,13 +181,15 @@
           "server_ip": "Локальна IP-адреса слухача",
           "collector_ip": "IP-адреса колектора",
           "driver_hint": "Драйвер",
-          "connection_strategy": "Як підключається колектор"
+          "connection_strategy": "Як підключається колектор",
+          "driver_detection_strategy": "Пошук протоколу інвертора"
         },
         "data_description": {
           "server_ip": "Локальна IPv4-адреса Home Assistant, до якої прив'язується TCP-слухач EyeBond. Для звичайної локальної мережі вибирайте інтерфейс у тій самій підмережі, що й колектор.",
           "collector_ip": "IPv4-адреса колектора для прямої перевірки. Залиште порожнім для локального широкомовного виявлення. Для remote або NAT сценаріїв вкажіть публічну чи проброшену IPv4-адресу, яка веде до колектора.",
           "driver_hint": "Автовиявлення працює для більшості інверторів. Змінюйте лише за окремою рекомендацією.",
-          "connection_strategy": "Виберіть «Колектор сам підключається до Home Assistant», якщо колектор уже налаштований на Home Assistant. Виберіть «Запитувати підключення колектора за потреби», щоб Home Assistant надсилав один запит на вказану адресу, коли потрібні дані."
+          "connection_strategy": "Виберіть «Колектор сам підключається до Home Assistant», якщо колектор уже налаштований на Home Assistant. Виберіть «Запитувати підключення колектора за потреби», щоб Home Assistant надсилав один запит на вказану адресу, коли потрібні дані.",
+          "driver_detection_strategy": "Рекомендовано швидкий режим. Повне сканування корисне, якщо інвертор може відповідати за кількома протоколами й потрібно вибрати між ними."
         },
         "sections": {
           "advanced_connection": {
@@ -234,9 +230,9 @@
       },
       "advanced_setup": {
         "title": "Розширене налаштування",
-        "description": "Використовуйте це, лише якщо автоматичний скан не знайшов інвертор.",
+        "description": "Скористайтеся цими варіантами, якщо автоматичний пошук не знайшов пристрій.",
         "menu_options": {
-          "deep_scan": "Глибокий скан (вся підмережа)",
+          "deep_scan": "Пошук у всій локальній мережі",
           "change_scan_interface": "Змінити мережевий інтерфейс",
           "manual": "Ввести адресу вручну",
           "refresh_scan": "Сканувати знову"
@@ -322,7 +318,7 @@
       }
     },
     "progress": {
-      "scanning_network": "Сканування локальної мережі на наявність колекторів EyeBond…",
+      "scanning_network": "Пошук пристроїв EyeBond у локальній мережі…",
       "shadow_learning": "{control_discovery_hint}",
       "verify_connection": "Перезапускаємо колектор {collector_pn}. Після закриття поточного з’єднання Home Assistant очікуватиме нове не довше однієї хвилини.",
       "active_scan_recovery_verify": "Перевіряємо підключення колектора {collector_pn}…",
@@ -427,10 +423,21 @@
           "shadow_learning": "Розширити підтримку пристрою",
           "collector_wifi": "Змінити Wi-Fi колектора",
           "collector_uart": "Змінити швидкість UART інвертора",
+          "inverter_protocol": "Вибрати протокол інвертора",
           "diagnostics": "Діагностика та сервісні інструменти",
           "strategy_transition_repair": "Завершити перемикання підключення (потрібне відновлення)",
           "strategy_transition_activation_retry": "Завантажити перевірене підключення",
           "strategy_transition_cancel": "Скасувати"
+        }
+      },
+      "inverter_protocol": {
+        "title": "Вибір протоколу інвертора",
+        "description": "Інвертор відповів через {count} підтримувані протоколи. Виберіть протокол, який має використовувати Home Assistant. Перед створенням сутностей інвертора вибраний протокол буде ще раз перевірено через активне підключення колектора.",
+        "data": {
+          "driver_hint": "Протокол інвертора"
+        },
+        "data_description": {
+          "driver_hint": "Виберіть протокол, який найкраще відповідає цьому інвертору. Якщо працюють обидва, виберіть той, який зазвичай використовуєте для керування пристроєм."
         }
       },
       "collector_wifi": {
@@ -464,12 +471,14 @@
         "title": "Параметри роботи",
         "description": "**{model_name}** — серійний номер {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
+          "driver_detection_strategy": "Пошук протоколу інвертора",
           "poll_mode": "Режим оновлення сенсорів",
           "poll_interval": "Інтервал опитування",
           "connection_strategy": "Як підключається колектор",
           "control_mode": "Режим керування"
         },
         "data_description": {
+          "driver_detection_strategy": "Швидкий режим зупиняється після першого підтвердженого протоколу. Повне сканування перевіряє всі підтримувані протоколи через сесію цього колектора.",
           "poll_mode": "Автоматичний режим дозволяє EyeBond Local вибрати безпечний інтервал за часом відповіді пристрою. Ручний режим використовує інтервал нижче.",
           "poll_interval": "Лише для ручного режиму. Це цільовий інтервал між початками циклів опитування. Якщо пристрою потрібно більше часу на відповідь, EyeBond Local попередить про високе навантаження опитування; використовуйте автоматичний режим, щоб інтеграція сама вибрала безпечний інтервал.",
           "connection_strategy": "«Колектор сам підключається до Home Assistant» — якщо колектор уже вказує на Home Assistant, запит на підключення не надсилається. «Запитувати підключення за потреби» надсилає колектору один запит на підключення за спробу; використовуйте для колектора, який зазвичай працює зі своєю хмарою.",
@@ -929,6 +938,12 @@
       "options": {
         "auto": "Автоматично",
         "manual": "Вручну"
+      }
+    },
+    "driver_detection_strategy": {
+      "options": {
+        "first_match": "Швидко: перший підтверджений протокол",
+        "full_scan": "Повне сканування всіх протоколів"
       }
     }
   }

@@ -136,6 +136,17 @@ class FakeRuntimeManager:
     async def async_reconcile_network(self, *, reason: str = "network_change") -> bool:
         return False
 
+    async def async_activate_claimed_session(
+        self,
+        *,
+        expected_session_id: str,
+        timeout: float,
+    ) -> bool:
+        """Honor the runtime protocol used by a prepared config-flow handoff."""
+
+        del expected_session_id, timeout
+        return True
+
     async def async_refresh(self, *, poll_interval: float | None = None):
         from custom_components.eybond_local.models import RuntimeSnapshot
 

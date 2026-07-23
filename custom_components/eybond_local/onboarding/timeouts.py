@@ -137,25 +137,23 @@ def estimate_deep_scan_seconds(
     target_count: int,
     *,
     policy: OnboardingTimeoutPolicy = DEFAULT_ONBOARDING_TIMEOUT_POLICY,
-    driver_sweep_seconds: float | None = None,
 ) -> float:
-    """Estimate deep scan duration from the shared onboarding timeout policy."""
+    """Estimate collector-only full-network discovery duration.
+
+    Inverter driver sweeps are runtime work and deliberately do not participate
+    in this estimate. The full-network path consists of the ordinary collector
+    scan, bounded concurrent unicast batches, and one final identity-settle
+    window for callbacks from the last batch.
+    """
 
     if target_count <= 0:
-        return float(policy.auto_scan_estimated_seconds)
-
-    if driver_sweep_seconds is None:
-        driver_sweep_seconds = default_deep_driver_sweep_seconds()
-    followup_seconds = max(
-        float(policy.deep_scan_followup_estimated_seconds),
-        float(driver_sweep_seconds),
-    )
+        return auto_scan_timeout_seconds(policy)
     batch_size = max(1, int(policy.deep_scan_concurrency))
     batches = (target_count + batch_size - 1) // batch_size
     return (
-        float(policy.auto_scan_estimated_seconds)
+        auto_scan_timeout_seconds(policy)
         + (batches * float(policy.deep_scan_batch_timeout))
-        + followup_seconds
+        + float(policy.deep_scan_identity_settle_seconds)
     )
 
 
@@ -299,14 +297,12 @@ def deep_scan_timeout_seconds(
     target_count: int,
     *,
     policy: OnboardingTimeoutPolicy = DEFAULT_ONBOARDING_TIMEOUT_POLICY,
-    driver_sweep_seconds: float | None = None,
 ) -> float:
-    """Return the default end-to-end timeout budget for deep scan."""
+    """Return the end-to-end collector-only full-network search budget."""
 
     estimated = estimate_deep_scan_seconds(
         target_count,
         policy=policy,
-        driver_sweep_seconds=driver_sweep_seconds,
     )
     return max(
         auto_scan_timeout_seconds(policy),

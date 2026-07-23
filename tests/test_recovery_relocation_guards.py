@@ -249,7 +249,7 @@ class RecoveryRelocationGuards(unittest.TestCase):
             "connect_timeout_without_udp_reply": 0.75,
             "heartbeat_timeout": 2.0,
             "manual_total_timeout": 45.0,
-            "auto_total_timeout": 45.0,
+            "auto_total_timeout": 30.0,
             "callback_identity_session_wait": 20.0,
             "callback_causality_lease_wait": 30.0,
             "callback_recovery_session_wait": 60.0,
@@ -257,6 +257,7 @@ class RecoveryRelocationGuards(unittest.TestCase):
             "inbound_restart_disconnect_timeout": 65.0,
             "inbound_reconnect_timeout": 60.0,
             "deep_scan_concurrency": 32,
+            "deep_scan_identity_settle_seconds": 5.0,
             "deep_scan_hard_ceiling_seconds": 900.0,
         }
         for field, value in expected.items():

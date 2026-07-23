@@ -4,12 +4,12 @@
     "step": {
       "user": {
         "title": "Добро пожаловать",
-        "description": "EyeBond Local поможет вам добавить инвертор с минимальной ручной настройкой.\n\n{welcome_hint}",
+        "description": "EyeBond Local поможет найти и добавить совместимое устройство с минимальной ручной настройкой.\n\n{welcome_hint}",
         "data": {
           "connection_type": "Тип подключения"
         },
         "data_description": {
-          "connection_type": "Выберите, каким способом Home Assistant должен подключаться к инвертору."
+          "connection_type": "Выберите, каким способом Home Assistant должен подключаться к устройству."
         },
         "menu_options": {
           "auto": "Продолжить"
@@ -26,12 +26,12 @@
       },
       "auto": {
         "title": "Выберите интерфейс сканирования",
-        "description": "Выберите сетевой интерфейс Home Assistant (тот, что в одной подсети с инвертором) и запустите сканирование.",
+        "description": "Выберите сетевой интерфейс Home Assistant, подключённый к сети устройства, и запустите сканирование.",
         "data": {
           "server_ip": "Интерфейс Home Assistant"
         },
         "data_description": {
-          "server_ip": "Сетевой интерфейс, к которому коллектор подключится в ответ. Выберите тот, что находится в той же подсети, что и ваш инвертор."
+          "server_ip": "Выберите интерфейс в той же сети, что и устройство."
         }
       },
       "bluetooth_setup": {
@@ -51,17 +51,17 @@
         }
       },
       "deep_scan": {
-        "title": "Глубокое сканирование",
-        "description": "Глубокое сканирование сохраняет начальный broadcast-probe, а затем напрямую проверяет остальную выбранную IPv4-сеть через **{selected_scan_interface}**.\n\n**Сеть:** {deep_scan_network}\n**Прямых адресов:** {deep_scan_target_count}\n\n{deep_scan_warning}",
+        "title": "Поиск во всей локальной сети",
+        "description": "Home Assistant проверит каждый адрес в выбранной IPv4-сети через **{selected_scan_interface}**.\n\n**Сеть:** {deep_scan_network}\n**Адресов для проверки:** {deep_scan_target_count}\n\n{deep_scan_warning}",
         "menu_options": {
-          "start_deep_scan": "Запустить глубокое сканирование",
+          "start_deep_scan": "Проверить всю сеть",
           "change_scan_interface": "Изменить интерфейс сканирования",
           "manual": "Ручная настройка"
         }
       },
       "scanning": {
         "title": "Сканирование сети",
-        "description": "Поиск коллекторов EyeBond и инверторов в локальной сети через **{selected_scan_interface}**.\n\n**{scan_progress_phase}**\n`{scan_progress_bar}`\n{scan_progress_detail}\n\n{scan_progress_hint}"
+        "description": "Поиск совместимых устройств в локальной сети через **{selected_scan_interface}**.\n\n**{scan_progress_phase}**\n`{scan_progress_bar}`\n{scan_progress_detail}\n\n{scan_progress_hint}"
       },
       "scan_results": {
         "title": "Обнаруженные устройства",
@@ -100,22 +100,12 @@
       },
       "choose": {
         "title": "Выберите устройство для добавления",
-        "description": "{choose_summary}\n\nСначала показываются устройства, готовые к добавлению.",
+        "description": "{choose_summary}",
         "data": {
           "result_key": "Обнаруженное устройство"
         },
         "data_description": {
-          "result_key": "Выберите инвертор, который хотите добавить в Home Assistant."
-        }
-      },
-      "driver_choice": {
-        "title": "Выбор драйвера инвертора",
-        "description": "{driver_choice_summary}\n\n{driver_choice_candidates}",
-        "data": {
-          "driver_match_key": "Драйвер / протокол"
-        },
-        "data_description": {
-          "driver_match_key": "Если не уверены — оставьте рекомендованный вариант."
+          "result_key": "Выберите устройство, которое хотите добавить в Home Assistant."
         }
       },
       "detection_summary": {
@@ -127,25 +117,29 @@
         }
       },
       "confirm": {
-        "title": "Подтвердите обнаружение",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
+        "title": "Добавить устройство",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_operation_mode_note}",
         "data": {
+          "driver_detection_strategy": "Поиск протокола инвертора",
           "poll_mode": "Режим обновления сенсоров",
           "poll_interval": "Интервал опроса"
         },
         "data_description": {
+          "driver_detection_strategy": "Быстрый режим останавливается после первого подтверждённого протокола. Полное сканирование проверяет все поддерживаемые протоколы и может найти несколько совместимых вариантов.",
           "poll_mode": "Автоматический режим позволяет EyeBond Local выбрать безопасный интервал по времени ответа устройства. Ручной режим использует интервал ниже.",
           "poll_interval": "Как часто считывать значения датчиков с инвертора после добавления устройства."
         }
       },
       "confirm_without_cloud_assist": {
-        "title": "Подтвердите обнаружение",
-        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{smartess_cloud_summary}\n\n{control_summary}\n\n{collector_operation_mode_note}",
+        "title": "Добавить устройство",
+        "description": "{collector_confirm_table}\n\n{inverter_confirm_table}\n\n{collector_operation_mode_note}",
         "data": {
+          "driver_detection_strategy": "Поиск протокола инвертора",
           "poll_mode": "Режим обновления сенсоров",
           "poll_interval": "Интервал опроса"
         },
         "data_description": {
+          "driver_detection_strategy": "Быстрый режим останавливается после первого подтверждённого протокола. Полное сканирование проверяет все поддерживаемые протоколы и может найти несколько совместимых вариантов.",
           "poll_mode": "Автоматический режим позволяет EyeBond Local выбрать безопасный интервал по времени ответа устройства. Ручной режим использует интервал ниже.",
           "poll_interval": "Как часто считывать значения датчиков с инвертора после добавления устройства."
         }
@@ -187,13 +181,15 @@
           "server_ip": "Локальный IP-адрес слушателя",
           "collector_ip": "IP-адрес коллектора",
           "driver_hint": "Драйвер",
-          "connection_strategy": "Как подключается коллектор"
+          "connection_strategy": "Как подключается коллектор",
+          "driver_detection_strategy": "Поиск протокола инвертора"
         },
         "data_description": {
           "server_ip": "Локальный IPv4-адрес Home Assistant, к которому привязывается TCP-слушатель EyeBond. Для обычной локальной сети выбирайте интерфейс в той же подсети, что и коллектор.",
           "collector_ip": "IPv4-адрес коллектора для прямой проверки. Оставьте пустым для локального широковещательного обнаружения. Для remote или NAT сценариев укажите публичный или проброшенный IPv4-адрес, ведущий к коллектору.",
           "driver_hint": "Автообнаружение работает для большинства инверторов. Изменяйте только если это отдельно рекомендовано.",
-          "connection_strategy": "Выберите «Коллектор сам подключается к Home Assistant», если коллектор уже настроен на Home Assistant. Выберите «Запрашивать подключение коллектора при необходимости», чтобы Home Assistant отправлял один запрос на указанный адрес, когда нужны данные."
+          "connection_strategy": "Выберите «Коллектор сам подключается к Home Assistant», если коллектор уже настроен на Home Assistant. Выберите «Запрашивать подключение коллектора при необходимости», чтобы Home Assistant отправлял один запрос на указанный адрес, когда нужны данные.",
+          "driver_detection_strategy": "Рекомендуется быстрый режим. Полное сканирование полезно, если инвертор может отвечать по нескольким протоколам и нужно выбрать между ними."
         },
         "sections": {
           "advanced_connection": {
@@ -234,9 +230,9 @@
       },
       "advanced_setup": {
         "title": "Расширенная настройка",
-        "description": "Используйте это, только если автоматический скан не нашёл инвертор.",
+        "description": "Используйте эти варианты, если автоматический поиск не нашёл устройство.",
         "menu_options": {
-          "deep_scan": "Глубокий скан (вся подсеть)",
+          "deep_scan": "Поиск во всей локальной сети",
           "change_scan_interface": "Сменить сетевой интерфейс",
           "manual": "Ввести адрес вручную",
           "refresh_scan": "Сканировать снова"
@@ -322,7 +318,7 @@
       }
     },
     "progress": {
-      "scanning_network": "Сканирование локальной сети на наличие коллекторов EyeBond…",
+      "scanning_network": "Поиск устройств EyeBond в локальной сети…",
       "shadow_learning": "{control_discovery_hint}",
       "verify_connection": "Перезапускаем коллектор {collector_pn}. После закрытия текущего соединения Home Assistant будет ждать новое не более одной минуты.",
       "active_scan_recovery_verify": "Проверяем подключение коллектора {collector_pn}…",
@@ -427,10 +423,21 @@
           "shadow_learning": "Расширить поддержку устройства",
           "collector_wifi": "Сменить Wi-Fi коллектора",
           "collector_uart": "Сменить скорость UART инвертора",
+          "inverter_protocol": "Выбрать протокол инвертора",
           "diagnostics": "Диагностика и сервисные инструменты",
           "strategy_transition_repair": "Завершить переключение подключения (требуется восстановление)",
           "strategy_transition_activation_retry": "Загрузить проверенное подключение",
           "strategy_transition_cancel": "Отменить"
+        }
+      },
+      "inverter_protocol": {
+        "title": "Выбор протокола инвертора",
+        "description": "Инвертор ответил по {count} поддерживаемым протоколам. Выберите протокол, который должен использовать Home Assistant. Перед созданием сущностей инвертора выбранный протокол будет ещё раз проверен через активное подключение коллектора.",
+        "data": {
+          "driver_hint": "Протокол инвертора"
+        },
+        "data_description": {
+          "driver_hint": "Выберите протокол, который лучше соответствует этому инвертору. Если работают оба, выберите тот, который обычно используете для управления устройством."
         }
       },
       "collector_wifi": {
@@ -464,12 +471,14 @@
         "title": "Параметры работы",
         "description": "**{model_name}** — серийный номер {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_operation_mode_note}",
         "data": {
+          "driver_detection_strategy": "Поиск протокола инвертора",
           "poll_mode": "Режим обновления сенсоров",
           "poll_interval": "Интервал опроса",
           "connection_strategy": "Как подключается коллектор",
           "control_mode": "Режим управления"
         },
         "data_description": {
+          "driver_detection_strategy": "Быстрый режим останавливается после первого подтверждённого протокола. Полное сканирование проверяет все поддерживаемые протоколы через сессию этого коллектора.",
           "poll_mode": "Автоматический режим позволяет EyeBond Local выбрать безопасный интервал по времени ответа устройства. Ручной режим использует интервал ниже.",
           "poll_interval": "Только для ручного режима. Это целевой интервал между началами циклов опроса. Если устройству нужно больше времени на ответ, EyeBond Local предупредит о высокой загрузке опроса; используйте автоматический режим, чтобы интеграция сама выбрала безопасный интервал.",
           "connection_strategy": "«Коллектор сам подключается к Home Assistant» — если коллектор уже указывает на Home Assistant, запрос на подключение не отправляется. «Запрашивать подключение при необходимости» отправляет коллектору один запрос на подключение за попытку; используйте для коллектора, который обычно работает со своим облаком.",
@@ -929,6 +938,12 @@
       "options": {
         "auto": "Автоматически",
         "manual": "Вручную"
+      }
+    },
+    "driver_detection_strategy": {
+      "options": {
+        "first_match": "Быстро: первый подтверждённый протокол",
+        "full_scan": "Полное сканирование всех протоколов"
       }
     }
   }

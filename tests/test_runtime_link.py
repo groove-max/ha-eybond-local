@@ -277,7 +277,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
     def test_listener_diagnostics_include_callback_session_inventory(self) -> None:
         manager = self._build_manager()
-        manager._expected_collector_session_protocol = "at_text"
+        manager._configured_collector_session_protocol = "at_text"
         manager._collector_identity_strategy = "at_dtupn"
         transport = _FakeTransport(connected=False)
         transport._listener = object()  # type: ignore[attr-defined]
@@ -285,7 +285,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
         diagnostics = manager.listener_diagnostics()
 
-        self.assertEqual(diagnostics["collector_callback_session_protocol"], "at_text")
+        self.assertEqual(diagnostics["collector_configured_session_protocol"], "at_text")
         self.assertEqual(diagnostics["collector_callback_identity_strategy"], "at_dtupn")
         self.assertEqual(diagnostics["collector_callback_pending_session_count"], 2)
         self.assertEqual(diagnostics["collector_callback_recent_session_count"], 3)
@@ -319,7 +319,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
             manager._collector_pn = _OBSERVED_PN
             # Expected (inferred) hint no longer drives the adapter; a routed AT
             # live session provides the confirmed raw/AT wire.
-            manager._expected_collector_session_protocol = "at_text"
+            manager._configured_collector_session_protocol = "at_text"
             payload = _FakeTransport(
                 connected=False,
                 connect_result=False,
@@ -379,7 +379,10 @@ class RuntimeLinkManagerTests(unittest.TestCase):
             self.assertTrue(changed)
             stop_all.assert_awaited_once()
             start_all.assert_awaited_once()
-            self.assertEqual(manager.listener_diagnostics()["collector_callback_session_protocol"], "at_text")
+            self.assertEqual(
+                manager.listener_diagnostics()["collector_configured_session_protocol"],
+                "at_text",
+            )
             self.assertEqual(manager.listener_diagnostics()["collector_callback_identity_strategy"], "at_dtupn")
             self.assertTrue(manager._started)
             self.assertEqual(manager.listener_status, "listening")
@@ -1763,7 +1766,7 @@ class DomainTransportOwnershipTests(unittest.TestCase):
     # against a persisted at_text hint.
     def test_live_framed_on_other_listener_overrides_persisted_at_text(self) -> None:
         manager = self._manager(collector_pn=self.FULL_PN)
-        manager._expected_collector_session_protocol = "at_text"
+        manager._configured_collector_session_protocol = "at_text"
         self._install_aux_fakes(manager)
         inventory = [
             self._domain_session(
@@ -1787,7 +1790,7 @@ class DomainTransportOwnershipTests(unittest.TestCase):
     # ValueCloud/G-ASCII raw-passthrough transport.
     def test_live_at_text_on_other_listener_keeps_raw_passthrough(self) -> None:
         manager = self._manager(collector_pn=self.FULL_PN)
-        manager._expected_collector_session_protocol = "eybond_framed"
+        manager._configured_collector_session_protocol = "eybond_framed"
         self._install_aux_fakes(manager)
         inventory = [
             self._domain_session(

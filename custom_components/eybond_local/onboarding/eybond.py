@@ -149,6 +149,14 @@ def _collector_identity_matches(left: str, right: str) -> bool:
     )
 
 
+def _result_has_collector_identity(result: OnboardingResult) -> bool:
+    """Return whether one result identified a collector independently of a driver."""
+
+    collector = result.collector
+    info = collector.collector if collector is not None else None
+    return bool(str(getattr(info, "collector_pn", "") or "").strip())
+
+
 def _apply_bridge_hardware_token_to_collector(collector: Any, hardware_version: object) -> None:
     """Carry a positive hardware-version bridge token into CollectorInfo."""
 
@@ -604,6 +612,7 @@ class OnboardingDetector:
         connect_timeout: float = 5.0,
         heartbeat_timeout: float = 2.0,
         enrich_runtime_details: bool = True,
+        identify_collector_only: bool = False,
         cleanup_new_shared_connection: bool = False,
         total_timeout: float | None = None,
         concurrency: int = _TARGET_DETECTION_CONCURRENCY,
@@ -632,6 +641,7 @@ class OnboardingDetector:
                             connect_timeout=connect_timeout,
                             heartbeat_timeout=heartbeat_timeout,
                             enrich_runtime_details=enrich_runtime_details,
+                            identify_collector_only=identify_collector_only,
                             cleanup_new_shared_connection=cleanup_new_shared_connection,
                             detection_state=state,
                             depth=state.depth,
@@ -689,7 +699,13 @@ class OnboardingDetector:
             for task in done:
                 result = task.result()
                 results.append(result)
-                if return_after_first_match and result.match is not None:
+                if return_after_first_match and (
+                    result.match is not None
+                    or (
+                        identify_collector_only
+                        and _result_has_collector_identity(result)
+                    )
+                ):
                     should_stop = True
             if should_stop:
                 stopped_after_first_match = True
@@ -723,6 +739,7 @@ class OnboardingDetector:
         attempts: int = 3,
         attempt_delay: float = 0.75,
         enrich_runtime_details: bool = True,
+        identify_collector_only: bool = False,
         total_timeout: float | None = None,
         return_after_first_match: bool = True,
         skip_probe_ips: frozenset[str] = frozenset(),
@@ -781,6 +798,7 @@ class OnboardingDetector:
                         connect_timeout=connect_timeout,
                         heartbeat_timeout=heartbeat_timeout,
                         enrich_runtime_details=enrich_runtime_details,
+                        identify_collector_only=identify_collector_only,
                         total_timeout=deadline.remaining_seconds(),
                         return_after_first_match=return_after_first_match,
                         skip_probe_ips=skip_probe_ips,
@@ -811,6 +829,7 @@ class OnboardingDetector:
                             connect_timeout=connect_timeout,
                             heartbeat_timeout=heartbeat_timeout,
                             enrich_runtime_details=enrich_runtime_details,
+                            identify_collector_only=identify_collector_only,
                             total_timeout=deadline.remaining_seconds(),
                             return_after_first_match=return_after_first_match,
                             skip_probe_ips=skip_probe_ips,
@@ -830,7 +849,13 @@ class OnboardingDetector:
 
                 deduped = self._dedupe_results(aggregated)
                 best = deduped[0] if deduped else None
-                if best is not None and best.match is not None:
+                if best is not None and (
+                    best.match is not None
+                    or (
+                        identify_collector_only
+                        and _result_has_collector_identity(best)
+                    )
+                ):
                     aggregated = list(deduped)
                     break
                 if attempt_index < max(1, attempts) - 1:
@@ -838,7 +863,13 @@ class OnboardingDetector:
 
             deduped = self._dedupe_results(aggregated)
             best = deduped[0] if deduped else None
-            if best is None or best.match is None:
+            if best is None or (
+                best.match is None
+                and not (
+                    identify_collector_only
+                    and _result_has_collector_identity(best)
+                )
+            ):
                 fallback_targets = await self._async_auto_unicast_fallback_targets(
                     resolved_targets=targets,
                     results=deduped,
@@ -854,6 +885,7 @@ class OnboardingDetector:
                             connect_timeout=connect_timeout,
                             heartbeat_timeout=heartbeat_timeout,
                             enrich_runtime_details=enrich_runtime_details,
+                            identify_collector_only=identify_collector_only,
                             total_timeout=deadline.remaining_seconds(),
                             return_after_first_match=return_after_first_match,
                             skip_probe_ips=skip_probe_ips,
@@ -958,25 +990,25 @@ class OnboardingDetector:
         attempts: int = 3,
         attempt_delay: float = 0.75,
         enrich_runtime_details: bool = True,
+        identify_collector_only: bool = False,
         total_timeout: float | None = None,
         skip_probe_ips: frozenset[str] = frozenset(),
     ) -> tuple[OnboardingResult, ...]:
         """Run broadcast discovery first, then sweep the full selected IPv4 network."""
 
-        # The scan budget must follow the discovered work: every connected
-        # collector admitted for identification extends this deadline by one
-        # full driver-sweep budget (bounded by the policy hard ceiling), so a
-        # site with many inverters does not starve the late ones.
-        deadline = ExtendableOnboardingDeadline(
-            base_timeout_seconds=total_timeout,
-            # Admission headroom sits ON TOP of the discovery budget: a /16
-            # sweep legitimately spends ~14 minutes on discovery alone and
-            # must not eat the identification budget.
-            hard_ceiling_seconds=(
-                float(total_timeout or 0.0)
-                + DEFAULT_ONBOARDING_TIMEOUT_POLICY.deep_scan_hard_ceiling_seconds
-            ),
-        )
+        if identify_collector_only:
+            # Config-flow deep search identifies collectors only. Its deadline
+            # is fixed by subnet batch count; driver sweeps and their extendable
+            # headroom are runtime concerns and must not inflate this flow.
+            deadline = OnboardingDeadline.from_timeout(total_timeout)
+        else:
+            deadline = ExtendableOnboardingDeadline(
+                base_timeout_seconds=total_timeout,
+                hard_ceiling_seconds=(
+                    float(total_timeout or 0.0)
+                    + DEFAULT_ONBOARDING_TIMEOUT_POLICY.deep_scan_hard_ceiling_seconds
+                ),
+            )
         resolved_targets = tuple(
             discovery_targets
             or build_default_discovery_targets(
@@ -996,6 +1028,7 @@ class OnboardingDetector:
                 attempts=attempts,
                 attempt_delay=attempt_delay,
                 enrich_runtime_details=enrich_runtime_details,
+                identify_collector_only=identify_collector_only,
                 total_timeout=deadline.remaining_seconds(),
                 return_after_first_match=False,
                 skip_probe_ips=skip_probe_ips,
@@ -1058,6 +1091,7 @@ class OnboardingDetector:
             connect_timeout=connect_timeout,
             heartbeat_timeout=heartbeat_timeout,
             enrich_runtime_details=enrich_runtime_details,
+            identify_collector_only=identify_collector_only,
             total_timeout=deadline.remaining_seconds(),
             return_after_first_match=False,
             skip_probe_ips=skip_probe_ips,
@@ -1245,6 +1279,7 @@ class OnboardingDetector:
         connect_timeout: float,
         heartbeat_timeout: float,
         enrich_runtime_details: bool = True,
+        identify_collector_only: bool = False,
         cleanup_new_shared_connection: bool = False,
         detection_state: _TargetDetectionState | None = None,
         deadline: OnboardingDeadline | None = None,
@@ -1454,13 +1489,37 @@ class OnboardingDetector:
                         "callback_route": callback_route,
                     }
 
-            smartess_probe = await _async_probe_smartess_onboarding(transport)
-            if candidate.collector is not None and smartess_probe is not None:
-                _apply_smartess_probe_to_collector(candidate.collector, smartess_probe)
-
             warnings = []
             if not heartbeat_seen:
                 warnings.append("collector_heartbeat_not_observed")
+
+            if identify_collector_only:
+                # Config-entry onboarding has one responsibility here: identify
+                # the collector and preserve the exact callback-session/route
+                # capability required by admission.  Inverter probing belongs to
+                # the runtime after that entry owns the session; doing it here as
+                # well creates a second authority and multiplies scan latency by
+                # every driver/collector pair.
+                if admission_kwargs:
+                    preserve_observed_session_id = silent_identity.session_id
+                return _with_detection_evidence(
+                    OnboardingResult(
+                        collector=candidate,
+                        connection_type=CONNECTION_TYPE_EYBOND,
+                        connection_mode=target.source,
+                        warnings=tuple(warnings),
+                        next_action="confirm_collector",
+                        last_error="collector_detected_without_driver",
+                        **admission_kwargs,
+                    ),
+                    depth=depth,
+                    status="collector_only",
+                    reason="collector_identity_only_scan",
+                )
+
+            smartess_probe = await _async_probe_smartess_onboarding(transport)
+            if candidate.collector is not None and smartess_probe is not None:
+                _apply_smartess_probe_to_collector(candidate.collector, smartess_probe)
 
             sweep_deadline = deadline
             if depth == DETECTION_DEPTH_DEEP:

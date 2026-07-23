@@ -37,7 +37,7 @@ if __name__ == "__main__":
     unittest.main()
 
 class VirtualBridgeTransportProfileTests(unittest.TestCase):
-    def test_virtual_bridge_entry_with_smartess_at_family_keeps_legacy_hint(self) -> None:
+    def test_virtual_bridge_entry_with_smartess_at_family_stays_wire_neutral(self) -> None:
         from custom_components.eybond_local.collector.transport_profile import (
             resolve_collector_transport_profile_from_entry_context,
         )
@@ -51,10 +51,10 @@ class VirtualBridgeTransportProfileTests(unittest.TestCase):
             {},
         )
 
-        self.assertEqual(profile.session_protocol, "at_text")
-        self.assertEqual(profile.identity_strategy, "at_dtupn")
+        self.assertEqual(profile.session_protocol, "")
+        self.assertEqual(profile.identity_strategy, "")
 
-    def test_factory_smartess_at_family_keeps_at_text_session(self) -> None:
+    def test_factory_smartess_at_family_does_not_select_a_session_protocol(self) -> None:
         from custom_components.eybond_local.collector.transport_profile import (
             resolve_collector_transport_profile_from_entry_context,
         )
@@ -64,4 +64,4 @@ class VirtualBridgeTransportProfileTests(unittest.TestCase):
             {},
         )
 
-        self.assertNotEqual(profile.session_protocol, "eybond_framed")
+        self.assertEqual(profile.session_protocol, "")
