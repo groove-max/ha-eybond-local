@@ -886,7 +886,8 @@ class EybondHub:
         entry_id: str = "",
         collector_ip: str,
         collector_pn: str = "",
-        collector_session_protocol: str = "",
+        expected_session_protocol: str = "",
+        proxy_wire_mode: str = "transparent",
         listen_port: int,
         upstream_host: str,
         upstream_port: int,
@@ -901,7 +902,8 @@ class EybondHub:
         route_kwargs = {
             "collector_ip": collector_ip,
             "collector_pn": collector_pn,
-            "collector_session_protocol": collector_session_protocol,
+            "expected_session_protocol": expected_session_protocol,
+            "proxy_wire_mode": proxy_wire_mode,
             "listen_port": listen_port,
             "upstream_host": upstream_host,
             "upstream_port": upstream_port,
@@ -949,7 +951,7 @@ class EybondHub:
         entry_id: str = "",
         collector_ip: str,
         collector_pn: str = "",
-        collector_session_protocol: str = "",
+        expected_session_protocol: str = "",
         listen_port: int,
         upstream_host: str,
         upstream_port: int,
@@ -961,7 +963,7 @@ class EybondHub:
         route_kwargs = {
             "collector_ip": collector_ip,
             "collector_pn": collector_pn,
-            "collector_session_protocol": collector_session_protocol,
+            "expected_session_protocol": expected_session_protocol,
             "listen_port": listen_port,
             "upstream_host": upstream_host,
             "upstream_port": upstream_port,
@@ -1897,7 +1899,7 @@ class EybondHub:
             "warnings": list(runtime_state.warnings),
         }
 
-    def _collector_management_adapter(self):
+    def _collector_management_adapter(self, *, active_only: bool = False):
         """Build the negotiated collector-management adapter (single switch: link).
 
         The wire is chosen ONCE, in ``link.collector_management_adapter_id``
@@ -1911,11 +1913,19 @@ class EybondHub:
             self._link_manager.collector_management_adapter_id(),
             framed_transport_provider=lambda: (
                 getattr(self._link_manager, "active_transport", None)
-                or self._link_manager.transport
+                if active_only
+                else (
+                    getattr(self._link_manager, "active_transport", None)
+                    or self._link_manager.transport
+                )
             ),
             at_transport_provider=lambda: (
                 getattr(self._link_manager, "active_collector_at_transport", None)
-                or getattr(self._link_manager, "collector_at_transport", None)
+                if active_only
+                else (
+                    getattr(self._link_manager, "active_collector_at_transport", None)
+                    or getattr(self._link_manager, "collector_at_transport", None)
+                )
             ),
         )
 
@@ -2141,10 +2151,15 @@ class EybondHub:
         endpoint: str,
         *,
         apply_changes: bool = True,
+        timeout: float = 5.0,
+        require_heartbeat: bool = True,
     ) -> dict[str, object]:
         """Stage or apply the collector's upstream endpoint via the management adapter."""
 
-        await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
+        await self._async_ensure_connected(
+            timeout=max(0.0, float(timeout)),
+            require_heartbeat=bool(require_heartbeat),
+        )
 
         normalized_endpoint = _normalize_collector_server_endpoint(endpoint)
         adapter = self._collector_management_adapter()
@@ -2201,10 +2216,18 @@ class EybondHub:
         result["rollback_endpoint"] = rollback_endpoint
         return result
 
-    async def async_get_collector_server_endpoint_state(self) -> dict[str, object]:
+    async def async_get_collector_server_endpoint_state(
+        self,
+        *,
+        timeout: float = 5.0,
+        require_heartbeat: bool = True,
+    ) -> dict[str, object]:
         """Return the live collector endpoint and reboot-required flag from local management."""
 
-        await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
+        await self._async_ensure_connected(
+            timeout=max(0.0, float(timeout)),
+            require_heartbeat=bool(require_heartbeat),
+        )
 
         adapter = self._collector_management_adapter()
         state = await self._run_management_operation(
@@ -2221,6 +2244,35 @@ class EybondHub:
             "current_endpoint": state.current_endpoint,
             "reboot_required": state.reboot_required,
         }
+
+    async def async_query_collector_parameters(
+        self,
+        parameters: tuple[int, ...],
+    ) -> dict[int, str]:
+        """Read collector parameters on the exact runtime-owned live session."""
+
+        await self._async_ensure_connected(timeout=10.0, require_heartbeat=False)
+        adapter = self._collector_management_adapter(active_only=True)
+        return await adapter.async_query_parameters(parameters)
+
+    async def async_set_collector_wifi_credentials(
+        self,
+        *,
+        ssid: str,
+        password: str,
+        ssid_parameter: int,
+        password_parameter: int,
+    ) -> str:
+        """Write Wi-Fi credentials through the exact runtime-owned session."""
+
+        await self._async_ensure_connected(timeout=10.0, require_heartbeat=False)
+        adapter = self._collector_management_adapter(active_only=True)
+        return await adapter.async_set_wifi_credentials(
+            ssid=ssid,
+            password=password,
+            ssid_parameter=ssid_parameter,
+            password_parameter=password_parameter,
+        )
 
     async def async_capture_support_evidence(self) -> dict[str, object]:
         """Capture matched-driver or generic raw evidence for one support archive."""

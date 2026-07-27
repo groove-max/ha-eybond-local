@@ -412,8 +412,7 @@
         "menu_options": {
           "connection": "Collector connection and cloud",
           "runtime": "Polling and inverter detection",
-          "shadow_learning": "Expand device support",
-          "proxy_capture": "Temporary cloud proxy and traffic capture",
+          "cloud_tools": "Cloud traffic tools",
           "collector_wifi": "Change collector Wi-Fi",
           "collector_uart": "Change inverter UART speed",
           "inverter_protocol": "Choose inverter protocol",
@@ -421,6 +420,14 @@
           "strategy_transition_repair": "Finish the connection switch (recovery required)",
           "strategy_transition_activation_retry": "Load the verified connection",
           "strategy_transition_cancel": "Cancel"
+        }
+      },
+      "cloud_tools": {
+        "title": "Cloud Traffic Tools",
+        "description": "These tools temporarily route the collector's cloud connection through Home Assistant and restore the original cloud endpoint when finished.",
+        "menu_options": {
+          "proxy_capture": "Capture collector traffic",
+          "shadow_learning": "Discover additional device controls"
         }
       },
       "connection": {
@@ -471,16 +478,18 @@
         }
       },
       "runtime": {
-        "title": "Polling and inverter detection",
+        "title": "Polling and inverter",
         "description": "**{model_name}** — serial {serial_number} — {confidence}\n\n{control_summary}\n\n{collector_connection_note}",
         "data": {
-          "driver_detection_strategy": "Inverter protocol detection",
+          "driver_hint": "Inverter driver",
+          "driver_detection_strategy": "Automatic identification mode",
           "poll_mode": "Sensor refresh mode",
           "poll_interval": "Poll interval",
           "control_mode": "Control mode"
         },
         "data_description": {
-          "driver_detection_strategy": "Fast mode stops at the first confirmed protocol. Full scan checks all supported protocols on the owned collector session.",
+          "driver_hint": "Keep Auto for normal operation, or choose a specific driver. Saving a changed value starts a new identification on this collector.",
+          "driver_detection_strategy": "Used when the driver is Auto. Fast mode stops at the first reliable match; full scan checks all supported drivers and can report several compatible results. Saving a changed mode starts a new identification.",
           "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "Manual mode only. This is the target start-to-start refresh interval. If the device needs longer to answer, EyeBond Local will warn about high poll utilization; use Automatic mode to let the integration choose a safe interval.",
           "control_mode": "Auto enables tested controls when detection confidence is high. Read-only disables all controls. Full enables everything."
@@ -659,27 +668,26 @@
         "title": "Retry connection"
       },
       "strategy_transition": {
-        "title": "Confirm the connection switch",
-        "description": "Switching to **{target_strategy}** must be verified with a controlled collector restart before it is saved.\n\n⚠️ {connection_strategy_risk}\n\nℹ️ {connection_strategy_rollback}\n\nCheck the addresses below. Behind NAT/port-forwarding enter the public host and port the collector can really reach — they are used exactly as written.",
+        "title": "Change connection mode",
+        "description": "Home Assistant will switch the collector to **{target_strategy}** and verify that it reconnects.\n\n{connection_strategy_risk}\n\n{connection_strategy_rollback}\n\nCheck the addresses and confirm to continue.",
         "data": {
-          "advertised_server_ip": "Home Assistant host the collector connects to",
-          "advertised_tcp_port": "Port the collector connects to",
-          "collector_ip": "Collector address (for the callback request)",
-          "confirm_connection_strategy_risk": "I understand the risks and want to switch the operating profile"
+          "advertised_server_ip": "Home Assistant address",
+          "advertised_tcp_port": "Home Assistant port",
+          "collector_ip": "Collector address",
+          "confirm_connection_strategy_risk": "I checked the addresses and want to continue"
         },
         "data_description": {
-          "confirm_connection_strategy_risk": "Required. The switch will not start until this box is checked."
+          "confirm_connection_strategy_risk": "The change starts only after confirmation."
         }
       },
       "strategy_transition_rollback": {
         "title": "Choose the cloud endpoint to restore",
-        "description": "Switching to on-demand means Home Assistant will hand the collector back to a cloud endpoint. Pick the endpoint to write to the collector. This is the collector's CLOUD endpoint — it is separate from the Home Assistant callback address you entered.\n\nSaved candidate: {candidate_endpoint}",
+        "description": "Choose the cloud address the collector should use after the switch. Select a known address or enter a custom endpoint in the same field.\n\nSaved candidate: {candidate_endpoint}",
         "data": {
-          "rollback_choice": "Cloud endpoint",
-          "rollback_manual_endpoint": "Manual endpoint (host, host,port or host,port,protocol)"
+          "rollback_endpoint": "Cloud endpoint"
         },
         "data_description": {
-          "rollback_manual_endpoint": "Only used when \"Enter a cloud endpoint manually\" is selected above. Leave blank otherwise."
+          "rollback_endpoint": "Choose a known endpoint or enter host, host,port, or host,port,protocol."
         }
       },
       "strategy_transition_failed": {

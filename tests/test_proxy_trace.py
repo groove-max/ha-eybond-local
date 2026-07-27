@@ -157,6 +157,47 @@ class ProxyTraceTests(unittest.TestCase):
             self.assertEqual(collector_dump, "deadbeef\n")
             self.assertEqual(server_dump, "cafebabe\n")
 
+    def test_bridge_trace_exports_cloud_requests_and_translated_responses(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir)
+            trace_path = proxy_trace_root(config_dir) / "bridge.jsonl"
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            trace_path.write_text(
+                '{"kind":"chunk","direction":"cloud_to_collector",'
+                '"chunk_hex":"010300640001c5d5"}\n'
+                '{"kind":"proxy_bridge_exchange","direction":"collector_to_cloud",'
+                '"message_kind":"modbus","request_hex":"010300640001c5d5",'
+                '"response_hex":"010302002a399b"}\n',
+                encoding="utf-8",
+            )
+            manifest_path = export_proxy_trace_manifest(
+                config_dir=config_dir,
+                manifest=build_proxy_trace_manifest(
+                    source="collector_proxy_capture",
+                    trace_path=str(trace_path),
+                    entry_id="entry-1",
+                    collector_pn="E5000020000000",
+                    anonymized=False,
+                ),
+            )
+
+            bundle_path = export_proxy_trace_bundle(
+                manifest_path=manifest_path,
+                overwrite=True,
+            )
+            with zipfile.ZipFile(bundle_path) as archive:
+                collector_dump = archive.read(
+                    "bridge.collector_to_server.raw.hex"
+                ).decode("utf-8")
+                server_dump = archive.read(
+                    "bridge.server_to_collector.raw.hex"
+                ).decode("utf-8")
+
+        self.assertEqual(server_dump, "010300640001c5d5\n")
+        self.assertEqual(collector_dump, "010302002a399b\n")
+
     def test_anonymize_proxy_trace_text_masks_only_collector_serials(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             trace_path = Path(tmpdir) / "session.jsonl"
@@ -201,6 +242,60 @@ class ProxyTraceTests(unittest.TestCase):
 
             clear_proxy_capture_session_state(config_dir)
             self.assertIsNone(load_proxy_capture_session_state(config_dir))
+
+    def test_proxy_wire_mode_roundtrips_and_malformed_record_fails_closed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir)
+            state = build_proxy_capture_session_state(
+                entry_id="entry-1",
+                collector_pn="E5000020000000",
+                original_endpoint="dtu_ess.eybond.com,18899,TCP",
+                proxy_endpoint="192.168.1.50,18899,TCP",
+                restore_required=True,
+                anonymized=True,
+                started_at="2026-07-26T10:00:00+00:00",
+                expires_at="2026-07-26T10:05:00+00:00",
+                status="running",
+                proxy_wire_mode="transparent",
+            )
+
+            path = save_proxy_capture_session_state(
+                config_dir=config_dir,
+                state=state,
+            )
+            loaded = load_proxy_capture_session_state(config_dir)
+
+            self.assertIsNotNone(loaded)
+            assert loaded is not None
+            self.assertEqual(loaded.proxy_wire_mode, "transparent")
+            self.assertEqual(
+                refresh_proxy_capture_session_lease(
+                    loaded,
+                    lease_seconds=60,
+                ).proxy_wire_mode,
+                "transparent",
+            )
+
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["proxy_wire_mode"] = "framed_at_bridge"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            self.assertIsNone(load_proxy_capture_session_state(config_dir))
+
+        with self.assertRaises(ValueError):
+            build_proxy_capture_session_state(
+                entry_id="entry-1",
+                collector_pn="E5000020000000",
+                original_endpoint="dtu_ess.eybond.com,18899,TCP",
+                proxy_endpoint="192.168.1.50,18899,TCP",
+                restore_required=True,
+                anonymized=True,
+                started_at="2026-07-26T10:00:00+00:00",
+                expires_at="2026-07-26T10:05:00+00:00",
+                status="running",
+                proxy_wire_mode="unknown",
+            )
 
     def test_refresh_proxy_capture_session_lease_updates_deadline(self) -> None:
         state = build_proxy_capture_session_state(

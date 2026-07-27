@@ -36,7 +36,6 @@ except ModuleNotFoundError:  # Local tooling imports the package without Home As
         """Fallback used by local tooling when Home Assistant is unavailable."""
 
 from .naming import installation_title, legacy_installation_titles
-from .collector.capabilities import collector_capability_profile_from_runtime
 from .collector.signal import is_legacy_disabled_signal_entity_key
 from .collector.transport import CollectorListenerBindError
 from .device_scoped_overlay import filter_learned_read_measurements_for_activation
@@ -794,8 +793,6 @@ def _default_enabled_unique_ids(entry_id: str) -> set[str]:
     for key in _DEFAULT_ENABLED_RUNTIME_SELECT_KEYS:
         expected.add(_entity_unique_id(entry_id, "select", key))
 
-    expected.add(_entity_unique_id(entry_id, "number", CONF_PROXY_CAPTURE_DURATION_MINUTES))
-
     for capability in all_write_capabilities():
         if not capability.enabled_default:
             continue
@@ -808,25 +805,6 @@ def _default_enabled_unique_ids(entry_id: str) -> set[str]:
             expected.add(_preset_unique_id(entry_id, preset.key))
 
     return expected
-
-
-def _coordinator_proxy_capture_allowed(coordinator: object) -> bool:
-    explicit_capabilities = getattr(coordinator, "collector_capabilities", None)
-    if getattr(explicit_capabilities, "proxy_capture", True) is False:
-        return False
-    config_entry = getattr(coordinator, "config_entry", None)
-    snapshot = getattr(coordinator, "data", None)
-    if explicit_capabilities is None and config_entry is None and snapshot is None:
-        return True
-    values = getattr(snapshot, "values", None)
-    collector = getattr(snapshot, "collector", None)
-    profile = collector_capability_profile_from_runtime(
-        collector=collector,
-        values=values if isinstance(values, dict) else {},
-        data=dict(getattr(config_entry, "data", {}) or {}),
-        options=dict(getattr(config_entry, "options", {}) or {}),
-    )
-    return profile.proxy_capture
 
 
 def _default_enabled_unique_ids_for_current_runtime(
@@ -908,19 +886,11 @@ def _default_enabled_unique_ids_for_current_runtime(
     ):
         expected.add(_entity_unique_id(entry_id, "select", key))
 
-    collector_proxy_capture_allowed = _coordinator_proxy_capture_allowed(coordinator)
-
-    if (
-        collector_proxy_capture_allowed
-        and hasattr(coordinator, "async_set_proxy_capture_duration_minutes")
-    ):
-        expected.add(_entity_unique_id(entry_id, "number", CONF_PROXY_CAPTURE_DURATION_MINUTES))
-
     for key in default_enabled_tooling_button_keys_for_runtime(
         capability_keys,
         profile_name,
         has_inverter_identity=has_inverter_identity,
-        collector_proxy_capture_allowed=collector_proxy_capture_allowed,
+        collector_proxy_capture_allowed=False,
     ):
         expected.add(_tool_unique_id(entry_id, key))
 
@@ -1175,26 +1145,25 @@ async def _async_cleanup_obsolete_entities(
     from homeassistant.helpers import entity_registry as er
 
     registry = er.async_get(hass)
-    collector_proxy_capture_allowed = _coordinator_proxy_capture_allowed(coordinator)
-    if not collector_proxy_capture_allowed:
-        capability_scoped_unique_ids = {
-            _entity_unique_id(
-                entry.entry_id,
-                "number",
-                CONF_PROXY_CAPTURE_DURATION_MINUTES,
-            ),
-            _tool_unique_id(entry.entry_id, "start_proxy_capture"),
-            _tool_unique_id(entry.entry_id, "stop_proxy_capture"),
-        }
-        for entity_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
-            if entity_entry.unique_id not in capability_scoped_unique_ids:
-                continue
-            logger.warning(
-                "Removing collector capability entity %s for entry %s because proxy capture is not supported by this collector",
-                entity_entry.entity_id,
-                entry.entry_id,
-            )
-            registry.async_remove(entity_entry.entity_id)
+    menu_owned_proxy_unique_ids = {
+        _entity_unique_id(
+            entry.entry_id,
+            "number",
+            CONF_PROXY_CAPTURE_DURATION_MINUTES,
+        ),
+        _tool_unique_id(entry.entry_id, "start_proxy_capture"),
+        _tool_unique_id(entry.entry_id, "stop_proxy_capture"),
+    }
+    for entity_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if entity_entry.unique_id not in menu_owned_proxy_unique_ids:
+            continue
+        logger.info(
+            "Removing obsolete proxy control entity %s for entry %s; "
+            "proxy actions and duration are owned by the options flow",
+            entity_entry.entity_id,
+            entry.entry_id,
+        )
+        registry.async_remove(entity_entry.entity_id)
 
     cleanup_allowed, cleanup_reason = _cleanup_obsolete_entities_allowed(coordinator)
     if not cleanup_allowed:
@@ -1292,7 +1261,7 @@ async def _async_cleanup_obsolete_entities(
             capability_keys,
             profile_name,
             has_inverter_identity=has_inverter_identity,
-            collector_proxy_capture_allowed=collector_proxy_capture_allowed,
+            collector_proxy_capture_allowed=False,
         )
     )
     expected_unique_ids.update(
@@ -1305,13 +1274,6 @@ async def _async_cleanup_obsolete_entities(
             has_inverter_identity=has_inverter_identity,
         )
     )
-    if (
-        collector_proxy_capture_allowed
-        and hasattr(coordinator, "async_set_proxy_capture_duration_minutes")
-    ):
-        expected_unique_ids.add(
-            _entity_unique_id(entry.entry_id, "number", CONF_PROXY_CAPTURE_DURATION_MINUTES)
-        )
     for capability in capabilities:
         if not coordinator.can_expose_capability(capability):
             continue

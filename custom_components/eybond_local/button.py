@@ -153,20 +153,6 @@ def _tooling_button_specs() -> tuple[_ToolingButtonSpec, ...]:
             enabled_default=True,
         ),
         _ToolingButtonSpec(
-            key="start_proxy_capture",
-            name="Start Proxy Capture",
-            icon="mdi:transit-connection-variant",
-            entity_category=EntityCategory.CONFIG,
-            enabled_default=True,
-        ),
-        _ToolingButtonSpec(
-            key="stop_proxy_capture",
-            name="Stop Proxy Capture",
-            icon="mdi:stop-circle-outline",
-            entity_category=EntityCategory.CONFIG,
-            enabled_default=True,
-        ),
-        _ToolingButtonSpec(
             key="sync_inverter_clock",
             name="Sync Inverter Clock",
             icon="mdi:clock-sync",

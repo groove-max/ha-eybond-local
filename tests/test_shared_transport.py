@@ -83,6 +83,44 @@ async def _wait_for_writer_buffer(writer: _FakeWriter, expected: bytes) -> None:
 
 
 class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_proxy_route_rejects_malformed_wire_before_route_lease(
+        self,
+    ) -> None:
+        manager = EybondRuntimeLinkManager(
+            server_ip="127.0.0.1",
+            collector_ip="192.168.1.55",
+            collector_pn="E50000200000000001",
+            tcp_port=8899,
+            udp_port=58899,
+            discovery_target="192.168.1.255",
+            discovery_interval=3,
+            heartbeat_interval=60,
+            collector_configured_session_protocol="eybond_framed",
+            collector_identity_strategy="fc2_parameter_2",
+        )
+        common = {
+            "collector_ip": "192.168.1.55",
+            "collector_pn": "E50000200000000001",
+            "expected_session_protocol": "at_text",
+            "listen_port": 8899,
+            "upstream_host": "dtu_ess.eybond.com",
+            "upstream_port": 18899,
+            "output_path": Path("/tmp/proxy-bridge-invalid.jsonl"),
+        }
+
+        for overrides in (
+            {"proxy_wire_mode": "unknown"},
+            {"expected_session_protocol": ""},
+            {"expected_session_protocol": " AT_TEXT "},
+            {"expected_session_protocol": object()},
+        ):
+            kwargs = {**common, **overrides}
+            with self.assertRaises(ValueError):
+                await manager.async_start_proxy_capture_route(
+                    **kwargs,
+                )
+            self.assertIsNone(manager.route_lease)
+
     async def test_collector_connection_wait_until_heartbeat_requires_fresh_sample(self) -> None:
         connection = _CollectorConnection(
             remote_ip_hint="127.0.0.1",
@@ -2082,6 +2120,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             host="127.0.0.1",
             port=8899,
             collector_ip="127.0.0.1",
+            expected_session_protocol="at_text",
             handler=_handler,
         )
         route._listener = _FakeListener(pending)  # type: ignore[assignment]
@@ -2092,6 +2131,268 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(handled_chunks, [b"ping"])
         self.assertEqual(bytes(writer.buffer), b"pong")
         self.assertTrue(writer.closed)
+
+    async def test_proxy_capture_route_owns_listener_reservation_for_its_lifetime(
+        self,
+    ) -> None:
+        port = _free_tcp_port()
+
+        async def _handler(
+            _reader: asyncio.StreamReader,
+            _writer: asyncio.StreamWriter,
+        ) -> None:
+            return None
+
+        route = SharedProxyCaptureRoute(
+            host="127.0.0.1",
+            port=port,
+            collector_ip="192.168.1.55",
+            collector_pn="E50000200000000001",
+            expected_session_protocol="at_text",
+            handler=_handler,
+        )
+        await route.start()
+        listener = route._listener
+        assert listener is not None
+        self.assertEqual(len(listener._exclusive_routes), 1)
+        self.assertIsNotNone(route._reservation_token)
+
+        await route.stop()
+
+        self.assertEqual(listener._exclusive_routes, {})
+        self.assertIsNone(route._reservation_token)
+        self.assertNotIn(("127.0.0.1", port), _LISTENERS)
+
+    async def test_transparent_route_claims_fresh_silent_socket_without_probe(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=8899)
+        old_reader = asyncio.StreamReader()
+        old_pending = _PendingCollectorSocket(
+            session_id="baseline-session",
+            remote_ip="192.168.1.1",
+            reader=old_reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets[old_pending.session_id] = old_pending
+        token = listener.register_exclusive_collector_route(
+            collector_ip="192.168.1.55",
+            collector_pn="E50000200000000001",
+            transparent=True,
+            expected_session_protocol="at_text",
+        )
+
+        new_reader = asyncio.StreamReader()
+        new_writer = _FakeWriter()
+        new_pending = _PendingCollectorSocket(
+            session_id="fresh-session",
+            remote_ip="192.168.1.1",
+            reader=new_reader,
+            writer=new_writer,  # type: ignore[arg-type]
+        )
+        listener._remember_session(
+            session_id=new_pending.session_id,
+            remote_ip=new_pending.remote_ip,
+            remote_port=41000,
+        )
+        listener._pending_sockets[new_pending.session_id] = new_pending
+        sniff = asyncio.create_task(listener._sniff_pending_socket(new_pending))
+        new_pending.sniff_task = sniff
+
+        # The passive sniffer stays live while the route reservation exists;
+        # this lets an initially ambiguous framed socket reveal itself later.
+        await asyncio.sleep(0.35)
+        self.assertEqual(bytes(new_writer.buffer), b"")
+        self.assertFalse(sniff.done())
+
+        claimed = await listener.pop_pending_socket_for_transparent_route(token)
+
+        self.assertIs(claimed, new_pending)
+        self.assertEqual(claimed.initial_bytes, b"")
+        self.assertIn("baseline-session", listener._pending_sockets)
+        self.assertNotIn("fresh-session", listener._pending_sockets)
+        with self.assertRaises(asyncio.CancelledError):
+            await sniff
+
+    async def test_transparent_route_refuses_ambiguous_or_strong_foreign_socket(
+        self,
+    ) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=8899)
+        token = listener.register_exclusive_collector_route(
+            collector_ip="192.168.1.55",
+            collector_pn="E50000200000000001",
+            transparent=True,
+            expected_session_protocol="at_text",
+        )
+        for session_id in ("fresh-one", "fresh-two"):
+            listener._remember_session(
+                session_id=session_id,
+                remote_ip="192.168.1.1",
+                remote_port=41000,
+            )
+            listener._pending_sockets[session_id] = _PendingCollectorSocket(
+                session_id=session_id,
+                remote_ip="192.168.1.1",
+                reader=asyncio.StreamReader(),
+                writer=_FakeWriter(),  # type: ignore[arg-type]
+            )
+
+        self.assertIsNone(
+            await listener.pop_pending_socket_for_transparent_route(token)
+        )
+
+        listener._pending_sockets.pop("fresh-two")
+        listener._mark_session_identity(
+            "fresh-one",
+            "V001020SYN62344022",
+            "fc2_parameter_2",
+        )
+        self.assertIsNone(
+            await listener.pop_pending_socket_for_transparent_route(token)
+        )
+
+    async def test_transparent_at_route_ignores_fresh_framed_ha_session(
+        self,
+    ) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=8899)
+        collector_pn = "E50000200000000001"
+        token = listener.register_exclusive_collector_route(
+            collector_ip="192.168.1.55",
+            collector_pn=collector_pn,
+            transparent=True,
+            expected_session_protocol="at_text",
+        )
+
+        framed = _PendingCollectorSocket(
+            session_id="fresh-framed-ha",
+            remote_ip="192.168.1.1",
+            reader=asyncio.StreamReader(),
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._remember_session(
+            session_id=framed.session_id,
+            remote_ip=framed.remote_ip,
+            remote_port=41001,
+        )
+        listener._mark_session_first_bytes(
+            framed.session_id,
+            build_collector_request(
+                1,
+                collector_pn[:16].encode("ascii"),
+                devcode=2376,
+                collector_addr=1,
+                fcode=1,
+            ),
+        )
+        listener._mark_session_identity(
+            framed.session_id,
+            collector_pn,
+            "fc2_parameter_2",
+        )
+        listener._pending_sockets[framed.session_id] = framed
+
+        cloud = _PendingCollectorSocket(
+            session_id="fresh-at-cloud",
+            remote_ip="192.168.1.1",
+            reader=asyncio.StreamReader(),
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._remember_session(
+            session_id=cloud.session_id,
+            remote_ip=cloud.remote_ip,
+            remote_port=41002,
+        )
+        listener._mark_session_first_bytes(
+            cloud.session_id,
+            f"AT+DTUPN:{collector_pn}\r\n".encode("ascii"),
+        )
+        listener._mark_session_identity(
+            cloud.session_id,
+            collector_pn,
+            "at_dtupn",
+        )
+        listener._pending_sockets[cloud.session_id] = cloud
+
+        claimed = await listener.pop_pending_socket_for_transparent_route(token)
+
+        self.assertIs(claimed, cloud)
+        self.assertIn(framed.session_id, listener._pending_sockets)
+        self.assertNotIn(cloud.session_id, listener._pending_sockets)
+
+    async def test_ambiguous_silent_pair_resolves_when_framed_socket_heartbeats(
+        self,
+    ) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=8899)
+        collector_pn = "E50000200000000001"
+        token = listener.register_exclusive_collector_route(
+            collector_ip="192.168.1.55",
+            collector_pn=collector_pn,
+            transparent=True,
+            expected_session_protocol="at_text",
+        )
+
+        framed_reader = asyncio.StreamReader()
+        framed_writer = _FakeWriter()
+        framed = _PendingCollectorSocket(
+            session_id="fresh-framed-ha",
+            remote_ip="192.168.1.1",
+            reader=framed_reader,
+            writer=framed_writer,  # type: ignore[arg-type]
+        )
+        cloud_writer = _FakeWriter()
+        cloud = _PendingCollectorSocket(
+            session_id="fresh-silent-cloud",
+            remote_ip="192.168.1.1",
+            reader=asyncio.StreamReader(),
+            writer=cloud_writer,  # type: ignore[arg-type]
+        )
+        for port, pending in ((41001, framed), (41002, cloud)):
+            listener._remember_session(
+                session_id=pending.session_id,
+                remote_ip=pending.remote_ip,
+                remote_port=port,
+            )
+            listener._pending_sockets[pending.session_id] = pending
+            pending.sniff_task = asyncio.create_task(
+                listener._sniff_pending_socket(pending)
+            )
+
+        await asyncio.sleep(0.35)
+        self.assertIsNone(
+            await listener.pop_pending_socket_for_transparent_route(token)
+        )
+        self.assertFalse(framed.sniff_task.done())
+        self.assertFalse(cloud.sniff_task.done())
+        self.assertEqual(bytes(framed_writer.buffer), b"")
+        self.assertEqual(bytes(cloud_writer.buffer), b"")
+
+        framed_reader.feed_data(
+            build_collector_request(
+                1,
+                collector_pn[:16].encode("ascii"),
+                devcode=2376,
+                collector_addr=1,
+                fcode=1,
+            )
+        )
+        deadline = asyncio.get_running_loop().time() + 1.0
+        while asyncio.get_running_loop().time() < deadline:
+            entry = listener._session_inventory[framed.session_id]
+            if entry.protocol_shape == "eybond_framed":
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(
+            listener._session_inventory[framed.session_id].protocol_shape,
+            "eybond_framed",
+        )
+
+        claimed = await listener.pop_pending_socket_for_transparent_route(token)
+
+        self.assertIs(claimed, cloud)
+        self.assertEqual(bytes(cloud_writer.buffer), b"")
+        self.assertNotIn(cloud.session_id, listener._pending_sockets)
+        self.assertIn(framed.session_id, listener._pending_sockets)
+        framed.sniff_task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await framed.sniff_task
 
     async def test_proxy_capture_route_selects_same_peer_pending_by_collector_pn(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
@@ -2154,7 +2455,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             port=8899,
             collector_ip="203.0.113.10",
             collector_pn="PN-TWO",
-            collector_session_protocol="at_text",
+            expected_session_protocol="at_text",
             handler=_handler,
         )
         route._listener = listener
@@ -2180,6 +2481,115 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         first_reader.feed_eof()
         await asyncio.wait_for(watch, timeout=2.0)
         self.assertNotIn("session-one", listener._pending_sockets)
+
+    async def test_exclusive_route_reservation_wins_over_runtime_pn_owner(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        full_pn = "E50000200000000001"
+        heartbeat_pn = full_pn[:16]
+        runtime_connection = listener.ensure_connection(
+            "",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+            collector_pn=full_pn,
+        )
+        listener.register_payload_pn_owner(full_pn)
+        token = listener.register_exclusive_collector_route(
+            collector_ip="192.168.1.55",
+            collector_pn=full_pn,
+        )
+        listener._remember_session(
+            session_id="exclusive-s1",
+            remote_ip="192.168.1.55",
+            remote_port=41000,
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            build_collector_request(
+                1,
+                heartbeat_pn.encode("ascii"),
+                devcode=2376,
+                collector_addr=1,
+                fcode=1,
+            )
+        )
+        pending = _PendingCollectorSocket(
+            session_id="exclusive-s1",
+            remote_ip="192.168.1.55",
+            remote_port=41000,
+            reader=reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets[pending.session_id] = pending
+
+        with patch.object(runtime_connection, "run", new=AsyncMock()) as runtime_run:
+            sniff = asyncio.create_task(listener._sniff_pending_socket(pending))
+            pending.sniff_task = sniff
+            await asyncio.sleep(0.05)
+
+            states = {
+                item["session_id"]: item["state"]
+                for item in listener.session_inventory_diagnostics()["sessions"]
+            }
+            self.assertEqual(states["exclusive-s1"], "waiting_for_exclusive_route")
+            runtime_run.assert_not_awaited()
+
+            claimed = await listener.pop_pending_socket_for_route(
+                collector_ip="192.168.1.55",
+                collector_pn=full_pn,
+                session_protocol="eybond_framed",
+            )
+            self.assertIs(claimed, pending)
+            self.assertIn(heartbeat_pn.encode("ascii"), claimed.initial_bytes)
+            with self.assertRaises(asyncio.CancelledError):
+                await sniff
+
+        await listener.unregister_exclusive_collector_route(token)
+
+    async def test_exclusive_route_never_steals_observed_foreign_pn_by_ip(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        target_pn = "E50000200000000001"
+        foreign_pn = "V001020SYN62344022"
+        runtime_connection = listener.ensure_connection(
+            "",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+            collector_pn=foreign_pn,
+        )
+        listener.register_payload_pn_owner(foreign_pn)
+        token = listener.register_exclusive_collector_route(
+            collector_ip="192.168.1.1",
+            collector_pn=target_pn,
+        )
+        listener._remember_session(
+            session_id="foreign-s1",
+            remote_ip="192.168.1.1",
+            remote_port=41001,
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            build_collector_request(
+                1,
+                foreign_pn[:16].encode("ascii"),
+                devcode=2376,
+                collector_addr=1,
+                fcode=1,
+            )
+        )
+        pending = _PendingCollectorSocket(
+            session_id="foreign-s1",
+            remote_ip="192.168.1.1",
+            remote_port=41001,
+            reader=reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets[pending.session_id] = pending
+
+        with patch.object(runtime_connection, "run", new=AsyncMock()) as runtime_run:
+            await listener._sniff_pending_socket(pending)
+
+        runtime_run.assert_awaited_once()
+        self.assertFalse(listener._pending_socket_still_registered(pending))
+        await listener.unregister_exclusive_collector_route(token)
 
     async def test_at_transport_wait_until_connected_activates_pending_socket(self) -> None:
         port = _free_tcp_port()

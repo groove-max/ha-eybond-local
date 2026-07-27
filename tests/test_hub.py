@@ -1448,6 +1448,7 @@ class HubSnapshotTests(unittest.TestCase):
             await hub.async_trigger_reverse_discovery(timeout=1.25)
             await hub.async_start_proxy_capture_route(
                 collector_ip="192.168.1.14",
+                expected_session_protocol="at_text",
                 listen_port=18899,
                 upstream_host="dtu_ess.eybond.com",
                 upstream_port=18899,
@@ -1470,7 +1471,8 @@ class HubSnapshotTests(unittest.TestCase):
                     {
                         "collector_ip": "192.168.1.14",
                         "collector_pn": "",
-                        "collector_session_protocol": "",
+                        "expected_session_protocol": "at_text",
+                        "proxy_wire_mode": "transparent",
                         "listen_port": 18899,
                         "upstream_host": "dtu_ess.eybond.com",
                         "upstream_port": 18899,
@@ -3462,6 +3464,77 @@ class HubCollectorManagementTests(unittest.TestCase):
         self.assertTrue(caps.write_endpoint)
         self.assertTrue(caps.apply_changes)
         self.assertTrue(caps.reboot)
+
+    def test_wifi_management_uses_the_exact_runtime_owned_framed_session(
+        self,
+    ) -> None:
+        class _WifiTransport:
+            def __init__(self) -> None:
+                self.values = {7: "Old SSID", 8: "old-password"}
+                self.requests: list[tuple[int, bytes]] = []
+
+            async def async_send_collector(
+                self,
+                *,
+                fcode: int,
+                payload: bytes = b"",
+                devcode: int = 0,
+                collector_addr: int = 1,
+            ):
+                del devcode, collector_addr
+                self.requests.append((fcode, payload))
+                parameter = payload[0]
+                if fcode == 2:
+                    return (
+                        None,
+                        bytes((0, parameter))
+                        + self.values.get(parameter, "").encode("ascii"),
+                    )
+                if fcode == 3:
+                    value = payload[1:].decode("ascii")
+                    if parameter != 29:
+                        self.values[parameter] = value
+                    return (None, bytes((0, parameter)))
+                raise KeyError((fcode, payload))
+
+        async def _run() -> None:
+            hub = self._hub()
+            link = _FakeLinkManager()
+            transport = _WifiTransport()
+            link.transport = transport
+            link.active_transport = transport
+            hub._link_manager = link
+
+            before = await hub.async_query_collector_parameters((7, 8))
+            applied_ssid = await hub.async_set_collector_wifi_credentials(
+                ssid="New SSID",
+                password="new-password",
+                ssid_parameter=7,
+                password_parameter=8,
+            )
+
+            self.assertEqual(before, {7: "Old SSID", 8: "old-password"})
+            self.assertEqual(applied_ssid, "New SSID")
+            self.assertEqual(transport.values[7], "New SSID")
+            self.assertEqual(transport.values[8], "new-password")
+            self.assertIn((3, bytes((29,)) + b"1"), transport.requests)
+
+        asyncio.run(_run())
+
+    def test_wifi_management_never_uses_a_stale_fallback_transport(self) -> None:
+        async def _run() -> None:
+            hub, link = self._framed_hub()
+            link.active_transport = None
+
+            with self.assertRaisesRegex(
+                CollectorManagementUnsupportedError,
+                "collector_local_management_not_supported",
+            ):
+                await hub.async_query_collector_parameters((7,))
+
+            self.assertEqual(link.transport.requests, [])
+
+        asyncio.run(_run())
 
     def test_at_capabilities_have_no_reboot(self) -> None:
         hub, _ = self._at_hub()

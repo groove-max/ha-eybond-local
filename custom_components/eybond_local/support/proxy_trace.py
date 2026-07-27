@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
-import shutil
 from typing import Any
 import zipfile
 
@@ -37,9 +36,11 @@ class ProxyCaptureSessionState:
     started_at: str
     expires_at: str
     status: str
+    proxy_wire_mode: str = "transparent"
 
 
 _ACTIVE_PROXY_CAPTURE_SESSION_STATUSES = {"starting", "running", "stopping", "restoring"}
+_PROXY_CAPTURE_WIRE_MODES = {"transparent"}
 _SERIAL_TOKEN_RE = re.compile(r"(?<![A-Z0-9])([A-Z][A-Z0-9]{7,23})(?![A-Z0-9])")
 _SERIAL_TOKEN_BYTES_RE = re.compile(rb"(?<![A-Z0-9])([A-Z][A-Z0-9]{7,23})(?![A-Z0-9])")
 _DIRECTIONAL_RAW_DUMP_NAMES = {
@@ -48,6 +49,8 @@ _DIRECTIONAL_RAW_DUMP_NAMES = {
 }
 _RAW_TRACE_KIND_HEX_KEYS = {
     "chunk": "chunk_hex",
+    "proxy_bridge_exchange": "response_hex",
+    "proxy_identity_observed": "response_hex",
     "restore_drain_chunk": "chunk_hex",
     "tail": "remaining_hex",
 }
@@ -62,18 +65,6 @@ def proxy_trace_root(config_dir: Path) -> Path:
     """Return the proxy trace output directory under one HA config dir."""
 
     return config_dir / LOCAL_METADATA_DIR / LOCAL_PROXY_TRACES_DIR
-
-
-def proxy_trace_public_root(config_dir: Path) -> Path:
-    """Return the Home Assistant static file directory for proxy trace artifacts."""
-
-    return config_dir / "www" / LOCAL_METADATA_DIR / LOCAL_PROXY_TRACES_DIR
-
-
-def proxy_trace_download_url(filename: str) -> str:
-    """Return the Home Assistant `/local` URL for one saved proxy trace artifact."""
-
-    return f"/local/{LOCAL_METADATA_DIR}/{LOCAL_PROXY_TRACES_DIR}/{filename}"
 
 
 def active_proxy_capture_state_path(config_dir: Path) -> Path:
@@ -172,20 +163,6 @@ def export_proxy_trace_manifest(
         encoding="utf-8",
     )
     return destination
-
-
-def publish_proxy_trace_download_copy(
-    *,
-    config_dir: Path,
-    source_path: Path,
-) -> tuple[Path, str]:
-    """Publish one saved proxy trace artifact under `/local/...` and return its URL."""
-
-    public_root = proxy_trace_public_root(config_dir)
-    public_root.mkdir(parents=True, exist_ok=True)
-    destination = public_root / source_path.name
-    shutil.copy2(source_path, destination)
-    return destination, proxy_trace_download_url(source_path.name)
 
 
 def export_proxy_trace_bundle(
@@ -315,9 +292,16 @@ def build_proxy_capture_session_state(
     started_at: str,
     expires_at: str,
     status: str,
+    proxy_wire_mode: str = "transparent",
 ) -> ProxyCaptureSessionState:
     """Build one persisted active proxy capture session state."""
 
+    if (
+        type(proxy_wire_mode) is not str
+        or proxy_wire_mode != proxy_wire_mode.strip()
+        or proxy_wire_mode not in _PROXY_CAPTURE_WIRE_MODES
+    ):
+        raise ValueError("proxy_capture_wire_mode_invalid")
     return ProxyCaptureSessionState(
         entry_id=str(entry_id or "").strip(),
         route_owner_id=str(route_owner_id or "").strip(),
@@ -330,6 +314,7 @@ def build_proxy_capture_session_state(
         started_at=str(started_at or "").strip(),
         expires_at=str(expires_at or "").strip(),
         status=str(status or "").strip(),
+        proxy_wire_mode=proxy_wire_mode,
     )
 
 
@@ -374,6 +359,7 @@ def refresh_proxy_capture_session_lease(
         started_at=state.started_at,
         expires_at=build_proxy_capture_lease_deadline(lease_seconds=lease_seconds, now=now),
         status=str(status or state.status or "").strip(),
+        proxy_wire_mode=state.proxy_wire_mode,
     )
 
 
@@ -456,6 +442,7 @@ def save_proxy_capture_session_state(
         "started_at": state.started_at,
         "expires_at": state.expires_at,
         "status": state.status,
+        "proxy_wire_mode": state.proxy_wire_mode,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
@@ -473,6 +460,13 @@ def load_proxy_capture_session_state(config_dir: Path) -> ProxyCaptureSessionSta
         return None
     if not isinstance(payload, dict):
         return None
+    raw_wire_mode = payload.get("proxy_wire_mode", "transparent")
+    if (
+        type(raw_wire_mode) is not str
+        or raw_wire_mode != raw_wire_mode.strip()
+        or raw_wire_mode not in _PROXY_CAPTURE_WIRE_MODES
+    ):
+        return None
     return build_proxy_capture_session_state(
         entry_id=str(payload.get("entry_id") or ""),
         route_owner_id=str(payload.get("route_owner_id") or ""),
@@ -485,6 +479,7 @@ def load_proxy_capture_session_state(config_dir: Path) -> ProxyCaptureSessionSta
         started_at=str(payload.get("started_at") or ""),
         expires_at=str(payload.get("expires_at") or ""),
         status=str(payload.get("status") or ""),
+        proxy_wire_mode=raw_wire_mode,
     )
 
 

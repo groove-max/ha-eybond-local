@@ -21,7 +21,6 @@ from typing import Any
 
 from .. import valuecloud_cloud as valuecloud_cloud_module
 from ..smartess_cloud import (
-    SessionCredentials,
     build_device_detail_action,
     build_device_settings_action,
     fetch_device_bundle_for_collector,
@@ -44,6 +43,7 @@ ExecutorJob = Callable[..., Awaitable[Any]]
 ProgressCallback = Callable[..., None]
 IdentityCallback = Callable[[dict[str, Any]], None]
 LearningCallback = Callable[[], None]
+StartShadowRouteCallback = Callable[[], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -117,6 +117,7 @@ class CloudControlDiscoveryRunner(ABC):
         progress: ProgressCallback,
         orchestrator_callbacks: Mapping[str, Any],
         on_identity: IdentityCallback,
+        start_shadow_route: StartShadowRouteCallback,
         on_learning: LearningCallback,
     ) -> ControlDiscoveryOutcome:
         ...
@@ -137,8 +138,11 @@ class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
         progress,
         orchestrator_callbacks,
         on_identity,
+        start_shadow_route,
         on_learning,
     ) -> ControlDiscoveryOutcome:
+        progress(0.08, "fetching")
+        await start_shadow_route()
         progress(0.18, "fetching")
         cloud_bundle = await executor(
             lambda: fetch_device_bundle_for_collector(
@@ -152,9 +156,15 @@ class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
             raise RuntimeError("shadow_learning_identity_unavailable")
         on_identity(identity)
 
-        _login_envelope, cloud_session = await executor(
+        # SmartESS serializes collector-bound work within one authenticated
+        # session. The full provider bundle owns its metadata login; a fresh
+        # post-bundle login is the control-dispatch boundary. This exact route ->
+        # bundle -> control-login -> control sequence is pinned by the successful
+        # production trace and must not be collapsed into one session.
+        _control_login, control_session = await executor(
             lambda: login_with_password(username=username, password=password)
         )
+
         settings_dat = _settings_dat_from_bundle(cloud_bundle)
         if settings_dat is None:
             settings_envelope = await executor(
@@ -165,14 +175,7 @@ class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
                         devcode=identity["devcode"],
                         devaddr=identity["devaddr"],
                     ),
-                    session=SessionCredentials(
-                        token=cloud_session.token,
-                        secret=cloud_session.secret,
-                        uid=cloud_session.uid,
-                        usr=cloud_session.usr,
-                        role=cloud_session.role,
-                        expire=cloud_session.expire,
-                    ),
+                    session=control_session,
                 )
             )
             settings_dat = settings_envelope.dat
@@ -181,7 +184,7 @@ class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
         progress(0.30, "testing")
         result = await async_orchestrate_shadow_learning_settings(
             settings_dat=settings_dat,
-            session=cloud_session,
+            session=control_session,
             pn=identity["pn"],
             sn=identity["sn"],
             devcode=identity["devcode"],
@@ -197,13 +200,36 @@ class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
             delay_seconds=0.0,
             **dict(orchestrator_callbacks),
         )
+        if int(result.get("degraded_count") or 0) > 0:
+            first_result = next(
+                (
+                    item
+                    for item in result.get("results", ())
+                    if isinstance(item, dict)
+                ),
+                {},
+            )
+            response = first_result.get("response")
+            logger.warning(
+                "SmartESS control discovery degraded planned=%s executed=%s "
+                "first_status=%s first_reason=%s first_response_err=%s",
+                int(result.get("planned_write_count") or 0),
+                int(result.get("executed_result_count") or 0),
+                str(first_result.get("status") or ""),
+                str(first_result.get("reason") or ""),
+                (
+                    response.get("err")
+                    if isinstance(response, dict)
+                    else ""
+                ),
+            )
 
         read_bindings: dict[str, Any] | None = None
         read_map = result.get("read_map")
         if isinstance(read_map, dict) and read_map.get("registers"):
             read_bindings = await self._async_bind_read_labels(
                 executor=executor,
-                cloud_session=cloud_session,
+                cloud_session=control_session,
                 identity=identity,
                 read_map=read_map,
             )
@@ -270,14 +296,17 @@ class ValueCloudControlDiscoveryRunner(CloudControlDiscoveryRunner):
         progress,
         orchestrator_callbacks,
         on_identity,
+        start_shadow_route,
         on_learning,
     ) -> ControlDiscoveryOutcome:
-        progress(0.18, "fetching")
+        progress(0.08, "fetching")
         _login_envelope, cloud_session = await executor(
             lambda: valuecloud_cloud_module.login_with_password(
                 username=username, password=password
             )
         )
+        await start_shadow_route()
+        progress(0.18, "fetching")
         cloud_bundle = await executor(
             lambda: valuecloud_cloud_module.fetch_device_bundle_for_collector_with_session(
                 session=cloud_session,

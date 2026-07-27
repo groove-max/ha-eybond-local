@@ -13,10 +13,12 @@ if str(REPO_ROOT) not in sys.path:
 from custom_components.eybond_local.collector.protocol import HEADER_SIZE, decode_header
 from custom_components.eybond_local.support.collector_cloud_proxy import (
     AtChunkProxyFilter,
+    FrameRecord,
     ObservedCollectorAddress,
     RestoreTarget,
     SessionObservation,
     _looks_like_at_traffic,
+    _fc2_identity_from_record,
     build_restore_at_commands,
     build_restore_frames,
     parse_restore_target,
@@ -168,6 +170,63 @@ class CollectorCloudProxyTests(unittest.TestCase):
             b"AT+CLDSRVHOST1:collector-cloud.smartess.example,18899,TCP\r\n",
         )
         self.assertEqual(len(response_events), 1)
+
+    def test_real_cloud_dtupn_exchange_verifies_expected_proxy_identity(self) -> None:
+        observed = SessionObservation(collector=ObservedCollectorAddress())
+        collector_filter = AtChunkProxyFilter(
+            direction="collector_to_cloud",
+            remote="192.168.1.1:40000",
+            observed=observed,
+            expected_collector_pn="E50000200000000001",
+        )
+
+        forwarded, events = collector_filter.feed(
+            b"AT+DTUPN:E50000200000000001\r\n"
+        )
+
+        self.assertEqual(forwarded, b"AT+DTUPN:E50000200000000001\r\n")
+        self.assertEqual(observed.collector_pn, "E50000200000000001")
+        self.assertEqual(observed.identity_source, "at_dtupn")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["kind"], "proxy_identity_observed")
+        self.assertIs(events[0]["identity_verified"], True)
+
+    def test_real_cloud_dtupn_exchange_marks_foreign_proxy_identity(self) -> None:
+        observed = SessionObservation(collector=ObservedCollectorAddress())
+        collector_filter = AtChunkProxyFilter(
+            direction="collector_to_cloud",
+            remote="192.168.1.1:40000",
+            observed=observed,
+            expected_collector_pn="E50000200000000001",
+        )
+
+        _forwarded, events = collector_filter.feed(
+            b"AT+DTUPN:V001020SYN62344022\r\n"
+        )
+
+        self.assertEqual(len(events), 1)
+        self.assertIs(events[0]["identity_verified"], False)
+
+    def test_framed_fc2_cloud_exchange_extracts_full_identity(self) -> None:
+        record = FrameRecord(
+            timestamp="2026-07-26T00:00:00+00:00",
+            direction="collector_to_cloud",
+            remote="192.168.1.1:40000",
+            chunk_len=28,
+            frame_len=28,
+            tid=1,
+            devcode=0x0102,
+            devaddr=0xFF,
+            fcode=2,
+            fcode_name="FC_QUERY_COLLECTOR",
+            payload_hex=b"\x00\x02E50000200000000001".hex(),
+            payload_ascii="",
+        )
+
+        self.assertEqual(
+            _fc2_identity_from_record(record),
+            "E50000200000000001",
+        )
 
 
 if __name__ == "__main__":

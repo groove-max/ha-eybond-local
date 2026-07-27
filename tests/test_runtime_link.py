@@ -777,6 +777,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
             ):
                 await manager.async_start_proxy_capture_route(
                     collector_ip="192.168.1.14",
+                    expected_session_protocol="at_text",
                     listen_port=502,
                     upstream_host="47.91.67.66",
                     upstream_port=18899,
@@ -785,6 +786,15 @@ class RuntimeLinkManagerTests(unittest.TestCase):
                     restore_trigger_path=Path("/tmp/proxy.restore"),
                 )
                 self.assertTrue(manager.proxy_capture_route_running())
+                with patch.object(
+                    manager,
+                    "_send_callback_trigger",
+                    new=AsyncMock(),
+                ) as trigger:
+                    self.assertFalse(
+                        await manager.async_try_connect(timeout=0.1)
+                    )
+                    trigger.assert_not_awaited()
                 await manager.async_stop_proxy_capture_route()
                 self.assertFalse(manager.proxy_capture_route_running())
 
@@ -855,6 +865,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
                         owner_id="proxy-owner",
                         entry_id="entry-1",
                         collector_ip="192.168.1.14",
+                        expected_session_protocol="at_text",
                         listen_port=502,
                         upstream_host="cloud.example",
                         upstream_port=18899,
@@ -868,6 +879,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
                         owner_id="shadow-owner",
                         entry_id="entry-1",
                         collector_ip="192.168.1.14",
+                        expected_session_protocol="at_text",
                         listen_port=503,
                         upstream_host="cloud.example",
                         upstream_port=18899,
@@ -938,6 +950,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
                         owner_id="proxy-owner",
                         entry_id="entry-1",
                         collector_ip="192.168.1.14",
+                        expected_session_protocol="at_text",
                         listen_port=502,
                         upstream_host="cloud.example",
                         upstream_port=18899,
@@ -949,6 +962,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
                     owner_id="shadow-owner",
                     entry_id="entry-1",
                     collector_ip="192.168.1.14",
+                    expected_session_protocol="at_text",
                     listen_port=503,
                     upstream_host="cloud.example",
                     upstream_port=18899,
@@ -1000,6 +1014,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
                     owner_id="proxy-owner",
                     entry_id="entry-1",
                     collector_ip="192.168.1.14",
+                    expected_session_protocol="at_text",
                     listen_port=502,
                     upstream_host="cloud.example",
                     upstream_port=18899,
@@ -1057,6 +1072,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
                     owner_id="shadow-owner",
                     entry_id="entry-1",
                     collector_ip="192.168.1.14",
+                    expected_session_protocol="at_text",
                     listen_port=503,
                     upstream_host="cloud.example",
                     upstream_port=18899,
@@ -1068,6 +1084,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
                         owner_id="proxy-owner",
                         entry_id="entry-1",
                         collector_ip="192.168.1.14",
+                        expected_session_protocol="at_text",
                         listen_port=502,
                         upstream_host="cloud.example",
                         upstream_port=18899,

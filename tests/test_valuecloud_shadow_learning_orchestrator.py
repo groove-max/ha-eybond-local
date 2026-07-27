@@ -61,6 +61,116 @@ def _batch_control() -> dict[str, object]:
 
 
 class ValueCloudShadowLearningOrchestratorTests(unittest.TestCase):
+    def test_session_wait_refusal_sends_no_cloud_control(self) -> None:
+        calls: list[str] = []
+
+        async def _wait_until_ready() -> bool:
+            calls.append("wait")
+            return False
+
+        def _setup_action(**_kwargs):
+            calls.append("send")
+            raise AssertionError("cloud control must not be sent without a safe route")
+
+        result = asyncio.run(
+            async_orchestrate_valuecloud_shadow_learning(
+                batch_control={
+                    "groups": [
+                        {
+                            "controlItemId": 10,
+                            "parameters": [
+                                {
+                                    "id": "cltd_lcd_backlight",
+                                    "detailsId": 20,
+                                    "order": 3,
+                                    "name": "LCD Backlight",
+                                    "readwrite": "RW",
+                                    "item": {"0": "Off"},
+                                }
+                            ],
+                        }
+                    ]
+                },
+                session=ValueCloudSession(token="token", secret="secret"),
+                pn="I200",
+                sn="DEV1",
+                devcode=2506,
+                devaddr=1,
+                dry_run=False,
+                confirm_cloud_write=True,
+                shadow_session_state="ready",
+                field_ids=[],
+                is_session_ready=lambda: False,
+                wait_until_session_ready=_wait_until_ready,
+                setup_action=_setup_action,
+            )
+        )
+
+        self.assertEqual(calls, ["wait"])
+        self.assertEqual(result["results"][0]["status"], "degraded")
+        self.assertEqual(result["results"][0]["reason"], "session_not_ready")
+
+    def test_session_wait_opens_route_before_cloud_control(self) -> None:
+        calls: list[str] = []
+        ready = {"value": False}
+
+        async def _wait_until_ready() -> bool:
+            calls.append("wait")
+            ready["value"] = True
+            return True
+
+        def _setup_action(**_kwargs):
+            self.assertTrue(ready["value"])
+            calls.append("send")
+            return ValueCloudEnvelope(
+                code=500,
+                message="expected nack",
+                error_message="expected nack",
+                success=False,
+                data={},
+                raw={"code": 500, "success": False},
+                headers={},
+            )
+
+        result = asyncio.run(
+            async_orchestrate_valuecloud_shadow_learning(
+                batch_control={
+                    "groups": [
+                        {
+                            "controlItemId": 10,
+                            "parameters": [
+                                {
+                                    "id": "cltd_lcd_backlight",
+                                    "detailsId": 20,
+                                    "order": 3,
+                                    "name": "LCD Backlight",
+                                    "readwrite": "RW",
+                                    "item": {"0": "Off"},
+                                }
+                            ],
+                        }
+                    ]
+                },
+                session=ValueCloudSession(token="token", secret="secret"),
+                pn="I200",
+                sn="DEV1",
+                devcode=2506,
+                devaddr=1,
+                dry_run=False,
+                confirm_cloud_write=True,
+                shadow_session_state="ready",
+                field_ids=[],
+                is_session_ready=lambda: ready["value"],
+                wait_until_session_ready=_wait_until_ready,
+                correlation_timeout_seconds=0.01,
+                abort_on_unproxied_write=False,
+                setup_action=_setup_action,
+            )
+        )
+
+        self.assertEqual(calls, ["wait", "send"])
+        self.assertEqual(result["results"][0]["status"], "sent")
+
     def test_plan_uses_batch_control_metadata_and_skips_destructive_actions(self) -> None:
         plan = build_valuecloud_learning_plan(_batch_control())
 

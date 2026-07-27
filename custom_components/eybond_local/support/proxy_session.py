@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
@@ -48,6 +49,7 @@ class InProcessProxyCaptureHandler:
         upstream_host: str,
         upstream_port: int,
         output_path: Path,
+        expected_collector_pn: str = "",
         masked_endpoint: str = "",
         restore_trigger_path: Path | None = None,
         async_open_output: AsyncOutputOpener | None = None,
@@ -56,12 +58,17 @@ class InProcessProxyCaptureHandler:
         self._upstream_host = str(upstream_host)
         self._upstream_port = int(upstream_port)
         self._output_path = Path(output_path)
+        self._expected_collector_pn = str(expected_collector_pn or "").strip()
         self._masked_endpoint = str(masked_endpoint or "").strip()
         self._restore_trigger_path = restore_trigger_path
         self._async_open_output = async_open_output or _default_async_open_output
         self._async_close_output = async_close_output or _default_async_close_output
         self._output_handle: TextIO | None = None
         self._frame_writer: JsonLineWriter | None = None
+        self._reserved_upstream: tuple[
+            asyncio.StreamReader,
+            asyncio.StreamWriter,
+        ] | None = None
         self._tasks: set[asyncio.Task[None]] = set()
         self._running = False
 
@@ -78,7 +85,35 @@ class InProcessProxyCaptureHandler:
             return
         self._output_handle = await self._async_open_output(self._output_path)
         self._frame_writer = JsonLineWriter(self._output_handle)
-        self._running = True
+        try:
+            self._reserved_upstream = await asyncio.open_connection(
+                self._upstream_host,
+                self._upstream_port,
+            )
+            await self._frame_writer.write(
+                {
+                    "kind": "upstream_preconnected",
+                    "upstream_host": self._upstream_host,
+                    "upstream_port": self._upstream_port,
+                }
+            )
+            self._running = True
+        except BaseException:
+            reserved_upstream = self._reserved_upstream
+            self._reserved_upstream = None
+            if reserved_upstream is not None:
+                _reader, writer = reserved_upstream
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+            output_handle = self._output_handle
+            self._output_handle = None
+            self._frame_writer = None
+            if output_handle is not None:
+                await self._async_close_output(output_handle)
+            raise
 
     async def stop(self) -> None:
         """Cancel active proxy tasks and close the trace stream."""
@@ -95,6 +130,15 @@ class InProcessProxyCaptureHandler:
             except Exception:
                 pass
         self._tasks.clear()
+        reserved_upstream = self._reserved_upstream
+        self._reserved_upstream = None
+        if reserved_upstream is not None:
+            _reader, writer = reserved_upstream
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
 
         output_handle = self._output_handle
         self._output_handle = None
@@ -121,6 +165,8 @@ class InProcessProxyCaptureHandler:
         if current_task is not None:
             self._tasks.add(current_task)
         try:
+            upstream_connection = self._reserved_upstream
+            self._reserved_upstream = None
             await handle_proxy_client(
                 reader,
                 writer,
@@ -135,6 +181,8 @@ class InProcessProxyCaptureHandler:
                 restore_after=0,
                 restore_at_followup="",
                 restore_trigger_file=self._restore_trigger_path,
+                expected_collector_pn=self._expected_collector_pn,
+                upstream_connection=upstream_connection,
             )
         finally:
             if current_task is not None:
@@ -206,7 +254,10 @@ def inspect_proxy_capture_start_status(trace_path: Path) -> dict[str, Any]:
     status: dict[str, Any] = {
         "connected": False,
         "upstream_error": "",
-        "restore_confirmed": False,
+        "identity_verified": False,
+        "identity_mismatch": False,
+        "operational_activity": False,
+        "restore_acknowledged": False,
         "restore_missing": False,
     }
     if not trace_path.exists():
@@ -228,13 +279,24 @@ def inspect_proxy_capture_start_status(trace_path: Path) -> dict[str, Any]:
                 status["connected"] = True
             elif kind == "upstream_connect_error":
                 status["upstream_error"] = str(payload.get("error") or "upstream_connect_error")
+            elif kind == "proxy_identity_observed":
+                if payload.get("identity_verified") is True:
+                    status["identity_verified"] = True
+                else:
+                    status["identity_mismatch"] = True
+            elif kind == "proxy_operational_activity":
+                status["operational_activity"] = True
             elif kind == "restore_inject_response_missing":
                 status["restore_missing"] = True
             elif kind == "restore_inject_response":
                 value = str(payload.get("response_value") or payload.get("payload_ascii") or "")
                 label = str(payload.get("label") or "")
                 if label in {"restore_endpoint", "restore_endpoint_at"} and ("W000" in value or value):
-                    status["restore_confirmed"] = True
+                    # This is only a wire-level acknowledgement.  The collector
+                    # may disconnect before persisting/applying parameter 21, so
+                    # terminal restore confirmation must come from a later live
+                    # endpoint read on the entry-owned same-PN runtime session.
+                    status["restore_acknowledged"] = True
     return status
 
 
@@ -359,6 +421,13 @@ def _format_trace_event(payload: dict[str, Any]) -> str:
     direction = str(payload.get("direction") or "").strip()
     prefix = _event_prefix(timestamp, direction)
 
+    if kind == "upstream_preconnected":
+        upstream = (
+            f"{payload.get('upstream_host', '')}:"
+            f"{payload.get('upstream_port', '')}"
+        ).strip(":")
+        suffix = f" ({upstream})" if upstream else ""
+        return f"{prefix}cloud connection prepared{suffix}".strip()
     if kind == "connect":
         client = str(payload.get("client") or "collector").strip()
         upstream = f"{payload.get('upstream_host', '')}:{payload.get('upstream_port', '')}".strip(":")
@@ -380,6 +449,17 @@ def _format_trace_event(payload: dict[str, Any]) -> str:
     if kind == "masked_endpoint_response":
         forwarded = _single_line_preview(str(payload.get("forwarded_ascii") or ""))
         return f"{prefix}masked AT+CLDSRVHOST1 response as {forwarded}".strip()
+    if kind == "proxy_identity_observed":
+        collector_pn = _single_line_preview(
+            str(payload.get("collector_pn") or "")
+        )
+        if payload.get("identity_verified") is True:
+            return f"{prefix}collector identity verified {collector_pn}".strip()
+        return f"{prefix}collector identity did not match {collector_pn}".strip()
+    if kind == "proxy_operational_activity":
+        return f"{prefix}cloud data exchange confirmed".strip()
+    if kind == "restore_trigger_seen":
+        return f"{prefix}restoring the collector cloud endpoint".strip()
     if kind == "restore_inject_request":
         label = str(payload.get("label") or "restore").strip()
         command = _single_line_preview(str(payload.get("command_ascii") or payload.get("frame_ascii") or ""))

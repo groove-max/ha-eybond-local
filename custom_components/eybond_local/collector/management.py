@@ -16,8 +16,10 @@ leaves them holding a stale socket.
 
 Metadata polling is NOT part of this contract: it remains the hub/runtime's
 existing responsibility (with its own dual-channel cadence/bootstrap/dead-channel
-learning) and is a separate future phase. This module carries no cloud-family /
-provider / collector-kind knowledge.
+learning). Explicit user-initiated collector settings reads/writes do belong
+here, because they must use the same negotiated management wire as endpoint
+actions. This module carries no cloud-family / provider / collector-kind
+knowledge.
 """
 
 from __future__ import annotations
@@ -200,6 +202,24 @@ class CollectorManagementAdapter(ABC):
     @abstractmethod
     async def async_reboot(self) -> CollectorSystemActionResult:
         ...
+
+    @abstractmethod
+    async def async_query_parameters(
+        self,
+        parameters: tuple[int, ...],
+    ) -> dict[int, str]:
+        """Read explicit collector settings through this negotiated wire."""
+
+    @abstractmethod
+    async def async_set_wifi_credentials(
+        self,
+        *,
+        ssid: str,
+        password: str,
+        ssid_parameter: int,
+        password_parameter: int,
+    ) -> str:
+        """Write and apply collector Wi-Fi credentials when supported."""
 
 
 def _wrap_wire_call(exc: Exception) -> CollectorManagementError:
@@ -449,6 +469,63 @@ class FramedCollectorManagementAdapter(CollectorManagementAdapter):
     async def async_reboot(self) -> CollectorSystemActionResult:
         return await self._system_action("reboot")
 
+    async def async_query_parameters(
+        self,
+        parameters: tuple[int, ...],
+    ) -> dict[int, str]:
+        if (
+            type(parameters) is not tuple
+            or not parameters
+            or any(type(parameter) is not int for parameter in parameters)
+        ):
+            raise TypeError("collector_parameter_tuple_required")
+        session, _ = self._session()
+        return {
+            parameter: await self._query_confirmed(session, parameter)
+            for parameter in parameters
+        }
+
+    async def async_set_wifi_credentials(
+        self,
+        *,
+        ssid: str,
+        password: str,
+        ssid_parameter: int,
+        password_parameter: int,
+    ) -> str:
+        if (
+            type(ssid) is not str
+            or not ssid
+            or type(password) is not str
+            or not password
+            or type(ssid_parameter) is not int
+            or type(password_parameter) is not int
+        ):
+            raise TypeError("collector_wifi_write_arguments_invalid")
+        session, _ = self._session()
+        for parameter, value in (
+            (ssid_parameter, ssid),
+            (password_parameter, password),
+        ):
+            try:
+                response = await session.set_collector(parameter, value)
+            except CollectorManagementError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise _wrap_wire_call(exc) from exc
+            if response.status != 0 or response.parameter != parameter:
+                raise CollectorManagementConfirmationError(
+                    f"collector_set_unconfirmed:parameter={parameter}:"
+                    f"status={response.status}"
+                )
+        readback = await self._query_confirmed(session, ssid_parameter)
+        if readback != ssid:
+            raise CollectorManagementConfirmationError(
+                "collector_wifi_readback_mismatch"
+            )
+        await self._apply(session)
+        return ssid
+
 
 # ---------------------------------------------------------------------------
 # AT-text implementation
@@ -622,6 +699,28 @@ class AtTextCollectorManagementAdapter(CollectorManagementAdapter):
             "collector_reboot_unsupported_on_at_wire"
         )
 
+    async def async_query_parameters(
+        self,
+        parameters: tuple[int, ...],
+    ) -> dict[int, str]:
+        del parameters
+        raise CollectorManagementUnsupportedError(
+            "collector_parameter_query_unsupported_on_at_wire"
+        )
+
+    async def async_set_wifi_credentials(
+        self,
+        *,
+        ssid: str,
+        password: str,
+        ssid_parameter: int,
+        password_parameter: int,
+    ) -> str:
+        del ssid, password, ssid_parameter, password_parameter
+        raise CollectorManagementUnsupportedError(
+            "collector_wifi_write_unsupported_on_at_wire"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Unavailable implementation (conflict / unknown / nothing negotiated)
@@ -654,6 +753,24 @@ class UnavailableCollectorManagementAdapter(CollectorManagementAdapter):
         self._fail()
 
     async def async_reboot(self) -> CollectorSystemActionResult:
+        self._fail()
+
+    async def async_query_parameters(
+        self,
+        parameters: tuple[int, ...],
+    ) -> dict[int, str]:
+        del parameters
+        self._fail()
+
+    async def async_set_wifi_credentials(
+        self,
+        *,
+        ssid: str,
+        password: str,
+        ssid_parameter: int,
+        password_parameter: int,
+    ) -> str:
+        del ssid, password, ssid_parameter, password_parameter
         self._fail()
 
 

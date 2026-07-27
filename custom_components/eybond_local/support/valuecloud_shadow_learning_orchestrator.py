@@ -111,6 +111,7 @@ async def async_orchestrate_valuecloud_shadow_learning(
     wait_for_observations_since: Callable[[int, float], Awaitable[tuple[ShadowWriteObservation, ...]]] | None = None,
     current_observations_since: Callable[[int], tuple[ShadowWriteObservation, ...]] | None = None,
     is_session_ready: Callable[[], bool] | None = None,
+    wait_until_session_ready: Callable[[], Awaitable[bool]] | None = None,
     read_map_snapshot: Callable[[], dict[str, Any]] | None = None,
     base_url: str = DEFAULT_BASE_URL,
     language: str = DEFAULT_LANGUAGE,
@@ -173,7 +174,10 @@ async def async_orchestrate_valuecloud_shadow_learning(
             attempts.append(attempt)
             continue
 
-        if is_session_ready is not None and not bool(is_session_ready()):
+        if not await _async_session_ready_for_attempt(
+            is_session_ready=is_session_ready,
+            wait_until_session_ready=wait_until_session_ready,
+        ):
             attempt["status"] = _CONTROL_STATUS_DEGRADED
             attempt["reason"] = "session_not_ready"
             attempts.append(attempt)
@@ -544,12 +548,12 @@ async def _wait_for_attempt_observations(
     current_observations_since: Callable[[int], tuple[ShadowWriteObservation, ...]] | None,
     is_session_ready: Callable[[], bool] | None,
 ) -> tuple[ShadowWriteObservation, ...] | None:
-    if is_session_ready is not None and not bool(is_session_ready()):
-        return None
     if current_observations_since is not None:
         existing = tuple(current_observations_since(cursor_start) or ())
         if existing:
             return existing
+    if is_session_ready is not None and not bool(is_session_ready()):
+        return None
     if wait_for_observations_since is None:
         return ()
 
@@ -565,6 +569,20 @@ async def _wait_for_attempt_observations(
         )
         if observations:
             return observations
+
+
+async def _async_session_ready_for_attempt(
+    *,
+    is_session_ready: Callable[[], bool] | None,
+    wait_until_session_ready: Callable[[], Awaitable[bool]] | None,
+) -> bool:
+    """Wait for a safe proxy window without weakening the live-route gate."""
+
+    if is_session_ready is None or bool(is_session_ready()):
+        return True
+    if wait_until_session_ready is None:
+        return False
+    return bool(await wait_until_session_ready())
 
 
 def _attach_attempt_observation(

@@ -339,11 +339,13 @@ from custom_components.eybond_local.const import (
     CONF_COLLECTOR_OPERATION_MODE,
     CONF_CONNECTION_STRATEGY,
     CONF_DRIVER_DETECTION_STRATEGY,
+    CONF_PROXY_CAPTURE_DURATION_MINUTES,
     CONF_PROXY_ENABLED,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
     DOMAIN,
     DRIVER_DETECTION_FULL_SCAN,
+    DEFAULT_PROXY_CAPTURE_DURATION_MINUTES,
     CONF_DRIVER_HINT,
     CONF_SMARTESS_COLLECTOR_VERSION,
     CONF_SMARTESS_DEVICE_ADDRESS,
@@ -5917,12 +5919,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result["description_placeholders"]["bridge_note"].strip()
         )
 
-    async def test_options_init_menu_keeps_shadow_learning_for_factory_collector(self) -> None:
+    async def test_options_init_uses_one_cloud_tools_menu_for_factory_collector(self) -> None:
         options = self._make_options_flow()
         options._config_entry.data.update(
             {
-                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
-                "endpoint_control_policy": "integration_managed",
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                "endpoint_control_policy": "external",
             }
         )
         options._config_entry.runtime_data = types.SimpleNamespace(
@@ -5939,16 +5941,18 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         result = await options.async_step_init()
 
-        self.assertIn("shadow_learning", result["menu_options"])
-        self.assertIn("proxy_capture", result["menu_options"])
-        self.assertLess(
-            result["menu_options"].index("proxy_capture"),
-            result["menu_options"].index("diagnostics"),
+        self.assertIn("cloud_tools", result["menu_options"])
+        self.assertNotIn("shadow_learning", result["menu_options"])
+        self.assertNotIn("proxy_capture", result["menu_options"])
+        tools = await options.async_step_cloud_tools()
+        self.assertEqual(
+            tools["menu_options"],
+            ["proxy_capture", "shadow_learning"],
         )
         self.assertNotIn("collector_uart", result["menu_options"])
         self.assertEqual(result["description_placeholders"]["bridge_note"], "")
 
-    async def test_callback_profile_keeps_endpoint_tools_locked(self) -> None:
+    async def test_callback_profile_exposes_shared_cloud_tools_path(self) -> None:
         options = self._make_options_flow()
         options._config_entry.data = {
             **dict(options._config_entry.data),
@@ -5975,10 +5979,32 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "create_support_package"
             )
 
+        self.assertIn("cloud_tools", menu["menu_options"])
         self.assertNotIn("shadow_learning", menu["menu_options"])
         self.assertNotIn("proxy_capture", menu["menu_options"])
         self.assertNotIn("proxy_capture", diagnostics)
         self.assertFalse(options._collector_capabilities().ha_only_required)
+
+    async def test_ha_only_profile_hides_new_cloud_tool_starts(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
+                "endpoint_control_policy": "integration_managed",
+            }
+        )
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={},
+            ),
+        )
+
+        menu = await options.async_step_init()
+        deep_link = await options.async_step_cloud_tools()
+
+        self.assertNotIn("cloud_tools", menu["menu_options"])
+        self.assertEqual(deep_link["step_id"], "connection")
 
     async def test_active_proxy_cleanup_remains_on_main_menu_after_capability_drift(
         self,
@@ -5998,8 +6024,31 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         menu = await options.async_step_init()
 
-        self.assertIn("proxy_capture", menu["menu_options"])
+        self.assertIn("cloud_tools", menu["menu_options"])
         self.assertNotIn("shadow_learning", menu["menu_options"])
+        tools = await options.async_step_cloud_tools()
+        self.assertEqual(tools["menu_options"], ["proxy_capture"])
+
+    async def test_shadow_restore_remains_reachable_after_profile_drift(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
+                "endpoint_control_policy": "integration_managed",
+            }
+        )
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={"shadow_learning_session_status": "restore_failed"},
+            ),
+        )
+
+        menu = await options.async_step_init()
+        tools = await options.async_step_cloud_tools()
+
+        self.assertIn("cloud_tools", menu["menu_options"])
+        self.assertIn("shadow_learning", tools["menu_options"])
 
     async def test_options_init_offers_repair_for_degraded_virtual_bridge(self) -> None:
         # Recovery beats capability filtering: a DEGRADED virtual bridge (recovery
@@ -6147,42 +6196,20 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_options_collector_wifi_apply_writes_without_password_readback(self) -> None:
         options = self._make_options_flow()
-        transport = AsyncMock()
-        session = AsyncMock()
-        writes: list[tuple[int, str]] = []
-        reads: list[int] = []
-
-        async def set_collector(parameter: int, value: str):
-            writes.append((parameter, value))
-            return type("_SetResponse", (), {"status": 0, "parameter": parameter})()
-
-        async def query_collector(parameter: int):
-            reads.append(parameter)
-            return type(
-                "_QueryResponse",
-                (),
-                {"code": 0, "parameter": parameter, "text": "NewWiFi", "data": b"NewWiFi"},
-            )()
-
-        async def with_session():
-            return transport, session
-
-        session.set_collector.side_effect = set_collector
-        session.query_collector.side_effect = query_collector
-        options._async_with_options_collector_session = with_session
+        writer = AsyncMock(return_value="NewWiFi")
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            async_set_collector_wifi_credentials=writer
+        )
 
         await options._async_apply_collector_wifi_settings(ssid="NewWiFi", password="Secret123")
 
-        self.assertEqual(
-            writes,
-            [
-                (SET_TARGET_SSID, "NewWiFi"),
-                (SET_TARGET_PASSWORD, "Secret123"),
-                (SET_REBOOT_OR_APPLY, "1"),
-            ],
+        writer.assert_awaited_once_with(
+            ssid="NewWiFi",
+            password="Secret123",
+            ssid_parameter=SET_TARGET_SSID,
+            password_parameter=SET_TARGET_PASSWORD,
         )
-        self.assertEqual(reads, [SET_TARGET_SSID])
-        transport.stop.assert_awaited_once()
+        self.assertEqual(options._collector_wifi_current_ssid, "NewWiFi")
 
     async def test_options_collector_uart_step_renders_current_status_for_bridge(self) -> None:
         options = self._make_options_flow()
@@ -6394,11 +6421,22 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         form = await options.async_step_runtime()
 
+        self.assertIn(CONF_DRIVER_HINT, form["data_schema"].schema)
+        self.assertIn(
+            CONF_DRIVER_DETECTION_STRATEGY,
+            form["data_schema"].schema,
+        )
         self.assertIn("poll_mode", form["data_schema"].schema)
         self.assertIn("poll_interval", form["data_schema"].schema)
+        self.assertNotIn(
+            CONF_DRIVER_HINT,
+            form["data_schema"].schema["connection"].schema,
+        )
 
         result = await options.async_step_runtime(
             {
+                CONF_DRIVER_HINT: "modbus_smg",
+                CONF_DRIVER_DETECTION_STRATEGY: DRIVER_DETECTION_FULL_SCAN,
                 "poll_mode": "manual",
                 "poll_interval": 15,
                 "control_mode": "full",
@@ -6412,7 +6450,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     "discovery_target": "192.168.1.255",
                     "discovery_interval": 4,
                     "heartbeat_interval": 30,
-                    "driver_hint": "modbus_smg",
                 },
             }
         )
@@ -6426,10 +6463,71 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["data"]["advertised_server_ip"], "203.0.113.10")
         self.assertEqual(result["data"]["advertised_tcp_port"], 9443)
         self.assertEqual(result["data"]["driver_hint"], "modbus_smg")
+        self.assertEqual(
+            result["data"][CONF_DRIVER_DETECTION_STRATEGY],
+            DRIVER_DETECTION_FULL_SCAN,
+        )
         self.assertNotIn("connection", result["data"])
         self.assertEqual(options._config_entry.data["detected_driver"], "")
         self.assertEqual(options._config_entry.data["detected_model"], "")
         self.assertEqual(options._config_entry.data["detected_serial"], "")
+
+    async def test_runtime_detection_strategy_change_forces_real_reidentification(
+        self,
+    ) -> None:
+        options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                "detected_driver": "pi30",
+                "detected_model": "PI30 inverter",
+                "detected_serial": "SERIAL-1",
+                "detection_confidence": "high",
+                "control_mode": "full",
+            }
+        )
+        options._config_entry.options.update(
+            {
+                CONF_DRIVER_HINT: "auto",
+                CONF_DRIVER_DETECTION_STRATEGY: "first_match",
+                "poll_mode": "auto",
+                "poll_interval": 15,
+                "control_mode": "full",
+            }
+        )
+
+        result = await options.async_step_runtime(
+            {
+                CONF_DRIVER_HINT: "auto",
+                CONF_DRIVER_DETECTION_STRATEGY: DRIVER_DETECTION_FULL_SCAN,
+                "poll_mode": "auto",
+                "control_mode": "full",
+                "connection": {
+                    "server_ip": "192.168.1.50",
+                    "collector_ip": "192.168.1.55",
+                    "tcp_port": 8899,
+                    "advertised_server_ip": "203.0.113.10",
+                    "advertised_tcp_port": 9443,
+                    "udp_port": 58899,
+                    "discovery_target": "192.168.1.255",
+                    "discovery_interval": 4,
+                    "heartbeat_interval": 30,
+                },
+            }
+        )
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(
+            result["data"][CONF_DRIVER_DETECTION_STRATEGY],
+            DRIVER_DETECTION_FULL_SCAN,
+        )
+        self.assertEqual(result["data"]["control_mode"], "read_only")
+        self.assertEqual(options._config_entry.data["detected_driver"], "")
+        self.assertEqual(options._config_entry.data["detected_model"], "")
+        self.assertEqual(options._config_entry.data["detected_serial"], "")
+        self.assertEqual(
+            options._config_entry.data["detection_confidence"],
+            "none",
+        )
 
     async def test_options_runtime_auto_mode_hides_poll_interval_and_preserves_fallback(self) -> None:
         options = self._make_options_flow()
@@ -6673,12 +6771,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("proxy_capture", menu_options)
         self.assertIn("create_support_package", menu_options)
 
-    async def test_proxy_capture_is_exposed_from_main_menu_not_diagnostics(self) -> None:
+    async def test_cloud_tools_are_exposed_from_main_menu_not_diagnostics(self) -> None:
         options = self._make_options_flow()
         options._config_entry.data.update(
             {
-                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
-                "endpoint_control_policy": "integration_managed",
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                "endpoint_control_policy": "external",
             }
         )
         options._config_entry.runtime_data = types.SimpleNamespace(
@@ -6699,7 +6797,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         main_menu = await options.async_step_init()
 
         self.assertNotIn("proxy_capture", menu_options)
-        self.assertIn("proxy_capture", main_menu["menu_options"])
+        self.assertIn("cloud_tools", main_menu["menu_options"])
+        self.assertNotIn("proxy_capture", main_menu["menu_options"])
 
     async def test_diagnostics_menu_hides_proxy_capture_in_callback_profile(self) -> None:
         options = self._make_options_flow()
@@ -6745,7 +6844,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         menu = await options.async_step_init()
 
-        self.assertIn("proxy_capture", menu["menu_options"])
+        self.assertIn("cloud_tools", menu["menu_options"])
 
     async def test_options_runtime_step_hides_operation_mode_selector_for_bridge(self) -> None:
         # The polling form contains no connection profile control for any
@@ -7013,7 +7112,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             list(result["data_schema"].schema.keys()),
-            ["proxy_capture_live_log_view", "proxy_capture_action"],
+            [
+                "proxy_capture_live_log_view",
+                "proxy_capture_action",
+                CONF_PROXY_CAPTURE_DURATION_MINUTES,
+            ],
         )
         self.assertIn("proxy_capture_action", result["data_schema"].schema)
         self.assertIn("proxy_capture_live_log_view", result["data_schema"].schema)
@@ -7033,7 +7136,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result["description_placeholders"]["proxy_capture_saved_result_section"], "")
 
-    async def test_proxy_capture_deep_link_routes_to_profile_choice_when_blocked(
+    async def test_proxy_capture_deep_link_keeps_blocked_status_and_saved_result_reachable(
         self,
     ) -> None:
         options = self._make_options_flow()
@@ -7042,14 +7145,50 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 can_start=False,
                 can_stop=False,
                 critical_phase=False,
+                blocking_reason="collector_not_connected",
             ),
-            data=types.SimpleNamespace(collector=None, values={}),
+            latest_proxy_trace_path="/config/eybond_local/proxy_traces/session.jsonl",
+            latest_proxy_trace_manifest_path="/config/eybond_local/proxy_traces/session.json",
+            data=types.SimpleNamespace(
+                collector=None,
+                values={
+                    "proxy_capture_status": "blocked",
+                    "proxy_capture_blocking_reason": "collector_not_connected",
+                },
+            ),
         )
 
-        result = await options.async_step_proxy_capture()
+        with patch.object(
+            options,
+            "_diagnostics_placeholders",
+            return_value={
+                "proxy_capture_live_log": "",
+                "proxy_capture_status": "blocked",
+                "proxy_capture_blocking_reason": "collector_not_connected",
+                "proxy_trace_manifest_download_url": (
+                    "/api/eybond_local/proxy_capture/entry/session.zip?authSig=signed"
+                ),
+            },
+        ):
+            result = await options.async_step_proxy_capture()
 
         self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "connection")
+        self.assertEqual(result["step_id"], "proxy_capture")
+        self.assertEqual(
+            [
+                option["value"]
+                for option in result["data_schema"].schema[
+                    "proxy_capture_action"
+                ].config.kwargs["options"]
+            ],
+            ["refresh"],
+        )
+        self.assertIn(
+            "/api/eybond_local/proxy_capture/",
+            result["description_placeholders"][
+                "proxy_trace_manifest_download_url"
+            ],
+        )
 
     async def test_show_proxy_capture_status_step_renders_current_status(self) -> None:
         options = self._make_options_flow()
@@ -7233,11 +7372,25 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
 
-            result = await options.async_step_proxy_capture()
+            with patch.object(
+                config_flow_module,
+                "sign_proxy_capture_download_url",
+                return_value=(
+                    "http://203.0.113.7:8123/api/eybond_local/proxy_capture/"
+                    "entry-options/session.zip?authSig=fresh"
+                ),
+            ) as sign_mock:
+                result = await options.async_step_proxy_capture()
 
         self.assertIn(
-            "](http://203.0.113.7:8123/local/eybond_local/proxy_traces/session.zip)",
+            "](http://203.0.113.7:8123/api/eybond_local/proxy_capture/"
+            "entry-options/session.zip?authSig=fresh)",
             result["description_placeholders"]["proxy_capture_saved_result_section"],
+        )
+        sign_mock.assert_called_once_with(
+            options.hass,
+            "entry-options",
+            "session.zip",
         )
         self.assertIn(
             "previous capture is complete",
@@ -7248,11 +7401,45 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result["description_placeholders"]["proxy_capture_saved_result_section"],
         )
 
+    def test_proxy_capture_form_mints_a_fresh_signed_url_on_each_render(self) -> None:
+        options = self._make_options_flow()
+        values = {
+            "proxy_trace_saved_result_path": (
+                "/config/eybond_local/proxy_traces/session.zip"
+            ),
+            "proxy_trace_saved_result_download_url": (
+                "/api/eybond_local/proxy_capture/entry-options/session.zip"
+                "?authSig=expired"
+            ),
+        }
+        fresh_urls = (
+            "/api/eybond_local/proxy_capture/entry-options/session.zip?authSig=fresh-1",
+            "/api/eybond_local/proxy_capture/entry-options/session.zip?authSig=fresh-2",
+        )
+        with patch.object(
+            config_flow_module,
+            "sign_proxy_capture_download_url",
+            side_effect=fresh_urls,
+        ) as sign_mock:
+            first = options._fresh_proxy_capture_download_url(values)
+            second = options._fresh_proxy_capture_download_url(values)
+
+        self.assertEqual((first, second), fresh_urls)
+        self.assertNotIn("expired", first + second)
+        self.assertEqual(sign_mock.call_count, 2)
+
     async def test_start_proxy_capture_step_invokes_coordinator(self) -> None:
         options = self._make_options_flow()
 
         async def _start_proxy_capture(**kwargs):
-            self.assertEqual(kwargs, {"anonymized": True, "confirm_redirect": False})
+            self.assertEqual(
+                kwargs,
+                {
+                    "anonymized": True,
+                    "confirm_redirect": False,
+                    "duration_minutes": DEFAULT_PROXY_CAPTURE_DURATION_MINUTES,
+                },
+            )
             return {
                 "status": "running",
                 "trace_path": "/config/eybond_local/proxy_traces/session.jsonl",
@@ -7285,7 +7472,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options = self._make_options_flow()
 
         async def _start_proxy_capture(**kwargs):
-            self.assertEqual(kwargs, {"anonymized": True, "confirm_redirect": True})
+            self.assertEqual(
+                kwargs,
+                {
+                    "anonymized": True,
+                    "confirm_redirect": True,
+                    "duration_minutes": DEFAULT_PROXY_CAPTURE_DURATION_MINUTES,
+                },
+            )
             return {
                 "status": "running",
                 "trace_path": "/config/eybond_local/proxy_traces/session.jsonl",
@@ -7908,8 +8102,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options = self._make_options_flow()
         options._config_entry.data.update(
             {
-                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
-                "endpoint_control_policy": "integration_managed",
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                "endpoint_control_policy": "external",
             }
         )
         options._config_entry.runtime_data = types.SimpleNamespace(
@@ -7917,14 +8111,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         return options
 
-    async def test_control_discovery_callback_profile_routes_to_profile_choice(
+    async def test_control_discovery_ha_only_profile_routes_to_profile_choice(
         self,
     ) -> None:
         options = self._make_options_flow()
         options._config_entry.data.update(
             {
-                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
-                "endpoint_control_policy": "external",
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
+                "endpoint_control_policy": "integration_managed",
             }
         )
         options._config_entry.runtime_data = types.SimpleNamespace(
@@ -8211,6 +8405,37 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Risky", overview)
         self.assertNotIn("destructive_action", overview)
         self.assertNotIn("sys_reset_690", overview)
+
+    async def test_control_discovery_review_localizes_existing_read_section(self) -> None:
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(
+            options,
+            capabilities=[],
+            phase="overview",
+            skipped_reads=[
+                {
+                    "register": 344,
+                    "title": "PV Voltage",
+                    "kind": "numeric",
+                    "reason": "register_already_decoded",
+                },
+                {
+                    "register": 239,
+                    "title": "Battery Voltage",
+                    "kind": "numeric",
+                    "reason": "title_already_mapped",
+                },
+            ],
+        )
+
+        result = await options.async_step_shadow_learning_review()
+
+        overview = result["description_placeholders"]["control_discovery_overview"]
+        self.assertIn("Sensors already in Home Assistant (2)", overview)
+        self.assertIn("PV Voltage", overview)
+        self.assertIn("Battery Voltage", overview)
+        self.assertNotIn("register_already_decoded", overview)
+        self.assertNotIn("title_already_mapped", overview)
 
     async def test_control_discovery_review_overview_continues_to_edit(self) -> None:
         options = self._wizard_options_flow()
@@ -9007,11 +9232,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    async def test_control_discovery_runner_aborts_before_cloud_when_route_not_ready(self) -> None:
-        # SAFETY: if the proxy route is not write-ready (no live upstream and
-        # not ready), the runner must stop the session and never reach SmartESS
-        # cloud login / writes — the route gate that replaced the deleted
-        # advanced-step gating.
+    async def test_control_discovery_runner_passes_bounded_live_route_waiter(self) -> None:
+        # Read-only cloud metadata may be fetched while the short-lived collector
+        # route is between connections. Actual control remains fail-closed in the
+        # orchestrator, which receives both the strict live predicate and a
+        # bounded waiter for the next safe route window.
         coordinator = self._RunnerCoordinator(ready=False)
         coordinator.route_status = ShadowLearningRouteStatus(
             running=True,
@@ -9024,13 +9249,26 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         captured: dict = {}
         login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(captured=captured)
 
-        with login_p as login_mock, fetch_p as fetch_mock, orchestrate_p as orchestrate_mock, overlay_p:
+        with (
+            login_p as login_mock,
+            fetch_p as fetch_mock,
+            orchestrate_p as orchestrate_mock,
+            overlay_p,
+            patch.object(
+                config_flow_module,
+                "_SHADOW_CONTROL_ROUTE_WINDOW_WAIT",
+                0.01,
+            ),
+        ):
             await options._async_run_control_discovery()
+            self.assertFalse(captured["is_session_ready"]())
+            self.assertFalse(await captured["wait_until_session_ready"]())
 
-        login_mock.assert_not_called()
-        fetch_mock.assert_not_called()
-        orchestrate_mock.assert_not_called()
-        # Session was started fail-closed then stopped; no overlay drafted.
+        # The bundle helper owns its metadata login; this explicit login is the
+        # fresh control-dispatch session created after the bundle completes.
+        self.assertEqual(login_mock.call_count, 1)
+        fetch_mock.assert_called_once()
+        orchestrate_mock.assert_called_once()
         self.assertEqual(len(coordinator.stopped), 1)
 
     async def test_control_discovery_runner_uses_valuecloud_provider_runner(self) -> None:
@@ -9187,10 +9425,18 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         with login_p, fetch_p as bundle_mock, orchestrate_p as orchestrate_mock, overlay_p:
             await options._async_run_control_discovery()
 
-        bundle_mock.assert_called_once_with(
-            username="demo@example.com",
-            password="cloud-secret",
-            collector_pn="E5000020000000",
+        bundle_mock.assert_called_once()
+        self.assertEqual(
+            set(bundle_mock.call_args.kwargs),
+            {"username", "password", "collector_pn"},
+        )
+        self.assertEqual(
+            bundle_mock.call_args.kwargs["collector_pn"],
+            "E5000020000000",
+        )
+        self.assertEqual(
+            bundle_mock.call_args.kwargs["username"],
+            "demo@example.com",
         )
         orchestrate_mock.assert_called_once()
         self.assertEqual(captured["pn"], "E50000200000000001")
@@ -9230,8 +9476,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         with login_p, fetch_p, orchestrate_p as orchestrate_mock, overlay_p as overlay_mock:
             await options._async_run_control_discovery()
 
-        # The session was started, the cloud fetch failed, and cleanup still ran:
-        # the runner never raises and records the failure in flow state.
+        # Authentication succeeded and the route opened, but device-bound
+        # metadata failed through that route. Cleanup must stop and restore it.
         self.assertEqual(len(coordinator.started), 1)
         orchestrate_mock.assert_not_called()
         overlay_mock.assert_not_called()
@@ -9240,7 +9486,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(coordinator.stopped), 1)
         self.assertFalse(coordinator.stopped[0].get("raise_when_not_running", True))
         self.assertEqual(options._shadow_learning_state["discovery"]["status"], "error")
-        self.assertIn("settings_fetch_boom", options._shadow_learning_state["discovery"]["reason"])
+        self.assertEqual(
+            options._shadow_learning_state["discovery"]["reason"],
+            config_flow_module.CONTROL_DISCOVERY_FAILURE_GENERIC,
+        )
 
     async def test_control_discovery_runner_treats_leaked_write_as_failure(self) -> None:
         coordinator = self._RunnerCoordinator(ready=True)
@@ -9270,9 +9519,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(coordinator.stopped), 1)
         self.assertFalse(coordinator.stopped[0].get("raise_when_not_running", True))
         self.assertEqual(options._shadow_learning_state["discovery"]["status"], "error")
-        self.assertIn(
-            "SAFETY STOP",
+        self.assertEqual(
             options._shadow_learning_state["discovery"]["reason"],
+            config_flow_module.CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
         )
         self.assertNotIn("overlay", options._shadow_learning_state)
 
@@ -9309,9 +9558,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(coordinator.started), 0)
         login_mock.assert_not_called()
         self.assertEqual(options._shadow_learning_state["discovery"]["status"], "error")
-        self.assertIn(
-            "shadow_learning_preflight_blocked",
+        self.assertEqual(
             options._shadow_learning_state["discovery"]["reason"],
+            config_flow_module.CONTROL_DISCOVERY_FAILURE_GENERIC,
         )
 
 
@@ -9631,6 +9880,67 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(disc_request.observed_session.collector_pn, self.FULL_PN)
         self.assertIsNone(scan_flow._admission_transaction)
         self.assertIs(scan_flow._selected_result.observed_session, observed)
+
+    def test_typed_observed_session_identity_makes_silent_result_addable(self) -> None:
+        """Exact-session FC=2 identity must survive an empty legacy projection."""
+
+        flow = self._make_flow()
+        observed = ObservedCollectorSession(
+            collector_pn=self.FULL_PN,
+            identity_source="fc2_parameter_2",
+            session_id=self.OLD_SESSION,
+            listener_port=8899,
+            protocol_shape="eybond_framed",
+            peer_hint=self.PEER_IP,
+        )
+        result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.255",
+                source="silent_callback_scan",
+                ip=self.PEER_IP,
+                connected=False,
+                collector=CollectorInfo(),
+            ),
+            observed_session=observed,
+        )
+
+        self.assertEqual(flow._collector_pn_for_result(result), self.FULL_PN)
+        self.assertTrue(flow._is_addable_scan_result(result))
+
+    def test_scan_identity_projection_reconciles_or_fails_closed(self) -> None:
+        flow = self._make_flow()
+        short_pn = self.FULL_PN[:14]
+        observed = ObservedCollectorSession(
+            collector_pn=self.FULL_PN,
+            identity_source="fc2_parameter_2",
+            session_id=self.OLD_SESSION,
+            listener_port=8899,
+        )
+        same_identity = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.255",
+                source="silent_callback_scan",
+                collector=CollectorInfo(collector_pn=short_pn),
+            ),
+            observed_session=observed,
+        )
+        foreign_identity = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.255",
+                source="silent_callback_scan",
+                connected=True,
+                collector=CollectorInfo(collector_pn=self.OTHER_FULL_PN),
+            ),
+            observed_session=observed,
+        )
+
+        self.assertEqual(
+            flow._collector_pn_for_result(same_identity),
+            self.FULL_PN,
+        )
+        self.assertTrue(flow._is_addable_scan_result(same_identity))
+        self.assertEqual(flow._collector_pn_for_result(foreign_identity), "")
+        self.assertFalse(flow._is_addable_scan_result(foreign_identity))
 
     async def test_passive_adapter_fails_closed_on_duck_or_subclass_observation(
         self,
@@ -10302,6 +10612,82 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.callback_route.trigger_target_ip, self.PEER_IP)
         self.assertEqual(flow._verified_connection_strategy, "")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
+
+    async def test_single_udp_route_equal_to_exact_peer_skips_redundant_ip_form(
+        self,
+    ) -> None:
+        """One independently responding peer may enter the same proof transaction."""
+
+        flow = self._make_flow()
+        observed = ObservedCollectorSession(
+            collector_pn=self.FULL_PN,
+            identity_source="at_dtupn",
+            session_id=self.OLD_SESSION,
+            listener_port=8899,
+            protocol_shape="eybond_framed",
+            peer_hint=self.PEER_IP,
+        )
+        flow._autodetect_results = {
+            "0": OnboardingResult(
+                collector=CollectorCandidate(
+                    target_ip="192.168.1.255",
+                    source="callback_listener",
+                    ip=self.PEER_IP,
+                    connected=True,
+                    collector=CollectorInfo(collector_pn=self.FULL_PN),
+                ),
+                connection_mode="callback_listener",
+                observed_session=observed,
+                detection=TargetDetectionEvidence(
+                    status="collector_only",
+                    reason="callback_session_inventory",
+                ),
+            )
+        }
+        flow._scan_responded_addresses = {self.PEER_IP}
+
+        result = await flow.async_step_scan_results({CONF_RESULT_KEY: "0"})
+
+        self.assertEqual(result["step_id"], "verify_connection")
+        request = flow._admission_transaction.request
+        self.assertEqual(request.origin, "scan_selected_route")
+        self.assertEqual(
+            request.callback_route.trigger_target_ip,
+            self.PEER_IP,
+        )
+
+    async def test_multiple_udp_routes_never_guess_one_from_the_tcp_peer(self) -> None:
+        flow = self._make_flow()
+        observed = ObservedCollectorSession(
+            collector_pn=self.FULL_PN,
+            identity_source="at_dtupn",
+            session_id=self.OLD_SESSION,
+            listener_port=8899,
+            protocol_shape="eybond_framed",
+            peer_hint=self.PEER_IP,
+        )
+        flow._autodetect_results = {
+            "0": OnboardingResult(
+                collector=CollectorCandidate(
+                    target_ip="192.168.1.255",
+                    source="callback_listener",
+                    ip=self.PEER_IP,
+                    connected=True,
+                    collector=CollectorInfo(collector_pn=self.FULL_PN),
+                ),
+                connection_mode="callback_listener",
+                observed_session=observed,
+            )
+        }
+        flow._scan_responded_addresses = {
+            self.PEER_IP,
+            "192.168.1.99",
+        }
+
+        result = await flow.async_step_scan_results({CONF_RESULT_KEY: "0"})
+
+        self.assertEqual(result["step_id"], "scan_collector_route")
+        self.assertIsNone(flow._admission_transaction)
 
     def _admission_request(self, origin: str) -> "CollectorAdmissionRequest":
         return CollectorAdmissionRequest(
@@ -14218,16 +14604,13 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
         callback_note = callback_form["description_placeholders"]["connection_strategy_risk"]
 
         self.assertNotEqual(inbound_note, callback_note)
-        # Inbound warns about pointing the collector at HA / cloud reachability
-        # without naming one vendor application as the whole cloud platform.
-        self.assertIn("cloud service", inbound_note)
+        # Inbound names the user-visible effect and reachability requirement
+        # without exposing callback/recovery implementation terminology.
+        self.assertIn("connect directly", inbound_note)
+        self.assertIn("reachable", inbound_note)
         self.assertNotIn("SmartESS", inbound_note)
-        # Callback is honest about the current boundary: only a previously
-        # saved endpoint is restored automatically, while an unknown target
-        # requires an explicit catalog/manual choice before any mutation.
-        self.assertIn("previously saved", callback_note)
-        self.assertIn("does not guess", callback_note)
-        self.assertIn("choose a catalog endpoint", callback_note)
+        self.assertIn("use the cloud again", callback_note)
+        self.assertIn("only when it needs data", callback_note)
 
     # -- CP2B.1 Test F: read-only rollback summary -------------------------
     @staticmethod
@@ -14262,10 +14645,10 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
             target="callback_on_demand", endpoint="", provenance="none"
         )
         self.assertNotEqual(callback_known, callback_unknown)
-        # Known callback summary shows the entry's own endpoint + provenance.
+        # Known callback summary shows the entry's own endpoint without
+        # implementation provenance jargon.
         self.assertIn("ess.eybond.com,18899,TCP", callback_known)
-        self.assertIn("saved original endpoint", callback_known)
-        self.assertIn("offered for confirmation", callback_known)
+        self.assertNotIn("source:", callback_known)
         self.assertNotIn("will be used", callback_known.lower())
         # Unknown callback summary is honest that no endpoint is guessed.
         self.assertNotIn("ess.eybond.com", callback_unknown)
@@ -14337,12 +14720,12 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
         flow._transition_target_strategy = "callback_on_demand"
         return flow, calls
 
-    def _catalog_key(self) -> str:
+    def _catalog_option(self):
         from custom_components.eybond_local.collector.cloud_rollback_catalog import (
             writable_cloud_rollback_catalog_options,
         )
 
-        return writable_cloud_rollback_catalog_options()[0].key
+        return writable_cloud_rollback_catalog_options()[0]
 
     async def _reach_chooser(self, flow):
         return await flow.async_step_strategy_transition(
@@ -14382,8 +14765,8 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
             form["description_placeholders"]["candidate_endpoint"],
             "ess.eybond.com,18899,TCP",
         )
-        self.assertIn("rollback_choice", form["data_schema"].schema)
-        self.assertIn("rollback_manual_endpoint", form["data_schema"].schema)
+        self.assertIn("rollback_endpoint", form["data_schema"].schema)
+        self.assertNotIn("rollback_manual_endpoint", form["data_schema"].schema)
 
     async def test_chooser_no_candidate_offers_catalog_and_manual(self) -> None:
         # With no candidate, the confirmed option is not accepted, but catalog and
@@ -14393,17 +14776,17 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
         form = await flow.async_step_strategy_transition_rollback()
         self.assertEqual(form["step_id"], "strategy_transition_rollback")
         self.assertEqual(form["description_placeholders"]["candidate_endpoint"], "")
-        self.assertIn("rollback_choice", form["data_schema"].schema)
+        self.assertIn("rollback_endpoint", form["data_schema"].schema)
 
-    async def _submit_chooser(self, flow, choice, *, manual=""):
+    async def _submit_chooser(self, flow, endpoint):
         flow._transition_confirmed_input = {"host": "198.51.100.20", "port": 19000, "collector_ip": "203.0.113.10"}
         return await flow.async_step_strategy_transition_rollback(
-            {"rollback_choice": choice, "rollback_manual_endpoint": manual}
+            {"rollback_endpoint": endpoint}
         )
 
     async def test_chooser_confirmed_builds_selection_and_is_single_authority(self) -> None:
         flow, calls = self._make_chooser_flow(candidate_endpoint="ess.eybond.com,18899,TCP")
-        result = await self._submit_chooser(flow, "__confirmed_candidate__")
+        result = await self._submit_chooser(flow, "ess.eybond.com,18899,TCP")
         self.assertEqual(result["type"], "progress")
         selection = flow._transition_rollback_selection
         self.assertEqual(selection.selection_kind, "confirmed_candidate")
@@ -14421,24 +14804,30 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_chooser_catalog_builds_selection(self) -> None:
         flow, calls = self._make_chooser_flow(candidate_endpoint=None)
-        key = self._catalog_key()
-        result = await self._submit_chooser(flow, key)
+        option = self._catalog_option()
+        result = await self._submit_chooser(flow, option.endpoint)
         self.assertEqual(result["type"], "progress")
         self.assertEqual(flow._transition_rollback_selection.selection_kind, "catalog")
-        self.assertEqual(flow._transition_rollback_selection.catalog_profile_key, key)
+        self.assertEqual(
+            flow._transition_rollback_selection.catalog_profile_key,
+            option.key,
+        )
 
     async def test_chooser_manual_valid_builds_selection(self) -> None:
         flow, _calls = self._make_chooser_flow(candidate_endpoint=None)
-        result = await self._submit_chooser(flow, "__manual__", manual="my.cloud,18899,TCP")
+        result = await self._submit_chooser(flow, "my.cloud,18899,TCP")
         self.assertEqual(result["type"], "progress")
         self.assertEqual(flow._transition_rollback_selection.selection_kind, "manual")
         self.assertEqual(flow._transition_rollback_selection.endpoint_value, "my.cloud,18899,TCP")
 
     async def test_chooser_manual_malformed_is_form_error(self) -> None:
         flow, calls = self._make_chooser_flow(candidate_endpoint=None)
-        result = await self._submit_chooser(flow, "__manual__", manual="bad###ep")
+        result = await self._submit_chooser(flow, "bad###ep")
         self.assertEqual(result["type"], "form")
-        self.assertEqual(result["errors"].get("rollback_manual_endpoint"), "rollback_endpoint_invalid")
+        self.assertEqual(
+            result["errors"].get("rollback_endpoint"),
+            "rollback_endpoint_invalid",
+        )
         self.assertIsNone(flow._transition_rollback_selection)
         self.assertIsNone(flow._transition_task)
         self.assertEqual(calls, [])
@@ -14447,15 +14836,23 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
         flow, calls = self._make_chooser_flow(candidate_endpoint=None)
         result = await self._submit_chooser(flow, "___removed_key___")
         self.assertEqual(result["type"], "form")
-        self.assertEqual(result["errors"].get("rollback_choice"), "rollback_choice_invalid")
+        self.assertEqual(
+            result["errors"].get("rollback_endpoint"),
+            "rollback_endpoint_invalid",
+        )
         self.assertIsNone(flow._transition_rollback_selection)
         self.assertEqual(calls, [])
 
-    async def test_chooser_confirmed_without_candidate_is_form_error(self) -> None:
+    async def test_chooser_typed_value_without_candidate_is_manual(self) -> None:
         flow, _calls = self._make_chooser_flow(candidate_endpoint=None)
-        result = await self._submit_chooser(flow, "__confirmed_candidate__")
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["errors"].get("rollback_choice"), "rollback_choice_invalid")
+        result = await self._submit_chooser(flow, "ess.eybond.com,18899,TCP")
+        # Without a trusted saved candidate, the same syntactically valid value
+        # is treated as an explicit manual endpoint, never as confirmed evidence.
+        self.assertEqual(result["type"], "progress")
+        self.assertEqual(
+            flow._transition_rollback_selection.selection_kind,
+            "manual",
+        )
 
     async def test_chooser_submit_uses_the_candidate_that_was_shown(self) -> None:
         from custom_components.eybond_local.connection.strategy_transition_context import (
@@ -14482,7 +14879,7 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
         )
         form = await flow.async_step_strategy_transition_rollback()
         self.assertEqual(form["description_placeholders"]["candidate_endpoint"], shown.endpoint)
-        result = await self._submit_chooser(flow, "__confirmed_candidate__")
+        result = await self._submit_chooser(flow, shown.endpoint)
         self.assertEqual(result["type"], "progress")
         self.assertEqual(
             flow._transition_rollback_selection.endpoint_value, shown.endpoint

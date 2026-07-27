@@ -281,6 +281,7 @@ from .support.cloud_evidence_providers import (
     resolve_cloud_evidence_provider,
 )
 from .support.collector_registry import remember_collector_original_endpoint
+from .support.download import sign_proxy_capture_download_url
 from .support.memory_guard import read_available_memory_mib, shadow_learning_memory_blocker
 from .support.shadow_learning_backend import build_shadow_learning_preflight, build_shadow_learning_seed
 from .support.shadow_learning_proxy import route_status_indicates_control_write_ready
@@ -355,6 +356,10 @@ CONTROL_DISCOVERY_RESULT_ACTION_ACTIVATE = "activate_selected"
 CONTROL_DISCOVERY_RESULT_ACTION_SUPPORT = "create_support_package"
 CONTROL_DISCOVERY_RESULT_ACTION_RETRY = "retry"
 CONTROL_DISCOVERY_RESULT_ACTION_DONE = "done"
+CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED = "control_discovery_route_dropped"
+CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE = "control_discovery_run_incomplete"
+CONTROL_DISCOVERY_FAILURE_SAFETY_STOP = "control_discovery_safety_stop"
+CONTROL_DISCOVERY_FAILURE_GENERIC = "control_discovery_failure_generic"
 SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_USE_SAVED = "use_saved"
 SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH = "refresh"
 SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_ARCHIVE_ONLY = "archive_only"
@@ -390,6 +395,11 @@ _TRANSLATIONS_DIR = Path(__file__).with_name("translations")
 _FLOW_TRANSLATIONS_DIR = Path(__file__).with_name("flow_translations")
 _ONBOARDING_TIMEOUT_POLICY = DEFAULT_ONBOARDING_TIMEOUT_POLICY
 _AUTO_SCAN_TIMEOUT = _onboarding_auto_scan_timeout_seconds(_ONBOARDING_TIMEOUT_POLICY)
+# A cloud-control request may only be sent while both legs of the temporary
+# shadow route are live. E500-class collectors open that cloud session on their
+# roughly one-minute cadence, so wait through one full cadence plus scheduler
+# margin instead of either failing immediately or weakening the live-route gate.
+_SHADOW_CONTROL_ROUTE_WINDOW_WAIT = 65.0
 _BLE_SCAN_TIMEOUT = 5.0
 _BLE_CONNECT_TIMEOUT = 30.0
 _BLE_WIFI_SCAN_TIMEOUT = 30.0
@@ -2132,6 +2142,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._manual_config: dict[str, Any] = {}
         self._manual_result: OnboardingResult | None = None
         self._autodetect_results: dict[str, OnboardingResult] = {}
+        # Route evidence is scan-wide and independent from collector identity.
+        # Collapsing a PN-bearing TCP result with a PN-less UDP response must
+        # not erase the address that actually answered this scan.
+        self._scan_responded_addresses: set[str] = set()
         self._selected_result: OnboardingResult | None = None
         self._selected_result_collector_capabilities_attempted = False
         self._scan_task: asyncio.Task | None = None
@@ -2601,6 +2615,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 )
                 if admission is not None:
                     return admission
+            matching_route = self._single_scan_route_matching_observed_peer(result)
+            if matching_route:
+                admission = await self._async_admit_selected_scan_result(
+                    callback_route=self._scan_callback_route(
+                        result=result,
+                        observed=observed,
+                        address=matching_route,
+                    )
+                )
+                if admission is not None:
+                    return admission
             return await self.async_step_scan_collector_route()
         if self._selected_result is not None and self._is_route_scan_result(
             self._selected_result
@@ -2664,11 +2689,16 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         route = result.callback_route
         if type(route) is CallbackRecoveryRoute:
             add(route.trigger_target_ip)
+        responded_addresses = set(self._scan_responded_addresses)
         for candidate in self._autodetect_results.values():
             if not self._is_route_scan_result(candidate):
                 continue
             collector = candidate.collector
-            add(collector.ip if collector is not None else "")
+            address = collector.ip if collector is not None else ""
+            if type(address) is str:
+                responded_addresses.add(address)
+        for address in sorted(responded_addresses):
+            add(address)
 
         observed = result.observed_session
         if type(observed) is ObservedCollectorSession:
@@ -2676,6 +2706,42 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         elif result.collector is not None:
             add(result.collector.ip, peer=True)
         return options
+
+    def _single_scan_route_matching_observed_peer(
+        self,
+        result: OnboardingResult,
+    ) -> str:
+        """Return one unambiguous scan target equal to the exact session peer.
+
+        This is only a UX shortcut. It requires an independently observed,
+        single UDP-responsive address equal to the selected exact session peer.
+        The ordinary callback identity and recovery transaction still has to
+        prove the same PN before entry creation.
+
+        The peer itself is never counted as a response, so a passive or stale
+        callback session cannot manufacture its own route authority.
+        """
+
+        observed = result.observed_session
+        if type(observed) is not ObservedCollectorSession:
+            return ""
+        peer = observed.peer_hint
+        if type(peer) is not str or peer != peer.strip() or not _is_ipv4(peer):
+            return ""
+
+        responded_addresses = set(self._scan_responded_addresses)
+        for candidate in self._autodetect_results.values():
+            if not self._is_route_scan_result(candidate):
+                continue
+            collector = candidate.collector
+            address = collector.ip if collector is not None else ""
+            if (
+                type(address) is str
+                and address == address.strip()
+                and _is_ipv4(address)
+            ):
+                responded_addresses.add(address)
+        return peer if responded_addresses == {peer} else ""
 
     def _prepare_scan_route_manual(
         self,
@@ -3607,6 +3673,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     async def _async_do_scan(self) -> None:
         """Run auto-detection in the background."""
 
+        self._scan_responded_addresses.clear()
         effective_input = self._auto_config
         server_ip = str(effective_input.get(CONF_SERVER_IP, self._local_ip) or self._local_ip)
         discovery_targets = self._scan_discovery_targets()
@@ -3669,6 +3736,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._scan_progress_stage = "analyzing"
         self.async_update_progress(0.9)
         await asyncio.sleep(0.08)
+        for result in results:
+            if not self._is_route_scan_result(result):
+                continue
+            collector = result.collector
+            address = collector.ip if collector is not None else ""
+            if (
+                type(address) is str
+                and address == address.strip()
+                and _is_ipv4(address)
+            ):
+                self._scan_responded_addresses.add(address)
         visible_results = self._collapse_scan_results(
             result
             for result in (*passive_results, *results)
@@ -7459,18 +7537,60 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 detail = f"{detail}:{','.join(result.details)}"
             raise SmartEssBleError(f"ble_provision_failed:{detail}")
 
-    def _collector_pn_for_result(self, result: OnboardingResult | None) -> str:
+    @staticmethod
+    def _collector_identity_projection(
+        result: OnboardingResult | None,
+    ) -> tuple[str, bool]:
+        """Return the reconciled PN and whether the result contains a conflict.
+
+        ``ObservedCollectorSession`` is the typed admission evidence carried by
+        a silent callback scan.  It may be the only place where the exact-session
+        FC=2 probe produced a PN, so the older ``CollectorInfo`` projection must
+        not make that result disappear from the UI.  Conversely, no source may
+        silently override another identity: all non-empty facts must denote the
+        same collector before short/full reconciliation is allowed.
+        """
+
         if result is None:
-            return ""
+            return "", False
+
+        def _exact_pn(value: object) -> str:
+            if type(value) is not str or not value or value != value.strip():
+                return ""
+            return value
+
+        identities: list[str] = []
 
         collector_info = result.collector.collector if result.collector is not None else None
         if collector_info is not None:
-            collector_pn = str(collector_info.collector_pn or "").strip()
+            collector_pn = _exact_pn(collector_info.collector_pn)
             if collector_pn:
-                return collector_pn
+                identities.append(collector_pn)
+
+        observed = result.observed_session
+        if type(observed) is ObservedCollectorSession:
+            identities.append(observed.collector_pn)
 
         match_details = result.match.details if result.match is not None else {}
-        return str(match_details.get("collector_pn") or "").strip()
+        match_pn = _exact_pn(match_details.get("collector_pn"))
+        if match_pn:
+            identities.append(match_pn)
+
+        for index, identity in enumerate(identities):
+            if any(
+                not pn_is_same_identity(identity, candidate)
+                for candidate in identities[index + 1 :]
+            ):
+                return "", True
+
+        collector_pn = ""
+        for identity in identities:
+            collector_pn = reconcile_pn(collector_pn, identity)
+        return collector_pn, False
+
+    def _collector_pn_for_result(self, result: OnboardingResult | None) -> str:
+        collector_pn, conflict = self._collector_identity_projection(result)
+        return "" if conflict else collector_pn
 
     def _known_smartess_ble_firmware_version(self, ble_address: str) -> str:
         cached_fw_version = str(self._ble_fw_version_by_address.get(ble_address, "") or "").strip()
@@ -8664,18 +8784,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             or (collector_info is not None and collector_info.collector_pn)
         )
 
-    @staticmethod
-    def _is_addable_scan_result(result: OnboardingResult) -> bool:
+    def _is_addable_scan_result(self, result: OnboardingResult) -> bool:
         collector = result.collector
-        collector_info = collector.collector if collector is not None else None
+        collector_pn, identity_conflict = self._collector_identity_projection(result)
+        if identity_conflict:
+            return False
         return bool(
-            result.match is not None
+            collector_pn
+            or result.match is not None
             or (
                 collector is not None
-                and (
-                    collector.connected
-                    or (collector_info is not None and collector_info.collector_pn)
-                )
+                and collector.connected
             )
         )
 
@@ -9390,14 +9509,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             ha_only_required=self._collector_capabilities().ha_only_required,
         )
 
-    def _proxy_capture_menu_available(self, coordinator=None) -> bool:
-        """Return whether proxy capture must be reachable from the main menu.
-
-        ``ProxyCaptureOverview`` is the single readiness authority: its
-        ``can_start`` already includes collector capability and the stable
-        HA-only baseline. An existing or recovering session always remains
-        reachable because cleanup is a lifecycle obligation.
-        """
+    def _proxy_capture_available(self, coordinator=None) -> bool:
+        """Return whether the proxy workflow has useful state to present."""
 
         coordinator = coordinator or self._coordinator()
         overview = getattr(coordinator, "proxy_capture_overview", None)
@@ -9405,6 +9518,39 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             getattr(overview, "can_start", False)
             or getattr(overview, "can_stop", False)
             or getattr(overview, "critical_phase", False)
+            or str(getattr(overview, "blocking_reason", "") or "").strip()
+            or str(getattr(coordinator, "latest_proxy_trace_path", "") or "").strip()
+            or str(
+                getattr(coordinator, "latest_proxy_trace_manifest_path", "") or ""
+            ).strip()
+        )
+
+    def _shadow_learning_lifecycle_active(self, coordinator=None) -> bool:
+        """Return whether shadow cleanup/recovery must remain reachable."""
+
+        coordinator = coordinator or self._coordinator()
+        if coordinator is None:
+            return False
+        return self._shadow_learning_session_state(coordinator) in {
+            "preflight",
+            "starting",
+            "ready",
+            "learning",
+            "waiting_for_collector",
+            "connecting_upstream",
+            "degraded",
+            "restoring",
+            "restore_failed",
+        }
+
+    def _cloud_tools_menu_available(self, coordinator=None) -> bool:
+        """Return whether the shared cloud-traffic tools path is reachable."""
+
+        coordinator = coordinator or self._coordinator()
+        return bool(
+            self._collector_operating_profile().cloud_tools_allowed
+            or self._proxy_capture_available(coordinator)
+            or self._shadow_learning_lifecycle_active(coordinator)
         )
 
     def _operating_profile_label(self, profile: str) -> str:
@@ -9484,11 +9630,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 "collector_wifi",
                 "diagnostics",
             ]
-            if self._collector_operating_profile().endpoint_tools_allowed:
-                menu_options.insert(2, "shadow_learning")
 
-        if self._proxy_capture_menu_available():
-            menu_options.insert(menu_options.index("diagnostics"), "proxy_capture")
+        if self._cloud_tools_menu_available():
+            menu_options.insert(menu_options.index("diagnostics"), "cloud_tools")
 
         # RECOVERY takes priority OVER the capability filter: a degraded entry
         # (recovery marker present) offers the repair FIRST -- even a virtual
@@ -9503,6 +9647,51 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             step_id="init",
             menu_options=menu_options,
             description_placeholders={"bridge_note": bridge_note},
+        )
+
+    @_with_translation_bundle
+    async def async_step_cloud_tools(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Expose proxy capture and shadow learning through one product path."""
+
+        coordinator = self._coordinator()
+        if coordinator is None:
+            return await self._async_show_diagnostics_result(
+                action_title=self._diagnostics_result_tr(
+                    "cloud_tools_title",
+                    "Cloud traffic tools",
+                ),
+                status=self._diagnostics_result_tr(
+                    "coordinator_not_loaded",
+                    "Coordinator is not loaded.",
+                ),
+                next_step=self._diagnostics_result_tr(
+                    "ensure_entry_loaded",
+                    "Ensure the entry is loaded, then try again.",
+                ),
+            )
+        if not self._cloud_tools_menu_available(coordinator):
+            return await self.async_step_connection()
+
+        capabilities = self._collector_capabilities()
+        menu_options: list[str] = []
+        if (
+            capabilities.proxy_capture
+            or self._proxy_capture_available(coordinator)
+        ):
+            menu_options.append("proxy_capture")
+        if (
+            capabilities.shadow_learning
+            or self._shadow_learning_lifecycle_active(coordinator)
+        ):
+            menu_options.append("shadow_learning")
+        if not menu_options:
+            return await self.async_step_init()
+        return self.async_show_menu(
+            step_id="cloud_tools",
+            menu_options=menu_options,
         )
 
     @_with_translation_bundle
@@ -9571,8 +9760,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                         OPERATING_PROFILE_CLOUD_AND_HA: (
                             "The collector normally remains connected to its cloud service. "
                             "Home Assistant asks it to connect when data is needed. "
-                            "Temporary traffic capture and control discovery require "
-                            "the Home Assistant only profile."
+                            "Temporary traffic capture and control discovery are "
+                            "available from this profile."
                         ),
                         OPERATING_PROFILE_HA_ONLY: (
                             "The collector connects directly to Home Assistant. "
@@ -9922,7 +10111,20 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             or detection_strategy not in DRIVER_DETECTION_STRATEGIES
         ):
             detection_strategy = DEFAULT_DRIVER_DETECTION_STRATEGY
+        driver_intent = self._config_entry.options.get(
+            CONF_DRIVER_HINT,
+            self._config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
+        )
+        if (
+            type(driver_intent) is not str
+            or driver_intent not in driver_options()
+        ):
+            driver_intent = DRIVER_HINT_AUTO
         schema_fields: dict[Any, Any] = {
+            vol.Required(
+                CONF_DRIVER_HINT,
+                default=driver_intent,
+            ): self._runtime_driver_selector(),
             vol.Required(
                 CONF_DRIVER_DETECTION_STRATEGY,
                 default=detection_strategy,
@@ -9942,7 +10144,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             vol.Schema(
                 self._build_connection_fields_schema(
                     connection_type,
-                    fields=branch.form_layout.runtime_fields,
+                    fields=tuple(
+                        field
+                        for field in branch.form_layout.runtime_fields
+                        if field.key != CONF_DRIVER_HINT
+                    ),
                     values=connection_values,
                 )
             ),
@@ -10008,10 +10214,25 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             options.get(CONF_DRIVER_HINT, current_driver_intent)
             or DRIVER_HINT_AUTO
         ).strip()
-        if submitted_driver_intent != current_driver_intent:
+        current_detection_strategy = self._config_entry.options.get(
+            CONF_DRIVER_DETECTION_STRATEGY,
+            self._config_entry.data.get(
+                CONF_DRIVER_DETECTION_STRATEGY,
+                DEFAULT_DRIVER_DETECTION_STRATEGY,
+            ),
+        )
+        submitted_detection_strategy = options.get(
+            CONF_DRIVER_DETECTION_STRATEGY,
+            current_detection_strategy,
+        )
+        if (
+            submitted_driver_intent != current_driver_intent
+            or submitted_detection_strategy != current_detection_strategy
+        ):
             # A driver selector changes user intent, never runtime fact.  Clear
-            # the old binding atomically with that intent so the reloaded runtime
-            # must prove the selected protocol on its owned collector session.
+            # the old binding atomically with either driver intent or automatic
+            # scan depth so the reloaded runtime really performs the requested
+            # identification instead of merely saving a decorative preference.
             _clear_runtime_inverter_facts(data)
             options[CONF_CONTROL_MODE] = CONTROL_MODE_READ_ONLY
         self.hass.config_entries.async_update_entry(
@@ -10075,6 +10296,51 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             if key in self._config_entry.options:
                 persisted_options[key] = self._config_entry.options[key]
         return persisted_options
+
+    def _runtime_driver_selector(self) -> SelectSelector:
+        """Build the driver selector with live detection evidence highlighted."""
+
+        detected_driver = self._config_entry.data.get(CONF_DETECTED_DRIVER, "")
+        detected_driver = (
+            detected_driver
+            if type(detected_driver) is str
+            and detected_driver == detected_driver.strip()
+            else ""
+        )
+        candidate_keys = {
+            candidate.driver_key
+            for candidate in self._runtime_inverter_protocol_candidates()
+        }
+        options: list[SelectOptionDict] = []
+        for key in driver_options():
+            label = _selector_option_label(
+                self._translation_bundle,
+                "driver_hint",
+                key,
+                _DRIVER_DISPLAY_LABELS.get(
+                    key,
+                    key.replace("_", " ").title(),
+                ),
+            )
+            if key == detected_driver:
+                label = self._tr(
+                    "common.dynamic.runtime_driver_current",
+                    "{driver} — currently detected",
+                    {"driver": label},
+                )
+            elif key in candidate_keys:
+                label = self._tr(
+                    "common.dynamic.runtime_driver_candidate",
+                    "{driver} — also detected",
+                    {"driver": label},
+                )
+            options.append(SelectOptionDict(value=key, label=label))
+        return SelectSelector(
+            SelectSelectorConfig(
+                options=options,
+                mode=SelectSelectorMode.DROPDOWN,
+            )
+        )
 
     @_with_translation_bundle
     async def async_step_runtime_poll_interval(
@@ -10246,58 +10512,30 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         to the user's own entry.
         """
 
-        from .connection.strategy_transition_context import (
-            CLOUD_PROVENANCE_OBSERVED_CURRENT,
-            CLOUD_PROVENANCE_ORIGINAL,
-            CLOUD_PROVENANCE_REGISTRY,
-        )
-
         known = rollback is not None and getattr(rollback, "known", False)
         if to_inbound:
             if known:
                 return self._tr(
                     "common.dynamic.connection_strategy_rollback_inbound_known",
-                    "A previously confirmed external endpoint is available and "
-                    "can be offered for confirmation if you switch back to "
-                    "cloud mode later.",
+                    "The cloud address is saved and can be restored later.",
                 )
             return self._tr(
                 "common.dynamic.connection_strategy_rollback_inbound_unknown",
-                "No original external endpoint is confirmed yet; before "
-                "returning to cloud mode you will have to choose one explicitly.",
+                "No cloud address is saved yet. You will need to enter one if "
+                "you return to cloud mode.",
             )
         if known:
-            provenance_label = {
-                CLOUD_PROVENANCE_ORIGINAL: self._tr(
-                    "common.dynamic.rollback_provenance_original",
-                    "saved original endpoint",
-                ),
-                CLOUD_PROVENANCE_REGISTRY: self._tr(
-                    "common.dynamic.rollback_provenance_registry",
-                    "collector registry",
-                ),
-                CLOUD_PROVENANCE_OBSERVED_CURRENT: self._tr(
-                    "common.dynamic.rollback_provenance_observed_current",
-                    "current endpoint",
-                ),
-            }.get(rollback.provenance, rollback.provenance)
             template = self._tr(
                 "common.dynamic.connection_strategy_rollback_callback_known",
-                "A previously confirmed endpoint candidate is available: "
-                "{endpoint} (source: {provenance}). It will be offered for "
-                "confirmation before restoration.",
+                "Cloud address to restore: {endpoint}.",
             )
             try:
-                return template.format(
-                    endpoint=rollback.endpoint, provenance=provenance_label
-                )
+                return template.format(endpoint=rollback.endpoint)
             except (KeyError, IndexError, ValueError):
                 return template
         return self._tr(
             "common.dynamic.connection_strategy_rollback_callback_unknown",
-            "No previously confirmed cloud endpoint is known, so this switch "
-            "will not guess one. Before anything changes, the next step will "
-            "ask you to choose a catalog endpoint or enter one manually.",
+            "Choose the cloud address on the next step.",
         )
 
     @_with_translation_bundle
@@ -10414,23 +10652,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         if to_inbound:
             risk_note = self._tr(
                 "common.dynamic.connection_strategy_risk_inbound",
-                "This points the collector's callback endpoint at Home "
-                "Assistant. Its cloud service may stop receiving data, and "
-                "the Home Assistant host and port you enter must be genuinely "
-                "reachable from the collector, including through any NAT or "
-                "port-forwarding. If they are not, the collector can end up "
-                "unable to reach either side.",
+                "The collector will connect directly to Home Assistant. Cloud "
+                "services will stop receiving its data. Make sure the Home "
+                "Assistant address and port are reachable from the collector.",
             )
         else:
             risk_note = self._tr(
                 "common.dynamic.connection_strategy_risk_callback",
-                "This stops keeping a permanent Home Assistant connection open. "
-                "Home Assistant will ask the collector to connect only when it "
-                "needs data. If the integration previously changed the collector "
-                "endpoint, it can restore only a previously saved and valid "
-                "cloud endpoint. When no such endpoint is known, the safe switch "
-                "does not guess one: before anything changes, you must choose a "
-                "catalog endpoint or enter one manually.",
+                "The collector will use the cloud again. Home Assistant will "
+                "request a connection only when it needs data.",
             )
         rollback_note = self._connection_strategy_rollback_note(
             to_inbound=to_inbound,
@@ -10468,14 +10698,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             dict(self._config_entry.data), dict(self._config_entry.options)
         )
         return policy == ENDPOINT_CONTROL_INTEGRATION_MANAGED
-
-    @staticmethod
-    def _rollback_choice_confirmed_key() -> str:
-        return "__confirmed_candidate__"
-
-    @staticmethod
-    def _rollback_choice_manual_key() -> str:
-        return "__manual__"
 
     @_with_translation_bundle
     async def async_step_strategy_transition_rollback(
@@ -10520,34 +10742,35 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             type(candidate) is CloudRollbackEndpoint and candidate.known
         )
         catalog_options = writable_cloud_rollback_catalog_options()
-        confirmed_key = self._rollback_choice_confirmed_key()
-        manual_key = self._rollback_choice_manual_key()
         errors: dict[str, str] = {}
 
         if user_input is not None:
             flat = _flatten_sections(user_input)
-            choice = flat.get("rollback_choice")
-            manual_raw = flat.get("rollback_manual_endpoint")
+            selected_endpoint = flat.get("rollback_endpoint")
             selection = None
-            if choice == confirmed_key:
+            if (
+                candidate_known
+                and selected_endpoint == candidate.endpoint
+            ):
                 selection = (
                     cloud_rollback_selection_from_candidate(candidate)
-                    if candidate_known
-                    else None
                 )
-                if selection is None:
-                    errors["rollback_choice"] = "rollback_choice_invalid"
-            elif choice == manual_key:
-                selection = cloud_rollback_selection_from_manual(manual_raw)
-                if selection is None:
-                    errors["rollback_manual_endpoint"] = "rollback_endpoint_invalid"
-            elif type(choice) is str and choice:
-                # A catalog key: fail-closed on an arbitrary / stale key.
-                selection = cloud_rollback_selection_from_catalog_key(choice)
-                if selection is None:
-                    errors["rollback_choice"] = "rollback_choice_invalid"
             else:
-                errors["rollback_choice"] = "rollback_choice_required"
+                catalog_match = next(
+                    (
+                        option
+                        for option in catalog_options
+                        if option.endpoint == selected_endpoint
+                    ),
+                    None,
+                )
+                selection = (
+                    cloud_rollback_selection_from_catalog_key(catalog_match.key)
+                    if catalog_match is not None
+                    else cloud_rollback_selection_from_manual(selected_endpoint)
+                )
+            if selection is None:
+                errors["rollback_endpoint"] = "rollback_endpoint_invalid"
             if not errors and selection is not None:
                 self._transition_rollback_selection = selection
                 return await self.async_step_strategy_transition_progress()
@@ -10560,7 +10783,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             )
             options.append(
                 SelectOptionDict(
-                    value=confirmed_key,
+                    value=candidate.endpoint,
                     label=(
                         f"{self._tr('common.dynamic.rollback_choice_confirmed', 'Use the saved endpoint')}"
                         f": {candidate.endpoint} ({provenance_label})"
@@ -10570,27 +10793,19 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         for option in catalog_options:
             options.append(
                 SelectOptionDict(
-                    value=option.key,
+                    value=option.endpoint,
                     label=f"{option.label} ({option.provider}) — {option.endpoint}",
                 )
             )
-        options.append(
-            SelectOptionDict(
-                value=manual_key,
-                label=self._tr(
-                    "common.dynamic.rollback_choice_manual",
-                    "Enter a cloud endpoint manually",
-                ),
-            )
-        )
-        default_choice = confirmed_key if candidate_known else manual_key
+        default_endpoint = candidate.endpoint if candidate_known else ""
         schema_fields: dict[Any, Any] = {
-            vol.Required("rollback_choice", default=default_choice): SelectSelector(
-                SelectSelectorConfig(options=options, mode=SelectSelectorMode.DROPDOWN)
-            ),
-            vol.Optional("rollback_manual_endpoint", default=""): TextSelector(
-                TextSelectorConfig()
-            ),
+            vol.Required("rollback_endpoint", default=default_endpoint): SelectSelector(
+                SelectSelectorConfig(
+                    options=options,
+                    custom_value=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            )
         }
         return self.async_show_form(
             step_id="strategy_transition_rollback",
@@ -11414,7 +11629,10 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 ),
             )
 
-        if not self._collector_operating_profile().endpoint_tools_allowed:
+        if not (
+            self._collector_operating_profile().cloud_tools_allowed
+            or self._shadow_learning_lifecycle_active(coordinator)
+        ):
             return await self.async_step_connection()
 
         errors: dict[str, str] = {}
@@ -11648,10 +11866,18 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         except Exception as exc:
             # Fail-closed cleanup: stop the shadow session and restore the
             # collector endpoint, then surface the failure in flow state.
+            progress = dict(self._shadow_learning_state.get("progress") or {})
+            logger.error(
+                "Control discovery failed entry=%s provider=%s stage=%s exception_type=%s",
+                getattr(self._config_entry, "entry_id", ""),
+                str(getattr(coordinator, "cloud_evidence_provider", "") or ""),
+                str(progress.get("stage") or "unknown"),
+                type(exc).__name__,
+            )
             await self._async_control_discovery_failsafe_stop(coordinator)
             self._shadow_learning_state["discovery"] = {
                 "status": "error",
-                "reason": str(exc),
+                "reason": self._control_discovery_failure_reason(exc),
             }
             self._shadow_learning_state["status"] = self._tr(
                 "common.dynamic.control_discovery_failed",
@@ -11716,19 +11942,22 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 )
             )
 
-        self._set_control_discovery_progress(0.10, "connecting")
-        session = await coordinator.async_start_shadow_learning(allow_ack_writes=False)
-        self._shadow_learning_state["session"] = dict(session or {})
-        self._publish_shadow_learning_artifacts(coordinator)
-
-        if not self._shadow_learning_route_accepts_control(coordinator):
-            raise RuntimeError("shadow_learning_session_not_ready")
-
-        # The active provider owns login/fetch/parse/action/orchestrate; the flow
-        # passes progress + observation callbacks and updates its own UI state via
-        # the identity/learning hooks. It imports no provider HTTP client.
+        # The active provider owns login/fetch/parse/action/orchestrate. It logs
+        # in before redirecting the collector, then fetches device-bound
+        # metadata and performs the control sweep through that same cloud
+        # session. This avoids both wasting the short-lived E500 proxy socket on
+        # authentication and creating a competing pre-proxy collector session.
         shadow_runtime = self._shadow_learning_runtime(coordinator)
         runner = provider_impl.control_discovery_runner()
+
+        async def _start_shadow_route() -> None:
+            self._set_control_discovery_progress(0.10, "connecting")
+            session = await coordinator.async_start_shadow_learning(
+                allow_ack_writes=False
+            )
+            self._shadow_learning_state["session"] = dict(session or {})
+            self._publish_shadow_learning_artifacts(coordinator)
+
         outcome = await runner.async_run(
             executor=self.hass.async_add_executor_job,
             collector_pn=str(coordinator.smartess_collector_pn or ""),
@@ -11744,6 +11973,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             on_identity=lambda identity: self._on_control_discovery_identity(
                 coordinator, identity
             ),
+            start_shadow_route=_start_shadow_route,
             on_learning=self._on_control_discovery_learning,
         )
         identity = outcome.identity
@@ -11781,31 +12011,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             # first such write, but a live change may already have been applied to the hardware.
             # Do not build or offer a partial overlay from a safety-aborted run; let the caller
             # perform the fail-closed stop/restore path and surface this as an error.
-            raise RuntimeError(
-                self._tr(
-                    "common.dynamic.control_discovery_leaked",
-                    "SAFETY STOP: the inverter dropped off the local proxy during the scan and a "
-                    "control command reached the real inverter before the scan was halted. CHECK "
-                    "THE INVERTER NOW (especially its output/on-off state). Run the scan only in "
-                    "HA-only mode until this is resolved.",
-                )
-            )
+            raise RuntimeError(CONTROL_DISCOVERY_FAILURE_SAFETY_STOP)
         if degraded_count > 0:
-            raise RuntimeError(
-                self._tr(
-                    "common.dynamic.control_discovery_degraded",
-                    "The temporary cloud connection dropped during the scan. The scan was "
-                    "stopped before adding controls. Please try again.",
-                )
-            )
+            raise RuntimeError(CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED)
         if planned_count > 0 and executed_count < planned_count:
-            raise RuntimeError(
-                self._tr(
-                    "common.dynamic.control_discovery_run_incomplete",
-                    "The device could not be fully checked this time. The temporary cloud "
-                    "connection was closed before the scan finished. Please try again.",
-                )
-            )
+            raise RuntimeError(CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE)
 
         self._set_control_discovery_progress(0.88, "building")
         correlation = result.get("correlation")
@@ -11914,6 +12124,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 else None
             ),
             "is_session_ready": lambda: self._shadow_learning_route_accepts_control(coordinator),
+            "wait_until_session_ready": lambda: (
+                self._async_wait_for_shadow_learning_control_route(coordinator)
+            ),
             "read_map_snapshot": (
                 shadow_runtime.read_map_snapshot
                 if shadow_runtime is not None
@@ -12085,11 +12298,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 errors={},
                 description_placeholders=self._control_discovery_placeholders(
                     coordinator,
-                    "common.dynamic.control_discovery_overview_intro",
-                    "Found {control_discovery_count} extra control(s) for this device — "
-                    "{control_discovery_new_count} new, "
-                    "{control_discovery_existing_count} already in Home Assistant. "
-                    "Continue to choose which new items to add.\n\n"
+                "common.dynamic.control_discovery_overview_intro",
+                    "Found {control_discovery_count} supported item(s): "
+                    "{control_discovery_new_count} new control(s), "
+                    "{control_discovery_existing_count} existing control(s), "
+                    "{control_discovery_new_read_count} new sensor(s), and "
+                    "{control_discovery_existing_read_count} existing sensor(s). "
+                    "Continue to review the results.\n\n"
                     "{control_discovery_overview}",
                     hint_placeholders=overview_placeholders,
                     extra=overview_placeholders,
@@ -12237,18 +12452,51 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         discovery = self._shadow_learning_state.get("discovery")
         return isinstance(discovery, dict) and str(discovery.get("status") or "") == "error"
 
-    def _control_discovery_error_detail(self) -> str:
-        """Return the best-available failure detail (discovery reason or last status).
+    @staticmethod
+    def _control_discovery_failure_reason(exc: Exception) -> str:
+        """Reduce internal exceptions to a closed user-facing reason set."""
 
-        Surfaced to the user on the result screen so a failed run / failed support
-        export is self-diagnosable instead of showing only a generic error.
-        """
+        reason = str(exc).strip()
+        if reason in {
+            CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED,
+            CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE,
+            CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
+        }:
+            return reason
+        return CONTROL_DISCOVERY_FAILURE_GENERIC
+
+    def _control_discovery_error_detail(self) -> str:
+        """Return a localized explanation without leaking internal exceptions."""
 
         discovery = self._shadow_learning_state.get("discovery")
         reason = str(discovery.get("reason") or "") if isinstance(discovery, dict) else ""
-        if not reason:
-            reason = str(self._shadow_learning_state.get("status") or "")
-        return reason.strip()
+        reason = reason.strip()
+        defaults = {
+            CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED: (
+                "The temporary cloud connection ended before all capabilities "
+                "could be checked. Home Assistant stopped safely and restored "
+                "the collector connection."
+            ),
+            CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE: (
+                "The device check ended before all planned capabilities were tested."
+            ),
+            CONTROL_DISCOVERY_FAILURE_SAFETY_STOP: (
+                "The safety check stopped the scan because a command may have "
+                "bypassed the local learning route. Check the inverter before trying again."
+            ),
+            CONTROL_DISCOVERY_FAILURE_GENERIC: (
+                "Home Assistant stopped safely and restored the collector connection."
+            ),
+        }
+        normalized = (
+            reason
+            if reason in defaults
+            else CONTROL_DISCOVERY_FAILURE_GENERIC
+        )
+        return self._tr(
+            f"common.dynamic.{normalized}",
+            defaults[normalized],
+        )
 
     def _control_discovery_already_supported_controls(self) -> list[dict[str, Any]]:
         """Return controls discovered but already supported by the base schema.
@@ -12339,7 +12587,15 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             lines.append(f"**{heading}**")
             for sensor in new_reads:
                 name = clean(self._control_discovery_read_sensor_label(sensor))
-                lines.append(f"- {name} — Sensor · Suggested on")
+                type_label = self._tr(
+                    "common.dynamic.control_discovery_overview_read_sensor_type",
+                    "Sensor",
+                )
+                suggested = self._tr(
+                    "common.dynamic.control_discovery_overview_read_sensor_suggested",
+                    "Suggested on",
+                )
+                lines.append(f"- {name} — {type_label} · {suggested}")
         if already_reads:
             if lines:
                 lines.append("")
@@ -12350,14 +12606,8 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             )
             lines.append(f"**{heading}**")
             for sensor in already_reads:
-                name = clean(
-                    sensor.get("field_name")
-                    or sensor.get("default_label")
-                    or sensor.get("title")
-                )
-                reason = clean(sensor.get("reason") or "")
-                suffix = f" · {reason}" if reason else ""
-                lines.append(f"- {name}{suffix}")
+                name = clean(self._control_discovery_read_sensor_label(sensor))
+                lines.append(f"- {name}")
         return "\n".join(lines)
 
     def _control_discovery_prior_selections(self) -> dict[str, dict[str, Any]]:
@@ -13295,6 +13545,68 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         # deliver the command over the real-server route and bypass our shadow.
         return route_status_indicates_control_write_ready(status.to_mapping())
 
+    async def _async_wait_for_shadow_learning_control_route(
+        self,
+        coordinator,
+    ) -> bool:
+        """Wait for one safe live shadow-route window before a cloud request."""
+
+        started_at = asyncio.get_running_loop().time()
+        deadline = (
+            started_at
+            + _SHADOW_CONTROL_ROUTE_WINDOW_WAIT
+        )
+        initial_status = self._shadow_learning_route_status(coordinator)
+        logger.warning(
+            "Shadow control route wait started running=%s collector=%s ingress=%s "
+            "activity=%s upstream=%s ready=%s upstream_error=%s",
+            initial_status.running,
+            initial_status.collector_connected,
+            initial_status.collector_protocol_ingress,
+            initial_status.route_protocol_activity,
+            initial_status.upstream_connected,
+            initial_status.ready,
+            bool(initial_status.upstream_error),
+        )
+        while asyncio.get_running_loop().time() < deadline:
+            if self._shadow_learning_route_accepts_control(coordinator):
+                logger.warning(
+                    "Shadow control route wait ready elapsed=%.3f",
+                    asyncio.get_running_loop().time() - started_at,
+                )
+                return True
+            status = self._shadow_learning_route_status(coordinator)
+            if not status.running or status.upstream_error:
+                logger.warning(
+                    "Shadow control route wait terminal elapsed=%.3f running=%s "
+                    "collector=%s ingress=%s activity=%s upstream=%s ready=%s "
+                    "upstream_error=%s",
+                    asyncio.get_running_loop().time() - started_at,
+                    status.running,
+                    status.collector_connected,
+                    status.collector_protocol_ingress,
+                    status.route_protocol_activity,
+                    status.upstream_connected,
+                    status.ready,
+                    bool(status.upstream_error),
+                )
+                return False
+            await asyncio.sleep(0.25)
+        status = self._shadow_learning_route_status(coordinator)
+        logger.warning(
+            "Shadow control route wait timeout elapsed=%.3f running=%s collector=%s "
+            "ingress=%s activity=%s upstream=%s ready=%s upstream_error=%s",
+            asyncio.get_running_loop().time() - started_at,
+            status.running,
+            status.collector_connected,
+            status.collector_protocol_ingress,
+            status.route_protocol_activity,
+            status.upstream_connected,
+            status.ready,
+            bool(status.upstream_error),
+        )
+        return False
+
     def _shadow_learning_placeholders(self, coordinator) -> dict[str, str]:
         state = dict(self._shadow_learning_state or {})
         preflight = dict(state.get("preflight") or {})
@@ -13387,7 +13699,9 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                 ),
             )
 
-        if not self._proxy_capture_menu_available(coordinator):
+        if not (
+            self._proxy_capture_available(coordinator)
+        ):
             return await self.async_step_connection()
 
         errors: dict[str, str] = {}
@@ -13395,12 +13709,24 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         touch_proxy_capture_lease = getattr(coordinator, "async_touch_proxy_capture_lease", None)
         if user_input is not None:
             action = str(user_input.get("proxy_capture_action") or "refresh").strip()
+            duration_minutes = user_input.get(
+                CONF_PROXY_CAPTURE_DURATION_MINUTES,
+                getattr(
+                    coordinator,
+                    "proxy_capture_configured_duration_minutes",
+                    self._config_entry.options.get(
+                        CONF_PROXY_CAPTURE_DURATION_MINUTES,
+                        DEFAULT_PROXY_CAPTURE_DURATION_MINUTES,
+                    ),
+                ),
+            )
             try:
                 if action == "start":
                     overview = coordinator.proxy_capture_overview
                     await coordinator.async_start_proxy_capture(
                         anonymized=True,
                         confirm_redirect=bool(getattr(overview, "redirect_required", False)),
+                        duration_minutes=duration_minutes,
                     )
                     self._proxy_capture_action_result = self._tr(
                         "common.dynamic.proxy_capture_action_started",
@@ -13408,6 +13734,13 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     )
                 elif action == PROXY_CAPTURE_ACTION_RESET_TIMER:
                     expires_at = ""
+                    set_duration = getattr(
+                        coordinator,
+                        "async_set_proxy_capture_duration_minutes",
+                        None,
+                    )
+                    if callable(set_duration):
+                        await set_duration(duration_minutes)
                     if touch_proxy_capture_lease is not None:
                         expires_at = str(await touch_proxy_capture_lease(extend=True) or "").strip()
                     if expires_at:
@@ -13435,6 +13768,11 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                         "Live log refreshed.",
                     )
             except Exception as exc:  # pragma: no cover - HA renders the error key.
+                logger.exception(
+                    "Cloud traffic capture action %s failed for entry %s",
+                    action,
+                    self.config_entry.entry_id,
+                )
                 if await self._handle_proxy_capture_action_error(coordinator, action, exc):
                     errors.clear()
                 else:
@@ -13578,6 +13916,17 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
                     vol.Required("proxy_capture_action", default=default_action): SelectSelector(
                         SelectSelectorConfig(options=options, mode=SelectSelectorMode.DROPDOWN)
                     ),
+                    vol.Required(
+                        CONF_PROXY_CAPTURE_DURATION_MINUTES,
+                        default=getattr(
+                            coordinator,
+                            "proxy_capture_display_duration_minutes",
+                            self._config_entry.options.get(
+                                CONF_PROXY_CAPTURE_DURATION_MINUTES,
+                                DEFAULT_PROXY_CAPTURE_DURATION_MINUTES,
+                            ),
+                        ),
+                    ): _PROXY_CAPTURE_DURATION_SELECTOR,
                 }
             ),
             errors=errors or {},
@@ -13937,44 +14286,39 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         return self._collector_query_response_text(response)
 
     async def _async_refresh_collector_wifi_status(self) -> None:
-        transport, session = await self._async_with_options_collector_session()
-        try:
-            current_ssid = await self._async_query_options_collector_text(session, SET_TARGET_SSID)
-            network_diagnostics = await self._async_query_options_collector_text(
-                session,
+        coordinator = self._coordinator()
+        query = getattr(coordinator, "async_query_collector_parameters", None)
+        if not callable(query):
+            raise RuntimeError("collector_local_management_not_supported")
+        values = await query(
+            (
+                SET_TARGET_SSID,
                 QUERY_NETWORK_DIAGNOSTICS,
+                QUERY_WIFI_SCAN_LIST,
             )
-            scan_text = await self._async_query_options_collector_text(session, QUERY_WIFI_SCAN_LIST)
-        finally:
-            await transport.stop()
+        )
+        current_ssid = str(values.get(SET_TARGET_SSID) or "")
+        network_diagnostics = str(values.get(QUERY_NETWORK_DIAGNOSTICS) or "")
+        scan_text = str(values.get(QUERY_WIFI_SCAN_LIST) or "")
 
         self._collector_wifi_current_ssid = current_ssid
         self._collector_wifi_network_diagnostics = network_diagnostics
         self._collector_wifi_networks = self._parse_collector_wifi_scan_response(scan_text)
 
     async def _async_apply_collector_wifi_settings(self, *, ssid: str, password: str) -> None:
-        transport, session = await self._async_with_options_collector_session()
-        try:
-            ssid_response = await session.set_collector(SET_TARGET_SSID, ssid)
-            if ssid_response.status != 0 or ssid_response.parameter != SET_TARGET_SSID:
-                raise RuntimeError(
-                    f"collector_set_failed:parameter={SET_TARGET_SSID}:status={ssid_response.status}"
-                )
-            password_response = await session.set_collector(SET_TARGET_PASSWORD, password)
-            if password_response.status != 0 or password_response.parameter != SET_TARGET_PASSWORD:
-                raise RuntimeError(
-                    f"collector_set_failed:parameter={SET_TARGET_PASSWORD}:status={password_response.status}"
-                )
-            readback = await session.query_collector(SET_TARGET_SSID)
-            if readback.code == 0:
-                self._collector_wifi_current_ssid = self._collector_query_response_text(readback)
-            apply_response = await session.set_collector(SET_REBOOT_OR_APPLY, "1")
-            if apply_response.status != 0 or apply_response.parameter != SET_REBOOT_OR_APPLY:
-                raise RuntimeError(
-                    f"collector_set_failed:parameter={SET_REBOOT_OR_APPLY}:status={apply_response.status}"
-                )
-        finally:
-            await transport.stop()
+        coordinator = self._coordinator()
+        writer = getattr(coordinator, "async_set_collector_wifi_credentials", None)
+        if not callable(writer):
+            raise RuntimeError("collector_local_management_not_supported")
+        self._collector_wifi_current_ssid = str(
+            await writer(
+                ssid=ssid,
+                password=password,
+                ssid_parameter=SET_TARGET_SSID,
+                password_parameter=SET_TARGET_PASSWORD,
+            )
+            or ""
+        )
 
     async def _async_refresh_collector_uart_status(self) -> None:
         transport, session = await self._async_with_options_collector_session()
@@ -14618,6 +14962,7 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
     def _diagnostics_placeholders(self) -> dict[str, str]:
         coordinator = self._coordinator()
         values = coordinator.data.values if coordinator is not None else {}
+        proxy_capture_download_url = self._fresh_proxy_capture_download_url(values)
         effective_owner_name = coordinator.effective_owner_name if coordinator is not None else ""
         effective_owner_key = coordinator.effective_owner_key if coordinator is not None else ""
         smartess_family_name = coordinator.smartess_family_name if coordinator is not None else ""
@@ -14716,20 +15061,18 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
             ),
             "proxy_trace_path": str(values.get("proxy_trace_path") or self._tr("common.dynamic.not_created_yet", "Not created yet")),
             "proxy_trace_manifest_path": str(values.get("proxy_trace_saved_result_path") or self._tr("common.dynamic.not_created_yet", "Not created yet")),
-            "proxy_trace_manifest_download_url": str(values.get("proxy_trace_saved_result_download_url") or ""),
+            "proxy_trace_manifest_download_url": proxy_capture_download_url,
             "proxy_trace_manifest_download_markdown": (
                 self._tr(
                     "common.dynamic.download_proxy_capture_result",
                     "[Download saved result]({url})",
-                    {"url": values.get("proxy_trace_saved_result_download_url") or ""},
+                    {"url": proxy_capture_download_url},
                 )
-                if values.get("proxy_trace_saved_result_download_url")
+                if proxy_capture_download_url
                 else self._tr("common.dynamic.not_available_yet", "Not available yet")
             ),
             "proxy_capture_saved_result_section": self._proxy_capture_saved_result_section(
-                saved_result_download_url=str(
-                    values.get("proxy_trace_saved_result_download_url") or ""
-                ).strip(),
+                saved_result_download_url=proxy_capture_download_url,
                 status=str(values.get("proxy_capture_status") or ""),
             ),
             "proxy_trace_line_count": str(values.get("proxy_trace_line_count") or 0),
@@ -14764,6 +15107,35 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         }
         placeholders.update(self._localized_support_workflow(values))
         return placeholders
+
+    def _fresh_proxy_capture_download_url(self, values: dict[str, Any]) -> str:
+        """Mint a fresh signed API URL each time the proxy form is rendered."""
+
+        bundle_path = values.get("proxy_trace_saved_result_path")
+        if type(bundle_path) is str and bundle_path == bundle_path.strip() and bundle_path:
+            filename = Path(bundle_path).name
+            entry_id = getattr(self._config_entry, "entry_id", "")
+            if (
+                type(entry_id) is str
+                and entry_id == entry_id.strip()
+                and entry_id
+                and filename.lower().endswith(".zip")
+            ):
+                with suppress(Exception):
+                    return sign_proxy_capture_download_url(
+                        self.hass,
+                        entry_id,
+                        filename,
+                    )
+
+        # Compatibility for a live coordinator that has not yet published the
+        # archive path. New captures always take the path branch above.
+        existing = values.get("proxy_trace_saved_result_download_url")
+        return (
+            existing.strip()
+            if type(existing) is str and existing == existing.strip()
+            else ""
+        )
 
     def _localized_proxy_capture_status_label(self, values: dict[str, Any]) -> str:
         status = str(values.get("proxy_capture_status") or "").strip()

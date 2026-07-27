@@ -292,7 +292,7 @@ class InitModuleTests(unittest.TestCase):
         self.assertNotIn("entry123_select_collector_operation_mode", unique_ids)
         self.assertIn("entry123_collector_onboarding_status", unique_ids)
         self.assertIn("entry123_collector_serial_baudrate", unique_ids)
-        self.assertIn("entry123_number_proxy_capture_duration_minutes", unique_ids)
+        self.assertNotIn("entry123_number_proxy_capture_duration_minutes", unique_ids)
         self.assertNotIn("entry123_select_control_mode", unique_ids)
         self.assertNotIn("entry123_text_collector_callback_endpoint", unique_ids)
 
@@ -355,7 +355,7 @@ class InitModuleTests(unittest.TestCase):
 
         self.assertIn("entry123_pv_power", unique_ids)
         self.assertIn("entry123_binary_sensor_fault_active", unique_ids)
-        self.assertIn("entry123_number_proxy_capture_duration_minutes", unique_ids)
+        self.assertNotIn("entry123_number_proxy_capture_duration_minutes", unique_ids)
         self.assertIn("entry123_select_turn_on_mode", unique_ids)
         self.assertNotIn("entry123_select_output_mode", unique_ids)
 
@@ -421,8 +421,6 @@ class InitModuleTests(unittest.TestCase):
                 "apply_collector_changes",
                 "rediscover_collector",
                 "reboot_collector",
-                "start_proxy_capture",
-                "stop_proxy_capture",
             ),
         )
 
@@ -437,8 +435,6 @@ class InitModuleTests(unittest.TestCase):
                 "apply_collector_changes",
                 "rediscover_collector",
                 "reboot_collector",
-                "start_proxy_capture",
-                "stop_proxy_capture",
             ),
         )
         self.assertEqual(
@@ -464,8 +460,6 @@ class InitModuleTests(unittest.TestCase):
                 "apply_collector_changes",
                 "rediscover_collector",
                 "reboot_collector",
-                "start_proxy_capture",
-                "stop_proxy_capture",
                 "sync_inverter_clock",
             ),
         )
@@ -482,8 +476,6 @@ class InitModuleTests(unittest.TestCase):
                 "apply_collector_changes",
                 "rediscover_collector",
                 "reboot_collector",
-                "start_proxy_capture",
-                "stop_proxy_capture",
                 "sync_inverter_clock",
             ),
         )
@@ -500,8 +492,6 @@ class InitModuleTests(unittest.TestCase):
                 "apply_collector_changes",
                 "rediscover_collector",
                 "reboot_collector",
-                "start_proxy_capture",
-                "stop_proxy_capture",
             ),
         )
         self.assertEqual(
@@ -568,11 +558,11 @@ class InitModuleTests(unittest.TestCase):
         self.assertIn("entry123_tool_create_support_package", unique_ids)
         self.assertIn("entry123_tool_apply_collector_changes", unique_ids)
         self.assertIn("entry123_tool_reboot_collector", unique_ids)
-        self.assertIn("entry123_tool_start_proxy_capture", unique_ids)
-        self.assertIn("entry123_tool_stop_proxy_capture", unique_ids)
+        self.assertNotIn("entry123_tool_start_proxy_capture", unique_ids)
+        self.assertNotIn("entry123_tool_stop_proxy_capture", unique_ids)
         self.assertIn("entry123_tool_sync_inverter_clock", unique_ids)
 
-    def test_current_runtime_default_enabled_unique_ids_skip_proxy_entities_when_collector_forbids_proxy(
+    def test_current_runtime_default_enabled_unique_ids_never_include_menu_only_proxy_entities(
         self,
     ) -> None:
         coordinator = types.SimpleNamespace(

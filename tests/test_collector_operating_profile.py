@@ -40,7 +40,7 @@ class CollectorOperatingProfileTests(unittest.TestCase):
             OPERATING_PROFILE_CLOUD_AND_HA,
         )
         self.assertTrue(profile.stable)
-        self.assertFalse(profile.endpoint_tools_allowed)
+        self.assertTrue(profile.cloud_tools_allowed)
 
     def test_managed_inbound_is_ha_only(self) -> None:
         profile = resolve_collector_operating_profile(
@@ -50,7 +50,7 @@ class CollectorOperatingProfileTests(unittest.TestCase):
 
         self.assertEqual(profile.profile, OPERATING_PROFILE_HA_ONLY)
         self.assertTrue(profile.stable)
-        self.assertTrue(profile.endpoint_tools_allowed)
+        self.assertFalse(profile.cloud_tools_allowed)
 
     def test_verified_user_managed_inbound_is_ha_only(self) -> None:
         profile = resolve_collector_operating_profile(
@@ -70,7 +70,7 @@ class CollectorOperatingProfileTests(unittest.TestCase):
 
         self.assertEqual(profile.profile, OPERATING_PROFILE_CUSTOM)
         self.assertFalse(profile.stable)
-        self.assertFalse(profile.endpoint_tools_allowed)
+        self.assertFalse(profile.cloud_tools_allowed)
 
     def test_callback_with_managed_endpoint_is_custom(self) -> None:
         profile = resolve_collector_operating_profile(
@@ -148,14 +148,14 @@ class CollectorOperatingProfileTests(unittest.TestCase):
                 with self.assertRaises(TypeError):
                     resolve_collector_operating_profile(**kwargs)
 
-    def test_endpoint_tool_permission_is_a_read_only_profile_projection(self) -> None:
+    def test_cloud_tool_permission_is_a_read_only_profile_projection(self) -> None:
         profile = resolve_collector_operating_profile(
-            connection_strategy=CONNECTION_STRATEGY_INBOUND,
-            endpoint_control_policy=ENDPOINT_CONTROL_INTEGRATION_MANAGED,
+            connection_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+            endpoint_control_policy=ENDPOINT_CONTROL_EXTERNAL,
         )
 
-        self.assertTrue(profile.endpoint_tools_allowed)
-        self.assertNotIn("endpoint_tools_allowed", profile.__dataclass_fields__)
+        self.assertTrue(profile.cloud_tools_allowed)
+        self.assertNotIn("cloud_tools_allowed", profile.__dataclass_fields__)
 
     def test_direct_constructor_rejects_cross_field_contradictions(self) -> None:
         valid = CollectorOperatingProfile(
@@ -241,7 +241,7 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         self.assertIn("_stage_connection_strategy_transition", connection_source or "")
         self.assertIn("async_step_strategy_transition", connection_source or "")
 
-    def test_proxy_menu_uses_one_runtime_readiness_authority(self) -> None:
+    def test_cloud_tools_use_one_shared_menu_path(self) -> None:
         path = (
             REPO_ROOT
             / "custom_components"
@@ -266,24 +266,28 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
             )
             return ast.get_source_segment(source, method) or ""
 
-        availability = _method_source("_proxy_capture_menu_available")
+        proxy_availability = _method_source("_proxy_capture_available")
+        cloud_tools_availability = _method_source("_cloud_tools_menu_available")
         init_step = _method_source("async_step_init")
+        cloud_tools_step = _method_source("async_step_cloud_tools")
         proxy_step = _method_source("async_step_proxy_capture")
+        shadow_step = _method_source("async_step_shadow_learning")
         diagnostics_menu = _method_source("_diagnostics_menu_options")
 
-        self.assertIn("proxy_capture_overview", availability)
-        self.assertIn("can_start", availability)
-        self.assertIn("can_stop", availability)
-        self.assertIn("critical_phase", availability)
-        for duplicate_authority in (
-            "_collector_operating_profile",
-            "_collector_capabilities",
-            "connection_strategy",
-            "endpoint_control_policy",
-        ):
-            self.assertNotIn(duplicate_authority, availability)
-        self.assertIn("_proxy_capture_menu_available", init_step)
-        self.assertIn("_proxy_capture_menu_available", proxy_step)
+        self.assertIn("proxy_capture_overview", proxy_availability)
+        self.assertIn("can_start", proxy_availability)
+        self.assertIn("can_stop", proxy_availability)
+        self.assertIn("critical_phase", proxy_availability)
+        self.assertIn("cloud_tools_allowed", cloud_tools_availability)
+        self.assertIn("_proxy_capture_available", cloud_tools_availability)
+        self.assertIn("_shadow_learning_lifecycle_active", cloud_tools_availability)
+        self.assertIn('"cloud_tools"', init_step)
+        self.assertNotIn('"proxy_capture"', init_step)
+        self.assertNotIn('"shadow_learning"', init_step)
+        self.assertIn('"proxy_capture"', cloud_tools_step)
+        self.assertIn('"shadow_learning"', cloud_tools_step)
+        self.assertIn("_proxy_capture_available", proxy_step)
+        self.assertIn("cloud_tools_allowed", shadow_step)
         self.assertNotIn('"proxy_capture"', diagnostics_menu)
 
     def test_runtime_route_never_re_reads_legacy_operation_mode(self) -> None:
@@ -337,7 +341,7 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         self.assertNotIn("collector_operation_mode_note", source)
         self.assertIn("self._collector_endpoint_bind_applied", source)
 
-    def test_endpoint_tools_share_one_profile_gate_without_blocking_cleanup(self) -> None:
+    def test_cloud_tools_share_one_profile_gate_without_blocking_cleanup(self) -> None:
         coordinator_path = (
             REPO_ROOT
             / "custom_components"
@@ -366,17 +370,45 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         shadow_stop = _async_method_source("async_stop_shadow_learning")
         proxy_start = _async_method_source("async_start_proxy_capture")
         proxy_stop = _async_method_source("async_stop_proxy_capture")
+        endpoint_context = _async_method_source(
+            "_async_prepare_cloud_tool_endpoint_context"
+        )
 
-        self.assertIn("collector_endpoint_tools_allowed", shadow_start)
-        self.assertNotIn("async_set_collector_server_endpoint", shadow_start)
+        self.assertIn("collector_cloud_tools_allowed", shadow_start)
+        self.assertIn("async_set_collector_server_endpoint", shadow_start)
+        self.assertIn("restore_required", shadow_start)
         self.assertIn("proxy_capture_overview", proxy_start)
-        self.assertNotIn("collector_endpoint_tools_allowed", shadow_stop)
-        self.assertNotIn("collector_endpoint_tools_allowed", proxy_stop)
+        self.assertEqual(
+            shadow_start.count("_async_prepare_cloud_tool_endpoint_context"),
+            1,
+        )
+        self.assertEqual(
+            proxy_start.count("_async_prepare_cloud_tool_endpoint_context"),
+            1,
+        )
+        self.assertIn(
+            "collector_callback_endpoint=endpoint_context.target_endpoint",
+            shadow_start,
+        )
+        self.assertNotIn(
+            "collector_callback_endpoint=self.proxy_capture_target_endpoint",
+            shadow_start,
+        )
+        self.assertIn(
+            "async_get_collector_server_endpoint_state",
+            endpoint_context,
+        )
+        self.assertNotIn(
+            "_async_read_live_collector_server_endpoint",
+            endpoint_context,
+        )
+        self.assertNotIn("collector_cloud_tools_allowed", shadow_stop)
+        self.assertNotIn("collector_cloud_tools_allowed", proxy_stop)
         self.assertEqual(
             source.count(
-                "endpoint_tools_allowed=self.collector_endpoint_tools_allowed"
+                "cloud_tools_allowed=self.collector_cloud_tools_allowed"
             ),
-            3,
+            4,
         )
 
 

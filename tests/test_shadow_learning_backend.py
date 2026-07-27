@@ -762,6 +762,7 @@ class ShadowLearningBackendTests(unittest.TestCase):
             ):
                 await manager.async_start_shadow_learning_route(
                     collector_ip="192.168.1.15",
+                    expected_session_protocol="at_text",
                     listen_port=502,
                     upstream_host="cloud.example",
                     upstream_port=18899,
@@ -826,6 +827,7 @@ class ShadowLearningBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "proxy_capture_route_running"):
                 await manager.async_start_shadow_learning_route(
                     collector_ip="192.168.1.15",
+                    expected_session_protocol="at_text",
                     listen_port=502,
                     upstream_host="cloud.example",
                     upstream_port=18899,
@@ -865,6 +867,7 @@ class ShadowLearningBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "shadow_learning_route_running"):
                 await manager.async_start_proxy_capture_route(
                     collector_ip="192.168.1.15",
+                    expected_session_protocol="at_text",
                     listen_port=502,
                     upstream_host="cloud.example",
                     upstream_port=18899,

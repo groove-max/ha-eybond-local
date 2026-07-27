@@ -6,6 +6,37 @@ from dataclasses import dataclass
 
 from .proxy_trace import ProxyCaptureSessionState
 
+PROXY_WIRE_TRANSPARENT = "transparent"
+
+
+def resolve_proxy_wire_mode(
+    collector_session_protocol: object,
+    cloud_session_protocol: object,
+) -> str:
+    """Return the one supported proxy wire mode, or ``""`` fail-closed."""
+
+    if type(collector_session_protocol) is not str or type(
+        cloud_session_protocol
+    ) is not str:
+        return ""
+    collector = collector_session_protocol.strip().lower()
+    cloud = cloud_session_protocol.strip().lower()
+    if (
+        not collector
+        or not cloud
+        or collector_session_protocol != collector_session_protocol.strip()
+        or cloud_session_protocol != cloud_session_protocol.strip()
+    ):
+        return ""
+    # The collector's current Home Assistant management session does not define
+    # the wire used by the NEW cloud session created after endpoint redirect.
+    # That post-redirect session speaks the provider's cloud protocol and must
+    # remain byte-transparent.  The current collector protocol is validated
+    # above only as required live authority for changing the endpoint.
+    if cloud in {"at_text", "eybond_framed"}:
+        return PROXY_WIRE_TRANSPARENT
+    return ""
+
 
 @dataclass(frozen=True, slots=True)
 class ProxyCaptureOverview:
@@ -34,8 +65,10 @@ def build_proxy_capture_overview(
     collector_control_allowed: bool = True,
     collector_proxy_capture_allowed: bool = True,
     collector_connected: bool,
-    endpoint_tools_allowed: bool,
+    cloud_tools_allowed: bool,
     collector_cloud_family: str = "",
+    collector_session_protocol: str = "",
+    cloud_session_protocol: str = "",
     current_endpoint: str,
     upstream_endpoint: str = "",
     target_endpoint: str,
@@ -49,9 +82,15 @@ def build_proxy_capture_overview(
     normalized_upstream = str(upstream_endpoint or "").strip()
     normalized_target = str(target_endpoint or "").strip()
     normalized_family = str(collector_cloud_family or "").strip().lower()
+    normalized_collector_protocol = str(collector_session_protocol or "").strip().lower()
+    normalized_cloud_protocol = str(cloud_session_protocol or "").strip().lower()
+    wire_mode = resolve_proxy_wire_mode(
+        collector_session_protocol,
+        cloud_session_protocol,
+    )
     normalized_trace_path = str(getattr(active_state, "trace_path", "") or latest_trace_path or "").strip()
     normalized_manifest_path = "" if active_state is not None else str(latest_manifest_path or "").strip()
-    if type(endpoint_tools_allowed) is not bool:
+    if type(cloud_tools_allowed) is not bool:
         raise TypeError("proxy_capture_profile_gate_not_bool")
 
     if active_state is not None:
@@ -75,15 +114,15 @@ def build_proxy_capture_overview(
             latest_manifest_path=normalized_manifest_path,
         )
 
-    if not endpoint_tools_allowed:
+    if not cloud_tools_allowed:
         return ProxyCaptureOverview(
             status="blocked",
             status_label=_status_label("blocked"),
             summary=(
-                "Switch the collector to Home Assistant only before starting "
-                "traffic capture."
+                "Switch the collector to Cloud + Home Assistant before starting "
+                "a cloud traffic operation."
             ),
-            blocking_reason="operating_profile_requires_ha_only",
+            blocking_reason="operating_profile_requires_cloud_and_ha",
             can_start=False,
             can_stop=False,
             critical_phase=False,
@@ -99,6 +138,39 @@ def build_proxy_capture_overview(
 
     redirect_required = bool(normalized_current and normalized_target and normalized_current != normalized_target)
     masked_endpoint = normalized_current or normalized_target
+
+    # The route is deliberately byte-transparent. Its wire is the NEW cloud
+    # session created by endpoint redirect, not the pre-existing Home Assistant
+    # management session. A known cloud protocol is therefore sufficient; the
+    # listener reservation excludes fresh sockets of the wrong wire shape.
+    if not wire_mode and (
+        normalized_collector_protocol or normalized_cloud_protocol
+    ):
+        reason = (
+            "transparent_wire_incompatible"
+            if normalized_collector_protocol and normalized_cloud_protocol
+            else "transparent_wire_unavailable"
+        )
+        return ProxyCaptureOverview(
+            status="blocked",
+            status_label=_status_label("blocked"),
+            summary=(
+                "Transparent capture is unavailable because the collector's "
+                "cloud session protocol is not known."
+            ),
+            blocking_reason=reason,
+            can_start=False,
+            can_stop=False,
+            critical_phase=False,
+            redirect_required=redirect_required,
+            collector_connected=collector_connected,
+            current_endpoint=normalized_current,
+            upstream_endpoint=normalized_upstream,
+            target_endpoint=normalized_target,
+            masked_endpoint=masked_endpoint,
+            latest_trace_path=normalized_trace_path,
+            latest_manifest_path=normalized_manifest_path,
+        )
 
     if not normalized_target:
         return ProxyCaptureOverview(
@@ -142,7 +214,7 @@ def build_proxy_capture_overview(
         return ProxyCaptureOverview(
             status="blocked",
             status_label=_status_label("blocked"),
-            summary="This collector has no SmartESS cloud callback side, so proxy capture is not available.",
+            summary="This collector has no supported cloud callback side, so proxy capture is not available.",
             blocking_reason="collector_proxy_capture_unavailable",
             can_start=False,
             can_stop=False,

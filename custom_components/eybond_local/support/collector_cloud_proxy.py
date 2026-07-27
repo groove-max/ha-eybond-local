@@ -19,11 +19,15 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from custom_components.eybond_local.collector.protocol import (  # noqa: E402
+    FC_QUERY_COLLECTOR,
     FC_SET_COLLECTOR,
     HEADER_SIZE,
     TIDCounter,
     build_collector_request,
     decode_header,
+)
+from custom_components.eybond_local.connection.session_registry import (  # noqa: E402
+    pn_is_same_identity,
 )
 from custom_components.eybond_local.collector.discovery import DiscoveryAnnouncer  # noqa: E402
 from custom_components.eybond_local.collector.at import (  # noqa: E402
@@ -40,6 +44,9 @@ from custom_components.eybond_local.collector.smartess_local import (  # noqa: E
 from custom_components.eybond_local.collector_endpoint import (  # noqa: E402
     inspect_collector_server_endpoint,
     normalize_collector_server_endpoint,
+)
+from custom_components.eybond_local.support.cloud_session_wire import (  # noqa: E402
+    consume_cloud_message,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -118,6 +125,9 @@ class SessionObservation:
     collector: ObservedCollectorAddress
     saw_at_traffic: bool = False
     pending_masked_endpoint_response: bool = False
+    collector_pn: str = ""
+    identity_source: str = ""
+    operational_activity: bool = False
 
 
 class AtChunkProxyFilter:
@@ -128,11 +138,13 @@ class AtChunkProxyFilter:
         remote: str,
         observed: SessionObservation,
         masked_endpoint: str = "",
+        expected_collector_pn: str = "",
     ) -> None:
         self._direction = direction
         self._remote = remote
         self._observed = observed
         self._masked_endpoint = str(masked_endpoint or "").strip()
+        self._expected_collector_pn = str(expected_collector_pn or "").strip()
         self._buffer = bytearray()
 
     def feed(self, chunk: bytes) -> tuple[bytes, list[dict[str, object]]]:
@@ -184,6 +196,19 @@ class AtChunkProxyFilter:
             return line, None
 
         self._observed.saw_at_traffic = True
+        if response.command == "DTUPN" and response.value:
+            observed_pn = str(response.value).strip()
+            self._observed.collector_pn = observed_pn
+            self._observed.identity_source = "at_dtupn"
+            return (
+                line,
+                _proxy_identity_event(
+                    expected_pn=self._expected_collector_pn,
+                    observed_pn=observed_pn,
+                    identity_source="at_dtupn",
+                    remote=self._remote,
+                ),
+            )
         if not self._observed.pending_masked_endpoint_response:
             return line, None
 
@@ -229,6 +254,54 @@ def _safe_ascii(data: bytes) -> str:
 
 def _looks_like_at_traffic(chunk: bytes) -> bool:
     return chunk.lstrip().startswith(b"AT+")
+
+
+def _is_identity_exchange_chunk(chunk: bytes) -> bool:
+    """Return whether an AT chunk is only the cloud identity handshake."""
+
+    lines = tuple(line.strip() for line in chunk.splitlines() if line.strip())
+    if not lines:
+        return False
+    return all(
+        line == b"AT+DTUPN?"
+        or line.startswith((b"AT+DTUPN:", b"AT+DTUPN="))
+        for line in lines
+    )
+
+
+def _proxy_identity_event(
+    *,
+    expected_pn: str,
+    observed_pn: str,
+    identity_source: str,
+    remote: str,
+) -> dict[str, object]:
+    """Describe identity learned from the real collector/cloud exchange."""
+
+    return {
+        "kind": "proxy_identity_observed",
+        "timestamp": _utc_timestamp(),
+        "remote": remote,
+        "collector_pn": observed_pn,
+        "identity_source": identity_source,
+        "identity_verified": bool(
+            expected_pn and pn_is_same_identity(expected_pn, observed_pn)
+        ),
+    }
+
+
+def _fc2_identity_from_record(record: FrameRecord) -> str:
+    """Return a full PN from one FC=2 parameter-2 response."""
+
+    if record.fcode != FC_QUERY_COLLECTOR:
+        return ""
+    try:
+        payload = bytes.fromhex(record.payload_hex)
+    except ValueError:
+        return ""
+    if len(payload) < 3 or payload[1] != 2:
+        return ""
+    return payload[2:].decode("ascii", errors="ignore").strip("\x00").strip()
 
 
 def build_restore_at_commands(
@@ -437,6 +510,7 @@ async def _pipe(
         writer=frame_writer,
         frame_callback=frame_callback,
     )
+    exit_reason = "eof"
     try:
         while True:
             chunk = await reader.read(4096)
@@ -453,20 +527,38 @@ async def _pipe(
                     "chunk_ascii": _safe_ascii(chunk),
                 }
             )
-            if chunk_callback is not None:
-                callback_result = chunk_callback(chunk)
-                if callback_result is not None:
-                    await callback_result
             await extractor.feed(chunk)
             forwarded = chunk
             if chunk_filter is not None:
                 forwarded, events = chunk_filter.feed(chunk)
                 for event in events:
                     await frame_writer.write(event)
+            # Run observation callbacks after both parsers consumed the chunk.
+            # This distinguishes a pure identity exchange from useful traffic
+            # even when TCP coalesces DTUPN and the next command into one read.
+            if chunk_callback is not None:
+                callback_result = chunk_callback(chunk)
+                if callback_result is not None:
+                    await callback_result
             if forwarded:
                 writer.write(forwarded)
                 await writer.drain()
+    except asyncio.CancelledError:
+        exit_reason = "cancelled"
+        raise
+    except Exception as exc:
+        exit_reason = f"{type(exc).__name__}: {exc}"
+        raise
     finally:
+        await frame_writer.write(
+            {
+                "kind": "pipe_ended",
+                "timestamp": _utc_timestamp(),
+                "direction": direction,
+                "remote": remote,
+                "reason": exit_reason,
+            }
+        )
         await extractor.flush_tail()
         if chunk_filter is not None:
             tail = chunk_filter.flush()
@@ -745,6 +837,12 @@ async def _handle_client(
     restore_after: float,
     restore_at_followup: str,
     restore_trigger_file: Path | None,
+    expected_collector_pn: str = "",
+    upstream_connection: tuple[
+        asyncio.StreamReader,
+        asyncio.StreamWriter,
+    ]
+    | None = None,
 ) -> None:
     client_peer = client_writer.get_extra_info("peername") or ("", 0)
     client_ip = client_peer[0] or ""
@@ -762,7 +860,13 @@ async def _handle_client(
     )
 
     try:
-        upstream_reader, upstream_writer = await asyncio.open_connection(upstream_host, upstream_port)
+        if upstream_connection is None:
+            upstream_reader, upstream_writer = await asyncio.open_connection(
+                upstream_host,
+                upstream_port,
+            )
+        else:
+            upstream_reader, upstream_writer = upstream_connection
     except Exception as exc:
         await frame_writer.write(
             {
@@ -786,6 +890,7 @@ async def _handle_client(
         remote=remote_label,
         observed=observed,
         masked_endpoint=masked_endpoint,
+        expected_collector_pn=expected_collector_pn,
     )
     cloud_at_filter = AtChunkProxyFilter(
         direction="cloud_to_collector",
@@ -793,14 +898,70 @@ async def _handle_client(
         observed=observed,
         masked_endpoint=masked_endpoint,
     )
+    cloud_data_buffer = bytearray()
+    cloud_requested_inverter_data = False
 
     def _remember_chunk_kind(chunk: bytes) -> None:
         if _looks_like_at_traffic(chunk):
             observed.saw_at_traffic = True
 
-    def _remember_collector_address(record: FrameRecord) -> None:
+    async def _remember_collector_chunk(chunk: bytes) -> None:
+        _remember_chunk_kind(chunk)
+        if (
+            cloud_requested_inverter_data
+            and not observed.operational_activity
+            and chunk
+            and not _looks_like_at_traffic(chunk)
+        ):
+            await _remember_operational_activity()
+
+    async def _remember_cloud_chunk(chunk: bytes) -> None:
+        nonlocal cloud_requested_inverter_data
+        _remember_chunk_kind(chunk)
+        cloud_data_buffer.extend(chunk)
+        while cloud_data_buffer:
+            try:
+                message = consume_cloud_message(cloud_data_buffer)
+            except Exception:
+                # Observation must never alter the byte-transparent relay.
+                cloud_data_buffer.clear()
+                return
+            if message is None:
+                if len(cloud_data_buffer) > 8192:
+                    cloud_data_buffer.clear()
+                return
+            kind, _payload = message
+            if kind != "at":
+                cloud_requested_inverter_data = True
+
+    async def _remember_operational_activity() -> None:
+        if observed.operational_activity or not observed.collector_pn:
+            return
+        observed.operational_activity = True
+        await frame_writer.write(
+            {
+                "kind": "proxy_operational_activity",
+                "timestamp": _utc_timestamp(),
+                "remote": remote_label,
+            }
+        )
+
+    async def _remember_collector_address(record: FrameRecord) -> None:
         observed.collector.devcode = record.devcode
         observed.collector.collector_addr = record.devaddr
+        observed_pn = _fc2_identity_from_record(record)
+        if not observed_pn:
+            return
+        observed.collector_pn = observed_pn
+        observed.identity_source = "fc2_parameter_2"
+        await frame_writer.write(
+            _proxy_identity_event(
+                expected_pn=expected_collector_pn,
+                observed_pn=observed_pn,
+                identity_source="fc2_parameter_2",
+                remote=remote_label,
+            )
+        )
 
     collector_task = asyncio.create_task(
         _pipe(
@@ -809,7 +970,7 @@ async def _handle_client(
             direction="collector_to_cloud",
             remote=remote_label,
             frame_writer=frame_writer,
-            chunk_callback=_remember_chunk_kind,
+            chunk_callback=_remember_collector_chunk,
             frame_callback=_remember_collector_address,
             chunk_filter=collector_at_filter,
             close_writer_on_exit=restore_target is None,
@@ -822,6 +983,7 @@ async def _handle_client(
             direction="cloud_to_collector",
             remote=remote_label,
             frame_writer=frame_writer,
+            chunk_callback=_remember_cloud_chunk,
             chunk_filter=cloud_at_filter,
             close_writer_on_exit=restore_target is None,
         )
@@ -974,6 +1136,12 @@ async def handle_proxy_client(
     restore_after: float,
     restore_at_followup: str,
     restore_trigger_file: Path | None,
+    expected_collector_pn: str = "",
+    upstream_connection: tuple[
+        asyncio.StreamReader,
+        asyncio.StreamWriter,
+    ]
+    | None = None,
 ) -> None:
     """Public compatibility wrapper for the in-process proxy session helper."""
 
@@ -987,6 +1155,8 @@ async def handle_proxy_client(
         restore_after=restore_after,
         restore_at_followup=restore_at_followup,
         restore_trigger_file=restore_trigger_file,
+        expected_collector_pn=expected_collector_pn,
+        upstream_connection=upstream_connection,
     )
 
 

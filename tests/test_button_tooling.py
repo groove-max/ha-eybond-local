@@ -222,8 +222,8 @@ class ToolingButtonTests(unittest.TestCase):
         self.assertTrue(specs["rediscover_collector"].enabled_default)
         self.assertTrue(specs["reboot_collector"].enabled_default)
         self.assertNotIn("rollback_collector_server_endpoint", specs)
-        self.assertTrue(specs["start_proxy_capture"].enabled_default)
-        self.assertTrue(specs["stop_proxy_capture"].enabled_default)
+        self.assertNotIn("start_proxy_capture", specs)
+        self.assertNotIn("stop_proxy_capture", specs)
         self.assertEqual(specs["apply_collector_changes"].entity_category, "diagnostic")
 
     def test_collector_only_runtime_skips_metadata_draft_buttons(self) -> None:

@@ -102,6 +102,8 @@ class RuntimeManager(Protocol):
         endpoint: str,
         *,
         apply_changes: bool = True,
+        timeout: float = 5.0,
+        require_heartbeat: bool = True,
     ) -> dict[str, object]:
         ...
 
@@ -126,7 +128,8 @@ class RuntimeManager(Protocol):
         entry_id: str = "",
         collector_ip: str,
         collector_pn: str = "",
-        collector_session_protocol: str = "",
+        expected_session_protocol: str = "",
+        proxy_wire_mode: str = "transparent",
         listen_port: int,
         upstream_host: str,
         upstream_port: int,
@@ -156,7 +159,7 @@ class RuntimeManager(Protocol):
         entry_id: str = "",
         collector_ip: str,
         collector_pn: str = "",
-        collector_session_protocol: str = "",
+        expected_session_protocol: str = "",
         listen_port: int,
         upstream_host: str,
         upstream_port: int,
@@ -228,7 +231,28 @@ class RuntimeManager(Protocol):
     ) -> dict[str, object]:
         ...
 
-    async def async_get_collector_server_endpoint_state(self) -> dict[str, object]:
+    async def async_get_collector_server_endpoint_state(
+        self,
+        *,
+        timeout: float = 5.0,
+        require_heartbeat: bool = True,
+    ) -> dict[str, object]:
+        ...
+
+    async def async_query_collector_parameters(
+        self,
+        parameters: tuple[int, ...],
+    ) -> dict[int, str]:
+        ...
+
+    async def async_set_collector_wifi_credentials(
+        self,
+        *,
+        ssid: str,
+        password: str,
+        ssid_parameter: int,
+        password_parameter: int,
+    ) -> str:
         ...
 
     def collector_management_capabilities(self) -> Any:

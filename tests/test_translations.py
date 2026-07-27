@@ -37,6 +37,13 @@ RECOVERY_FAIL_KEYS = (
 # sentence embedded in config_flow.py.
 IDENTITY_FAIL_KEYS = ("manual_probe_callback_session_silent",)
 
+CONTROL_DISCOVERY_FAILURE_KEYS = (
+    "control_discovery_route_dropped",
+    "control_discovery_run_incomplete",
+    "control_discovery_safety_stop",
+    "control_discovery_failure_generic",
+)
+
 
 class TranslationShapeTests(unittest.TestCase):
     def test_option_flow_errors_are_declared_at_options_error_level(self) -> None:
@@ -89,7 +96,13 @@ class TranslationShapeTests(unittest.TestCase):
                 options = payload["options"]
                 product_strings = (
                     options["step"]["init"]["menu_options"]["connection"],
-                    options["step"]["init"]["menu_options"]["proxy_capture"],
+                    options["step"]["init"]["menu_options"]["cloud_tools"],
+                    options["step"]["cloud_tools"]["menu_options"][
+                        "proxy_capture"
+                    ],
+                    options["step"]["cloud_tools"]["menu_options"][
+                        "shadow_learning"
+                    ],
                     options["step"]["connection"]["title"],
                     options["step"]["connection"]["data_description"][
                         "connection_strategy"
@@ -172,6 +185,25 @@ class RecoveryFailureLocalizationTests(unittest.TestCase):
                         f"extra={sorted(keys - reference)}"
                     ),
                 )
+
+    def test_control_discovery_failures_are_localized_in_every_bundle(self) -> None:
+        rendered: dict[str, dict[str, str]] = {}
+        for path in FLOW_TRANSLATION_FILES:
+            dynamic = self._dynamic(path)
+            rendered[path.stem] = {}
+            for key in CONTROL_DISCOVERY_FAILURE_KEYS:
+                with self.subTest(path=path.name, key=key):
+                    value = dynamic.get(key)
+                    self.assertIsInstance(value, str)
+                    self.assertTrue(value.strip())
+                    rendered[path.stem][key] = value
+
+        for key in CONTROL_DISCOVERY_FAILURE_KEYS:
+            self.assertEqual(
+                len({rendered[language][key] for language in ("en", "ru", "uk")}),
+                3,
+                f"{key} silently falls back to one language",
+            )
 
     def _load_bundle(self, language: str) -> dict:
         # The REAL loader every flow uses -- not a hand-built dict.

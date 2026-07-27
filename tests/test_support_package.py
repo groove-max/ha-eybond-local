@@ -30,7 +30,10 @@ def _smg_marker_payload(*, variant_key: str = "", profile_name: str = ""):
     return marker.as_payload() if marker is not None else None
 from custom_components.eybond_local.support.download import (
     async_register_support_package_download_view,
+    proxy_capture_authenticated_download_url,
+    resolve_proxy_capture_download_path,
     resolve_support_package_download_path,
+    sign_proxy_capture_download_url,
     sign_support_package_download_url,
     support_package_authenticated_download_url,
     support_package_download_request_allowed,
@@ -58,6 +61,64 @@ class SupportPackageTests(unittest.TestCase):
             self.assertEqual(
                 sign_support_package_download_url(object(), "entry123"),
                 "/api/eybond_local/support_package/entry123?authSig=signed",
+            )
+
+    def test_authenticated_proxy_capture_download_url_is_entry_scoped(self) -> None:
+        self.assertEqual(
+            proxy_capture_authenticated_download_url(
+                "entry123",
+                "entry123_20260725T234645357268Z.zip",
+            ),
+            (
+                "/api/eybond_local/proxy_capture/entry123/"
+                "entry123_20260725T234645357268Z.zip"
+            ),
+        )
+
+    def test_signed_proxy_capture_download_url_uses_ha_signed_path(self) -> None:
+        auth_module = types.ModuleType("homeassistant.components.http.auth")
+        auth_module.async_sign_path = (
+            lambda _hass, path, _expiration: f"{path}?authSig=signed"
+        )
+
+        with patch.dict(sys.modules, {"homeassistant.components.http.auth": auth_module}):
+            self.assertEqual(
+                sign_proxy_capture_download_url(
+                    object(),
+                    "entry123",
+                    "entry123_20260725T234645357268Z.zip",
+                ),
+                (
+                    "/api/eybond_local/proxy_capture/entry123/"
+                    "entry123_20260725T234645357268Z.zip?authSig=signed"
+                ),
+            )
+
+    def test_signed_proxy_capture_download_url_is_absolute_for_frontend_navigation(
+        self,
+    ) -> None:
+        auth_module = types.ModuleType("homeassistant.components.http.auth")
+        auth_module.async_sign_path = (
+            lambda _hass, path, _expiration: f"{path}?authSig=signed"
+        )
+        hass = types.SimpleNamespace(
+            config=types.SimpleNamespace(
+                external_url="https://ha.example.test",
+                internal_url="http://ha.local:8123",
+            )
+        )
+
+        with patch.dict(sys.modules, {"homeassistant.components.http.auth": auth_module}):
+            self.assertEqual(
+                sign_proxy_capture_download_url(
+                    hass,
+                    "entry123",
+                    "entry123_20260725T234645357268Z.zip",
+                ),
+                (
+                    "https://ha.example.test/api/eybond_local/proxy_capture/"
+                    "entry123/entry123_20260725T234645357268Z.zip?authSig=signed"
+                ),
             )
 
     def test_signed_navigation_and_admin_api_download_are_allowed(self) -> None:
@@ -457,6 +518,39 @@ class SupportPackageTests(unittest.TestCase):
                         config_dir=config_dir,
                         entry_id="entry123",
                         coordinator=coordinator,
+                    )
+                )
+
+    def test_resolves_only_entry_owned_proxy_capture_archives(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            proxy_root = config_dir / "eybond_local" / "proxy_traces"
+            proxy_root.mkdir(parents=True)
+            filename = "entry123_20260725T234645357268Z.zip"
+            archive_path = proxy_root / filename
+            archive_path.write_bytes(b"zip")
+
+            self.assertEqual(
+                resolve_proxy_capture_download_path(
+                    config_dir=config_dir,
+                    entry_id="entry123",
+                    filename=filename,
+                ),
+                archive_path.resolve(),
+            )
+
+            for unsafe in (
+                "../entry123_20260725T234645357268Z.zip",
+                "other_20260725T234645357268Z.zip",
+                "entry123_20260725T234645357268Z.json",
+                " entry123_20260725T234645357268Z.zip",
+                object(),
+            ):
+                self.assertIsNone(
+                    resolve_proxy_capture_download_path(
+                        config_dir=config_dir,
+                        entry_id="entry123",
+                        filename=unsafe,
                     )
                 )
 

@@ -1708,6 +1708,34 @@ class _CollectorSessionInventoryEntry:
         return result
 
 
+@dataclass(frozen=True, slots=True)
+class _ExclusiveCollectorRouteReservation:
+    """One temporary route that must win over normal runtime activation."""
+
+    collector_ip: str
+    collector_pn: str
+    baseline_session_ids: frozenset[str]
+    transparent: bool
+    expected_session_protocol: str
+
+
+def _transparent_route_accepts_protocol_shape(
+    expected_session_protocol: str,
+    protocol_shape: str,
+) -> bool:
+    """Return whether one fresh socket may carry the expected cloud wire."""
+
+    expected = str(expected_session_protocol or "").strip().lower()
+    observed = str(protocol_shape or "").strip().lower() or "unknown"
+    if expected == "at_text":
+        # AT cloud sessions may be silent until the cloud sends its first
+        # command, or start directly with raw inverter bytes.
+        return observed in {"unknown", "at_text", "raw_tcp"}
+    if expected == "eybond_framed":
+        return observed in {"unknown", "eybond_framed"}
+    return False
+
+
 class _SharedEybondListener:
     _MAX_SESSION_INVENTORY = 20
     # Unclaimed collector callbacks are parked (held open passively) instead
@@ -1745,6 +1773,8 @@ class _SharedEybondListener:
         self._session_seq = 0
         self._session_inventory: dict[str, _CollectorSessionInventoryEntry] = {}
         self._pending_route_lock = asyncio.Lock()
+        self._exclusive_route_seq = 0
+        self._exclusive_routes: dict[int, _ExclusiveCollectorRouteReservation] = {}
         self._connection_watcher_seq = 0
         self._connection_watchers: dict[int, tuple[str, Callable[[str], None]]] = {}
 
@@ -1823,6 +1853,7 @@ class _SharedEybondListener:
         self._payload_pn_owner_counts.clear()
         self._at_pn_owner_counts.clear()
         self._session_protocol_owner_counts.clear()
+        self._exclusive_routes.clear()
         self._session_inventory.clear()
 
         if self._server is not None:
@@ -1873,6 +1904,228 @@ class _SharedEybondListener:
 
     def unregister_session_protocol_owner(self, session_protocol: str) -> None:
         self._decrement_owner_count(self._session_protocol_owner_counts, session_protocol)
+
+    def register_exclusive_collector_route(
+        self,
+        *,
+        collector_ip: str,
+        collector_pn: str,
+        transparent: bool = False,
+        expected_session_protocol: str = "",
+    ) -> int:
+        """Reserve matching new callbacks for a temporary proxy route.
+
+        Runtime transports remain registered so they can resume immediately
+        after the tool stops, but they must not consume the reconnect that a
+        proxy/shadow route is waiting for.
+        """
+
+        self._exclusive_route_seq += 1
+        token = self._exclusive_route_seq
+        self._exclusive_routes[token] = _ExclusiveCollectorRouteReservation(
+            collector_ip=str(collector_ip or "").strip(),
+            collector_pn=str(collector_pn or "").strip(),
+            baseline_session_ids=frozenset(self._pending_sockets),
+            transparent=bool(transparent),
+            expected_session_protocol=str(
+                expected_session_protocol or ""
+            ).strip().lower(),
+        )
+        return token
+
+    async def pop_pending_socket_for_transparent_route(
+        self,
+        token: int,
+    ) -> _PendingCollectorSocket | None:
+        """Claim one causally-new socket without injecting identity traffic.
+
+        A cloud proxy must preserve the collector/cloud handshake byte-for-byte.
+        Sending HA's FC=2/DTUPN probe before handing the socket to the proxy
+        contaminates that handshake.  The temporary route therefore claims only
+        one socket that appeared after its reservation baseline.  Identity is
+        verified from the real cloud exchange before the proxy is considered
+        ready.
+        """
+
+        async with self._pending_route_lock:
+            reservation = self._exclusive_routes.get(token)
+            if reservation is None or not reservation.transparent:
+                return None
+
+            candidates: list[_PendingCollectorSocket] = []
+            for pending in self._pending_sockets.values():
+                if pending.session_id in reservation.baseline_session_ids:
+                    continue
+                entry = self._session_inventory.get(pending.session_id)
+                protocol_shape = str(
+                    getattr(entry, "protocol_shape", "") or ""
+                ).strip().lower()
+                session_state = str(
+                    getattr(entry, "state", "") or ""
+                ).strip().lower()
+                if not _transparent_route_accepts_protocol_shape(
+                    reservation.expected_session_protocol,
+                    protocol_shape,
+                ):
+                    continue
+                if (
+                    protocol_shape in {"", "unknown"}
+                    and session_state != "exclusive_route_silent"
+                ):
+                    # Give the shared listener's existing passive read one full
+                    # turn to classify a framed callback before an unknown
+                    # socket may be provisionally selected as a silent cloud
+                    # route. This is the listener's framing boundary, not a
+                    # second onboarding/recovery timeout.
+                    continue
+                observed_pn = str(
+                    getattr(entry, "collector_pn", "") or ""
+                ).strip()
+                observed_source = str(
+                    getattr(entry, "collector_identity_source", "") or ""
+                ).strip()
+                if observed_pn:
+                    if (
+                        reservation.collector_pn
+                        and self._collector_pn_matches(
+                            reservation.collector_pn,
+                            observed_pn,
+                        )
+                    ):
+                        candidates.append(pending)
+                    elif identity_source_is_strong(observed_source):
+                        # Never route a strongly identified foreign collector.
+                        continue
+                    # A weak foreign-looking prefix is not sufficient authority
+                    # to select or reject a socket behind shared NAT.
+                    continue
+                exact_route_hint = bool(
+                    reservation.collector_ip
+                    and self._callback_ip_matches_collector(
+                        reservation.collector_ip,
+                        pending.remote_ip,
+                    )
+                )
+                transparent_candidates = tuple(
+                    candidate
+                    for candidate in self._exclusive_routes.values()
+                    if candidate.transparent
+                    and pending.session_id not in candidate.baseline_session_ids
+                )
+                if exact_route_hint or (
+                    len(transparent_candidates) == 1
+                    and transparent_candidates[0] is reservation
+                ):
+                    # A private hairpin gateway may rewrite 192.168.1.55 to
+                    # 192.168.1.1, which is intentionally not an identity/IP
+                    # match.  One causally-new socket plus exactly one active
+                    # transparent reservation is still an unambiguous
+                    # provisional route; the cloud handshake must prove PN
+                    # before readiness.
+                    candidates.append(pending)
+
+            unique = {id(candidate): candidate for candidate in candidates}
+            if len(unique) != 1:
+                return None
+            pending = next(iter(unique.values()))
+            await self._pause_pending_sniff(pending)
+            if not self._pending_socket_still_registered(pending):
+                return None
+            return self._claim_pending_socket(pending)
+
+    def _reserved_for_transparent_route(
+        self,
+        pending: _PendingCollectorSocket,
+    ) -> bool:
+        """Return whether a fresh socket must remain byte-transparent."""
+
+        candidates = tuple(
+            reservation
+            for reservation in self._exclusive_routes.values()
+            if reservation.transparent
+            and pending.session_id not in reservation.baseline_session_ids
+            and _transparent_route_accepts_protocol_shape(
+                reservation.expected_session_protocol,
+                str(
+                    getattr(
+                        self._session_inventory.get(pending.session_id),
+                        "protocol_shape",
+                        "",
+                    )
+                    or ""
+                ),
+            )
+        )
+        if len(candidates) == 1:
+            return True
+        return any(
+            reservation.collector_ip
+            and self._callback_ip_matches_collector(
+                reservation.collector_ip,
+                pending.remote_ip,
+            )
+            for reservation in candidates
+        )
+
+    async def unregister_exclusive_collector_route(self, token: int) -> None:
+        """Drop a reservation and return any unclaimed socket to normal routing."""
+
+        if self._exclusive_routes.pop(token, None) is None:
+            return
+
+        for pending in tuple(self._pending_sockets.values()):
+            entry = self._session_inventory.get(pending.session_id)
+            if str(getattr(entry, "state", "") or "") != "waiting_for_exclusive_route":
+                continue
+            observed_pn = str(getattr(entry, "collector_pn", "") or "").strip()
+            if self._matches_exclusive_collector_route(
+                remote_ip=pending.remote_ip,
+                observed_pn=observed_pn,
+                protocol_shape=str(
+                    getattr(entry, "protocol_shape", "") or ""
+                ),
+            ):
+                continue
+            await self._pause_pending_sniff(pending)
+            if not self._pending_socket_still_registered(pending):
+                continue
+            pending.parked = False
+            pending.sniff_task = _spawn_tracked_task(
+                self._sniff_pending_socket(pending),
+                name=f"collector_pending_sniff_{pending.remote_ip}",
+            )
+
+    def _matches_exclusive_collector_route(
+        self,
+        *,
+        remote_ip: str,
+        observed_pn: str,
+        protocol_shape: str,
+    ) -> bool:
+        """Match by identity first; peer IP is only for unidentified sockets."""
+
+        normalized_pn = str(observed_pn or "").strip()
+        for reservation in self._exclusive_routes.values():
+            if reservation.transparent and not _transparent_route_accepts_protocol_shape(
+                reservation.expected_session_protocol,
+                protocol_shape,
+            ):
+                continue
+            if normalized_pn:
+                if reservation.collector_pn and self._collector_pn_matches(
+                    reservation.collector_pn,
+                    normalized_pn,
+                ):
+                    return True
+                # An observed foreign identity must never be captured merely
+                # because several collectors share one NAT/peer address.
+                continue
+            if reservation.collector_ip and self._callback_ip_matches_collector(
+                reservation.collector_ip,
+                remote_ip,
+            ):
+                return True
+        return False
 
     def _decrement_owner_count(self, owner_counts: dict[str, int], owner_value: str) -> None:
         owner = str(owner_value or "").strip()
@@ -3188,13 +3441,30 @@ class _SharedEybondListener:
             chunk = pending.initial_bytes
             pending.initial_bytes = b""
         else:
-            try:
-                chunk = await asyncio.wait_for(pending.reader.read(64), timeout=0.25)
-            except asyncio.TimeoutError:
-                chunk = await self._async_probe_pending_identity(pending)
-                return chunk, False
-            except Exception:
-                return b"", True
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        pending.reader.read(64),
+                        timeout=0.25,
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    if self._reserved_for_transparent_route(pending):
+                        # Keep passively observing every ambiguous fresh socket.
+                        # A framed HA callback will normally identify its wire
+                        # with a heartbeat; the still-silent cloud socket can
+                        # then become the only eligible AT route.  Returning
+                        # here would park both as permanently ``unknown`` and
+                        # deadlock the selector.
+                        self._mark_session_state(
+                            pending.session_id,
+                            "exclusive_route_silent",
+                        )
+                        continue
+                    chunk = await self._async_probe_pending_identity(pending)
+                    return chunk, False
+                except Exception:
+                    return b"", True
         if not chunk:
             return chunk, True
 
@@ -3324,7 +3594,11 @@ class _SharedEybondListener:
                 await self._park_unclaimed_pending_socket(
                     pending,
                     b"",
-                    session_state="parked_waiting_for_identity",
+                    session_state=(
+                        "waiting_for_exclusive_route"
+                        if self._reserved_for_transparent_route(pending)
+                        else "parked_waiting_for_identity"
+                    ),
                 )
                 return
             self._remove_pending_socket(pending)
@@ -3359,6 +3633,17 @@ class _SharedEybondListener:
                 initial_pn,
                 initial_pn_source,
             )
+        if self._matches_exclusive_collector_route(
+            remote_ip=pending.remote_ip,
+            observed_pn=initial_pn,
+            protocol_shape=protocol_shape,
+        ):
+            await self._park_unclaimed_pending_socket(
+                pending,
+                chunk,
+                session_state="waiting_for_exclusive_route",
+            )
+            return
 
         route_at = protocol_shape == "at_text"
         # Byte-shape is the only safe authority for explicit framed-vs-AT wire
@@ -3674,16 +3959,25 @@ class SharedProxyCaptureRoute:
         port: int,
         collector_ip: str,
         collector_pn: str = "",
-        collector_session_protocol: str = "",
+        expected_session_protocol: str = "",
         handler: Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]],
     ) -> None:
         self._host = str(host)
         self._port = int(port)
         self._collector_ip = str(collector_ip or "").strip()
         self._collector_pn = str(collector_pn or "").strip()
-        self._collector_session_protocol = str(collector_session_protocol or "").strip().lower()
+        if (
+            type(expected_session_protocol) is not str
+            or expected_session_protocol != expected_session_protocol.strip()
+            or expected_session_protocol.lower() not in {"at_text", "eybond_framed"}
+        ):
+            raise ValueError("proxy_expected_session_protocol_invalid")
+        self._expected_session_protocol = str(
+            expected_session_protocol or ""
+        ).strip().lower()
         self._handler = handler
         self._listener: _SharedEybondListener | None = None
+        self._reservation_token: int | None = None
         self._task: asyncio.Task[None] | None = None
         self._running = False
 
@@ -3695,6 +3989,12 @@ class SharedProxyCaptureRoute:
         if self._listener is not None:
             return
         self._listener = await _acquire_shared_listener(self._host, self._port)
+        self._reservation_token = self._listener.register_exclusive_collector_route(
+            collector_ip=self._collector_ip,
+            collector_pn=self._collector_pn,
+            transparent=True,
+            expected_session_protocol=self._expected_session_protocol,
+        )
         self._running = True
         self._task = asyncio.create_task(
             self._route_loop(),
@@ -3713,8 +4013,16 @@ class SharedProxyCaptureRoute:
                 pass
         listener = self._listener
         self._listener = None
+        reservation_token = self._reservation_token
+        self._reservation_token = None
         if listener is not None:
-            await _release_shared_listener(listener)
+            try:
+                if reservation_token is not None:
+                    await listener.unregister_exclusive_collector_route(
+                        reservation_token
+                    )
+            finally:
+                await _release_shared_listener(listener)
 
     async def _route_loop(self) -> None:
         try:
@@ -3722,11 +4030,20 @@ class SharedProxyCaptureRoute:
                 listener = self._listener
                 if listener is None:
                     return
-                pending = await listener.pop_pending_socket_for_route(
-                    collector_ip=self._collector_ip,
-                    collector_pn=self._collector_pn,
-                    session_protocol=self._collector_session_protocol,
+                transparent_pop = getattr(
+                    listener,
+                    "pop_pending_socket_for_transparent_route",
+                    None,
                 )
+                if callable(transparent_pop) and self._reservation_token is not None:
+                    pending = await transparent_pop(self._reservation_token)
+                else:
+                    # Compatibility for narrow listener test doubles.
+                    pending = await listener.pop_pending_socket_for_route(
+                        collector_ip=self._collector_ip,
+                        collector_pn=self._collector_pn,
+                        session_protocol=self._expected_session_protocol,
+                    )
                 if pending is None:
                     await asyncio.sleep(0.1)
                     continue

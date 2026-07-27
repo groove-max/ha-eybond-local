@@ -192,6 +192,7 @@ async def async_orchestrate_shadow_learning_settings(
     wait_for_observations_since: Callable[[int, float], Awaitable[tuple[ShadowWriteObservation, ...]]] | None = None,
     current_observations_since: Callable[[int], tuple[ShadowWriteObservation, ...]] | None = None,
     is_session_ready: Callable[[], bool] | None = None,
+    wait_until_session_ready: Callable[[], Awaitable[bool]] | None = None,
     read_map_snapshot: Callable[[], dict[str, Any]] | None = None,
     base_url: str = DEFAULT_BASE_URL,
     language: str = DEFAULT_LANGUAGE,
@@ -259,7 +260,10 @@ async def async_orchestrate_shadow_learning_settings(
             attempts.append(attempt)
             continue
 
-        if is_session_ready is not None and not bool(is_session_ready()):
+        if not await _async_session_ready_for_attempt(
+            is_session_ready=is_session_ready,
+            wait_until_session_ready=wait_until_session_ready,
+        ):
             attempt["status"] = _CONTROL_STATUS_DEGRADED
             attempt["reason"] = "session_not_ready"
             attempts.append(attempt)
@@ -307,6 +311,7 @@ async def async_orchestrate_shadow_learning_settings(
             wait_for_observations_since=wait_for_observations_since,
             current_observations_since=current_observations_since,
             is_session_ready=is_session_ready,
+            wait_until_session_ready=wait_until_session_ready,
         )
         if observations is None:
             if abort_on_unproxied_write and _attempt_is_unproxied_success_candidate(attempt):
@@ -587,20 +592,41 @@ async def _wait_for_attempt_observations(
     wait_for_observations_since: Callable[[int, float], Awaitable[tuple[ShadowWriteObservation, ...]]] | None,
     current_observations_since: Callable[[int], tuple[ShadowWriteObservation, ...]] | None,
     is_session_ready: Callable[[], bool] | None,
+    wait_until_session_ready: Callable[[], Awaitable[bool]] | None,
 ) -> tuple[ShadowWriteObservation, ...] | None:
-    if is_session_ready is not None and not bool(is_session_ready()):
-        return None
     if current_observations_since is not None:
         existing = tuple(current_observations_since(cursor_start) or ())
         if existing:
             return existing
+    if not await _async_reacquire_session_after_sent_control(
+        is_session_ready=is_session_ready,
+        wait_until_session_ready=wait_until_session_ready,
+    ):
+        return None
     if wait_for_observations_since is None:
         return ()
 
     deadline = asyncio.get_running_loop().time() + max(float(timeout_seconds), 0.0)
     while True:
         if is_session_ready is not None and not bool(is_session_ready()):
-            return None
+            if not await _async_reacquire_session_after_sent_control(
+                is_session_ready=is_session_ready,
+                wait_until_session_ready=wait_until_session_ready,
+            ):
+                return None
+            # A queued cloud control can arrive only after the replacement
+            # collector session becomes live. Give its local observation the
+            # ordinary correlation interval from that point.
+            deadline = (
+                asyncio.get_running_loop().time()
+                + max(float(timeout_seconds), 0.0)
+            )
+            if current_observations_since is not None:
+                observations = tuple(
+                    current_observations_since(cursor_start) or ()
+                )
+                if observations:
+                    return observations
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             return ()
@@ -613,6 +639,41 @@ async def _wait_for_attempt_observations(
         )
         if observations:
             return observations
+
+
+async def _async_reacquire_session_after_sent_control(
+    *,
+    is_session_ready: Callable[[], bool] | None,
+    wait_until_session_ready: Callable[[], Awaitable[bool]] | None,
+) -> bool:
+    """Keep one sent control correlated across a transient cloud TCP cycle.
+
+    SmartESS may close its short-lived collector socket after the metadata read
+    sweep while a just-issued ``ctrlDevice`` request is queued for the next
+    connection. The fail-closed route remains armed and owns the endpoint during
+    that gap. Waiting for the same route is therefore part of one attempt, not a
+    retry and never a second cloud write.
+    """
+
+    if is_session_ready is None or bool(is_session_ready()):
+        return True
+    if wait_until_session_ready is None:
+        return False
+    return bool(await wait_until_session_ready())
+
+
+async def _async_session_ready_for_attempt(
+    *,
+    is_session_ready: Callable[[], bool] | None,
+    wait_until_session_ready: Callable[[], Awaitable[bool]] | None,
+) -> bool:
+    """Wait for a safe proxy window without weakening the live-route gate."""
+
+    if is_session_ready is None or bool(is_session_ready()):
+        return True
+    if wait_until_session_ready is None:
+        return False
+    return bool(await wait_until_session_ready())
 
 
 def _attach_attempt_observation(
@@ -638,10 +699,18 @@ def _normalize_captured_not_applied_status(attempt: dict[str, Any]) -> None:
 
     if not isinstance(attempt.get("observation"), dict):
         return
-    if attempt.get("status") == _CONTROL_STATUS_SENT and _attempt_has_success_response(attempt):
+    if attempt.get("status") == _CONTROL_STATUS_SENT:
         attempt["status"] = _CONTROL_STATUS_CAPTURED_NOT_APPLIED
         attempt["proxy_capture_result"] = "captured_not_applied"
-        attempt["cloud_ack_after_proxy_nack"] = True
+        if _attempt_has_success_response(attempt):
+            attempt["cloud_ack_after_proxy_nack"] = True
+        else:
+            response = attempt.get("response")
+            if isinstance(response, dict):
+                attempt["cloud_nack_response"] = {
+                    "err": response.get("err"),
+                    "desc": str(response.get("desc") or ""),
+                }
         return
     if attempt.get("status") != _CONTROL_STATUS_ERROR:
         return

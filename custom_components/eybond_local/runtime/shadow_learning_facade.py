@@ -36,24 +36,55 @@ class ShadowLearningRuntimeFacade:
             "shadow_learning_route_status",
             None,
         )
-        raw_status = (
-            route_status_provider()
-            if callable(route_status_provider)
-            else None
-        )
+        try:
+            raw_status = (
+                route_status_provider()
+                if callable(route_status_provider)
+                else None
+            )
+        except Exception:
+            raw_status = None
+        route_status = ShadowLearningRouteStatus.from_mapping(raw_status)
+
         observations_provider = getattr(
             self._runtime,
             "shadow_learning_write_observations",
             None,
         )
+        try:
+            candidate_observations = (
+                tuple(observations_provider())
+                if callable(observations_provider)
+                else ()
+            )
+        except Exception:
+            candidate_observations = ()
         observations = (
-            tuple(observations_provider())
-            if callable(observations_provider)
+            candidate_observations
+            if all(
+                type(observation) is ShadowWriteObservation
+                for observation in candidate_observations
+            )
             else ()
         )
+
+        try:
+            candidate_evidence = self._cloud_evidence_provider()
+        except Exception:
+            candidate_evidence = None
+        evidence = (
+            candidate_evidence
+            if type(candidate_evidence) is CloudEvidenceRecord
+            else None
+        )
+
+        # Live route status is safety-critical. Optional evidence or observation
+        # projection failures must fail closed in their own field; they must
+        # never erase a valid route status and turn an active proxy into an
+        # apparent all-false session.
         return ShadowLearningRuntimeView(
-            route_status=ShadowLearningRouteStatus.from_mapping(raw_status),
-            cloud_evidence=self._cloud_evidence_provider(),
+            route_status=route_status,
+            cloud_evidence=evidence,
             write_observations=observations,
         )
 

@@ -132,10 +132,11 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
             }
         ]
         async def _active_scan(self) -> None:
-            # Keep the HA flow-manager test bounded to one route while running
-            # the REAL target detector: one set>server, exact-session FC=2 and
-            # driver detection. The resulting typed observed session + callback
-            # route must then cross admission/recovery/handoff into runtime.
+                # Keep the HA flow-manager test bounded to one route while running
+                # the REAL target detector: one set>server, exact-session FC=2 and
+                # collector identification. The resulting typed observed session +
+                # callback route must then cross admission/recovery/handoff into
+                # runtime, where inverter-driver detection now belongs.
             from custom_components.eybond_local.onboarding.detection import (
                 DiscoveryTarget,
                 OnboardingDetector,
@@ -155,14 +156,12 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
                 server_ip="127.0.0.1",
                 tcp_port=tcp_port,
                 udp_port=udp_port,
-                driver_hint="auto",
             )
             detected = await detector._async_detect_target(
                 DiscoveryTarget(ip="127.0.0.1", source="subnet_unicast"),
                 discovery_timeout=0.5,
                 connect_timeout=6.0,
                 heartbeat_timeout=0.2,
-                enrich_runtime_details=False,
             )
             assert detected.observed_session is not None
             assert detected.callback_route is not None

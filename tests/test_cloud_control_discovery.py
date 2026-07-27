@@ -34,6 +34,10 @@ async def _executor(fn, *args):
     return fn(*args)
 
 
+async def _start_shadow_route():
+    return None
+
+
 def _run(runner, **overrides):
     kwargs = dict(
         executor=_executor,
@@ -45,6 +49,7 @@ def _run(runner, **overrides):
         progress=lambda *a, **k: None,
         orchestrator_callbacks={},
         on_identity=lambda identity: None,
+        start_shadow_route=_start_shadow_route,
         on_learning=lambda: None,
     )
     kwargs.update(overrides)
@@ -80,20 +85,25 @@ class ProviderIsolationTests(unittest.TestCase):
             "request": {"params": {"pn": "E1", "sn": "S1", "devcode": 1, "devaddr": 1}},
             "responses": {"device_settings": {"dat": {"fields": []}}},
         }
-        seen: dict[str, int] = {}
-        with patch.object(ccd, "login_with_password", return_value=(object(), object())), patch.object(
+        control_session = object()
+        with patch.object(
             ccd, "fetch_device_bundle_for_collector", return_value=bundle
-        ) as smartess_fetch, patch.object(
+        ), patch.object(
+            ccd, "login_with_password", return_value=(object(), control_session)
+        ), patch.object(
             ccd, "async_orchestrate_shadow_learning_settings",
             side_effect=lambda **kw: dict(_ORCHESTRATION),
-        ), patch.object(
+        ) as smartess_orchestrate, patch.object(
             ccd.valuecloud_cloud_module, "login_with_password"
         ) as vc_login, patch.object(
             ccd.valuecloud_cloud_module, "fetch_device_bundle_for_collector_with_session"
         ) as vc_fetch:
             outcome = _run(_runner("smartess"))
         self.assertIsInstance(outcome, ControlDiscoveryOutcome)
-        smartess_fetch.assert_called_once()
+        self.assertIs(
+            smartess_orchestrate.call_args.kwargs["session"],
+            control_session,
+        )
         vc_login.assert_not_called()
         vc_fetch.assert_not_called()
 
@@ -127,8 +137,8 @@ class ProviderIsolationTests(unittest.TestCase):
             "request": {"params": {"pn": "E1", "sn": "S1", "devcode": 1, "devaddr": 1}},
             "responses": {"device_settings": {"dat": {"fields": []}}},
         }
-        with patch.object(ccd, "login_with_password", return_value=(object(), object())), patch.object(
-            ccd, "fetch_device_bundle_for_collector", return_value=bundle
+        with patch.object(ccd, "fetch_device_bundle_for_collector", return_value=bundle), patch.object(
+            ccd, "login_with_password", return_value=(object(), object())
         ), patch.object(
             ccd, "async_orchestrate_shadow_learning_settings",
             side_effect=lambda **kw: dict(_ORCHESTRATION),
@@ -144,20 +154,50 @@ class ProviderIsolationTests(unittest.TestCase):
             "responses": {"device_settings": {"dat": {"fields": []}}},
         }
         events: list[str] = []
-        with patch.object(ccd, "login_with_password", return_value=(object(), object())), patch.object(
-            ccd, "fetch_device_bundle_for_collector", return_value=bundle
+        progress_values: list[float] = []
+
+        async def _start_route() -> None:
+            events.append("route")
+
+        def _fetch_bundle(**_kwargs):
+            events.append("bundle")
+            return bundle
+
+        def _login(**_kwargs):
+            events.append("control_login")
+            return object(), "control_session"
+
+        async def _orchestrate(**_kwargs):
+            events.append("orchestrate")
+            return dict(_ORCHESTRATION)
+
+        with patch.object(ccd, "fetch_device_bundle_for_collector", side_effect=_fetch_bundle), patch.object(
+            ccd, "login_with_password", side_effect=_login
         ), patch.object(
             ccd, "async_orchestrate_shadow_learning_settings",
-            side_effect=lambda **kw: dict(_ORCHESTRATION),
+            side_effect=_orchestrate,
         ):
             _run(
                 _runner("smartess"),
+                progress=lambda fraction, _stage: progress_values.append(fraction),
                 on_identity=lambda identity: events.append("identity"),
+                start_shadow_route=_start_route,
                 on_learning=lambda: events.append("learning"),
             )
-        # identity resolved before the learning phase begins.
-        self.assertEqual(events, ["identity", "learning"])
-
-
+        # The route is active for the provider-owned metadata bundle. A fresh
+        # login after that bundle creates the control-dispatch session.
+        self.assertEqual(
+            events,
+            [
+                "route",
+                "bundle",
+                "identity",
+                "control_login",
+                "learning",
+                "orchestrate",
+            ],
+        )
+        self.assertEqual(progress_values, [0.08, 0.18, 0.30])
+        self.assertEqual(progress_values, sorted(progress_values))
 if __name__ == "__main__":
     unittest.main()

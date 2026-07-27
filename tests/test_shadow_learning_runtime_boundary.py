@@ -292,6 +292,38 @@ class ShadowLearningRuntimeFacadeTests(unittest.IsolatedAsyncioTestCase):
                         timeout,  # type: ignore[arg-type]
                     )
 
+    async def test_optional_projection_failures_do_not_erase_live_route(self) -> None:
+        class _Runtime:
+            @staticmethod
+            def shadow_learning_route_status() -> dict[str, object]:
+                return {
+                    "running": True,
+                    "collector_connected": True,
+                    "collector_protocol_ingress": True,
+                    "route_protocol_activity": True,
+                    "upstream_connected": True,
+                    "ready": True,
+                    "upstream_error": "",
+                }
+
+            @staticmethod
+            def shadow_learning_write_observations():
+                return (SimpleNamespace(register=7),)
+
+        def _broken_evidence_provider():
+            raise RuntimeError("supplemental_evidence_unavailable")
+
+        facade = ShadowLearningRuntimeFacade(
+            runtime=_Runtime(),
+            cloud_evidence_provider=_broken_evidence_provider,
+        )
+
+        view = facade.view
+        self.assertTrue(view.route_status.running)
+        self.assertTrue(view.route_status.ready)
+        self.assertIsNone(view.cloud_evidence)
+        self.assertEqual(view.write_observations, ())
+
 
 class ShadowLearningRuntimeArchitectureTests(unittest.TestCase):
     def test_production_consumers_do_not_access_coordinator_privates(self) -> None:

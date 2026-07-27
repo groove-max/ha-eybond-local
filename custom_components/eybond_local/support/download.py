@@ -10,6 +10,7 @@ from aiohttp import hdrs
 
 from ..const import DOMAIN
 from .package import support_packages_root
+from .proxy_trace import proxy_trace_root
 
 _SUPPORT_PACKAGE_DOWNLOAD_VIEW_REGISTERED = "support_package_download_view_registered"
 
@@ -34,6 +35,40 @@ def sign_support_package_download_url(
     except ModuleNotFoundError:
         return path
     return async_sign_path(hass, path, expiration)
+
+
+def proxy_capture_authenticated_download_url(
+    entry_id: str,
+    filename: str,
+) -> str:
+    """Return the authenticated HA API URL for one proxy-capture archive."""
+
+    return f"/api/{DOMAIN}/proxy_capture/{entry_id}/{filename}"
+
+
+def sign_proxy_capture_download_url(
+    hass: Any,
+    entry_id: str,
+    filename: str,
+    *,
+    expiration: timedelta = timedelta(minutes=15),
+) -> str:
+    """Return a browser-navigable signed URL for one proxy-capture archive."""
+
+    path = proxy_capture_authenticated_download_url(entry_id, filename)
+    try:
+        from homeassistant.components.http.auth import async_sign_path
+    except ModuleNotFoundError:
+        return path
+    signed_path = async_sign_path(hass, path, expiration)
+    config = getattr(hass, "config", None)
+    base_url = (
+        str(getattr(config, "external_url", "") or "").strip()
+        or str(getattr(config, "internal_url", "") or "").strip()
+    )
+    if not base_url:
+        return signed_path
+    return f"{base_url.rstrip('/')}{signed_path}"
 
 
 def resolve_support_package_download_path(
@@ -62,6 +97,36 @@ def resolve_support_package_download_path(
     if not path.is_file():
         return None
     return path
+
+
+def resolve_proxy_capture_download_path(
+    *,
+    config_dir: Path,
+    entry_id: str,
+    filename: str,
+) -> Path | None:
+    """Resolve one entry-owned proxy ZIP without exposing arbitrary files."""
+
+    if (
+        type(entry_id) is not str
+        or not entry_id
+        or entry_id != entry_id.strip()
+        or type(filename) is not str
+        or not filename
+        or filename != filename.strip()
+    ):
+        return None
+    if Path(filename).name != filename:
+        return None
+    if not filename.startswith(f"{entry_id}_") or not filename.endswith(".zip"):
+        return None
+    try:
+        root = proxy_trace_root(Path(config_dir)).resolve()
+        path = (root / filename).resolve()
+        path.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return path if path.is_file() else None
 
 
 def support_package_download_request_allowed(request: Any) -> bool:
@@ -133,6 +198,34 @@ def async_register_support_package_download_view(hass: Any) -> bool:
                 },
             )
 
+    class EybondProxyCaptureDownloadView(HomeAssistantView):
+        """Serve one signed entry-owned proxy-capture archive."""
+
+        url = f"/api/{DOMAIN}/proxy_capture/{{entry_id}}/{{filename}}"
+        name = f"api:{DOMAIN}:proxy_capture"
+        requires_auth = True
+
+        async def get(self, request, entry_id: str, filename: str):
+            request_hass = request.app["hass"]
+            if not support_package_download_request_allowed(request):
+                raise Unauthorized()
+            if request_hass.config_entries.async_get_entry(entry_id) is None:
+                raise web.HTTPNotFound()
+            path = resolve_proxy_capture_download_path(
+                config_dir=Path(request_hass.config.config_dir),
+                entry_id=entry_id,
+                filename=filename,
+            )
+            if path is None:
+                raise web.HTTPNotFound()
+            return web.FileResponse(
+                path,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{path.name}"',
+                },
+            )
+
     hass.http.register_view(EybondSupportPackageDownloadView())
+    hass.http.register_view(EybondProxyCaptureDownloadView())
     data[_SUPPORT_PACKAGE_DOWNLOAD_VIEW_REGISTERED] = True
     return True

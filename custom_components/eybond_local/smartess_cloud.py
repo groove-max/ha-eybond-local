@@ -972,6 +972,29 @@ def fetch_device_bundle_for_collector(
         language=language,
         timeout=timeout,
     )
+    return fetch_device_bundle_for_collector_with_session(
+        session=session,
+        collector_pn=collector_pn,
+        base_url=base_url,
+        language=language,
+        app_id=app_id,
+        app_version=app_version,
+        timeout=timeout,
+    )
+
+
+def fetch_device_bundle_for_collector_with_session(
+    *,
+    session: SessionCredentials,
+    collector_pn: str,
+    base_url: str = DEFAULT_BASE_URL,
+    language: str = DEFAULT_LANGUAGE,
+    app_id: str = DEFAULT_APP_ID,
+    app_version: str = DEFAULT_APP_VERSION,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Fetch one SmartESS evidence bundle through an existing login session."""
+
     list_action = build_device_list_action(
         pn=collector_pn,
         pagesize=50,

@@ -10,17 +10,103 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.support.proxy_capture import build_proxy_capture_overview
+from custom_components.eybond_local.support.proxy_capture import (
+    PROXY_WIRE_TRANSPARENT,
+    build_proxy_capture_overview,
+    resolve_proxy_wire_mode,
+)
 from custom_components.eybond_local.support.proxy_trace import build_proxy_capture_session_state
 
 
 class ProxyCapturePlannerTests(unittest.TestCase):
+    def test_uses_new_at_cloud_session_not_existing_framed_ha_session(
+        self,
+    ) -> None:
+        overview = build_proxy_capture_overview(
+            control_mode="auto",
+            collector_control_allowed=True,
+            collector_connected=True,
+            cloud_tools_allowed=True,
+            collector_cloud_family="smartess_at",
+            collector_session_protocol="eybond_framed",
+            cloud_session_protocol="at_text",
+            current_endpoint="dtu_ess.eybond.com,18899,TCP",
+            upstream_endpoint="dtu_ess.eybond.com,18899,TCP",
+            target_endpoint="192.168.1.50,18899,TCP",
+        )
+
+        self.assertEqual(overview.status, "ready")
+        self.assertEqual(overview.blocking_reason, "")
+        self.assertTrue(overview.can_start)
+        self.assertEqual(
+            resolve_proxy_wire_mode("eybond_framed", "at_text"),
+            PROXY_WIRE_TRANSPARENT,
+        )
+
+    def test_blocks_transparent_capture_when_only_one_wire_is_known(self) -> None:
+        overview = build_proxy_capture_overview(
+            control_mode="auto",
+            collector_control_allowed=True,
+            collector_connected=True,
+            cloud_tools_allowed=True,
+            collector_cloud_family="smartess_at",
+            collector_session_protocol="eybond_framed",
+            cloud_session_protocol="",
+            current_endpoint="dtu_ess.eybond.com,18899,TCP",
+            upstream_endpoint="dtu_ess.eybond.com,18899,TCP",
+            target_endpoint="192.168.1.50,18899,TCP",
+        )
+
+        self.assertEqual(overview.status, "blocked")
+        self.assertEqual(
+            overview.blocking_reason,
+            "transparent_wire_unavailable",
+        )
+        self.assertFalse(overview.can_start)
+
+    def test_existing_at_ha_session_does_not_block_framed_cloud_session(self) -> None:
+        overview = build_proxy_capture_overview(
+            control_mode="auto",
+            collector_control_allowed=True,
+            collector_connected=True,
+            cloud_tools_allowed=True,
+            collector_cloud_family="legacy_binary",
+            collector_session_protocol="at_text",
+            cloud_session_protocol="eybond_framed",
+            current_endpoint="ess.eybond.com,18899,TCP",
+            upstream_endpoint="ess.eybond.com,18899,TCP",
+            target_endpoint="192.168.1.50,18899,TCP",
+        )
+
+        self.assertEqual(overview.status, "ready")
+        self.assertEqual(overview.blocking_reason, "")
+        self.assertTrue(overview.can_start)
+
+    def test_allows_transparent_capture_when_local_and_cloud_wires_match(
+        self,
+    ) -> None:
+        overview = build_proxy_capture_overview(
+            control_mode="auto",
+            collector_control_allowed=True,
+            collector_connected=True,
+            cloud_tools_allowed=True,
+            collector_cloud_family="legacy_binary",
+            collector_session_protocol="eybond_framed",
+            cloud_session_protocol="eybond_framed",
+            current_endpoint="ess.eybond.com",
+            upstream_endpoint="ess.eybond.com",
+            target_endpoint="192.168.1.50,8899,TCP",
+        )
+
+        self.assertEqual(overview.status, "ready")
+        self.assertTrue(overview.can_start)
+
     def test_allows_redirect_when_collector_control_policy_allows_it(self) -> None:
         overview = build_proxy_capture_overview(
             control_mode="auto",
             collector_control_allowed=True,
             collector_connected=True,
-            endpoint_tools_allowed=True,
+            cloud_tools_allowed=True,
             current_endpoint="collector-cloud.smartess.example,18899,TCP",
             upstream_endpoint="collector-cloud.smartess.example,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
@@ -35,7 +121,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
             control_mode="auto",
             collector_control_allowed=False,
             collector_connected=True,
-            endpoint_tools_allowed=True,
+            cloud_tools_allowed=True,
             current_endpoint="collector-cloud.smartess.example,18899,TCP",
             upstream_endpoint="collector-cloud.smartess.example,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
@@ -51,7 +137,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
             control_mode="auto",
             collector_proxy_capture_allowed=False,
             collector_connected=True,
-            endpoint_tools_allowed=True,
+            cloud_tools_allowed=True,
             current_endpoint="192.168.1.50,18899,TCP",
             upstream_endpoint="collector-cloud.smartess.example,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
@@ -65,7 +151,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         overview = build_proxy_capture_overview(
             control_mode="auto",
             collector_connected=True,
-            endpoint_tools_allowed=True,
+            cloud_tools_allowed=True,
             current_endpoint="192.168.1.50,18899,TCP",
             upstream_endpoint="collector-cloud.smartess.example,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
@@ -96,7 +182,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         overview = build_proxy_capture_overview(
             control_mode="full",
             collector_connected=True,
-            endpoint_tools_allowed=True,
+            cloud_tools_allowed=True,
             current_endpoint="192.168.1.50,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
             active_state=state,
@@ -128,7 +214,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         overview = build_proxy_capture_overview(
             control_mode="full",
             collector_connected=True,
-            endpoint_tools_allowed=True,
+            cloud_tools_allowed=True,
             current_endpoint="192.168.1.50,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
             active_state=state,
@@ -158,7 +244,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         overview = build_proxy_capture_overview(
             control_mode="full",
             collector_connected=True,
-            endpoint_tools_allowed=True,
+            cloud_tools_allowed=True,
             current_endpoint="192.168.1.50,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
             active_state=state,
@@ -168,11 +254,11 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         self.assertTrue(overview.critical_phase)
         self.assertFalse(overview.can_stop)
 
-    def test_new_session_requires_home_assistant_only_profile(self) -> None:
+    def test_new_session_requires_cloud_and_home_assistant_profile(self) -> None:
         overview = build_proxy_capture_overview(
             control_mode="full",
             collector_connected=True,
-            endpoint_tools_allowed=False,
+            cloud_tools_allowed=False,
             current_endpoint="collector-cloud.smartess.example,18899,TCP",
             upstream_endpoint="collector-cloud.smartess.example,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
@@ -181,7 +267,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         self.assertEqual(overview.status, "blocked")
         self.assertEqual(
             overview.blocking_reason,
-            "operating_profile_requires_ha_only",
+            "operating_profile_requires_cloud_and_ha",
         )
         self.assertFalse(overview.can_start)
         self.assertFalse(overview.can_stop)
@@ -202,7 +288,7 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         overview = build_proxy_capture_overview(
             control_mode="full",
             collector_connected=True,
-            endpoint_tools_allowed=False,
+            cloud_tools_allowed=False,
             current_endpoint="192.168.1.50,18899,TCP",
             target_endpoint="192.168.1.50,18899,TCP",
             active_state=state,

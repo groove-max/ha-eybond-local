@@ -412,6 +412,90 @@ class _FakeObservationSource:
 
 
 class ShadowLearningAsyncOrchestratorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_session_wait_refusal_sends_no_cloud_control(self) -> None:
+        calls: list[str] = []
+
+        async def _wait_until_ready() -> bool:
+            calls.append("wait")
+            return False
+
+        def _fetch(**_kwargs):
+            calls.append("send")
+            raise AssertionError("cloud control must not be sent without a safe route")
+
+        result = await async_orchestrate_shadow_learning_settings(
+            settings_dat={
+                "field": [
+                    {
+                        "id": "sys_eybond_ctrl_53",
+                        "name": "Backlight",
+                        "item": [{"key": "0", "val": "Off"}],
+                    }
+                ]
+            },
+            session=SessionCredentials(token="token", secret="secret"),
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
+            devcode=2376,
+            devaddr=1,
+            dry_run=False,
+            confirm_cloud_write=True,
+            shadow_session_state="ready",
+            field_ids=[],
+            include_numeric=False,
+            is_session_ready=lambda: False,
+            wait_until_session_ready=_wait_until_ready,
+            fetch_action=_fetch,
+        )
+
+        self.assertEqual(calls, ["wait"])
+        self.assertEqual(result["results"][0]["status"], "degraded")
+        self.assertEqual(result["results"][0]["reason"], "session_not_ready")
+
+    async def test_session_wait_opens_route_before_cloud_control(self) -> None:
+        calls: list[str] = []
+        ready = {"value": False}
+
+        async def _wait_until_ready() -> bool:
+            calls.append("wait")
+            ready["value"] = True
+            return True
+
+        def _fetch(**_kwargs):
+            self.assertTrue(ready["value"])
+            calls.append("send")
+            return type("_Envelope", (), {"err": 1, "desc": "expected nack", "dat": {}})()
+
+        result = await async_orchestrate_shadow_learning_settings(
+            settings_dat={
+                "field": [
+                    {
+                        "id": "sys_eybond_ctrl_53",
+                        "name": "Backlight",
+                        "item": [{"key": "0", "val": "Off"}],
+                    }
+                ]
+            },
+            session=SessionCredentials(token="token", secret="secret"),
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
+            devcode=2376,
+            devaddr=1,
+            dry_run=False,
+            confirm_cloud_write=True,
+            shadow_session_state="ready",
+            field_ids=[],
+            include_numeric=False,
+            is_session_ready=lambda: ready["value"],
+            wait_until_session_ready=_wait_until_ready,
+            correlation_timeout_seconds=0.01,
+            abort_on_unproxied_write=False,
+            fetch_action=_fetch,
+        )
+
+        self.assertEqual(calls, ["wait", "send"])
+        self.assertEqual(result["results"][0]["status"], "sent")
+
     async def test_async_orchestrator_keeps_event_loop_progress_during_cloud_fetch(self) -> None:
         settings_dat = {
             "field": [
@@ -827,6 +911,71 @@ class ShadowLearningAsyncOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             result["correlation"]["degraded_attempts"][0]["reason"],
             {"session_not_ready", "session_degraded_during_run"},
+        )
+
+    async def test_sent_control_survives_one_transient_session_cycle(self) -> None:
+        settings_dat = {
+            "field": [
+                {
+                    "id": "sys_eybond_ctrl_53",
+                    "name": "Backlight",
+                    "item": [{"key": "0", "val": "Off"}],
+                },
+            ]
+        }
+        source = _FakeObservationSource()
+        ready = {"value": True}
+        calls: list[str] = []
+
+        def _fetch(**_kwargs):
+            calls.append("send")
+            ready["value"] = False
+            return type("_Envelope", (), {"err": 1, "desc": "expected nack", "dat": {}})()
+
+        async def _wait_until_ready() -> bool:
+            calls.append("wait")
+            source.add(
+                ShadowWriteObservation(
+                    register=305,
+                    values=(0,),
+                    function_code=16,
+                    devcode=2376,
+                    devaddr=1,
+                    raw_payload_hex="queued-after-reconnect",
+                    timestamp="2026-07-26T15:09:30+00:00",
+                )
+            )
+            ready["value"] = True
+            return True
+
+        result = await async_orchestrate_shadow_learning_settings(
+            settings_dat=settings_dat,
+            session=SessionCredentials(token="token", secret="secret"),
+            pn="E50000200000000001",
+            sn="E50000200000000001000001",
+            devcode=2376,
+            devaddr=1,
+            dry_run=False,
+            confirm_cloud_write=True,
+            shadow_session_state="ready",
+            field_ids=[],
+            include_numeric=False,
+            observation_cursor=source.observation_cursor,
+            current_observations_since=source.observations_since,
+            wait_for_observations_since=source.wait_for_observations_since,
+            is_session_ready=lambda: ready["value"],
+            wait_until_session_ready=_wait_until_ready,
+            correlation_timeout_seconds=0.05,
+            fetch_action=_fetch,
+        )
+
+        self.assertEqual(calls, ["send", "wait"])
+        self.assertEqual(result["executed_result_count"], 1)
+        self.assertEqual(result["degraded_count"], 0)
+        self.assertEqual(result["captured_not_applied_count"], 1)
+        self.assertEqual(
+            result["results"][0]["observation"]["raw_payload_hex"],
+            "queued-after-reconnect",
         )
 
 class SafeReadMapTests(unittest.TestCase):

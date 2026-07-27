@@ -199,20 +199,20 @@ async def test_runtime_options_commit_strategy_to_data_with_one_reload(
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {
-            "poll_mode": "auto",
-            "control_mode": "read_only",
-            "connection": {
+            {
+                "driver_hint": "auto",
+                "poll_mode": "auto",
+                "control_mode": "read_only",
+                "connection": {
                 "server_ip": SYNTHETIC_SERVER_IP,
                 "collector_ip": SYNTHETIC_COLLECTOR_IP,
                 "tcp_port": 8899,
                 "udp_port": 58899,
-                "discovery_target": "192.0.2.255",
-                "discovery_interval": 3,
-                "heartbeat_interval": 60,
-                "driver_hint": "auto",
+                    "discovery_target": "192.0.2.255",
+                    "discovery_interval": 3,
+                    "heartbeat_interval": 60,
+                },
             },
-        },
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()

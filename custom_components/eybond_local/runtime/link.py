@@ -1533,7 +1533,8 @@ class EybondRuntimeLinkManager:
         entry_id: str = "",
         collector_ip: str,
         collector_pn: str = "",
-        collector_session_protocol: str = "",
+        expected_session_protocol: str = "",
+        proxy_wire_mode: str = "transparent",
         listen_port: int,
         upstream_host: str,
         upstream_port: int,
@@ -1544,6 +1545,15 @@ class EybondRuntimeLinkManager:
         async_close_output=None,
     ) -> None:
         """Route one collector's callback connection through the in-process proxy."""
+
+        if proxy_wire_mode != "transparent":
+            raise ValueError("proxy_wire_mode_unsupported")
+        if (
+            type(expected_session_protocol) is not str
+            or expected_session_protocol != expected_session_protocol.strip()
+            or expected_session_protocol.lower() not in {"at_text", "eybond_framed"}
+        ):
+            raise ValueError("proxy_expected_session_protocol_invalid")
 
         normalized_owner_id = self._normalize_route_owner_id(
             mode="proxy_capture",
@@ -1567,6 +1577,7 @@ class EybondRuntimeLinkManager:
                 upstream_host=upstream_host,
                 upstream_port=upstream_port,
                 output_path=output_path,
+                expected_collector_pn=collector_pn,
                 masked_endpoint=masked_endpoint,
                 restore_trigger_path=restore_trigger_path,
                 async_open_output=async_open_output,
@@ -1578,14 +1589,14 @@ class EybondRuntimeLinkManager:
                 port=int(listen_port),
                 collector_ip=collector_ip,
                 collector_pn=collector_pn,
-                collector_session_protocol=collector_session_protocol,
+                expected_session_protocol=expected_session_protocol,
                 handler=handler.handle_client,
             )
             await route.start()
             self._proxy_capture_handler = handler
             self._proxy_capture_route = route
             await self._set_route_lease_state(normalized_owner_id, "running")
-        except Exception as exc:
+        except BaseException as exc:
             self._record_listener_error(exc)
             try:
                 if route is not None:
@@ -1608,7 +1619,7 @@ class EybondRuntimeLinkManager:
         entry_id: str = "",
         collector_ip: str,
         collector_pn: str = "",
-        collector_session_protocol: str = "",
+        expected_session_protocol: str = "",
         listen_port: int,
         upstream_host: str,
         upstream_port: int,
@@ -1616,6 +1627,13 @@ class EybondRuntimeLinkManager:
         seed: ShadowLearningSeed,
     ) -> None:
         """Route one collector callback connection through the fail-closed shadow proxy."""
+
+        if (
+            type(expected_session_protocol) is not str
+            or expected_session_protocol != expected_session_protocol.strip()
+            or expected_session_protocol.lower() not in {"at_text", "eybond_framed"}
+        ):
+            raise ValueError("shadow_expected_session_protocol_invalid")
 
         normalized_owner_id = self._normalize_route_owner_id(
             mode="shadow_learning",
@@ -1647,7 +1665,7 @@ class EybondRuntimeLinkManager:
                 port=int(listen_port),
                 collector_ip=collector_ip,
                 collector_pn=collector_pn,
-                collector_session_protocol=collector_session_protocol,
+                expected_session_protocol=expected_session_protocol,
                 handler=handler.handle_client,
             )
             await route.start()
@@ -1977,6 +1995,13 @@ class EybondRuntimeLinkManager:
         require_heartbeat: bool = False,
     ) -> bool:
         """Try to ensure a live collector connection without raising on timeout."""
+
+        if self._route_lease is not None and not self.connected:
+            # Proxy/shadow owns the post-redirect reconnect. Runtime must not
+            # send a callback trigger concurrently and create a second framed
+            # HA session that races the new cloud session for the shared
+            # listener.
+            return False
 
         # Transport ownership end-to-end: if the domain registry shows this
         # entry's owned session on another already-running shared listener,
