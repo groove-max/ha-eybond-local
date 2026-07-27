@@ -6,6 +6,8 @@
 
 # Never ingest Graphify's own output or local/generated artifacts.
 graphify-out/
+graphify-out/**
+**/graphify-out/**
 .local/
 field_dumps/
 .codex/
@@ -17,6 +19,9 @@ AGENTS.md
 .github/workflows/
 .github/ISSUE_TEMPLATE/
 .github/PULL_REQUEST_TEMPLATE*
+CONTRIBUTING.md
+docs/RELEASING.md
+requirements*.txt
 
 # Binary/UI assets and generated/reference-heavy documentation.
 custom_components/eybond_local/brand/
