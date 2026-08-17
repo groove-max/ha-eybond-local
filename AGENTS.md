@@ -12,3 +12,6 @@ Rules:
 - Do not build or update the graph until the user explicitly approves the
   initial extraction. Once `graphify-out/graph.json` exists, update it at
   architectural batch boundaries rather than after every small code edit.
+- Git hooks are intentionally disabled. Use the refresh and validation commands
+  in `docs/GRAPHIFY.md`; use `--force` after deletions or large refactors so
+  stale symbols cannot survive in the graph.
