@@ -551,6 +551,47 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["battery_float_voltage"], 27.2)
         self.assertIn("PBFT27.2", transport.commands)
 
+    async def test_pi30_max_exposes_and_writes_charge_current_controls(self) -> None:
+        driver = Pi30Driver()
+        target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
+        transport = _FakeTransport(
+            {
+                (0x0994, 0x01, "QPI"): "PI30",
+                (0x0994, 0x01, "QID"): "553555355535552",
+                (0x0994, 0x01, "QPIRI"): "220.0 19.0 220.0 50.0 19.0 4200 4200 24.0 27.0 21.0 28.2 27.0 2 70 100 0 2 2 1 10 0 0 27.0 0 1 23.0 10 22.0",
+                (0x0994, 0x01, "QMN"): "VMII-NXPW5KW",
+                (0x0994, 0x01, "MCHGC100"): "ACK",
+                (0x0994, 0x01, "MUCHGC070"): "ACK",
+            }
+        )
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.variant_key, "vmii_nxpw5kw")
+        self.assertEqual(inverter.details["max_charging_current"], "100 A")
+        self.assertEqual(inverter.details["max_ac_charging_current"], "70 A")
+        capability_keys = {item.key for item in inverter.capabilities}
+        self.assertIn("max_charging_current", capability_keys)
+        self.assertIn("max_ac_charging_current", capability_keys)
+
+        total = await driver.async_write_capability(
+            transport,
+            inverter,
+            "max_charging_current",
+            "100 A",
+        )
+        utility = await driver.async_write_capability(
+            transport,
+            inverter,
+            "max_ac_charging_current",
+            "70 A",
+        )
+
+        self.assertEqual(total, "100 A")
+        self.assertEqual(utility, "70 A")
+        self.assertIn("MCHGC100", transport.commands)
+        self.assertIn("MUCHGC070", transport.commands)
+
     async def test_support_capture_includes_dynamic_energy_commands(self) -> None:
         driver = Pi30Driver()
         target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
@@ -584,6 +625,8 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
                     (0x0994, 0x01, "QLY2026"): "54",
                     (0x0994, 0x01, "QLM202604"): "7",
                     (0x0994, 0x01, "QLD20260407"): "1",
+                    (0x0994, 0x01, "QMCHGCR"): "010 020 030 040 050 060 070 080 090 100 110 120",
+                    (0x0994, 0x01, "QMUCHGCR"): "002 010 020 030 040 050 060 070 080 090 100",
                 }
             ),
             inverter,
@@ -592,6 +635,8 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence["responses"]["QET"], "12345")
         self.assertEqual(evidence["responses"]["QEY2026"], "456")
         self.assertEqual(evidence["responses"]["QLD20260407"], "1")
+        self.assertIn("QMCHGCR", evidence["responses"])
+        self.assertIn("QMUCHGCR", evidence["responses"])
 
     def test_registry_exposes_pi30_driver(self) -> None:
         self.assertIn("pi30", driver_options())

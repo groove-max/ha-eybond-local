@@ -4590,6 +4590,43 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(flow._existing_entry_for_result(result))
 
+    async def test_existing_entry_does_not_claim_foreign_pn_with_shared_placeholder_serial(
+        self,
+    ) -> None:
+        existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
+        existing.data.update(
+            {
+                "collector_ip": "192.168.1.51",
+                "collector_pn": "Q00000000000010001",
+                "detected_serial": "55355535553555",
+            }
+        )
+        existing.unique_id = "collector:Q00000000000010001"
+        flow = self._make_flow(entries=[existing])
+        result = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.52",
+                source="broadcast",
+                ip="192.168.1.52",
+                connected=True,
+                collector=CollectorInfo(collector_pn="E50000200000000001"),
+            ),
+            match=DriverMatch(
+                driver_key="pi30",
+                protocol_family="pi30",
+                model_name="PowMr 4.2kW",
+                serial_number="55355535553555",
+                probe_target=ProbeTarget(
+                    devcode=0x0994,
+                    collector_addr=0xFF,
+                    device_addr=0,
+                ),
+            ),
+            connection_mode="broadcast",
+        )
+
+        self.assertIsNone(flow._existing_entry_for_result(result))
+
     async def test_existing_entry_with_pn_does_not_claim_unknown_candidate_on_same_nat_ip(self) -> None:
         existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
         existing.data.update(

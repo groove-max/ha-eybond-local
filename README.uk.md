@@ -7,6 +7,9 @@
 
 [![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=groove-max&repository=ha-eybond-local&category=integration)
 
+> Кнопка **Open in HACS** працює лише тоді, коли HACS уже встановлено. HACS не
+> є обов’язковим — без нього скористайтеся ручним встановленням нижче.
+
 > **Картка для панелі керування:** [EyeBond Local Card](https://github.com/groove-max/ha-eybond-local-card) додає готову панель Home Assistant з потоками енергії та графіками.
 
 > **Немає заводського колектора?** [ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector) — спільнотна прошивка-міст для підключення підтримуваних інверторів напряму до EyeBond Local без заводського хмарного реєстратора.
@@ -112,7 +115,7 @@ PI30 та SRNE. Рівень підтримки залежить від моде
 
 ### Ручне встановлення
 
-1. Завантажте останній реліз.
+1. Завантажте архів з [останнього релізу EyeBond Local](https://github.com/groove-max/ha-eybond-local/releases/latest).
 2. Скопіюйте `custom_components/eybond_local/` у `config/custom_components/`.
 3. Перезапустіть Home Assistant.
 4. Додайте **EyeBond Local** через **Налаштування → Пристрої та служби**.

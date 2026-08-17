@@ -274,6 +274,9 @@ class Pi30Driver(InverterDriver):
         if len(serial_number) < 6:
             return None
 
+        capabilities = _build_pi30_capabilities(config_values, profile.capabilities)
+        _translate_capability_enum_values(config_values, capabilities)
+
         return DetectedInverter(
             driver_key=self.key,
             protocol_family="pi30",
@@ -285,7 +288,7 @@ class Pi30Driver(InverterDriver):
             profile_name=profile_name,
             register_schema_name=schema_name,
             capability_groups=profile.groups,
-            capabilities=_build_pi30_capabilities(config_values, profile.capabilities),
+            capabilities=capabilities,
         )
 
     async def async_read_values(
@@ -440,6 +443,11 @@ def _support_commands() -> tuple[str, ...]:
                     if action.kind == "ascii_command" and action.command
                 ),
                 *(spec.command for spec in _RUNTIME_COMMAND_SPECS),
+                # Read-only selectable-value queries for the two documented
+                # PI30 charge-current controls. They belong in support
+                # evidence, not the normal polling cycle.
+                "QMCHGCR",
+                "QMUCHGCR",
             ]
         )
     )
@@ -1189,6 +1197,11 @@ def _validate_range(capability: WriteCapability, raw_value: int) -> None:
 
 
 def _build_write_command(capability: WriteCapability, raw_value: int) -> str:
+    if capability.command:
+        encoded = str(raw_value)
+        if capability.command_width is not None:
+            encoded = encoded.zfill(capability.command_width)
+        return f"{capability.command}{encoded}"
     if capability.key in _PI30_BOOL_COMMANDS:
         prefix = "PE" if raw_value else "PD"
         return f"{prefix}{_PI30_BOOL_COMMANDS[capability.key]}"
@@ -1197,6 +1210,24 @@ def _build_write_command(capability: WriteCapability, raw_value: int) -> str:
     if capability.key in _PI30_NUMERIC_COMMANDS:
         return f"{_PI30_NUMERIC_COMMANDS[capability.key]}{_format_scaled_value(capability, raw_value)}"
     raise ValueError(f"unsupported_write_command:{capability.key}")
+
+
+def _translate_capability_enum_values(
+    values: dict[str, Any],
+    capabilities: tuple[WriteCapability, ...],
+) -> None:
+    """Translate QPIRI numeric settings into their select labels."""
+
+    for capability in capabilities:
+        if capability.value_kind != "enum" or not capability.enum_value_map:
+            continue
+        current = values.get(capability.value_key)
+        if not isinstance(current, int) or isinstance(current, bool):
+            continue
+        values[capability.value_key] = capability.enum_value_map.get(
+            current,
+            f"Unknown ({current})",
+        )
 
 
 def _format_scaled_value(capability: WriteCapability, raw_value: int) -> str:

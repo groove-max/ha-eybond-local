@@ -484,6 +484,13 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
 
         live_block = await session.read_holding(live_block_start, live_block_count)
         values = _decode_block(live_block_start, live_block, live_fields)
+        # SMG reports a few watts of signed idle noise in the load-power
+        # register. Load consumption cannot be negative, so keep the signed
+        # schema decoding (which prevents 0xFFFD becoming 65533 W) and expose
+        # the physical value as zero.
+        output_power = values.get("output_power")
+        if isinstance(output_power, (int, float)) and not isinstance(output_power, bool):
+            values["output_power"] = max(0, output_power)
         values.update(status_values)
 
         config_block = await session.read_holding(config_block_start, config_block_count)

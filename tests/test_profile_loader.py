@@ -128,6 +128,19 @@ class ProfileLoaderTests(unittest.TestCase):
             "standard",
         )
         self.assertEqual(profile.get_capability("power_saving_mode").support_notes, "")
+        for key in (
+            "battery_bulk_voltage",
+            "battery_float_voltage",
+            "battery_under_voltage",
+            "battery_under_voltage_off_grid",
+            "battery_redischarge_voltage",
+            "battery_overvoltage_protection_voltage",
+            "battery_equalization_voltage",
+        ):
+            capability = profile.get_capability(key)
+            self.assertEqual(capability.minimum, 0, key)
+            self.assertEqual(capability.maximum, 700, key)
+            self.assertEqual(capability.divisor, 10, key)
         with self.assertRaises(KeyError):
             profile.get_capability("low_dc_cutoff_soc")
 
@@ -421,7 +434,15 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.source_scope, "builtin")
         self.assertTrue(profile.source_path.endswith("profiles/pi30_ascii/models/vmii_nxpw5kw.json"))
         self.assertEqual(len(profile.groups), 3)
-        self.assertEqual(len(profile.capabilities), 18)
+        self.assertEqual(len(profile.capabilities), 20)
+        self.assertEqual(
+            profile.get_capability("max_charging_current").enum_value_map[100],
+            "100 A",
+        )
+        self.assertEqual(
+            profile.get_capability("max_ac_charging_current").enum_value_map[70],
+            "70 A",
+        )
 
     def test_loads_pi30_pi41_profile_overlay(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
@@ -445,7 +466,11 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.title, "PI30 MAX / ASCII Profile")
         self.assertEqual(profile.source_name, "pi30_ascii/models/pi30_max.json")
         self.assertTrue(profile.source_path.endswith("profiles/pi30_ascii/models/pi30_max.json"))
-        self.assertEqual(len(profile.capabilities), 18)
+        self.assertEqual(len(profile.capabilities), 20)
+        total = profile.get_capability("max_charging_current")
+        utility = profile.get_capability("max_ac_charging_current")
+        self.assertEqual((total.command, total.command_width), ("MCHGC", 3))
+        self.assertEqual((utility.command, utility.command_width), ("MUCHGC", 3))
 
     def test_loads_pi30_pip_gk_profile_overlay(self) -> None:
         profile_loader.load_driver_profile.cache_clear()

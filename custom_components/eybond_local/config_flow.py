@@ -8733,7 +8733,20 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 return entry
             if collector_pn and _collector_identity_matches(entry_collector_pn, collector_pn):
                 return entry
-            if serial_number and entry_serial == serial_number:
+            # Collector PN is the durable entry identity. Some PI30-family
+            # inverters ship the same placeholder serial on every unit; once
+            # both sides have distinct collector PNs, that shared serial must
+            # never collapse two physical collectors into one entry.
+            distinct_collector_identities = bool(
+                collector_pn
+                and entry_collector_pn
+                and not _collector_identity_matches(entry_collector_pn, collector_pn)
+            )
+            if (
+                serial_number
+                and entry_serial == serial_number
+                and not distinct_collector_identities
+            ):
                 return entry
             if (
                 not candidate_has_strong_identity

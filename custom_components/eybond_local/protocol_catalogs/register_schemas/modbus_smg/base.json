@@ -265,7 +265,8 @@
       },
       {
         "key": "output_power",
-        "register": 213
+        "register": 213,
+        "signed": true
       },
       {
         "key": "output_va",

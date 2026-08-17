@@ -24,6 +24,7 @@ from custom_components.eybond_local.models import RegisterValueSpec  # noqa: E40
 from custom_components.eybond_local.control_policy import can_expose_capability  # noqa: E402
 from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
 from custom_components.eybond_local.metadata.register_schema_loader import (  # noqa: E402
+    load_register_schema,
     set_external_register_schema_roots,
 )
 from custom_components.eybond_local.models import DetectedInverter, ProbeTarget  # noqa: E402
@@ -1079,6 +1080,32 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["dry_contact_mode"], "Grounding Box Mode")
         self.assertEqual(values["automatic_mains_output_enabled"], "Enabled")
 
+    async def test_read_values_clamps_signed_idle_load_noise_to_zero(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        inverter = DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="SMG 6200",
+            serial_number="SMG11K240001",
+            probe_target=target,
+            variant_key="default",
+            profile_name="modbus_smg/models/smg_6200.json",
+            register_schema_name="modbus_smg/models/smg_6200.json",
+            capabilities=(),
+        )
+        registers = self._smg_family_registers(rated_power=6200)
+        registers[213] = 0xFFFD
+        transport = FixtureTransport(
+            registers=registers,
+            command_responses=None,
+            probe_target=target,
+        )
+
+        values = await driver.async_read_values(transport, inverter)
+
+        self.assertEqual(values["output_power"], 0)
+
     async def test_read_values_backfills_missing_default_probe_details(self) -> None:
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
@@ -1230,6 +1257,15 @@ class DecodeUnavailableSentinelTests(unittest.TestCase):
         specs = (RegisterValueSpec(key="battery_current", register=10, signed=True),)
         decoded = _decode_block(10, [0xFFFF], specs)
         self.assertEqual(decoded["battery_current"], -1)
+
+    def test_smg_output_power_schema_decodes_negative_idle_noise_as_signed(self) -> None:
+        schema = load_register_schema("modbus_smg/base.json")
+        spec = next(item for item in schema.spec_set("live") if item.key == "output_power")
+
+        decoded = _decode_block(213, [0xFFFD], (spec,))
+
+        self.assertTrue(spec.signed)
+        self.assertEqual(decoded["output_power"], -3)
 
     def test_normal_unsigned_value_is_unchanged(self) -> None:
         specs = (RegisterValueSpec(key="output_power", register=10),)

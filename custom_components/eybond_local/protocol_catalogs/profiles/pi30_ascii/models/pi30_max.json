@@ -3,5 +3,68 @@
   "profile_key": "pi30_ascii_pi30_max",
   "title": "PI30 MAX / ASCII Profile",
   "driver_key": "pi30",
-  "protocol_family": "pi30"
+  "protocol_family": "pi30",
+  "capabilities": [
+    {
+      "key": "max_charging_current",
+      "register": 0,
+      "value_kind": "enum",
+      "command": "MCHGC",
+      "command_width": 3,
+      "note": "PI30 MAX MCHGC command; selectable values confirmed by QMCHGCR/cloud evidence for this device family.",
+      "tested": true,
+      "provenance": "doc_backed",
+      "title": "Max Total Charge Current",
+      "group": "battery",
+      "order": 260,
+      "unit": "A",
+      "enabled_default": true,
+      "requires_confirm": true,
+      "change_summary": "Limits the total battery charging current from all sources.",
+      "choices": [
+        {"value": 10, "label": "10 A", "order": 0},
+        {"value": 20, "label": "20 A", "order": 1},
+        {"value": 30, "label": "30 A", "order": 2},
+        {"value": 40, "label": "40 A", "order": 3},
+        {"value": 50, "label": "50 A", "order": 4},
+        {"value": 60, "label": "60 A", "order": 5},
+        {"value": 70, "label": "70 A", "order": 6},
+        {"value": 80, "label": "80 A", "order": 7},
+        {"value": 90, "label": "90 A", "order": 8},
+        {"value": 100, "label": "100 A", "order": 9},
+        {"value": 110, "label": "110 A", "order": 10},
+        {"value": 120, "label": "120 A", "order": 11}
+      ]
+    },
+    {
+      "key": "max_ac_charging_current",
+      "register": 0,
+      "value_kind": "enum",
+      "command": "MUCHGC",
+      "command_width": 3,
+      "note": "PI30 MAX MUCHGC command; selectable values confirmed by QMUCHGCR/cloud evidence for this device family.",
+      "tested": true,
+      "provenance": "doc_backed",
+      "title": "Max Utility Charge Current",
+      "group": "battery",
+      "order": 270,
+      "unit": "A",
+      "enabled_default": true,
+      "requires_confirm": true,
+      "change_summary": "Limits the battery charging current supplied by utility power.",
+      "choices": [
+        {"value": 2, "label": "2 A", "order": 0},
+        {"value": 10, "label": "10 A", "order": 1},
+        {"value": 20, "label": "20 A", "order": 2},
+        {"value": 30, "label": "30 A", "order": 3},
+        {"value": 40, "label": "40 A", "order": 4},
+        {"value": 50, "label": "50 A", "order": 5},
+        {"value": 60, "label": "60 A", "order": 6},
+        {"value": 70, "label": "70 A", "order": 7},
+        {"value": 80, "label": "80 A", "order": 8},
+        {"value": 90, "label": "90 A", "order": 9},
+        {"value": 100, "label": "100 A", "order": 10}
+      ]
+    }
+  ]
 }

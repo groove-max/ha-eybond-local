@@ -1,5 +1,5 @@
 {
-  "extends": "./default.json",
+  "extends": "./pi30_max.json",
   "profile_key": "pi30_ascii_vmii_nxpw5kw",
   "title": "PI30 / ASCII VMII-NXPW5KW Profile",
   "driver_key": "pi30",

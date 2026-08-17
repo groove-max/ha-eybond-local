@@ -3,5 +3,49 @@
   "profile_key": "modbus_smg_anenji_4200_protocol_1",
   "title": "Anenji 4200 Protocol 1",
   "driver_key": "modbus_smg",
-  "protocol_family": "modbus_smg"
+  "protocol_family": "modbus_smg",
+  "capabilities": [
+    {
+      "key": "battery_bulk_voltage",
+      "minimum": 0,
+      "maximum": 700,
+      "note": "24 V unit: model-specific battery-voltage limits are not documented, so the family 48 V window must not be enforced; the inverter validates the requested setpoint."
+    },
+    {
+      "key": "battery_float_voltage",
+      "minimum": 0,
+      "maximum": 700,
+      "note": "24 V unit: model-specific battery-voltage limits are not documented, so the family 48 V window must not be enforced; the inverter validates the requested setpoint."
+    },
+    {
+      "key": "battery_under_voltage",
+      "minimum": 0,
+      "maximum": 700,
+      "note": "24 V unit: model-specific battery-voltage limits are not documented, so the family 48 V window must not be enforced; the inverter validates the requested setpoint."
+    },
+    {
+      "key": "battery_under_voltage_off_grid",
+      "minimum": 0,
+      "maximum": 700,
+      "note": "24 V unit: model-specific battery-voltage limits are not documented, so the family 48 V window must not be enforced; the inverter validates the requested setpoint."
+    },
+    {
+      "key": "battery_redischarge_voltage",
+      "minimum": 0,
+      "maximum": 700,
+      "note": "24 V unit: model-specific battery-voltage limits are not documented, so the family 48 V window must not be enforced; the inverter validates the requested setpoint."
+    },
+    {
+      "key": "battery_overvoltage_protection_voltage",
+      "minimum": 0,
+      "maximum": 700,
+      "note": "24 V unit: model-specific battery-voltage limits are not documented, so the family 48 V window must not be enforced; the inverter validates the requested setpoint."
+    },
+    {
+      "key": "battery_equalization_voltage",
+      "minimum": 0,
+      "maximum": 700,
+      "note": "24 V unit: model-specific battery-voltage limits are not documented, so the family 48 V window must not be enforced; the inverter validates the requested setpoint."
+    }
+  ]
 }

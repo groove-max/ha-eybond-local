@@ -60,7 +60,7 @@ class OnboardingDeadlineTests(unittest.TestCase):
             async def _too_slow() -> None:
                 await asyncio.sleep(1.0)
 
-            with self.assertRaises(TimeoutError):
+            with self.assertRaises(asyncio.TimeoutError):
                 await deadline.wait_for(_too_slow())
 
         asyncio.run(_run())

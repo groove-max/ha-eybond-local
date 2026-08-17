@@ -7,6 +7,9 @@
 
 [![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=groove-max&repository=ha-eybond-local&category=integration)
 
+> The **Open in HACS** button requires HACS to be installed. HACS is optional;
+> if you do not use it, follow the manual installation steps below.
+
 > **Companion dashboard card:** [EyeBond Local Card](https://github.com/groove-max/ha-eybond-local-card) adds a ready-made Home Assistant dashboard with power flow and history charts.
 
 > **No factory collector?** [ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector) is a community firmware bridge for connecting supported inverters directly to EyeBond Local without a factory cloud logger.
@@ -110,7 +113,7 @@ It is a small ESP8266/ESP32-based bridge that connects directly to the inverter 
 
 ### Manual installation
 
-1. Download the latest release.
+1. Download the archive from the [latest EyeBond Local release](https://github.com/groove-max/ha-eybond-local/releases/latest).
 2. Copy `custom_components/eybond_local/` into `config/custom_components/`.
 3. Restart Home Assistant.
 4. Add **EyeBond Local** from **Settings → Devices & Services**.
