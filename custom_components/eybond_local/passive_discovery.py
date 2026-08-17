@@ -12,6 +12,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from .collector_identity import validated_collector_pn
 from .collector.transport import _acquire_shared_listener, _release_shared_listener
 from .collector.transport_profile import collector_session_protocol_from_inventory_state
 from .connection.admission import ObservedCollectorSession
@@ -629,6 +630,8 @@ class PassiveCallbackDiscovery:
         # The registry is the single coalescing + ownership authority: it reads
         # the listener inventory (via ``iter_observed_sessions``), collapses
         # short/full PN duplicates, and marks sessions owned by a config entry.
+        observed_per_socket = self._registry.observed_sessions_per_socket()
+        await self._async_abort_stale_weak_discovery_flows(observed_per_socket)
         observed = self._registry.observed_sessions()
         self._capture_active_probe_sessions(observed)
         self._prune_notified_for_observed_sessions(observed)
@@ -636,7 +639,7 @@ class PassiveCallbackDiscovery:
         # 1) Repair/upgrade existing entries from their currently-live session.
         for candidate in observed:
             session = dict(candidate.raw)
-            collector_pn = str(session.get("collector_pn") or "").strip()
+            collector_pn = validated_collector_pn(session.get("collector_pn"))
             peer_ip = str(session.get("peer_ip") or "").strip()
             if not collector_pn or not peer_ip:
                 continue
@@ -667,7 +670,7 @@ class PassiveCallbackDiscovery:
                     session.get("collector_pn"),
                 )
                 continue
-            collector_pn = str(session.get("collector_pn") or "").strip()
+            collector_pn = validated_collector_pn(session.get("collector_pn"))
             peer_ip = str(session.get("peer_ip") or "").strip()
             if not collector_pn or not peer_ip:
                 continue
@@ -746,6 +749,107 @@ class PassiveCallbackDiscovery:
                 },
             )
             self._remember_notified(port, collector_pn, session=session)
+
+    async def _async_abort_stale_weak_discovery_flows(
+        self,
+        observed: object,
+    ) -> None:
+        """Abort weak discovery flows after their usable session disappears.
+
+        A weak heartbeat PN is evidence tied to a physical TCP session, not a
+        durable collector identity.  Keep the flow while that exact socket is
+        live, or while a live replacement has enriched the same PN.  Invalid
+        legacy flow identities are always removed.  Strong discovery flows are
+        deliberately unaffected by socket churn.
+        """
+
+        flow_manager = getattr(getattr(self._hass, "config_entries", None), "flow", None)
+        async_progress = getattr(flow_manager, "async_progress", None)
+        async_abort = getattr(flow_manager, "async_abort", None)
+        if not callable(async_progress) or not callable(async_abort):
+            return
+
+        live_sessions: set[tuple[int, str]] = set()
+        live_identities: list[str] = []
+        for candidate in tuple(observed or ()):
+            if getattr(candidate, "state", "") == SESSION_STATE_CLOSED:
+                continue
+            session_id = str(getattr(candidate, "session_id", "") or "").strip()
+            listener_port = int(getattr(candidate, "listener_port", 0) or 0)
+            collector_pn = validated_collector_pn(
+                getattr(candidate, "collector_pn", "")
+            )
+            if session_id:
+                live_sessions.add((listener_port, session_id))
+            if collector_pn:
+                live_identities.append(collector_pn)
+
+        try:
+            flows = async_progress(include_uninitialized=True)
+        except TypeError:
+            flows = async_progress()
+        except Exception:
+            logger.debug("Failed to inspect weak passive discovery flows", exc_info=True)
+            return
+
+        for flow in tuple(flows or ()):
+            flow_data = self._flow_discovery_data(flow)
+            if flow_data is None:
+                continue
+            flow_pn = validated_collector_pn(flow_data.get(CONF_COLLECTOR_PN))
+            source = _session_identity_source(flow_data)
+            session_id = str(flow_data.get("session_id") or "").strip()
+            listener_port = int(flow_data.get(CONF_TCP_PORT) or 0)
+
+            invalid_identity = not flow_pn
+            if not invalid_identity and identity_source_is_strong(source):
+                continue
+            step_id = str(flow.get("step_id") or "").strip()
+            if (
+                not invalid_identity
+                and step_id
+                and step_id != "verify_connection"
+            ):
+                # Once the user starts verification, the flow owns its reboot /
+                # reconnect lifecycle.  The original weak socket is expected to
+                # disappear there; background cleanup must not race the flow's
+                # own terminalization and cause "Invalid flow specified".
+                continue
+            if not invalid_identity:
+                exact_session_live = bool(
+                    session_id and (listener_port, session_id) in live_sessions
+                )
+                enriched_identity_live = any(
+                    pn_is_same_identity(flow_pn, candidate_pn)
+                    for candidate_pn in live_identities
+                )
+                if exact_session_live or enriched_identity_live:
+                    continue
+                # Flows created before exact-session metadata existed cannot be
+                # lifecycle-pruned safely; an unrelated same-peer socket is not
+                # sufficient evidence either.
+                if not session_id:
+                    continue
+
+            flow_id = str(flow.get("flow_id") or "").strip()
+            if not flow_id:
+                continue
+            try:
+                result = async_abort(flow_id)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.debug(
+                    "Failed to abort stale weak passive discovery flow %s",
+                    flow_id,
+                    exc_info=True,
+                )
+                continue
+            self._forget_notified(listener_port, flow_pn)
+            if session_id:
+                self._notified.discard(
+                    f"session:{listener_port}:{session_id}"
+                )
 
     def _log_session_once(self, port: int, session: dict[str, object]) -> None:
         collector_pn = str(session.get("collector_pn") or "").strip()

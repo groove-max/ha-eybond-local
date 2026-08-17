@@ -210,6 +210,137 @@ class EnsureObservedListenerTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_invalid_wire_identity_never_becomes_discovery(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        discovery._listeners[18899] = _FakeListener(
+            (
+                {
+                    "session_id": "listener-18899-scanner",
+                    "peer_ip": "69.5.169.178",
+                    "collector_pn": "\x13\x03\x13\x02+/ ,",
+                    "state": "routed_framed",
+                    "protocol_shape": "eybond_framed",
+                    "collector_identity_source": "framed_heartbeat",
+                },
+            )
+        )
+
+        with patch(
+            "custom_components.eybond_local.passive_discovery._WEAK_IDENTITY_SETTLE_SECONDS",
+            0,
+        ):
+            await discovery._async_poll_once()
+
+        self.assertEqual(hass.config_entries.flow.flows, [])
+
+    async def test_existing_invalid_weak_flow_is_aborted(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        hass.config_entries.flow.flows.append(
+            (
+                DOMAIN,
+                {
+                    "source": "integration_discovery",
+                    "flow_id": "flow-scanner",
+                    "eybond_discovery": {
+                        "collector_pn": "\x13\x03\x13\x02+/,",
+                        "tcp_port": 18899,
+                        "session_id": "listener-18899-scanner",
+                        "collector_identity_source": "framed_heartbeat",
+                    },
+                },
+                {},
+            )
+        )
+
+        await discovery._async_poll_once()
+
+        self.assertEqual(hass.config_entries.flow.aborted, ["flow-scanner"])
+        self.assertEqual(hass.config_entries.flow.flows, [])
+
+    async def test_weak_flow_is_aborted_when_its_session_disappears(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        session = {
+            "session_id": "listener-18899-weak",
+            "peer_ip": "195.138.86.175",
+            "collector_pn": "V001020SYN6234",
+            "state": "routed_framed",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "framed_heartbeat",
+        }
+        listener = _FakeListener((session,))
+        discovery._listeners[18899] = listener
+
+        with patch(
+            "custom_components.eybond_local.passive_discovery._WEAK_IDENTITY_SETTLE_SECONDS",
+            0,
+        ):
+            await discovery._async_poll_once()
+            self.assertEqual(len(hass.config_entries.flow.flows), 1)
+            listener._sessions = ()
+            await discovery._async_poll_once()
+
+        self.assertEqual(hass.config_entries.flow.aborted, ["flow-1"])
+        self.assertEqual(hass.config_entries.flow.flows, [])
+
+    async def test_strong_flow_survives_session_churn(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        session = {
+            "session_id": "listener-18899-strong",
+            "peer_ip": "195.138.86.175",
+            "collector_pn": "V001020SYN62344022",
+            "state": "routed_framed",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+        }
+        listener = _FakeListener((session,))
+        discovery._listeners[18899] = listener
+
+        await discovery._async_poll_once()
+        listener._sessions = ()
+        await discovery._async_poll_once()
+
+        self.assertEqual(hass.config_entries.flow.aborted, [])
+        self.assertEqual(len(hass.config_entries.flow.flows), 1)
+
+    async def test_started_weak_verification_owns_its_reconnect_lifecycle(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        hass.config_entries.flow.flows.append(
+            (
+                DOMAIN,
+                {
+                    "source": "integration_discovery",
+                    "flow_id": "flow-verifying",
+                    "eybond_discovery": {
+                        "collector_pn": "V001020SYN6234",
+                        "tcp_port": 18899,
+                        "session_id": "listener-18899-old",
+                        "collector_identity_source": "framed_heartbeat",
+                    },
+                },
+                {},
+            )
+        )
+        hass.config_entries.flow.async_progress = (
+            lambda include_uninitialized=False: [
+                {
+                    "flow_id": "flow-verifying",
+                    "handler": DOMAIN,
+                    "context": hass.config_entries.flow.flows[0][1],
+                    "step_id": "verify_connection_progress",
+                }
+            ]
+        )
+
+        await discovery._async_poll_once()
+
+        self.assertEqual(hass.config_entries.flow.aborted, [])
+        self.assertEqual(len(hass.config_entries.flow.flows), 1)
+
     async def test_active_callback_probe_scope_always_closes_service_scope(self) -> None:
         hass = _FakeHass()
         hass.data = {}

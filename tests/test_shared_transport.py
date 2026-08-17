@@ -25,6 +25,8 @@ from custom_components.eybond_local.collector.transport import (
     _CollectorConnection,
     _PendingCollectorSocket,
     _SharedEybondListener,
+    _collector_pn_from_initial_chunk,
+    _parse_fc2_collector_pn,
 )
 from custom_components.eybond_local.collector.at import CollectorAtResponse
 from custom_components.eybond_local.collector.protocol import (
@@ -32,6 +34,7 @@ from custom_components.eybond_local.collector.protocol import (
     build_collector_request,
     build_heartbeat_request,
     decode_header,
+    parse_heartbeat_pn,
 )
 from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
 from custom_components.eybond_local.models import CollectorInfo
@@ -83,6 +86,59 @@ async def _wait_for_writer_buffer(writer: _FakeWriter, expected: bytes) -> None:
 
 
 class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
+    def test_scanner_control_payload_is_not_a_heartbeat_identity(self) -> None:
+        scanner_payload = b"\x13\x03\x13\x02+/,"
+        frame = build_collector_request(
+            1,
+            scanner_payload,
+            devcode=0,
+            collector_addr=1,
+            fcode=1,
+        )
+
+        self.assertEqual(parse_heartbeat_pn(scanner_payload), "")
+        self.assertEqual(_collector_pn_from_initial_chunk(frame), ("", ""))
+
+    def test_wire_identity_parsers_accept_real_short_and_full_pns(self) -> None:
+        self.assertEqual(
+            parse_heartbeat_pn(b"V001020SYN6234"),
+            "V001020SYN6234",
+        )
+        self.assertEqual(
+            _parse_fc2_collector_pn(b"\x00\x02V001020SYN62344022"),
+            "V001020SYN62344022",
+        )
+
+    def test_fc2_identity_rejects_control_non_ascii_and_padded_text(self) -> None:
+        for payload in (
+            b"\x00\x02\x13\x03\x13\x02+/",
+            b"\x00\x02E500002SYN84\xff199645",
+            b"\x00\x02 E500002SYN84199645",
+            b"\x00\x02E500002SYN84199645 ",
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual(_parse_fc2_collector_pn(payload), "")
+
+    def test_listener_refuses_non_wire_safe_identity_before_inventory_mutation(
+        self,
+    ) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener._remember_session(
+            session_id="scanner-session",
+            remote_ip="69.5.169.178",
+            remote_port=41000,
+        )
+
+        listener._mark_session_identity(
+            "scanner-session",
+            "\x13\x03\x13\x02+/ ,",
+            "framed_heartbeat",
+        )
+
+        entry = listener._session_inventory["scanner-session"]
+        self.assertEqual(entry.collector_pn, "")
+        self.assertEqual(entry.collector_identity_source, "")
+
     async def test_proxy_route_rejects_malformed_wire_before_route_lease(
         self,
     ) -> None:

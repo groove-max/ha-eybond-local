@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Awaitable, Callable, Protocol
 
+from ..collector_identity import validated_collector_pn
 from .at import CollectorAtResponse, build_at_query, build_at_write, parse_at_response
 from .cloud_family import (
     apply_collector_cloud_family_observation,
@@ -279,7 +280,9 @@ def _seed_connection_collector_pn(connection: object, collector_pn: str) -> None
     collector.collector_pn_digits = seeded[1:]
 
 
-_AT_DTUPN_RE = re.compile(rb"AT\+DTUPN\s*[:=]\s*([A-Za-z0-9][A-Za-z0-9._-]{5,})")
+_AT_DTUPN_RE = re.compile(
+    rb"AT\+DTUPN\s*[:=]\s*([A-Za-z0-9][A-Za-z0-9._-]{5,63})(?![A-Za-z0-9._-])"
+)
 
 
 def _parse_fc2_collector_pn(payload: bytes) -> str:
@@ -287,7 +290,11 @@ def _parse_fc2_collector_pn(payload: bytes) -> str:
         return ""
     if payload[1] != 2:
         return ""
-    return payload[2:].decode("ascii", errors="ignore").strip("\x00").strip()
+    try:
+        candidate = payload[2:].rstrip(b"\x00").decode("ascii")
+    except UnicodeDecodeError:
+        return ""
+    return validated_collector_pn(candidate)
 
 
 def _collector_pn_from_initial_chunk(chunk: bytes) -> tuple[str, str]:
@@ -297,7 +304,9 @@ def _collector_pn_from_initial_chunk(chunk: bytes) -> tuple[str, str]:
 
     match = _AT_DTUPN_RE.search(payload)
     if match:
-        return match.group(1).decode("ascii", errors="ignore").strip(), "at_dtupn"
+        collector_pn = validated_collector_pn(match.group(1).decode("ascii"))
+        if collector_pn:
+            return collector_pn, "at_dtupn"
 
     if len(payload) < HEADER_SIZE:
         return "", ""
@@ -307,9 +316,11 @@ def _collector_pn_from_initial_chunk(chunk: bytes) -> tuple[str, str]:
         return "", ""
     available_payload = payload[HEADER_SIZE : HEADER_SIZE + max(header.payload_len, 0)]
     if header.fcode == FC_HEARTBEAT:
-        return parse_heartbeat_pn(available_payload), "framed_heartbeat"
+        collector_pn = parse_heartbeat_pn(available_payload)
+        return (collector_pn, "framed_heartbeat") if collector_pn else ("", "")
     if header.fcode == FC_QUERY_COLLECTOR:
-        return _parse_fc2_collector_pn(available_payload), "fc2_parameter_2"
+        collector_pn = _parse_fc2_collector_pn(available_payload)
+        return (collector_pn, "fc2_parameter_2") if collector_pn else ("", "")
     return "", ""
 
 
@@ -2488,7 +2499,7 @@ class _SharedEybondListener:
         collector_pn: str,
         source: str,
     ) -> None:
-        normalized_pn = str(collector_pn or "").strip()
+        normalized_pn = validated_collector_pn(collector_pn)
         if not normalized_pn:
             return
         entry = self._session_inventory.get(session_id)

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import struct
 
+from ..collector_identity import validated_collector_pn
+
 FC_HEARTBEAT = 1
 FC_QUERY_COLLECTOR = 2
 FC_SET_COLLECTOR = 3
@@ -126,4 +128,14 @@ def build_heartbeat_payload(interval: int) -> bytes:
 def parse_heartbeat_pn(payload: bytes) -> str:
     """Heartbeat payloads carry a collector part number in ASCII."""
 
-    return payload[:14].decode("ascii", errors="ignore").strip("\x00")
+    # A heartbeat PN occupies exactly the first 14 payload bytes.  Accepting a
+    # shorter payload made an arbitrary Internet probe with a coincidentally
+    # valid EyeBond header become a weak collector identity and HA discovery
+    # flow.  NUL padding remains supported for genuine shorter identifiers.
+    if type(payload) is not bytes or len(payload) < 14:
+        return ""
+    try:
+        candidate = payload[:14].rstrip(b"\x00").decode("ascii")
+    except UnicodeDecodeError:
+        return ""
+    return validated_collector_pn(candidate)
