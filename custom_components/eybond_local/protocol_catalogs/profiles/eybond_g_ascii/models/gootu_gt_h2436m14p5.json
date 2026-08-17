@@ -1,0 +1,39 @@
+{
+  "extends": "../base.json",
+  "profile_key": "eybond_g_ascii_gootu_gt_h2436m14p5",
+  "title": "Gootu GT-H2436M14P5",
+  "driver_key": "eybond_g_ascii",
+  "protocol_family": "eybond_g_ascii",
+  "capabilities": [
+    {
+      "key": "charging_priority",
+      "title": "Charging Priority",
+      "group": "charging",
+      "order": 160,
+      "tested": true,
+      "provenance": "verified",
+      "support_tier": "standard",
+      "enabled_default": true,
+      "requires_confirm": true,
+      "support_notes": "SmartValue proxy evidence from Gootu GT-H2436M14P5 hardware captured CPR03 and CPR00 writes with ACK responses. The CPR01 and CPR02 values use the same document-backed JSDSOLAR command family; output-priority OPR writes are intentionally not exposed for this model because no device ACK was captured.",
+      "register": -1,
+      "value_kind": "enum",
+      "command": "CPR",
+      "command_map": {
+        "12336": "CPR00",
+        "12337": "CPR01",
+        "12338": "CPR02",
+        "12339": "CPR03"
+      },
+      "enum_map": {
+        "12336": "Utility first",
+        "12337": "PV first",
+        "12338": "Utility + PV",
+        "12339": "PV only"
+      },
+      "read_key": "g_ascii_setting_charging_priority",
+      "change_summary": "Changes which source has priority for battery charging."
+    }
+  ],
+  "presets": []
+}

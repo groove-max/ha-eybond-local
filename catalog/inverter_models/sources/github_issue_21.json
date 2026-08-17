@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_21",
+  "kind": "github_issue",
+  "title": "Gootu GT-H2436M14P5 user report",
+  "reference": "project-issue:21",
+  "captured_at": "2026-07-31",
+  "visibility": "public",
+  "summary": "Device owner reported a Gootu GT-H2436M14P5 24V 3.6kW hybrid inverter using an EyeBond Wi-Fi collector. The integration recognized the G-ASCII family, while 0.3.0-beta.1 could time out during local probing in Cloud + HA mode.",
+  "assertions": [
+    "commercial_identity",
+    "runtime_compatibility"
+  ]
+}

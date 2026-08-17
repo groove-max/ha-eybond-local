@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_issue_21_20260731",
+  "kind": "support_archive",
+  "title": "Gootu GT-H2436M14P5 support archive",
+  "reference": "project-issue:21#support-archive-20260731",
+  "captured_at": "2026-07-31",
+  "visibility": "public",
+  "summary": "Sanitized support evidence identifies the EyeBond G-ASCII driver family and records the reported inverter fingerprint as 230V output, 15A output current, 24V battery, 50Hz, and software version 4.007. No private collector identity or network address is stored in the repository catalog.",
+  "assertions": [
+    "fingerprint",
+    "runtime_compatibility",
+    "telemetry_validation"
+  ]
+}

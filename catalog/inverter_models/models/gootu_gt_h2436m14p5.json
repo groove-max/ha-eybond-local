@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "model_key": "gootu_gt_h2436m14p5",
+  "manufacturer": "Gootu",
+  "model": "GT-H2436M14P5",
+  "aliases": [
+    "Gootu Hybrid 24V 3.6kW"
+  ],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "eybond_g_ascii_gootu_fingerprint",
+      "label": "EyeBond G-ASCII 230V/15A/24V/50Hz, software 4.007",
+      "device_descriptor_keys": [
+        "gootu_gt_h2436m14p5"
+      ],
+      "known_firmware": [
+        "collector AT R001",
+        "inverter F 230V 15A 24V 50Hz",
+        "inverter SVFW 4.007"
+      ]
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "confirmed",
+    "controls": "partial"
+  },
+  "coverage": {
+    "runtime_control_surface": "available",
+    "smartess_control_surface": "correlated",
+    "vendor_register_map": "documented",
+    "notes": [
+      "Runtime identification uses the exact local G-ASCII F/SVFW fingerprint, not the commercial model name.",
+      "Captured GPDAT0 and GPV responses match the existing EyeBond G-ASCII telemetry decoder.",
+      "Charging-priority CPR03 and CPR00 writes received ACK responses in a SmartValue proxy capture.",
+      "The family protocol document describes additional commands, but unverified model-specific writes are not promoted to tested support."
+    ]
+  },
+  "known_limitations": [
+    "Only charging priority is exposed as a model-verified control.",
+    "CPR01 and CPR02 are document-backed members of the verified CPR command family, but the supplied trace directly captured ACK only for CPR00 and CPR03.",
+    "Output-priority OPR is intentionally omitted until an ACK and resulting behavior are verified on this exact model.",
+    "The original Cloud + HA probe timeout was reported on 0.3.0-beta.1; release retesting is still required against the current connection lifecycle."
+  ],
+  "knowledge_summary": "Gootu GT-H2436M14P5 is a 24V 3.6kW hybrid inverter observed behind an EyeBond Wi-Fi collector. A support archive and SmartValue proxy capture establish the EyeBond G-ASCII telemetry family, the exact 230V/15A/24V/50Hz plus SVFW 4.007 offline fingerprint, and acknowledged CPR00/CPR03 charging-priority writes. The exact runtime profile therefore reuses the established telemetry decoder and exposes only the evidence-backed charging-priority control.",
+  "source_keys": [
+    "github_issue_21",
+    "support_archive_issue_21_20260731",
+    "proxy_capture_issue_21_20260801",
+    "documentation_jsdsolar_g_ascii_protocol"
+  ]
+}

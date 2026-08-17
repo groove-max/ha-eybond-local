@@ -284,6 +284,105 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         self.assertEqual(evidence["rating.frequency"], 50.0)
         self.assertEqual(evidence["firmware.software_version"], "4.003")
 
+    def test_probe_resolves_gootu_profile_from_sanitized_issue_21_capture(self) -> None:
+        class _CollectorInfo:
+            collector_pn = "A0000000000001"
+            collector_cloud_family = "valuecloud_at"
+
+        class _Transport:
+            collector_info = _CollectorInfo()
+
+            async def async_send_payload(self, payload, *, route):
+                responses = {
+                    b"GMOD\r": b"(L\r",
+                    b"GPDAT0\r": (
+                        b"(0 4 4007 0 00 230.9 50.02 231.5 50.02 230.9 "
+                        b"50.03 00.00 27.2 000.1 000 0000 0000 100 015.3 "
+                        b"000.0 0000 049.0\r"
+                    ),
+                    b"GPV\r": (
+                        b"(015.4 027.2 00.00 00.01 00000 00 0 1 441.1 "
+                        b"450.0 438.0 428.0 000.0 00 00000 00000 0000 "
+                        b"0000 0000 0010 00000 00000 00000 "
+                        b"0000000000000000\r"
+                    ),
+                    b"F\r": b"#230.0 015 024.0 50.0\r",
+                    b"SVFW\r": b"(4.007 (20250320\r",
+                }
+                return responses[payload]
+
+            def select_payload_route(self, route, *, payload_family=""):
+                return route
+
+        detected = asyncio.run(
+            EybondGAsciiDriver().async_probe(
+                _Transport(),
+                ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0),
+            )
+        )
+
+        self.assertIsNotNone(detected)
+        self.assertEqual(detected.model_name, "Gootu GT-H2436M14P5")
+        self.assertEqual(detected.variant_key, "gootu_gt_h2436m14p5")
+        self.assertEqual(
+            detected.profile_name,
+            "eybond_g_ascii/models/gootu_gt_h2436m14p5.json",
+        )
+        self.assertEqual(detected.register_schema_name, "eybond_g_ascii/base.json")
+        self.assertEqual(detected.details["catalog_detection"]["resolution"], "exact")
+        self.assertEqual(len(detected.capabilities), 23)
+        tested = {item.key for item in detected.capabilities if item.tested}
+        self.assertEqual(tested, {"charging_priority"})
+        self.assertNotIn("output_priority", {item.key for item in detected.capabilities})
+        evidence = detected.details["catalog_detection"]["evidence"]
+        self.assertEqual(evidence["rating.output_voltage"], 230.0)
+        self.assertEqual(evidence["rating.output_current"], 15.0)
+        self.assertEqual(evidence["rating.battery_voltage"], 24.0)
+        self.assertEqual(evidence["rating.frequency"], 50.0)
+        self.assertEqual(evidence["firmware.software_version"], "4.007")
+
+    def test_gootu_exact_profile_does_not_match_a_nearby_fingerprint(self) -> None:
+        class _CollectorInfo:
+            collector_pn = "A0000000000001"
+            collector_cloud_family = "valuecloud_at"
+
+        class _Transport:
+            collector_info = _CollectorInfo()
+
+            async def async_send_payload(self, payload, *, route):
+                responses = {
+                    b"GMOD\r": b"(L\r",
+                    b"GPDAT0\r": (
+                        b"(0 4 4008 0 00 230.9 50.02 231.5 50.02 230.9 "
+                        b"50.03 00.00 27.2 000.1 000 0000 0000 100 015.3 "
+                        b"000.0 0000 049.0\r"
+                    ),
+                    b"GPV\r": (
+                        b"(015.4 027.2 00.00 00.01 00000 00 0 1 441.1 "
+                        b"450.0 438.0 428.0 000.0 00 00000 00000 0000 "
+                        b"0000 0000 0010 00000 00000 00000 "
+                        b"0000000000000000\r"
+                    ),
+                    b"F\r": b"#230.0 015 024.0 50.0\r",
+                    b"SVFW\r": b"(4.008 (20250320\r",
+                }
+                return responses[payload]
+
+            def select_payload_route(self, route, *, payload_family=""):
+                return route
+
+        detected = asyncio.run(
+            EybondGAsciiDriver().async_probe(
+                _Transport(),
+                ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0),
+            )
+        )
+
+        self.assertIsNotNone(detected)
+        self.assertEqual(detected.model_name, "EyeBond G-ASCII family")
+        self.assertEqual(detected.variant_key, "g_ascii_family")
+        self.assertEqual(detected.details["catalog_detection"]["resolution"], "family")
+
     def test_decodes_eybond_g_ascii_runtime_mapping_without_short_gmod_leak(self) -> None:
         session = _FakeEybondGAsciiSession(
             {
@@ -971,6 +1070,46 @@ class EybondGAsciiDriverTests(unittest.TestCase):
             inverter.details["learned_output_priority"],
             "Mains output is preferred",
         )
+
+    def test_gootu_profile_writes_captured_charging_priority_commands(self) -> None:
+        profile = load_driver_profile(
+            "eybond_g_ascii/models/gootu_gt_h2436m14p5.json"
+        )
+        capability = profile.get_capability("charging_priority")
+        session = _FakeEybondGAsciiSession({"CPR03": "ACK", "CPR00": "ACK"})
+        inverter = DetectedInverter(
+            driver_key="eybond_g_ascii",
+            protocol_family="eybond_g_ascii",
+            model_name="Gootu GT-H2436M14P5",
+            serial_number="A0000000000001",
+            probe_target=ProbeTarget(
+                devcode=0x0994,
+                collector_addr=0xFF,
+                device_addr=0,
+            ),
+            register_schema_name="eybond_g_ascii/base.json",
+            capabilities=(capability,),
+        )
+        driver = EybondGAsciiDriver()
+
+        with patch.object(driver, "_session", return_value=session):
+            pv_only = asyncio.run(
+                driver.async_write_capability(
+                    object(), inverter, "charging_priority", "PV only"
+                )
+            )
+            utility_first = asyncio.run(
+                driver.async_write_capability(
+                    object(), inverter, "charging_priority", "Utility first"
+                )
+            )
+
+        self.assertEqual(session.commands, ["CPR03", "CPR00"])
+        self.assertEqual(pv_only, "PV only")
+        self.assertEqual(utility_first, "Utility first")
+        self.assertTrue(capability.tested)
+        self.assertEqual(capability.provenance, "verified")
+        self.assertTrue(capability.requires_confirm)
 
     def test_document_backed_g_ascii_capabilities_write_fixed_width_commands(self) -> None:
         profile = load_driver_profile("eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json")

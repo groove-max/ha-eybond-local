@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "proxy_capture_issue_21_20260801",
+  "kind": "support_archive",
+  "title": "Gootu SmartValue G-ASCII proxy capture",
+  "reference": "project-issue:21#proxy-capture-20260801",
+  "captured_at": "2026-08-01",
+  "visibility": "public",
+  "summary": "Sanitized SmartValue proxy evidence from the reported device contains repeated GPDAT0 and GPV telemetry responses. It also captures CPR03 followed by ACK and CPR00 followed by ACK while the user changed charging priority. No OPR write or acknowledgement is present.",
+  "assertions": [
+    "telemetry_validation",
+    "write_validation",
+    "control_behavior"
+  ]
+}

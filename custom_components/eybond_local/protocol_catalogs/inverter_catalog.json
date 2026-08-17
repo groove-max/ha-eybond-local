@@ -1287,6 +1287,17 @@
    "support_capture_policy": "must_pv_ph18"
   },
   {
+   "key": "eybond_g_ascii_gootu_gt_h2436m14p5",
+   "protocol_key": "eybond_g_ascii",
+   "driver_key": "eybond_g_ascii",
+   "variant_key": "gootu_gt_h2436m14p5",
+   "profile_name": "eybond_g_ascii/models/gootu_gt_h2436m14p5.json",
+   "register_schema_name": "eybond_g_ascii/base.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "eybond_g_ascii"
+  },
+  {
    "key": "eybond_g_ascii_lvyuan_ty_sic_3_6kbe_w1",
    "protocol_key": "eybond_g_ascii",
    "driver_key": "eybond_g_ascii",
@@ -2254,6 +2265,46 @@
      "private register map: SRNE-compatible Modbus product-info and telemetry ranges"
     ],
     "confidence": "third-party-map-unconfirmed"
+   }
+  },
+  {
+   "entry_key": "gootu_gt_h2436m14p5",
+   "surface_key": "eybond_g_ascii_gootu_gt_h2436m14p5",
+   "model_name": "Gootu GT-H2436M14P5",
+   "priority": 125,
+   "family_fallback": false,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "EYBOND_G_ASCII"
+    },
+    {
+     "key": "rating.output_voltage",
+     "equals": 230
+    },
+    {
+     "key": "rating.output_current",
+     "equals": 15
+    },
+    {
+     "key": "rating.battery_voltage",
+     "equals": 24
+    },
+    {
+     "key": "rating.frequency",
+     "equals": 50
+    },
+    {
+     "key": "firmware.software_version",
+     "equals": "4.007"
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "GitHub issue #21 and its support archive: user-reported Gootu GT-H2436M14P5 identity with local G-ASCII F/SVFW fingerprint 230V/15A/24V/50Hz and software 4.007.",
+     "SmartValue proxy capture from the same reported device: GPDAT0/GPV telemetry plus CPR03 and CPR00 writes acknowledged by the inverter."
+    ],
+    "confidence": "offline-fingerprint-user-reported-model"
    }
   },
   {
