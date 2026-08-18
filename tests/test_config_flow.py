@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 from dataclasses import dataclass, replace
 import json
@@ -4051,34 +4052,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             options["collector_original_server_endpoint_profile_key"],
             "valuecloud_at",
         )
-
-    async def test_endpoint_originality_hint_uses_catalog_host_match(self) -> None:
-        flow = self._make_flow()
-
-        hint = flow._endpoint_originality_hint("dtu_ess.eybond.com")
-
-        self.assertIn("original cloud endpoint", hint)
-
-    async def test_endpoint_originality_hint_uses_valuecloud_host_match_before_18899_port_fallback(self) -> None:
-        flow = self._make_flow()
-
-        hint = flow._endpoint_originality_hint("iot.eybond.com,18899,TCP")
-
-        self.assertIn("original cloud endpoint", hint)
-
-    async def test_endpoint_originality_hint_uses_catalog_port_match(self) -> None:
-        flow = self._make_flow()
-
-        hint = flow._endpoint_originality_hint("collector.example,502,TCP")
-
-        self.assertIn("original cloud endpoint", hint)
-
-    async def test_endpoint_originality_hint_reports_custom_for_unknown_endpoint(self) -> None:
-        flow = self._make_flow()
-
-        hint = flow._endpoint_originality_hint("collector.example,65535,TCP")
-
-        self.assertIn("does not look like the stock cloud address", hint)
 
     async def test_do_scan_keeps_matching_entries_loaded(self) -> None:
         matching = _FakeEntry("match", server_ip="192.168.1.50", tcp_port=8899)
@@ -15353,3 +15326,38 @@ class OptionsTransitionResolverPrefillTests(unittest.IsolatedAsyncioTestCase):
         )._transition_prefill()
         self.assertEqual((p["host"], p["port"]), ("195.191.72.37", 18899))
         self.assertNotEqual(p["port"], 1)
+
+
+class ConfigFlowDeadSurfaceGuards(unittest.TestCase):
+    def test_removed_test_only_helpers_do_not_return(self) -> None:
+        path = REPO_ROOT / "custom_components/eybond_local/config_flow.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        class_methods = {
+            node.name: {
+                item.name
+                for item in node.body
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+        }
+
+        self.assertTrue(
+            {
+                "_peer_label_plural",
+                "_endpoint_originality_hint",
+                "_onboarding_first_present_value",
+                "_onboarding_confirm_measurement",
+                "_onboarding_confirm_battery_connection",
+                "_default_control_summary",
+                "_scan_result_status_code",
+                "_scan_result_sort_key",
+            }.isdisjoint(class_methods["EybondLocalConfigFlow"])
+        )
+        self.assertTrue(
+            {
+                "_shadow_learning_settings_dat",
+                "_shadow_learning_observed_writes",
+                "_smartess_cloud_exported_next_step",
+            }.isdisjoint(class_methods["EybondLocalOptionsFlow"])
+        )

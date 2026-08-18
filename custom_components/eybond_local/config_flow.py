@@ -8072,12 +8072,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             self._connection_display().peer_label,
         )
 
-    def _peer_label_plural(self) -> str:
-        return self._tr(
-            "common.dynamic.peer_label_plural",
-            self._connection_display().peer_label_plural,
-        )
-
     def _unconfirmed_inverter_label(self) -> str:
         return self._tr(
             "common.dynamic.unconfirmed_inverter",
@@ -8137,40 +8131,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             }
         )
         return placeholders
-
-    def _endpoint_originality_hint(self, endpoint: str) -> str:
-        normalized = str(endpoint or "").strip().lower()
-        if not normalized:
-            return self._tr(
-                "common.dynamic.collector_endpoint_unknown_hint",
-                "The current collector callback endpoint could not be read yet.",
-            )
-
-        host = normalized.split(",", 1)[0]
-        family = ""
-        try:
-            parsed = inspect_collector_server_endpoint(
-                normalized,
-                require_explicit_port=False,
-                require_explicit_protocol=False,
-            )
-        except ValueError:
-            parsed = None
-        if parsed is not None:
-            host = str(parsed.host or "").strip().lower()
-            family = collector_cloud_family_observation_from_endpoint(normalized).family
-            if family == "unknown":
-                family = ""
-
-        if family or "eybond" in host or "smartess" in host:
-            return self._tr(
-                "common.dynamic.collector_endpoint_original_hint",
-                "This looks like the original cloud endpoint. Write it down before continuing; the integration will remember it, but keeping your own copy is safer.",
-            )
-        return self._tr(
-            "common.dynamic.collector_endpoint_custom_hint",
-            "This endpoint does not look like the stock cloud address. Make sure you know how to restore it before continuing.",
-        )
 
     def _auto_description_placeholders(self, single_interface: bool) -> dict[str, str]:
         if single_interface and self._interface_options:
@@ -8470,14 +8430,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     def _escape_markdown_table_cell(value: object) -> str:
         return str(value).replace("|", "\\|").replace("\n", " ")
 
-    @staticmethod
-    def _onboarding_first_present_value(details: dict[str, Any], *keys: str) -> object | None:
-        for key in keys:
-            value = details.get(key)
-            if value not in (None, ""):
-                return value
-        return None
-
     def _onboarding_confirm_table(
         self,
         heading_key: str,
@@ -8495,54 +8447,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 f"| {self._tr(label_key, label_fallback)} | {self._escape_markdown_table_cell(value)} |"
             )
         return "\n".join(lines)
-
-    def _onboarding_confirm_measurement(
-        self,
-        value: object,
-        *,
-        unit_key: str,
-        unit_fallback: str,
-    ) -> str:
-        if value in (None, ""):
-            return self._tr("common.dynamic.not_available_yet", "Not available yet")
-        if isinstance(value, bool):
-            return str(value)
-        if isinstance(value, float) and value.is_integer():
-            value = int(value)
-        if isinstance(value, (int, float)):
-            return self._tr(unit_key, unit_fallback, {"value": value})
-        return str(value)
-
-    def _onboarding_confirm_battery_connection(self, value: object) -> str:
-        if value in (None, ""):
-            return self._tr("common.dynamic.not_available_yet", "Not available yet")
-        if isinstance(value, bool):
-            return self._tr(
-                "common.dynamic.onboarding_confirm_battery_connected"
-                if value
-                else "common.dynamic.onboarding_confirm_battery_disconnected",
-                "Connected" if value else "Not connected",
-            )
-        if isinstance(value, (int, float)) and value in (0, 1):
-            return self._tr(
-                "common.dynamic.onboarding_confirm_battery_connected"
-                if int(value) == 1
-                else "common.dynamic.onboarding_confirm_battery_disconnected",
-                "Connected" if int(value) == 1 else "Not connected",
-            )
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized in {"1", "true", "yes", "connected", "present"}:
-                return self._tr(
-                    "common.dynamic.onboarding_confirm_battery_connected",
-                    "Connected",
-                )
-            if normalized in {"0", "false", "no", "not connected", "disconnected", "absent"}:
-                return self._tr(
-                    "common.dynamic.onboarding_confirm_battery_disconnected",
-                    "Not connected",
-                )
-        return str(value)
 
     def _result_placeholders(self, result: OnboardingResult) -> dict[str, str]:
         collector = result.collector
@@ -8632,17 +8536,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             "low": self._tr("common.dynamic.confidence_low", "Low confidence"),
             "none": self._tr("common.dynamic.confidence_none", "No confidence"),
         }.get(confidence, confidence)
-
-    def _default_control_summary(self, confidence: str) -> str:
-        if confidence == "high":
-            return self._tr(
-                "common.dynamic.control_auto",
-                "Tested controls are enabled automatically.",
-            )
-        return self._tr(
-            "common.dynamic.control_waiting",
-            "Monitoring only until a high-confidence detection is confirmed.",
-        )
 
     def _result_unique_id(self, result: OnboardingResult) -> str:
         collector_ip = result.collector.ip if result.collector is not None else ""
@@ -8878,19 +8771,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 already_added=self._existing_entry_for_result(result) is not None,
             ),
         )
-
-    @staticmethod
-    def _scan_result_status_code(result: OnboardingResult, already_added: bool = False) -> str:
-        return scan_result_status_code(result, already_added)
-
-    @classmethod
-    def _scan_result_sort_key(
-        cls,
-        result: OnboardingResult,
-        *,
-        already_added: bool = False,
-    ) -> tuple[int, int, str, str, str]:
-        return scan_result_sort_key(result, already_added=already_added)
 
     def _collapse_scan_results(
         self,
@@ -13380,25 +13260,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
     ) -> ShadowLearningRouteStatus:
         return self._shadow_learning_runtime_view(coordinator).route_status
 
-    def _shadow_learning_settings_dat(self, coordinator) -> dict[str, Any] | None:
-        record = self._cached_cloud_evidence_record(coordinator)
-        if record is None:
-            return None
-        payload = dict(record.payload or {})
-        bundle = payload.get("payload")
-        if not isinstance(bundle, dict):
-            return None
-        normalized = bundle.get("normalized")
-        if not isinstance(normalized, dict):
-            return None
-        settings = normalized.get("device_settings")
-        if not isinstance(settings, dict):
-            return None
-        fields = settings.get("fields")
-        if not isinstance(fields, list):
-            return None
-        return {"field": [dict(item) for item in fields if isinstance(item, dict)]}
-
     def _shadow_learning_cloud_identity(self, coordinator) -> dict[str, Any] | None:
         record = self._cached_cloud_evidence_record(coordinator)
         if record is None:
@@ -13421,9 +13282,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
 
     def _cached_cloud_evidence_record(self, coordinator):
         return self._shadow_learning_runtime_view(coordinator).cloud_evidence
-
-    def _shadow_learning_observed_writes(self, coordinator) -> tuple[Any, ...]:
-        return self._shadow_learning_runtime_view(coordinator).write_observations
 
     def _publish_shadow_learning_artifacts(self, coordinator) -> dict[str, Any]:
         """Publish the current UX artifact state into support-package runtime values."""
@@ -14863,23 +14721,6 @@ class EybondLocalOptionsFlow(_TranslationBundleMixin, OptionsFlow):
         return self._tr(
             f"common.dynamic.local_metadata_status_{translation_key}",
             raw_status,
-        )
-
-    def _smartess_cloud_exported_next_step(self) -> str:
-        coordinator = self._coordinator()
-        if coordinator is not None and getattr(coordinator, "smartess_smg_bridge_plan", None) is not None:
-            return self._diagnostics_result_tr(
-                "smartess_cloud_evidence_exported_next_bridge",
-                "Open Advanced metadata tools to create the SmartESS SMG bridge, then reload local metadata to apply it. If you only need the evidence, create a support archive instead.",
-            )
-        if coordinator is not None and getattr(coordinator, "smartess_known_family_draft_plan", None) is not None:
-            return self._diagnostics_result_tr(
-                "smartess_cloud_evidence_exported_next_draft",
-                "Open Advanced metadata tools to create the SmartESS draft, then reload local metadata to apply it. If you only need the evidence, create a support archive instead.",
-            )
-        return self._diagnostics_result_tr(
-            "smartess_cloud_evidence_exported_next",
-            "Open Advanced metadata tools to review what can be generated from this evidence. If local overrides already exist, reload local metadata there after updating them, or create a support archive to share the evidence with the developer.",
         )
 
     def _support_action_label(self, action: str) -> str:
