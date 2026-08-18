@@ -42,6 +42,7 @@ from ..metadata.device_catalog_loader import (
     resolve_support_capture_policy,
 )
 from .base import InverterDriver
+from .read_result import DriverReadMode, DriverReadResult
 from .modbus_write_error import ModbusWriteErrorMixin
 from .support_marker import DriverSupportMarker, DriverSupportWorkflow
 from .capability_codec import (
@@ -460,10 +461,10 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
         runtime_state: dict[str, Any] | None = None,
         poll_interval: float | None = None,
         now_monotonic: float | None = None,
-    ) -> dict[str, Any]:
+    ) -> DriverReadResult:
         schema = _schema_for_inverter(inverter, self.register_schema_name)
         if schema is None:
-            return {}
+            return DriverReadResult(values={}, mode=DriverReadMode.FULL)
         status_block_start = schema.block("status").start
         status_block_count = schema.block("status").count
         live_block_start = schema.block("live").start
@@ -561,7 +562,7 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
             session, inverter.capabilities, polled_blocks, already_read=aux_registers
         )
         _apply_capability_read_back(values, inverter.capabilities, polled_blocks + extra_blocks)
-        return values
+        return DriverReadResult(values=values, mode=DriverReadMode.FULL)
 
     async def async_write_capability(
         self,

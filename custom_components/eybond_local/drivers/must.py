@@ -14,6 +14,7 @@ from ..models import DetectedInverter, ProbeTarget
 from ..payload.modbus import ModbusError, ModbusSession
 from ..payload.register_decode import decode_ascii_word, read_spec_set_values
 from .base import InverterDriver
+from .read_result import DriverReadMode, DriverReadResult
 from .modbus_write_error import ModbusWriteErrorMixin
 from .capability_codec import (
     decode_capability_value,
@@ -120,7 +121,7 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
         runtime_state: dict[str, Any] | None = None,
         poll_interval: float | None = None,
         now_monotonic: float | None = None,
-    ) -> dict[str, Any]:
+    ) -> DriverReadResult:
         schema = load_register_schema(
             inverter.register_schema_name or self.register_schema_name
         )
@@ -134,7 +135,7 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
             )
         if "model_prefix" in values and "model_suffix" in values:
             values["model_number"] = f"{values['model_prefix']}{values['model_suffix']}"
-        return values
+        return DriverReadResult(values=values, mode=DriverReadMode.FULL)
 
     async def async_write_capability(
         self,

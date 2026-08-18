@@ -20,6 +20,10 @@ from custom_components.eybond_local.drivers.smg import (  # noqa: E402
     _decode_block,
     _support_capture_ranges,
 )
+from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
+    DriverReadMode,
+    DriverReadResult,
+)
 from custom_components.eybond_local.models import RegisterValueSpec  # noqa: E402
 from custom_components.eybond_local.control_policy import can_expose_capability  # noqa: E402
 from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
@@ -29,6 +33,12 @@ from custom_components.eybond_local.metadata.register_schema_loader import (  # 
 )
 from custom_components.eybond_local.models import DetectedInverter, ProbeTarget  # noqa: E402
 from custom_components.eybond_local.payload.modbus import crc16_modbus  # noqa: E402
+
+
+def _full_values(result: DriverReadResult) -> dict[str, object]:
+    if type(result) is not DriverReadResult or result.mode is not DriverReadMode.FULL:
+        raise AssertionError("SMG runtime read must be an exact FULL result")
+    return result.values
 
 
 def _register_map_for_ranges(ranges: tuple[tuple[int, int], ...]) -> dict[int, int]:
@@ -459,7 +469,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
             probe_target=target,
         )
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["operating_mode"], "Off-Grid")
         self.assertEqual(values["grid_voltage"], 230.0)
@@ -528,7 +538,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
             probe_target=target,
         )
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["inverter_date"], "2026-04-17")
         self.assertEqual(values["inverter_time"], "07:22:01")
@@ -573,7 +583,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport._registers[687], 0x1234)
         self.assertEqual(transport._registers[688], 0x5678)
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
         self.assertEqual(values["warning_mask_i"], 0x12345678)
 
     async def test_documented_secondary_output_write_targets_register_602(self) -> None:
@@ -719,7 +729,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport._registers[700], 9)
         self.assertEqual(transport._registers[701], 10)
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
         self.assertEqual(values["inverter_date"], "2026-04-18")
         self.assertEqual(values["inverter_time"], "08:09:10")
 
@@ -1116,7 +1126,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
             probe_target=target,
         )
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["battery_type"], "User")
         self.assertEqual(values["power_flow_status"], 97)
@@ -1151,7 +1161,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
             probe_target=target,
         )
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["output_power"], 0)
 
@@ -1178,7 +1188,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
             probe_target=target,
         )
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["protocol_number"], 1)
         self.assertEqual(values["device_type"], 0x1E00)
@@ -1224,7 +1234,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
             probe_target=target,
         )
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["protocol_number"], 1)
         self.assertEqual(values["device_type"], 0x3501)

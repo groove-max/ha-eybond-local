@@ -34,6 +34,7 @@ from ..payload.register_decode import (
     read_spec_set_values,
 )
 from .base import InverterDriver
+from .read_result import DriverReadMode, DriverReadResult
 from .modbus_write_error import ModbusWriteErrorMixin
 from .capability_codec import (
     decode_capability_value,
@@ -187,12 +188,13 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
         runtime_state: dict[str, Any] | None = None,
         poll_interval: float | None = None,
         now_monotonic: float | None = None,
-    ) -> dict[str, Any]:
+    ) -> DriverReadResult:
         schema = load_register_schema(
             inverter.register_schema_name or self.register_schema_name
         )
         session = self._session(transport, inverter.probe_target)
-        return await read_spec_set_values(session, schema, ascii_style="printable")
+        values = await read_spec_set_values(session, schema, ascii_style="printable")
+        return DriverReadResult(values=values, mode=DriverReadMode.FULL)
 
     @property
     def capability_groups(self):

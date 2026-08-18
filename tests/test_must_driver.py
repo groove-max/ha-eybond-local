@@ -12,8 +12,18 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.drivers.must import MustPvPh18Driver  # noqa: E402
 from custom_components.eybond_local.drivers.must import _support_capture_ranges  # noqa: E402
+from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
+    DriverReadMode,
+    DriverReadResult,
+)
 from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
 from custom_components.eybond_local.models import ProbeTarget  # noqa: E402
+
+
+def _full_values(result: DriverReadResult) -> dict[str, object]:
+    if type(result) is not DriverReadResult or result.mode is not DriverReadMode.FULL:
+        raise AssertionError("MUST runtime read must be an exact FULL result")
+    return result.values
 
 
 def _must_registers() -> dict[int, int]:
@@ -130,7 +140,7 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, target)
         assert inverter is not None
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         # Every writable control resolves a current value from its own register.
         for capability in inverter.capabilities:
@@ -167,7 +177,7 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, target)
         assert inverter is not None
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["model_number"], "PV18")
         self.assertEqual(values["battery_type"], "Lithium")

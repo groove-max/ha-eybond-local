@@ -11,8 +11,18 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.drivers.srne import SrneModbusDriver  # noqa: E402
+from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
+    DriverReadMode,
+    DriverReadResult,
+)
 from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
 from custom_components.eybond_local.models import ProbeTarget  # noqa: E402
+
+
+def _full_values(result: DriverReadResult) -> dict[str, object]:
+    if type(result) is not DriverReadResult or result.mode is not DriverReadMode.FULL:
+        raise AssertionError("SRNE runtime read must be an exact FULL result")
+    return result.values
 
 
 def _low_byte_ascii_words(text: str, count: int) -> list[int]:
@@ -130,7 +140,7 @@ class SrneModbusDriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, target)
         assert inverter is not None
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["product_info"], "SR-EOV24")
         self.assertEqual(values["battery_percent"], 85)
@@ -172,7 +182,7 @@ class SrneModbusDriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, target)
         assert inverter is not None
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["product_info"], "SR-EOV24")
         self.assertEqual(values["output_power"], 1200)

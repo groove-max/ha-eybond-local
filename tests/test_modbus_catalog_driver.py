@@ -11,8 +11,18 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.drivers.modbus_catalog import ModbusCatalogDriver  # noqa: E402
+from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
+    DriverReadMode,
+    DriverReadResult,
+)
 from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
 from custom_components.eybond_local.models import ProbeTarget  # noqa: E402
+
+
+def _full_values(result: DriverReadResult) -> dict[str, object]:
+    if type(result) is not DriverReadResult or result.mode is not DriverReadMode.FULL:
+        raise AssertionError("catalog runtime read must be an exact FULL result")
+    return result.values
 
 
 def _aohai_input_registers() -> dict[int, int]:
@@ -319,7 +329,7 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, _target())
         assert inverter is not None
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["inverter_operation_mode"], "Off-Grid")
         self.assertEqual(values["output_voltage"], 230.1)
@@ -360,7 +370,7 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, _target())
         assert inverter is not None
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["inverter_operation_mode"], "PV Charge")
         self.assertEqual(values["pv1_input_power"], 1500.0)
@@ -407,7 +417,7 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, _target())
         assert inverter is not None
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["inverter_current_status"], "Normal Running")
         self.assertEqual(values["pv_power"], 2500)
@@ -452,7 +462,7 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, _target())
         assert inverter is not None
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["run_state"], "Normal")
         self.assertEqual(values["rated_power"], 5000.0)
@@ -511,7 +521,7 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, _target())
         assert inverter is not None
 
-        values = await driver.async_read_values(transport, inverter)
+        values = _full_values(await driver.async_read_values(transport, inverter))
 
         self.assertEqual(values["rated_power"], 80000)
         self.assertEqual(values["run_state"], "Normal")
