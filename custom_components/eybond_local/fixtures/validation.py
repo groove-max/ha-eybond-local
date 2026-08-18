@@ -7,7 +7,7 @@ from typing import Any
 
 from ..const import DRIVER_HINT_AUTO
 from .catalog import CatalogEntryPaths, iter_catalog_entries, load_catalog_metadata
-from .replay import detect_fixture_path, read_fixture_values
+from .replay import detect_fixture_path, read_fixture_result
 
 
 def metadata_mismatches(metadata: dict[str, object], context: Any) -> list[str]:
@@ -40,7 +40,7 @@ async def validate_catalog_entry(
     metadata = load_catalog_metadata(entry)
     try:
         context = await detect_fixture_path(entry.fixture_path, driver_hint=driver_hint)
-        values = await read_fixture_values(context)
+        values = (await read_fixture_result(context)).values
         mismatches = metadata_mismatches(metadata, context)
         return {
             "slug": entry.slug,

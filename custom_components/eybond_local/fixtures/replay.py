@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..const import DRIVER_HINT_AUTO
+from ..drivers.read_result import DriverReadResult, coerce_driver_read_result
 from ..drivers.registry import iter_replay_drivers
 from .transport import FixtureTransport, load_fixture, load_fixture_payload
 from ..schema import build_runtime_ui_schema
@@ -56,15 +57,13 @@ async def detect_fixture_payload(
     )
 
 
-async def read_fixture_values(context: FixtureReplayContext) -> dict[str, Any]:
-    """Read runtime values through the detected driver using fixture transport."""
-
-    from ..drivers.read_result import coerce_driver_read_result
+async def read_fixture_result(context: FixtureReplayContext) -> DriverReadResult:
+    """Read one typed driver result through the fixture transport."""
 
     raw = await context.driver.async_read_values(context.transport, context.inverter)
     return coerce_driver_read_result(
         raw, driver_key=getattr(context.inverter, "driver_key", "")
-    ).values
+    )
 
 
 async def apply_fixture_preset(
@@ -74,7 +73,7 @@ async def apply_fixture_preset(
     """Apply a preset to the in-memory fixture transport."""
 
     preset = context.inverter.get_capability_preset(preset_key)
-    initial_values = await read_fixture_values(context)
+    initial_values = (await read_fixture_result(context)).values
     runtime_state = preset.runtime_state(context.inverter, initial_values)
     if not runtime_state.visible:
         raise ValueError(f"preset_not_visible:{preset_key}")
@@ -105,7 +104,7 @@ async def apply_fixture_preset(
             capability.key,
             item.value,
         )
-        current_values = await read_fixture_values(context)
+        current_values = (await read_fixture_result(context)).values
         results.append(
             {
                 "key": capability.key,
@@ -116,7 +115,8 @@ async def apply_fixture_preset(
             }
         )
 
-    final_values = await read_fixture_values(context)
+    final_result = await read_fixture_result(context)
+    final_values = final_result.values
     return {
         "preset": {
             "preset_key": preset.key,
@@ -125,6 +125,7 @@ async def apply_fixture_preset(
             "results": results,
         },
         "values": final_values,
+        "read_result": _fixture_read_result_payload(final_result),
         "ui_schema": build_runtime_ui_schema(context.inverter, final_values),
     }
 
@@ -132,11 +133,14 @@ async def apply_fixture_preset(
 def build_fixture_snapshot(
     context: FixtureReplayContext,
     *,
-    values: dict[str, Any],
+    read_result: DriverReadResult,
     full_snapshot: bool,
 ) -> dict[str, object]:
     """Build a standard replay payload for CLI consumers."""
 
+    if type(read_result) is not DriverReadResult:
+        raise TypeError("fixture_read_result_invalid")
+    values = read_result.values
     if not full_snapshot:
         return values
     return {
@@ -153,7 +157,18 @@ def build_fixture_snapshot(
             },
         },
         "values": values,
+        "read_result": _fixture_read_result_payload(read_result),
         "ui_schema": build_runtime_ui_schema(context.inverter, values),
+    }
+
+
+def _fixture_read_result_payload(result: DriverReadResult) -> dict[str, object]:
+    """Serialize fixture read semantics separately from produced values."""
+
+    return {
+        "mode": result.mode.value,
+        "removed_keys": sorted(result.removed_keys),
+        "diagnostics": dict(result.diagnostics),
     }
 
 

@@ -24,7 +24,7 @@ from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
 )
 from custom_components.eybond_local.fixtures.replay import (  # noqa: E402
     detect_fixture_payload,
-    read_fixture_values,
+    read_fixture_result,
 )
 from custom_components.eybond_local.metadata.profile_loader import load_driver_profile  # noqa: E402
 from custom_components.eybond_local.metadata.register_schema_loader import (  # noqa: E402
@@ -953,7 +953,7 @@ class EybondGAsciiDriverTests(unittest.TestCase):
         }
 
         context = asyncio.run(detect_fixture_payload(fixture, driver_hint="eybond_g_ascii"))
-        values = asyncio.run(read_fixture_values(context))
+        values = asyncio.run(read_fixture_result(context)).values
 
         self.assertEqual(context.inverter.serial_number, "A0000000000001")
         self.assertEqual(values["operating_mode"], "Battery")

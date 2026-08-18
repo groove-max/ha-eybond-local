@@ -19,6 +19,10 @@ from custom_components.eybond_local.support.bundle import (
     build_support_bundle_payload,
     export_support_bundle,
 )
+from custom_components.eybond_local.telemetry import (
+    TypedTelemetryFrame,
+    fold_driver_telemetry,
+)
 
 
 def _smg_marker_payload(*, variant_key: str = "", profile_name: str = ""):
@@ -47,6 +51,12 @@ def _sample_cloud_evidence() -> dict[str, object]:
 
 
 def _sample_support_bundle_payload() -> dict[str, object]:
+    telemetry = fold_driver_telemetry(
+        TypedTelemetryFrame.empty(),
+        driver_key="modbus_smg",
+        values={"operating_mode": "Off-Grid"},
+        replace=True,
+    )
     return build_support_bundle_payload(
         entry_id="entry123",
         entry_title="SMG 6200",
@@ -61,6 +71,7 @@ def _sample_support_bundle_payload() -> dict[str, object]:
             "register_schema_name": "modbus_smg/models/smg_6200.json",
         },
         values={"operating_mode": "Off-Grid"},
+        telemetry=telemetry,
         data={"server_ip": "192.168.1.50"},
         options={"poll_interval": 10},
         profile_name="smg_modbus.json",
@@ -127,10 +138,73 @@ class SupportBundleTests(unittest.TestCase):
         self.assertEqual(raw["source_metadata"]["profile_name"], "smg_modbus.json")
         self.assertEqual(raw["source_metadata"]["variant_key"], "default")
         self.assertEqual(raw["runtime"]["values"]["operating_mode"], "Off-Grid")
+        self.assertNotIn("operating_mode", raw["runtime"]["metadata"])
+        self.assertEqual(
+            raw["runtime"]["telemetry"]["values"]["operating_mode"],
+            "Off-Grid",
+        )
+        self.assertEqual(raw["runtime"]["telemetry"]["driver_key"], "modbus_smg")
+        self.assertEqual(raw["runtime"]["telemetry"]["fresh_count"], 1)
         self.assertEqual(raw["roles"]["collector"]["identity"]["collector_pn"], "E5000020000000")
         self.assertEqual(raw["roles"]["inverter"]["identity"]["model_name"], "SMG 6200")
         self.assertEqual(raw["roles"]["inverter"]["values"]["operating_mode"], "Off-Grid")
+        self.assertEqual(
+            raw["roles"]["inverter"]["measurements"]["operating_mode"],
+            "Off-Grid",
+        )
         self.assertEqual(raw["evidence"]["cloud"]["source"], "smartess_cloud_probe")
+
+    def test_typed_telemetry_is_split_from_broad_support_metadata(self) -> None:
+        telemetry = fold_driver_telemetry(
+            TypedTelemetryFrame.empty(),
+            driver_key="pi30",
+            values={"output_power": 420},
+            replace=True,
+        ).as_carried()
+        raw = build_support_bundle_payload(
+            entry_id="entry123",
+            entry_title="PI30",
+            connected=False,
+            collector=None,
+            inverter={"driver_key": "pi30"},
+            values={
+                "output_power": 420,
+                "runtime_driver_state": "offline",
+                "runtime_probe_log": [{"driver": "pi30"}],
+            },
+            telemetry=telemetry,
+            data={},
+            options={},
+            profile_name="",
+            register_schema_name="",
+        )
+
+        self.assertEqual(raw["runtime"]["telemetry"]["carried_count"], 1)
+        self.assertEqual(
+            raw["runtime"]["telemetry"]["points"][0]["freshness"],
+            "carried",
+        )
+        self.assertNotIn("output_power", raw["runtime"]["metadata"])
+        self.assertEqual(
+            raw["runtime"]["metadata"]["runtime_driver_state"], "offline"
+        )
+        self.assertIn("runtime_probe_log", raw["runtime"]["metadata"])
+
+    def test_support_telemetry_rejects_duck_frames(self) -> None:
+        common = dict(
+            entry_id="entry123",
+            entry_title="PI30",
+            connected=True,
+            collector=None,
+            inverter=None,
+            values={},
+            data={},
+            options={},
+            profile_name="",
+            register_schema_name="",
+        )
+        with self.assertRaises(TypeError):
+            build_support_bundle_payload(**common, telemetry=object())
 
     def test_builds_support_bundle_payload_with_role_value_split(self) -> None:
         raw = build_support_bundle_payload(

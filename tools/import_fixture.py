@@ -25,7 +25,7 @@ from custom_components.eybond_local.fixtures.catalog import (  # noqa: E402
 )
 from custom_components.eybond_local.fixtures.replay import (  # noqa: E402
     detect_fixture_payload,
-    read_fixture_values,
+    read_fixture_result,
 )
 from custom_components.eybond_local.fixtures.utils import (  # noqa: E402
     DEFAULT_SMG_SERIAL_RANGES,
@@ -62,7 +62,7 @@ async def _run(args: argparse.Namespace) -> int:
         )
 
     context = await detect_fixture_payload(processed, driver_hint=args.driver_hint)
-    values = await read_fixture_values(context)
+    values = (await read_fixture_result(context)).values
 
     default_title = str(processed.get("name", args.input.stem))
     title = args.title or default_title

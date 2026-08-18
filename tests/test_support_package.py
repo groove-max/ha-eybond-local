@@ -40,11 +40,54 @@ from custom_components.eybond_local.support.download import (
 )
 from custom_components.eybond_local.support.package import (
     _mask_jsonl_text,
+    _support_runtime_metadata,
     export_support_package,
+)
+from custom_components.eybond_local.telemetry import (
+    TypedTelemetryFrame,
+    fold_driver_telemetry,
 )
 
 
 class SupportPackageTests(unittest.TestCase):
+    def test_support_artifacts_choose_metadata_not_typed_measurements(self) -> None:
+        telemetry = fold_driver_telemetry(
+            TypedTelemetryFrame.empty(),
+            driver_key="modbus_smg",
+            values={"output_power": 420},
+            replace=True,
+        )
+        support_bundle = build_support_bundle_payload(
+            entry_id="entry123",
+            entry_title="SMG",
+            connected=True,
+            collector=None,
+            inverter={"driver_key": "modbus_smg"},
+            values={
+                "output_power": 420,
+                "shadow_learning_trace_path": "/metadata/trace.jsonl",
+            },
+            telemetry=telemetry,
+            data={},
+            options={},
+            profile_name="",
+            register_schema_name="",
+        )
+
+        metadata = _support_runtime_metadata(support_bundle)
+        self.assertNotIn("output_power", metadata)
+        self.assertEqual(
+            metadata["shadow_learning_trace_path"], "/metadata/trace.jsonl"
+        )
+
+    def test_archived_bundle_without_metadata_uses_legacy_values(self) -> None:
+        self.assertEqual(
+            _support_runtime_metadata(
+                {"runtime": {"values": {"legacy_artifact_path": "trace.jsonl"}}}
+            ),
+            {"legacy_artifact_path": "trace.jsonl"},
+        )
+
     def test_authenticated_support_package_download_url_uses_entry_id(self) -> None:
         self.assertEqual(
             support_package_authenticated_download_url("entry123"),

@@ -12,7 +12,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.fixtures.replay import detect_fixture_path, read_fixture_values
+from custom_components.eybond_local.fixtures.replay import detect_fixture_path, read_fixture_result
 from custom_components.eybond_local.fixtures.catalog import catalog_has_entries
 from custom_components.eybond_local.schema import build_runtime_ui_schema
 
@@ -48,7 +48,7 @@ class RuntimeSchemaTests(unittest.TestCase):
     def test_build_runtime_ui_schema_from_fixture(self) -> None:
         async def scenario() -> tuple[dict[str, object], dict[str, object]]:
             context = await detect_fixture_path(FIXTURE_PATH)
-            values = await read_fixture_values(context)
+            values = (await read_fixture_result(context)).values
             schema = build_runtime_ui_schema(context.inverter, values)
             return values, schema
 

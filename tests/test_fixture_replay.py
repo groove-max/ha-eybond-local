@@ -13,12 +13,18 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.fixtures.replay import (
+    FixtureReplayContext,
     apply_fixture_preset,
     build_fixture_snapshot,
     detect_fixture_path,
-    read_fixture_values,
+    read_fixture_result,
 )
 from custom_components.eybond_local.fixtures.catalog import catalog_has_entries
+from custom_components.eybond_local.drivers.read_result import (
+    DriverReadMode,
+    DriverReadResult,
+)
+from custom_components.eybond_local.models import DetectedInverter, ProbeTarget
 
 
 LOCAL_FIXTURE_TESTS_ENABLED = (
@@ -54,6 +60,69 @@ PI30_FIXTURE_PATH = (
 )
 
 
+class FixtureReplayContractTests(unittest.TestCase):
+    def test_replay_preserves_typed_result_until_snapshot_boundary(self) -> None:
+        expected = DriverReadResult(
+            values={"output_power": 420},
+            mode=DriverReadMode.DELTA,
+            removed_keys=frozenset({"stale_alarm"}),
+            diagnostics={"command_elapsed_ms": 12},
+        )
+
+        class _Driver:
+            async def async_read_values(self, _transport, _inverter):
+                return expected
+
+        inverter = DetectedInverter(
+            driver_key="pi30",
+            protocol_family="pi30",
+            model_name="Fixture inverter",
+            serial_number="fixture",
+            probe_target=ProbeTarget(
+                devcode=0x0994,
+                collector_addr=0x01,
+                device_addr=0x01,
+            ),
+        )
+        context = FixtureReplayContext(
+            fixture={"name": "typed"},
+            transport=object(),
+            driver=_Driver(),
+            inverter=inverter,
+        )
+
+        result = asyncio.run(read_fixture_result(context))
+        self.assertIs(result, expected)
+        snapshot = build_fixture_snapshot(
+            context,
+            read_result=result,
+            full_snapshot=True,
+        )
+        self.assertEqual(snapshot["values"], {"output_power": 420})
+        self.assertEqual(
+            snapshot["read_result"],
+            {
+                "mode": "delta",
+                "removed_keys": ["stale_alarm"],
+                "diagnostics": {"command_elapsed_ms": 12},
+            },
+        )
+
+    def test_snapshot_rejects_untyped_fixture_result(self) -> None:
+        context = FixtureReplayContext(
+            fixture={},
+            transport=object(),
+            driver=object(),
+            inverter=object(),
+        )
+        with self.assertRaises(TypeError):
+            build_fixture_snapshot(
+                context,
+                read_result={"output_power": 420},
+                full_snapshot=False,
+            )
+
+
 @unittest.skipUnless(
     LOCAL_FIXTURE_TESTS_ENABLED,
     "Local fixture replay tests are disabled. Set EYBOND_ENABLE_LOCAL_FIXTURE_TESTS=1 and populate .local/fixtures/catalog/.",
@@ -62,7 +131,7 @@ class FixtureReplayTests(unittest.TestCase):
     def test_catalog_fixture_detects_and_reads(self) -> None:
         async def scenario() -> tuple[object, dict[str, object]]:
             context = await detect_fixture_path(FIXTURE_PATH)
-            values = await read_fixture_values(context)
+            values = (await read_fixture_result(context)).values
             return context, values
 
         context, values = asyncio.run(scenario())
@@ -97,19 +166,23 @@ class FixtureReplayTests(unittest.TestCase):
     def test_full_snapshot_contains_runtime_ui_schema(self) -> None:
         async def scenario() -> dict[str, object]:
             context = await detect_fixture_path(FIXTURE_PATH)
-            values = await read_fixture_values(context)
-            return build_fixture_snapshot(context, values=values, full_snapshot=True)
+            read_result = await read_fixture_result(context)
+            return build_fixture_snapshot(
+                context, read_result=read_result, full_snapshot=True
+            )
 
         snapshot = asyncio.run(scenario())
 
         self.assertEqual(snapshot["inverter"]["driver_key"], "modbus_smg")
+        self.assertEqual(snapshot["read_result"]["mode"], "full")
+        self.assertEqual(snapshot["read_result"]["removed_keys"], [])
         self.assertEqual(snapshot["ui_schema"]["version"], 4)
         self.assertIn("power_flow_summary", snapshot["values"])
 
     def test_pi18_catalog_fixture_detects_and_reads_without_runtime_registration(self) -> None:
         async def scenario() -> tuple[object, dict[str, object]]:
             context = await detect_fixture_path(PI18_FIXTURE_PATH)
-            values = await read_fixture_values(context)
+            values = (await read_fixture_result(context)).values
             return context, values
 
         context, values = asyncio.run(scenario())
@@ -124,7 +197,7 @@ class FixtureReplayTests(unittest.TestCase):
     def test_pi30_catalog_fixture_detects_vmii_overlay_and_reads_live_values(self) -> None:
         async def scenario() -> tuple[object, dict[str, object]]:
             context = await detect_fixture_path(PI30_FIXTURE_PATH)
-            values = await read_fixture_values(context)
+            values = (await read_fixture_result(context)).values
             return context, values
 
         context, values = asyncio.run(scenario())

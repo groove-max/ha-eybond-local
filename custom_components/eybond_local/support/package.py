@@ -289,6 +289,22 @@ def _archive_support_bundle_payload(support_bundle: dict[str, Any]) -> dict[str,
     return archived_payload
 
 
+def _support_runtime_metadata(support_bundle: dict[str, Any]) -> dict[str, Any]:
+    """Return broad non-telemetry runtime metadata from a support bundle.
+
+    Older bundles predate the explicit split and expose only ``runtime.values``;
+    retaining that fallback keeps archived support packages readable.  Current
+    bundles always provide ``runtime.metadata``, so artifact discovery never
+    interprets typed inverter measurements as tooling paths or manifests.
+    """
+
+    runtime = _dict_value(support_bundle, "runtime")
+    metadata = runtime.get("metadata")
+    if isinstance(metadata, dict):
+        return metadata
+    return _dict_value(runtime, "values")
+
+
 def _build_shadow_learning_archive_members(
     *,
     config_dir: Path,
@@ -300,7 +316,7 @@ def _build_shadow_learning_archive_members(
     members: dict[str, Any] = {}
     manifest_members: dict[str, str] = {}
 
-    runtime_values = _dict_value(_dict_value(support_bundle, "runtime"), "values")
+    runtime_values = _support_runtime_metadata(support_bundle)
     entry_payload = _dict_value(support_bundle, "entry")
     entry_options = _dict_value(entry_payload, "options")
 

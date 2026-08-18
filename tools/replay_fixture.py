@@ -18,7 +18,7 @@ from custom_components.eybond_local.fixtures.replay import (  # noqa: E402
     apply_fixture_preset,
     build_fixture_snapshot,
     detect_fixture_path,
-    read_fixture_values,
+    read_fixture_result,
 )
 
 
@@ -40,7 +40,7 @@ async def _run(args: argparse.Namespace) -> int:
             args.key,
             args.value,
         )
-        values = await read_fixture_values(context)
+        values = (await read_fixture_result(context)).values
         payload = {
             "write": {
                 "key": args.key,
@@ -50,10 +50,10 @@ async def _run(args: argparse.Namespace) -> int:
             }
         }
     else:
-        values = await read_fixture_values(context)
+        read_result = await read_fixture_result(context)
         payload = build_fixture_snapshot(
             context,
-            values=values,
+            read_result=read_result,
             full_snapshot=args.full_snapshot,
         )
 

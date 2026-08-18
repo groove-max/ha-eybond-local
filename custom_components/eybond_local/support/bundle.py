@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..const import LOCAL_METADATA_DIR, LOCAL_SUPPORT_PACKAGES_DIR
+from ..telemetry import TypedTelemetryFrame
 
 
 _COLLECTOR_VALUE_PREFIXES = (
@@ -56,6 +57,47 @@ def _split_runtime_values_by_role(values: dict[str, Any]) -> dict[str, dict[str,
             continue
         grouped["inverter"][normalized_key] = value
     return grouped
+
+
+def _typed_telemetry_payload(
+    telemetry: TypedTelemetryFrame | None,
+) -> dict[str, Any]:
+    """Serialize the narrow measurement frame without reclassifying values.
+
+    ``None`` is used by offline/legacy callers that do not own a runtime
+    snapshot.  An exact frame is required otherwise, so support export cannot
+    accept a duck object and accidentally turn broad metadata into telemetry.
+    """
+
+    if telemetry is None:
+        return {
+            "available": False,
+            "driver_key": "",
+            "fresh_count": 0,
+            "carried_count": 0,
+            "values": {},
+            "points": [],
+        }
+    if type(telemetry) is not TypedTelemetryFrame:
+        raise TypeError("support_telemetry_frame_invalid")
+    return {
+        "available": True,
+        "driver_key": telemetry.driver_key,
+        "fresh_count": telemetry.fresh_count,
+        "carried_count": telemetry.carried_count,
+        "values": telemetry.values(),
+        "points": [
+            {
+                "key": point.key,
+                "value": point.value,
+                "kind": point.kind.value,
+                "freshness": point.freshness.value,
+                "origin": point.origin.value,
+                "source_keys": list(point.source_keys),
+            }
+            for point in telemetry.points
+        ],
+    }
 
 
 def _present(source: dict[str, Any], *keys: str) -> dict[str, Any]:
@@ -320,6 +362,7 @@ def _build_role_payloads(
     collector: dict[str, Any] | None,
     inverter: dict[str, Any] | None,
     values: dict[str, Any],
+    telemetry_payload: dict[str, Any],
     data: dict[str, Any],
     options: dict[str, Any],
     source_metadata: dict[str, Any],
@@ -353,6 +396,8 @@ def _build_role_payloads(
             "present": inverter is not None,
             "payload_ref": "runtime.inverter",
             "identity": inverter_identity,
+            "measurement_ref": "runtime.telemetry",
+            "measurements": telemetry_payload["values"],
             "values": grouped_values["inverter"],
         },
         "integration": {
@@ -427,6 +472,7 @@ def build_support_bundle_payload(
     collector: dict[str, Any] | None,
     inverter: dict[str, Any] | None,
     values: dict[str, Any],
+    telemetry: TypedTelemetryFrame | None = None,
     data: dict[str, Any],
     options: dict[str, Any],
     profile_name: str,
@@ -462,11 +508,20 @@ def build_support_bundle_payload(
         "smartess_protocol_asset_id": smartess_protocol_asset_id,
         "smartess_profile_key": smartess_profile_key,
     }
+    telemetry_payload = _typed_telemetry_payload(telemetry)
+    telemetry_keys = set(telemetry_payload["values"])
     runtime_payload = {
         "connected": connected,
         "collector": collector,
         "inverter": inverter,
+        # ``values`` is retained as the archive compatibility view.  New
+        # support consumers choose either the narrow telemetry payload or the
+        # broad non-telemetry metadata view explicitly.
         "values": values,
+        "telemetry": telemetry_payload,
+        "metadata": {
+            key: value for key, value in values.items() if key not in telemetry_keys
+        },
     }
     descriptor_decision_shadow = _descriptor_decision_shadow_payload(
         inverter=inverter,
@@ -492,6 +547,7 @@ def build_support_bundle_payload(
             collector=collector,
             inverter=inverter,
             values=values,
+            telemetry_payload=telemetry_payload,
             data=data,
             options=options,
             source_metadata=source_metadata,
@@ -513,6 +569,7 @@ def export_support_bundle(
     collector: dict[str, Any] | None,
     inverter: dict[str, Any] | None,
     values: dict[str, Any],
+    telemetry: TypedTelemetryFrame | None = None,
     data: dict[str, Any],
     options: dict[str, Any],
     profile_name: str,
@@ -538,6 +595,7 @@ def export_support_bundle(
         collector=collector,
         inverter=inverter,
         values=values,
+        telemetry=telemetry,
         data=data,
         options=options,
         profile_name=profile_name,

@@ -33,6 +33,11 @@ from custom_components.eybond_local.metadata.register_schema_loader import (  # 
 )
 from custom_components.eybond_local.models import DetectedInverter, ProbeTarget  # noqa: E402
 from custom_components.eybond_local.payload.modbus import crc16_modbus  # noqa: E402
+from custom_components.eybond_local.telemetry import (  # noqa: E402
+    TelemetryFreshness,
+    TypedTelemetryFrame,
+    fold_driver_telemetry,
+)
 
 
 def _full_values(result: DriverReadResult) -> dict[str, object]:
@@ -853,6 +858,80 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         return registers
+
+    async def test_learned_overlay_scalar_has_typed_telemetry_parity(self) -> None:
+        """An activated learned schema uses the normal driver telemetry path."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            schema_name = "learned/shadow_learning/device/typed_overlay.json"
+            schema_path = Path(temp_dir) / schema_name
+            schema_path.parent.mkdir(parents=True, exist_ok=True)
+            schema_path.write_text(
+                json.dumps(
+                    {
+                        "extends": "builtin:modbus_smg/models/smg_6200.json",
+                        "schema_key": "typed_learned_overlay",
+                        "title": "Typed learned overlay",
+                        "driver_key": "modbus_smg",
+                        "protocol_family": "modbus_smg",
+                        "spec_sets": {
+                            "aux_config": [
+                                {
+                                    "key": "learned_read_404",
+                                    "register": 404,
+                                    "divisor": 10,
+                                    "decimals": 1,
+                                }
+                            ]
+                        },
+                        "measurement_descriptions": [
+                            {
+                                "key": "learned_read_404",
+                                "name": "Learned voltage",
+                                "unit": "V",
+                                "device_class": "voltage",
+                                "state_class": "measurement",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            set_external_register_schema_roots((Path(temp_dir),))
+            self.addCleanup(set_external_register_schema_roots, ())
+
+            driver = SmgModbusDriver()
+            target = ProbeTarget(
+                devcode=0x0001,
+                collector_addr=0xFF,
+                device_addr=0x01,
+            )
+            registers = self._smg_family_registers(rated_power=6200)
+            registers[404] = 567
+            transport = FixtureTransport(
+                registers=registers,
+                command_responses=None,
+                probe_target=target,
+            )
+            inverter = await driver.async_probe(transport, target)
+            assert inverter is not None
+            inverter.register_schema_name = schema_name
+
+            result = await driver.async_read_values(transport, inverter)
+            self.assertIs(type(result), DriverReadResult)
+            self.assertIs(result.mode, DriverReadMode.FULL)
+            self.assertEqual(result.values["learned_read_404"], 56.7)
+
+            frame = fold_driver_telemetry(
+                TypedTelemetryFrame.empty(),
+                driver_key=inverter.driver_key,
+                values=result.values,
+                replace=True,
+            )
+            point = frame.point("learned_read_404")
+            assert point is not None
+            self.assertEqual(point.value, 56.7)
+            self.assertIs(point.freshness, TelemetryFreshness.FRESH)
 
     async def test_probe_keeps_supported_6200_layout_on_default_variant(self) -> None:
         driver = SmgModbusDriver()

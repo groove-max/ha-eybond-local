@@ -68,9 +68,13 @@ Phase 4 must not remove that copy until all of the following are true:
   the exact-dict FULL adapter; **implemented** (`FULL`: SMG, SRNE, MUST, catalog
   Modbus; `DELTA`: PI30, PI18, G-ASCII, SmartESS 0925);
 - learned/device-scoped overlays have parity coverage for their exposed scalar
-  values;
+  values; **implemented** (an activated learned SMG schema is read through the
+  production driver and folded into a fresh typed point);
 - support bundles and fixture tooling intentionally choose typed measurements
   versus broad metadata rather than depending on an undifferentiated mapping;
+  **implemented** (`runtime.telemetry` and `runtime.metadata` are separate
+  support payloads, while fixture replay preserves `DriverReadResult` mode,
+  removals, and diagnostics through its tooling boundary);
 - an architecture test proves no Home Assistant measurement consumer reads the
   broad mapping directly.
 
