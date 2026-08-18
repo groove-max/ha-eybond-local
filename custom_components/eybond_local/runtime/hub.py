@@ -541,11 +541,18 @@ class EybondHub:
         self._runtime_measurement_values: dict[str, Any] = {}
         self._runtime_measurement_telemetry = TypedTelemetryFrame.empty()
         self._runtime_measurement_owned_keys: set[str] = set()
+        # Driver diagnostics have their own exact-snapshot lifecycle. They are
+        # not measurements and never enter TypedTelemetryFrame, but the hub must
+        # still own replacement/removal so a diagnostic omitted by the next
+        # successful read cannot linger forever in RuntimeSnapshot.values.
+        self._runtime_driver_diagnostics: dict[str, Any] = {}
+        self._runtime_driver_diagnostic_owned_keys: set[str] = set()
         # Keys the PREVIOUS identity owned. When the binding changes they are
         # remembered here so the next snapshot also purges them from the carried
         # ``_last_snapshot`` (not just from the cache), then they are re-provided
         # by the new identity's detection details / cache if still relevant.
         self._stale_runtime_owned_keys: set[str] = set()
+        self._stale_runtime_driver_diagnostic_keys: set[str] = set()
         self._runtime_measurement_identity: str = ""
         self._runtime_measurement_last_mode: str = ""
         self._runtime_measurement_fresh_count: int = 0
@@ -1228,8 +1235,7 @@ class EybondHub:
                 raw, driver_key=getattr(self._inverter, "driver_key", "")
             )
             self._resolve_runtime_measurements(result)
-            runtime_values: dict[str, object] = dict(result.diagnostics)
-            runtime_values.update(self._runtime_measurement_diagnostics())
+            runtime_values: dict[str, object] = self._runtime_measurement_diagnostics()
             runtime_values["collector_poll_duration_ms"] = int(round(duration * 1000.0))
             return runtime_values
 
@@ -1501,6 +1507,8 @@ class EybondHub:
         self._runtime_measurement_values = {}
         self._runtime_measurement_telemetry = TypedTelemetryFrame.empty()
         self._runtime_measurement_owned_keys = set()
+        self._runtime_driver_diagnostics = {}
+        self._runtime_driver_diagnostic_owned_keys = set()
         self._runtime_measurement_last_mode = ""
         self._runtime_measurement_fresh_count = 0
         self._runtime_measurement_reused_count = 0
@@ -1522,6 +1530,9 @@ class EybondHub:
         if token == self._runtime_measurement_identity:
             return
         self._stale_runtime_owned_keys |= self._runtime_measurement_owned_keys
+        self._stale_runtime_driver_diagnostic_keys |= (
+            self._runtime_driver_diagnostic_owned_keys
+        )
         self._reset_runtime_measurement_cache()
         self._runtime_measurement_identity = token
 
@@ -1555,6 +1566,8 @@ class EybondHub:
             reused = len(set(self._runtime_measurement_values) - fresh_keys)
         self._runtime_measurement_owned_keys.update(fresh_keys)
         self._runtime_measurement_owned_keys.update(result.removed_keys)
+        self._runtime_driver_diagnostics = dict(result.diagnostics)
+        self._runtime_driver_diagnostic_owned_keys.update(result.diagnostics)
         self._runtime_measurement_last_mode = result.mode.value
         self._runtime_measurement_fresh_count = len(fresh_keys)
         self._runtime_measurement_reused_count = reused
@@ -1584,6 +1597,9 @@ class EybondHub:
                 0,
                 len(self._runtime_measurement_values)
                 - len(self._runtime_measurement_telemetry.points),
+            ),
+            "runtime_driver_diagnostic_count": len(
+                self._runtime_driver_diagnostics
             ),
         }
 
@@ -2995,7 +3011,12 @@ class EybondHub:
                 self._runtime_measurement_owned_keys | self._stale_runtime_owned_keys
             )
 
-        stripped_keys = generated_canonical_keys | runtime_owned_keys
+        stripped_keys = (
+            generated_canonical_keys
+            | runtime_owned_keys
+            | self._runtime_driver_diagnostic_owned_keys
+            | self._stale_runtime_driver_diagnostic_keys
+        )
         values = {
             key: value
             for key, value in self._last_snapshot.values.items()
@@ -3283,6 +3304,7 @@ class EybondHub:
             # EVERY snapshot build (including error / last-known-good paths), so a
             # cycle that omitted a measurement keeps the previous live value.
             values.update(self._runtime_measurement_values)
+            values.update(self._runtime_driver_diagnostics)
 
         if extra_values:
             safe_extra_values = dict(extra_values)

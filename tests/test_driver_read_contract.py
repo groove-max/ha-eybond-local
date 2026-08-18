@@ -220,6 +220,7 @@ class HubMeasurementCacheTests(unittest.TestCase):
         resolved = self._resolve(hub, {}, mode=DriverReadMode.DELTA)
         self.assertEqual(resolved, {"battery_voltage": 27.3})
 
+
     def test_removed_keys_delete_value(self) -> None:
         hub = _hub()
         _bind(hub, _inverter())
@@ -360,6 +361,51 @@ class HubMeasurementCacheTests(unittest.TestCase):
 
 
 # --- Snapshot integration: no revert to detection details ---------------------
+
+
+class HubDriverDiagnosticLifecycleTests(unittest.TestCase):
+    def _snapshot(self, hub) -> dict:
+        hub._last_snapshot = hub._build_snapshot()
+        return hub._last_snapshot.values
+
+    def test_next_successful_result_replaces_driver_diagnostics(self) -> None:
+        hub = _hub()
+        _bind(hub, _inverter())
+        hub._resolve_runtime_measurements(
+            DriverReadResult(
+                values={"battery_voltage": 27.3},
+                mode=DriverReadMode.FULL,
+                diagnostics={"driver_cycle_note": "old", "driver_shared_note": "one"},
+            )
+        )
+        first = self._snapshot(hub)
+        self.assertEqual(first["driver_cycle_note"], "old")
+
+        hub._resolve_runtime_measurements(
+            DriverReadResult(
+                values={"battery_voltage": 27.4},
+                mode=DriverReadMode.FULL,
+                diagnostics={"driver_shared_note": "two"},
+            )
+        )
+        second = self._snapshot(hub)
+        self.assertNotIn("driver_cycle_note", second)
+        self.assertEqual(second["driver_shared_note"], "two")
+        self.assertIsNone(hub._runtime_measurement_telemetry.point("driver_shared_note"))
+
+    def test_identity_change_purges_previous_driver_diagnostics(self) -> None:
+        hub = _hub()
+        _bind(hub, _inverter(serial="AAA"))
+        hub._resolve_runtime_measurements(
+            DriverReadResult(
+                values={"battery_voltage": 27.3},
+                diagnostics={"driver_cycle_note": "old"},
+            )
+        )
+        self.assertEqual(self._snapshot(hub)["driver_cycle_note"], "old")
+
+        _bind(hub, _inverter(serial="BBB", details={}))
+        self.assertNotIn("driver_cycle_note", self._snapshot(hub))
 
 
 class SnapshotNeverRevertsToDetailsTests(unittest.TestCase):
