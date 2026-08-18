@@ -11,6 +11,7 @@ from typing import Any, Callable
 from ..canonical_telemetry import (
     apply_canonical_measurements,
     canonical_measurements_for_driver,
+    project_canonical_telemetry,
 )
 from ..const import (
     CONNECTION_TYPE_EYBOND,
@@ -3444,6 +3445,11 @@ class EybondHub:
             self._inverter = self._inverter_overlay_applier(self._inverter, collector)
 
         typed_telemetry = self._runtime_measurement_telemetry
+        if self._inverter is not None:
+            typed_telemetry = project_canonical_telemetry(
+                typed_telemetry,
+                variant_key=self._inverter.variant_key or None,
+            )
         if last_error or not snapshot_connected:
             typed_telemetry = typed_telemetry.as_carried()
 

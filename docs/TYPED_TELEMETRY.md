@@ -35,7 +35,7 @@ are migrated.
 
 1. Project driver-produced scalar values into the typed frame. **Implemented.**
 2. Add typed provenance for canonical/derived measurements while retaining the
-   existing canonical compatibility aliases.
+   existing canonical compatibility aliases. **Implemented.**
 3. Move sensor and binary-sensor reads to typed points where coverage is proven;
    keep an explicit compatibility path for metadata and diagnostics.
 4. Remove broad-map measurement interpretation only after parity tests prove
@@ -53,4 +53,3 @@ are migrated.
   as measurements.
 - The typed layer must not decide connection, recovery, ownership, or driver
   selection.
-

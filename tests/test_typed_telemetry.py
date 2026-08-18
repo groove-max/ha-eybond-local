@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
 from custom_components.eybond_local.models import RuntimeSnapshot
 from custom_components.eybond_local.telemetry import (
     TelemetryFreshness,
+    TelemetryOrigin,
     TelemetryPoint,
     TelemetryValueKind,
     TypedTelemetryFrame,
@@ -79,6 +80,37 @@ class TelemetryPointBoundaryTests(unittest.TestCase):
         self.assertFalse(is_telemetry_scalar({}))
         self.assertFalse(is_telemetry_scalar(SimpleNamespace()))
         self.assertFalse(is_telemetry_scalar(math.nan))
+
+    def test_origin_and_source_boundary_is_structural(self) -> None:
+        canonical = TelemetryPoint(
+            key="pv_power",
+            value=900.0,
+            freshness=TelemetryFreshness.FRESH,
+            origin=TelemetryOrigin.CANONICAL,
+            source_keys=("pv_voltage", "pv_current"),
+        )
+        self.assertIs(canonical.origin, TelemetryOrigin.CANONICAL)
+
+        invalid = (
+            {"origin": "canonical", "source_keys": ("pv_voltage",)},
+            {"origin": TelemetryOrigin.DRIVER, "source_keys": ("pv_voltage",)},
+            {"origin": TelemetryOrigin.CANONICAL, "source_keys": ()},
+            {
+                "origin": TelemetryOrigin.CANONICAL,
+                "source_keys": ("pv_voltage", "pv_voltage"),
+            },
+            {"origin": TelemetryOrigin.CANONICAL, "source_keys": ("pv_power",)},
+            {"origin": TelemetryOrigin.CANONICAL, "source_keys": ["pv_voltage"]},
+        )
+        for fields in invalid:
+            with self.subTest(fields=fields):
+                with self.assertRaises((TypeError, ValueError)):
+                    TelemetryPoint(
+                        key="pv_power",
+                        value=900.0,
+                        freshness=TelemetryFreshness.FRESH,
+                        **fields,  # type: ignore[arg-type]
+                    )
 
 
 class TypedTelemetryFrameTests(unittest.TestCase):

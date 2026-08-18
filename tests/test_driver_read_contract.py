@@ -30,7 +30,10 @@ from custom_components.eybond_local.drivers.read_result import (
 )
 from custom_components.eybond_local.models import CollectorInfo, DetectedInverter, ProbeTarget
 from custom_components.eybond_local.runtime.hub import EybondHub
-from custom_components.eybond_local.telemetry import TelemetryFreshness
+from custom_components.eybond_local.telemetry import (
+    TelemetryFreshness,
+    TelemetryOrigin,
+)
 
 
 class _FakeLink:
@@ -253,6 +256,30 @@ class HubMeasurementCacheTests(unittest.TestCase):
         )
         self.assertEqual(live.values["battery_voltage"], 27.3)
         self.assertEqual(offline.values["battery_voltage"], 27.3)
+
+    def test_snapshot_projects_canonical_values_from_the_same_driver_frame(self) -> None:
+        hub = _hub()
+        _bind(hub, _inverter())
+        self._resolve(
+            hub,
+            {
+                "input_voltage": 230.0,
+                "output_active_power": 900,
+                "pv_input_power": 700,
+                "battery_voltage": 51.2,
+                "battery_charge_current": 0.0,
+                "battery_discharge_current": 2.0,
+            },
+            mode=DriverReadMode.FULL,
+        )
+
+        snapshot = hub._build_snapshot(connected=True)
+
+        self.assertEqual(snapshot.values["grid_voltage"], 230.0)
+        self.assertEqual(snapshot.telemetry.value("grid_voltage"), 230.0)
+        point = snapshot.telemetry.point("grid_voltage")
+        self.assertIs(point.origin, TelemetryOrigin.CANONICAL)
+        self.assertEqual(point.source_keys, ("input_voltage",))
 
 
 # --- Snapshot integration: no revert to detection details ---------------------

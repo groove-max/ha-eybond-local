@@ -6,6 +6,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from .models import MeasurementDescription
+from .telemetry import (
+    TelemetryFreshness,
+    TelemetryOrigin,
+    TelemetryPoint,
+    TypedTelemetryFrame,
+    is_telemetry_scalar,
+)
 
 
 _GRID_PRESENT_VOLTAGE_THRESHOLD = 20.0
@@ -33,6 +40,32 @@ class CanonicalTelemetryDescription:
 
     description: MeasurementDescription
     variants: tuple[CanonicalTelemetryVariant, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _CanonicalComputation:
+    """One alias computed by the shared canonical evaluation pass."""
+
+    key: str
+    value: Any
+    source_keys: tuple[str, ...]
+
+
+class _ReadTrackingValues(dict[str, Any]):
+    """A value snapshot that records present keys consulted by a compute."""
+
+    def __init__(self, values: dict[str, Any]) -> None:
+        super().__init__(values)
+        self._read_keys: list[str] = []
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key in self and key not in self._read_keys:
+            self._read_keys.append(key)
+        return super().get(key, default)
+
+    @property
+    def read_keys(self) -> tuple[str, ...]:
+        return tuple(self._read_keys)
 
 
 _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
@@ -582,23 +615,115 @@ def apply_canonical_measurements(
 ) -> dict[str, Any]:
     """Populate canonical telemetry aliases without overwriting native values."""
 
-    if not driver_key:
-        return values
+    _apply_canonical_pass(
+        driver_key,
+        values,
+        variant_key=variant_key,
+    )
+    return values
 
+
+def project_canonical_telemetry(
+    frame: TypedTelemetryFrame,
+    *,
+    variant_key: str | None = None,
+) -> TypedTelemetryFrame:
+    """Return *frame* plus typed canonical aliases with exact dependencies.
+
+    This projection uses the same evaluation pass as the legacy mapping. Native
+    driver keys always win. A derived point is fresh only when every immediate
+    typed source was fresh; otherwise freshness propagates as carried.
+    """
+
+    if type(frame) is not TypedTelemetryFrame:
+        raise TypeError("canonical_telemetry_frame_invalid")
+    if variant_key is not None and (
+        type(variant_key) is not str
+        or not variant_key
+        or variant_key != variant_key.strip()
+    ):
+        raise ValueError("canonical_telemetry_variant_invalid")
+    if not frame.points:
+        return frame
+
+    values = frame.values()
+    computations = _apply_canonical_pass(
+        frame.driver_key,
+        values,
+        variant_key=variant_key,
+    )
+    points = {point.key: point for point in frame.points}
+    for computation in computations:
+        if not is_telemetry_scalar(computation.value):
+            continue
+        sources = tuple(
+            points[key]
+            for key in computation.source_keys
+            if key in points
+        )
+        if len(sources) != len(computation.source_keys) or not sources:
+            continue
+        freshness = (
+            TelemetryFreshness.FRESH
+            if all(
+                source.freshness is TelemetryFreshness.FRESH
+                for source in sources
+            )
+            else TelemetryFreshness.CARRIED
+        )
+        points[computation.key] = TelemetryPoint(
+            key=computation.key,
+            value=computation.value,
+            freshness=freshness,
+            origin=TelemetryOrigin.CANONICAL,
+            source_keys=computation.source_keys,
+        )
+
+    return TypedTelemetryFrame(
+        driver_key=frame.driver_key,
+        points=tuple(points[key] for key in sorted(points)),
+    )
+
+
+def _apply_canonical_pass(
+    driver_key: str | None,
+    values: dict[str, Any],
+    *,
+    variant_key: str | None,
+) -> tuple[_CanonicalComputation, ...]:
+    """Mutate *values* and report aliases from the one canonical evaluator."""
+
+    if not driver_key:
+        return ()
+
+    computations: list[_CanonicalComputation] = []
     available_keys = set(values)
     for spec in _CANONICAL_TELEMETRY:
         canonical_key = spec.description.key
         if canonical_key in values:
             continue
-        variant = _matching_variant(spec, driver_key, available_keys, variant_key=variant_key)
+        variant = _matching_variant(
+            spec,
+            driver_key,
+            available_keys,
+            variant_key=variant_key,
+        )
         if variant is None:
             continue
-        value = _compute_variant(variant, values)
+        tracked_values = _ReadTrackingValues(values)
+        value = _compute_variant(variant, tracked_values)
         if value is None:
             continue
         values[canonical_key] = value
         available_keys.add(canonical_key)
-    return values
+        computations.append(
+            _CanonicalComputation(
+                key=canonical_key,
+                value=value,
+                source_keys=tracked_values.read_keys,
+            )
+        )
+    return tuple(computations)
 
 
 def _matching_variant(

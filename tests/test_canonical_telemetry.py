@@ -13,10 +13,29 @@ if str(REPO_ROOT) not in sys.path:
 from custom_components.eybond_local.canonical_telemetry import (
     apply_canonical_measurements,
     canonical_measurements_for_driver,
+    project_canonical_telemetry,
+)
+from custom_components.eybond_local.telemetry import (
+    TelemetryFreshness,
+    TelemetryOrigin,
+    TypedTelemetryFrame,
+    fold_driver_telemetry,
 )
 
 
 class CanonicalTelemetryTests(unittest.TestCase):
+    @staticmethod
+    def _typed_frame(
+        driver_key: str,
+        values: dict[str, object],
+    ) -> TypedTelemetryFrame:
+        return fold_driver_telemetry(
+            TypedTelemetryFrame.empty(),
+            driver_key=driver_key,
+            values=values,
+            replace=True,
+        )
+
     def test_pi30_canonical_measurements_expose_common_core_aliases(self) -> None:
         keys = {
             description.key
@@ -236,6 +255,117 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["battery_to_home_power"], 0.0)
         self.assertEqual(values["grid_to_home_power"], 397.0)
         self.assertEqual(values["grid_to_battery_power"], 614.4)
+
+    def test_typed_projection_uses_the_same_pi30_values_with_provenance(self) -> None:
+        raw = {
+            "input_voltage": 230.0,
+            "input_frequency": 50.0,
+            "output_active_power": 1400,
+            "pv_input_voltage": 118.0,
+            "pv_input_current": 8.5,
+            "pv_input_power": 1003,
+            "battery_voltage": 51.2,
+            "battery_charge_current": 12.0,
+            "battery_discharge_current": 0.0,
+        }
+        legacy = dict(raw)
+        apply_canonical_measurements("pi30", legacy)
+
+        projected = project_canonical_telemetry(self._typed_frame("pi30", raw))
+
+        self.assertEqual(projected.value("battery_power"), legacy["battery_power"])
+        self.assertEqual(
+            projected.value("grid_to_battery_power"),
+            legacy["grid_to_battery_power"],
+        )
+        battery = projected.point("battery_power")
+        self.assertIs(battery.origin, TelemetryOrigin.CANONICAL)
+        self.assertEqual(
+            battery.source_keys,
+            (
+                "battery_voltage",
+                "battery_charge_current",
+                "battery_discharge_current",
+            ),
+        )
+        flow = projected.point("grid_to_battery_power")
+        self.assertIs(flow.origin, TelemetryOrigin.CANONICAL)
+        self.assertIn("battery_power", flow.source_keys)
+        self.assertIs(flow.freshness, TelemetryFreshness.FRESH)
+
+    def test_typed_projection_propagates_carried_freshness_through_chain(self) -> None:
+        first = self._typed_frame(
+            "pi30",
+            {
+                "output_active_power": 1400,
+                "pv_input_power": 1003,
+                "battery_voltage": 51.2,
+                "battery_charge_current": 12.0,
+                "battery_discharge_current": 0.0,
+            },
+        )
+        delta = fold_driver_telemetry(
+            first,
+            driver_key="pi30",
+            values={"output_active_power": 1410},
+            replace=False,
+        )
+
+        projected = project_canonical_telemetry(delta)
+
+        self.assertIs(
+            projected.point("output_power").freshness,
+            TelemetryFreshness.FRESH,
+        )
+        self.assertIs(
+            projected.point("battery_power").freshness,
+            TelemetryFreshness.CARRIED,
+        )
+        self.assertIs(
+            projected.point("grid_to_battery_power").freshness,
+            TelemetryFreshness.CARRIED,
+        )
+
+    def test_native_canonical_key_remains_driver_owned(self) -> None:
+        frame = self._typed_frame(
+            "modbus_smg",
+            {
+                "output_power": 1750,
+                "pv_power": 920,
+                "battery_average_power": -315.0,
+            },
+        )
+
+        projected = project_canonical_telemetry(frame)
+
+        native = projected.point("pv_power")
+        self.assertIs(native.origin, TelemetryOrigin.DRIVER)
+        self.assertEqual(native.source_keys, ())
+        derived = projected.point("battery_power")
+        self.assertIs(derived.origin, TelemetryOrigin.CANONICAL)
+        self.assertEqual(derived.source_keys, ("battery_average_power",))
+
+    def test_typed_projection_respects_variant_gate_and_strict_context(self) -> None:
+        frame = self._typed_frame(
+            "modbus_catalog",
+            {
+                "pv_input_voltage": 350.0,
+                "pv_input_current": 4.0,
+            },
+        )
+
+        aohai = project_canonical_telemetry(frame, variant_key="aohai_fsa")
+        other = project_canonical_telemetry(frame, variant_key="other_pack")
+
+        self.assertEqual(aohai.value("pv_power"), 1400.0)
+        self.assertIsNone(other.point("pv_power"))
+        for variant in ("", " padded", 7, object()):
+            with self.subTest(variant=variant):
+                with self.assertRaises((TypeError, ValueError)):
+                    project_canonical_telemetry(
+                        frame,
+                        variant_key=variant,  # type: ignore[arg-type]
+                    )
 
     def test_apply_canonical_measurements_preserves_native_smg_values(self) -> None:
         values = {

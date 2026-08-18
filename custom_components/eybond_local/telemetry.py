@@ -40,6 +40,13 @@ class TelemetryFreshness(Enum):
     CARRIED = "carried"
 
 
+class TelemetryOrigin(Enum):
+    """Which authority produced one typed telemetry point."""
+
+    DRIVER = "driver"
+    CANONICAL = "canonical"
+
+
 def _strict_key(value: object) -> str:
     if type(value) is not str:
         raise TypeError("telemetry_key_not_string")
@@ -89,11 +96,27 @@ class TelemetryPoint:
     key: str
     value: TelemetryScalar
     freshness: TelemetryFreshness
+    origin: TelemetryOrigin = TelemetryOrigin.DRIVER
+    source_keys: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _strict_key(self.key)
         if type(self.freshness) is not TelemetryFreshness:
             raise TypeError("telemetry_freshness_invalid")
+        if type(self.origin) is not TelemetryOrigin:
+            raise TypeError("telemetry_origin_invalid")
+        if type(self.source_keys) is not tuple:
+            raise TypeError("telemetry_source_keys_not_tuple")
+        normalized_sources = tuple(_strict_key(key) for key in self.source_keys)
+        if len(set(normalized_sources)) != len(normalized_sources):
+            raise ValueError("telemetry_source_key_duplicate")
+        if self.origin is TelemetryOrigin.DRIVER and normalized_sources:
+            raise ValueError("driver_telemetry_has_sources")
+        if self.origin is TelemetryOrigin.CANONICAL:
+            if not normalized_sources:
+                raise ValueError("canonical_telemetry_missing_sources")
+            if self.key in normalized_sources:
+                raise ValueError("canonical_telemetry_self_reference")
         telemetry_value_kind(self.value)
 
     @property
@@ -111,6 +134,8 @@ class TelemetryPoint:
             key=self.key,
             value=self.value,
             freshness=TelemetryFreshness.CARRIED,
+            origin=self.origin,
+            source_keys=self.source_keys,
         )
 
 
@@ -237,6 +262,7 @@ def fold_driver_telemetry(
 
 __all__ = [
     "TelemetryFreshness",
+    "TelemetryOrigin",
     "TelemetryPoint",
     "TelemetryScalar",
     "TelemetryValueKind",
