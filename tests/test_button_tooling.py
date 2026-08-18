@@ -6,6 +6,7 @@ import asyncio
 import sys
 import types
 import unittest
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -240,7 +241,14 @@ class ToolingButtonTests(unittest.TestCase):
             icon="mdi:clock-check-outline",
         )
 
-        attributes = EybondToolingButton(coordinator, spec).extra_state_attributes
+        with mock.patch(
+            "custom_components.eybond_local.button.dt_util.now",
+            return_value=datetime(2026, 8, 18, 14, 30, 0),
+        ):
+            attributes = EybondToolingButton(
+                coordinator,
+                spec,
+            ).extra_state_attributes
 
         self.assertEqual(attributes["current_inverter_date"], "2026-08-18")
         self.assertEqual(attributes["current_inverter_time"], "14:25:00")
