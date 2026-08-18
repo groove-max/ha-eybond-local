@@ -118,7 +118,7 @@ def tearDownModule() -> None:
             sys.modules[name] = original
 
 
-from custom_components.eybond_local.models import RuntimeSnapshot  # noqa: E402
+from custom_components.eybond_local.models import CollectorInfo, RuntimeSnapshot  # noqa: E402
 from custom_components.eybond_local.text import (  # noqa: E402
     EybondCollectorText,
     _CollectorTextSpec,
@@ -189,6 +189,28 @@ class CollectorTextTests(unittest.TestCase):
         self.assertEqual(
             entity.extra_state_attributes["pending_apply_action"],
             "apply_collector_changes",
+        )
+
+    def test_collector_text_prefers_typed_collector_endpoint(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.data.collector = CollectorInfo(
+            collector_server_endpoint="typed.example,18899,TCP",
+        )
+        entity = EybondCollectorText(
+            coordinator,
+            _CollectorTextSpec(
+                key="collector_callback_endpoint",
+                translation_key="collector_callback_endpoint",
+                name="Collector Callback Endpoint",
+                icon="mdi:lan-pending",
+                enabled_default=True,
+            ),
+        )
+
+        self.assertEqual(entity.native_value, "typed.example,18899,TCP")
+        self.assertEqual(
+            entity.extra_state_attributes["current_callback_endpoint"],
+            "typed.example,18899,TCP",
         )
 
     def test_collector_text_requires_full_control_in_auto_mode(self) -> None:

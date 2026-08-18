@@ -442,7 +442,7 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             return "This collector connection does not support this management action."
         if self._spec.key == "bind_collector_to_home_assistant":
             current_endpoint = _normalize_collector_endpoint(
-                self.coordinator.data.values.get("collector_server_endpoint")
+                self.coordinator.data.collector_server_endpoint
             )
             if current_endpoint == _normalize_collector_endpoint(
                 self.coordinator.collector_callback_target_endpoint
@@ -458,7 +458,7 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
                     "Rollback becomes available after one collector redirect change."
                 )
             current_endpoint = _normalize_collector_endpoint(
-                self.coordinator.data.values.get("collector_server_endpoint")
+                self.coordinator.data.collector_server_endpoint
             )
             if current_endpoint and current_endpoint == rollback_endpoint:
                 return "Collector already matches the source-of-truth callback endpoint."
@@ -565,7 +565,9 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             attributes["current_inverter_time"] = values.get("inverter_time")
         if is_collector_tooling_key(self._spec.key):
             availability_reason = self._collector_action_availability_reason()
-            attributes["collector_server_endpoint"] = values.get("collector_server_endpoint")
+            attributes["collector_server_endpoint"] = (
+                self.coordinator.data.collector_server_endpoint
+            )
             attributes["collector_cloud_family"] = values.get("collector_cloud_family")
             attributes["collector_cloud_family_source"] = values.get("collector_cloud_family_source")
             attributes["collector_cloud_family_confidence"] = values.get("collector_cloud_family_confidence")
@@ -584,7 +586,7 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             attributes["requires_control_mode"] = "auto_or_full"
             attributes["confirmation_mode"] = "baked_in"
             current_endpoint = _normalize_collector_endpoint(
-                values.get("collector_server_endpoint")
+                self.coordinator.data.collector_server_endpoint
             )
             rollback_endpoint = _normalize_collector_endpoint(
                 self.coordinator.collector_server_endpoint_rollback_target

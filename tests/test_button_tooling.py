@@ -91,7 +91,7 @@ from custom_components.eybond_local.button import (  # noqa: E402
     _ToolingButtonSpec,
     _tooling_button_specs_for_runtime,
 )
-from custom_components.eybond_local.models import RuntimeSnapshot  # noqa: E402
+from custom_components.eybond_local.models import CollectorInfo, RuntimeSnapshot  # noqa: E402
 
 
 class _CoordinatorStub:
@@ -211,6 +211,24 @@ class _CoordinatorStub:
 
 
 class ToolingButtonTests(unittest.TestCase):
+    def test_collector_endpoint_attributes_prefer_typed_collector_info(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.data.collector = CollectorInfo(
+            collector_server_endpoint="typed.example,18899,TCP",
+        )
+        spec = _ToolingButtonSpec(
+            key="reboot_collector",
+            name="Reboot Collector",
+            icon="mdi:restart",
+        )
+
+        attributes = EybondToolingButton(coordinator, spec).extra_state_attributes
+
+        self.assertEqual(
+            attributes["collector_server_endpoint"],
+            "typed.example,18899,TCP",
+        )
+
     def test_collector_tooling_specs_are_enabled_by_default(self) -> None:
         specs = {
             spec.key: spec

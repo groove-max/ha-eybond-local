@@ -48,6 +48,14 @@ class RuntimeSnapshotCollectorMetadataTests(unittest.TestCase):
             'snapshot.values["collector_server_endpoint"] =',
             coordinator_source,
         )
+        self.assertNotIn(
+            'snapshot.values.get("collector_server_endpoint")',
+            coordinator_source,
+        )
+        self.assertNotIn(
+            'self.data.values.get("collector_server_endpoint")',
+            coordinator_source,
+        )
 
         coordinator_tree = ast.parse(coordinator_source)
         coordinator_class = next(
@@ -89,6 +97,19 @@ class RuntimeSnapshotCollectorMetadataTests(unittest.TestCase):
             and isinstance(node.func, ast.Attribute)
         }
         self.assertIn("set_collector_server_endpoint", builder_calls)
+
+    def test_collector_endpoint_ui_never_reads_the_legacy_slot_directly(self) -> None:
+        for relative_path in (
+            "custom_components/eybond_local/button.py",
+            "custom_components/eybond_local/text.py",
+        ):
+            with self.subTest(path=relative_path):
+                source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+                self.assertNotIn(
+                    'values.get("collector_server_endpoint")',
+                    source,
+                )
+                self.assertIn("collector_server_endpoint", source)
 
     def test_set_endpoint_updates_typed_and_legacy_projections_atomically(self) -> None:
         collector = CollectorInfo()

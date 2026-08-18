@@ -4456,7 +4456,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
         async with self._collector_endpoint_operation(OPERATION_ENDPOINT_BIND):
             target_endpoint = self.collector_callback_target_endpoint
-            current_endpoint = str(self.data.values.get("collector_server_endpoint") or "").strip()
+            current_endpoint = self.data.collector_server_endpoint
             if current_endpoint == target_endpoint:
                 # Already pointing at Home Assistant and no write happens: nothing
                 # was earned, so NO axis changes of any kind. Since Batch 8 the
@@ -5867,7 +5867,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         )
         # Pass the raw observed value.  A non-string/duck value must fail closed
         # in the neutral resolver, never become an endpoint via ``str()``.
-        observed_current = self.data.values.get("collector_server_endpoint", "")
+        observed_current = self.data.collector_server_endpoint
 
         return resolve_cloud_rollback_endpoint(
             # CP2B.1 offers NO explicit user choice yet (reserved for CP2B.2).
@@ -5885,7 +5885,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         """Return the effective callback endpoint configured for this entry."""
 
         template_endpoint = str(
-            self.data.values.get("collector_server_endpoint")
+            self.data.collector_server_endpoint
             or self.collector_server_endpoint_rollback_target
             or ""
         ).strip()
@@ -5922,7 +5922,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             except ValueError:
                 rollback_target = ""
 
-        current_endpoint = str(self.data.values.get("collector_server_endpoint") or "").strip()
+        current_endpoint = self.data.collector_server_endpoint
         if current_endpoint:
             try:
                 current_endpoint = _normalize_preserved_collector_server_endpoint(current_endpoint)
@@ -5963,7 +5963,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         config_options = getattr(config_entry, "options", {}) if config_entry is not None else {}
 
         endpoint_candidates = (
-            self.data.values.get("collector_server_endpoint"),
+            self.data.collector_server_endpoint,
             self.collector_server_endpoint_rollback_target,
             getattr(self, "_remembered_collector_server_endpoint", ""),
         )
@@ -6270,7 +6270,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         """
 
         template_endpoint = str(
-            self.data.values.get("collector_server_endpoint")
+            self.data.collector_server_endpoint
             or self.collector_server_endpoint_rollback_target
             or ""
         ).strip()
@@ -7522,7 +7522,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             ),
             current_endpoint=str(
                 values.get("collector_server_endpoint")
-                or snapshot.values.get("collector_server_endpoint")
+                or snapshot.collector_server_endpoint
                 or ""
             ),
             upstream_endpoint=self.proxy_capture_upstream_endpoint,
@@ -7727,7 +7727,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     async def _async_read_live_collector_server_endpoint(self) -> str:
         """Return the latest collector endpoint, preferring a direct live management read."""
 
-        fallback = str(self.data.values.get("collector_server_endpoint") or "").strip()
+        fallback = self.data.collector_server_endpoint
         try:
             result = await self._runtime.async_get_collector_server_endpoint_state()
         except Exception as exc:
@@ -9341,7 +9341,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             current_endpoint=str(
                 current_endpoint
                 or runtime_values.get("collector_server_endpoint")
-                or snapshot.values.get("collector_server_endpoint")
+                or snapshot.collector_server_endpoint
                 or ""
             ),
             upstream_endpoint=self.proxy_capture_upstream_endpoint,
@@ -9653,7 +9653,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             cloud_session_protocol=resolve_collector_cloud_session_protocol(
                 self.collector_cloud_family
             ),
-            current_endpoint=str(snapshot.values.get("collector_server_endpoint") or ""),
+            current_endpoint=snapshot.collector_server_endpoint,
             upstream_endpoint=self.proxy_capture_upstream_endpoint,
             target_endpoint=self.proxy_capture_target_endpoint,
             active_state=state,
