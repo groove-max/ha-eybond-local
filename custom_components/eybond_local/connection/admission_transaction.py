@@ -71,7 +71,7 @@ HANDOFF_NOT_PREPARED = "not_prepared"
 #                    \-> FAILED  -> (begin_callback) CALLBACK_READY
 #   any (except RUNNING/HANDED_OFF) -> CLOSED via release()/async_close()
 #
-# The callback continuation (2D.2), reached ONLY from FAILED via
+# The callback continuation, reached ONLY from FAILED via
 # begin_callback_continuation(), reuses the SAME single owner slot:
 #   CALLBACK_READY -> IDENTITY_RUNNING -> IDENTITY_CERTIFIED
 #                                      \-> (fail) CALLBACK_READY
@@ -100,6 +100,7 @@ _STATE_RECOVERY_ADOPTED = "recovery_adopted"
 # recovery owner commits AFTER the terminal returns).
 _TERMINAL_NONE = ""
 _TERMINAL_INBOUND = "inbound"
+_TERMINAL_IDENTITY = "identity"
 _TERMINAL_RECOVERY_OWNER = "recovery_owner"
 
 
@@ -120,7 +121,7 @@ def _strict_normalized_string(value: object, *, field: str) -> str:
 class CollectorAdmissionTransaction(CallbackContinuation):
     """Attempt-scoped owner of one observed-session admission.
 
-    In 2D.2 this ONE transaction owns the whole admission-origin attempt -- inbound
+    This ONE transaction owns the whole admission-origin attempt -- inbound
     verification AND, after an inbound failure the user explicitly continues by
     callback, the callback identity + recovery + terminal handoff -- by
     implementing the neutral :class:`CallbackContinuation` contract. The config
@@ -143,6 +144,43 @@ class CollectorAdmissionTransaction(CallbackContinuation):
         # dict / getattr source authority, and ``origin`` never steers anything.
         if type(request) is not CollectorAdmissionRequest:
             raise TypeError("collector_admission_request_required")
+        self._initialize(
+            request=request,
+            identity_context=CallbackIdentityContext(
+                expected_pn=request.observed_session.collector_pn,
+                old_session_id=request.observed_session.session_id,
+            ),
+            registry_provider=registry_provider,
+            listener_host=listener_host,
+            policy_provider=policy_provider,
+            hass_provider=hass_provider,
+            initial_state=_STATE_READY,
+        )
+
+    def _initialize(
+        self,
+        *,
+        request: CollectorAdmissionRequest | None,
+        identity_context: CallbackIdentityContext,
+        registry_provider: Callable[[], Any],
+        listener_host: str,
+        policy_provider: Callable[[], OnboardingTimeoutPolicy] | None,
+        hass_provider: Callable[[], Any] | None,
+        initial_state: str,
+    ) -> None:
+        """Initialize the shared admission/callback transaction state.
+
+        ``CollectorAdmissionTransaction`` enters through ``READY`` with an exact
+        observed-session request.  The manual specialization below enters through
+        ``CALLBACK_READY`` with only a typed identity context.  Both then use this
+        class's single callback identity -> recovery -> terminal owner lifecycle;
+        no flow-backed or parallel callback state machine exists.
+        """
+
+        if type(identity_context) is not CallbackIdentityContext:
+            raise TypeError("callback_identity_context_required")
+        if initial_state not in (_STATE_READY, _STATE_CALLBACK_READY):
+            raise ValueError("admission_transaction_initial_state_invalid")
         self._request = request
         self._registry_provider = registry_provider
         self._listener_host = str(listener_host or "").strip() or "0.0.0.0"
@@ -155,8 +193,8 @@ class CollectorAdmissionTransaction(CallbackContinuation):
         # The CURRENT working identity: the observation PN on the first attempt,
         # the weak->strong enriched FULL PN afterwards. The observation stays
         # immutable.
-        self._expected_pn = request.observed_session.collector_pn
-        self._old_session_id = request.observed_session.session_id
+        self._expected_pn = identity_context.expected_pn
+        self._old_session_id = identity_context.old_session_id
         self._outcome: InboundRecoveryOutcome | None = None
         # Held claim (only after a successful claim_session).
         self._registry: Any = None
@@ -169,13 +207,13 @@ class CollectorAdmissionTransaction(CallbackContinuation):
         # The PN a committed handoff was prepared for (idempotence guard).
         self._handoff_pn = ""
         # Non-persisted lifecycle gate (see the _STATE_* comment above).
-        self._state = _STATE_READY
+        self._state = initial_state
         # Synchronous flow removal cannot await an in-flight identity/recovery
         # authority. It marks this flag; the running coroutine then performs the
         # exact delayed-owner cleanup and terminates CLOSED instead of resurrecting
         # this transaction after its flow disappeared.
         self._close_requested = False
-        # ---- callback continuation (2D.2), all transient/private -------------
+        # ---- callback continuation, all transient/private --------------------
         # The exact certified identity of the current callback attempt.
         self._certified_pn = ""
         self._certified_session_id = ""
@@ -194,6 +232,8 @@ class CollectorAdmissionTransaction(CallbackContinuation):
     # ---- read-only surface -------------------------------------------------
     @property
     def request(self) -> CollectorAdmissionRequest:
+        if self._request is None:
+            raise RuntimeError("collector_admission_request_unavailable")
         return self._request
 
     @property
@@ -208,6 +248,8 @@ class CollectorAdmissionTransaction(CallbackContinuation):
     def peer_hint(self) -> str:
         """Editable display hint only -- never identity/claim/route."""
 
+        if self._request is None:
+            return ""
         return self._request.observed_session.peer_hint
 
     @property
@@ -245,6 +287,24 @@ class CollectorAdmissionTransaction(CallbackContinuation):
         return self._registry is not None and bool(self._owner)
 
     @property
+    def owner(self) -> str:
+        """The exact transient owner held by this transaction, or ``""``."""
+
+        return self._owner
+
+    @property
+    def registry(self) -> Any:
+        """The registry that owns :attr:`owner`, or ``None`` (read-only)."""
+
+        return self._registry
+
+    @property
+    def certified_session_id(self) -> str:
+        """The exact session certified by the current callback attempt."""
+
+        return self._certified_session_id
+
+    @property
     def handed_off(self) -> bool:
         return self._handed_off
 
@@ -270,6 +330,8 @@ class CollectorAdmissionTransaction(CallbackContinuation):
         leak the owner.
         """
 
+        if self._request is None:
+            raise RuntimeError("collector_admission_request_unavailable")
         # State-safe: never run concurrently, or after a hand-off / close.
         if self._state != _STATE_READY:
             raise RuntimeError("admission_transaction_not_runnable")
@@ -669,7 +731,7 @@ class CollectorAdmissionTransaction(CallbackContinuation):
         self._state = _STATE_CLOSED
 
     # ======================================================================
-    # Callback continuation (2D.2): the SAME transaction owns the callback
+    # Callback continuation: the SAME transaction owns the callback
     # identity -> recovery -> terminal lifecycle after an inbound failure the
     # user explicitly continues by callback. Implements CallbackContinuation.
     # ======================================================================
@@ -693,6 +755,8 @@ class CollectorAdmissionTransaction(CallbackContinuation):
         expected PN + old session context are kept as the identity context.
         """
 
+        if self._request is None:
+            raise RuntimeError("collector_admission_request_unavailable")
         if self._state != _STATE_FAILED:
             raise RuntimeError("admission_transaction_not_callback_ready")
         if self._close_requested:
@@ -716,6 +780,8 @@ class CollectorAdmissionTransaction(CallbackContinuation):
         session through the selected route; it cannot reuse this observation.
         """
 
+        if self._request is None:
+            raise RuntimeError("collector_admission_request_unavailable")
         observed = self._request.observed_session
         if self._state != _STATE_READY:
             raise RuntimeError("admission_transaction_not_callback_ready")
@@ -738,6 +804,8 @@ class CollectorAdmissionTransaction(CallbackContinuation):
     ) -> ObservedSessionWireProbeIntent:
         """Return the exact zero-send identity capability for this observation."""
 
+        if self._request is None:
+            raise RuntimeError("collector_admission_request_unavailable")
         if (_state_override or self._state) not in (
             _STATE_READY,
             _STATE_CALLBACK_READY,
@@ -787,8 +855,8 @@ class CollectorAdmissionTransaction(CallbackContinuation):
         )
         if not pn_is_same_identity(declared, self._expected_pn):
             raise ValueError("callback_declared_expected_pn_mismatch")
-        # Keep a stronger PN learned by this transaction; unlike the legacy
-        # adapter, retry never downgrades its own strong same-identity evidence.
+        # Keep a stronger PN learned by this observed-admission transaction;
+        # retry never downgrades its own strong same-identity evidence.
         return self.identity_context
 
     def adopt_certified_pn(self, collector_pn: str) -> str:
@@ -840,7 +908,14 @@ class CollectorAdmissionTransaction(CallbackContinuation):
         )
         if strategy != CONNECTION_STRATEGY_CALLBACK_ON_DEMAND:
             raise ValueError("callback_identity_request_strategy_invalid")
-        if not pn_is_same_identity(expected_pn, self._expected_pn):
+        if (
+            expected_pn != self._expected_pn
+            and not (
+                expected_pn
+                and self._expected_pn
+                and pn_is_same_identity(expected_pn, self._expected_pn)
+            )
+        ):
             raise ValueError("callback_identity_request_pn_mismatch")
         if old_session_id != self._old_session_id:
             raise ValueError("callback_identity_request_session_mismatch")
@@ -905,7 +980,10 @@ class CollectorAdmissionTransaction(CallbackContinuation):
             not collector_pn
             or not session_id
             or not owner
-            or not pn_is_same_identity(collector_pn, self._expected_pn)
+            or (
+                bool(self._expected_pn)
+                and not pn_is_same_identity(collector_pn, self._expected_pn)
+            )
         ):
             self._release_identity_outcome_owner(outcome)
             self._reset_callback_attempt()
@@ -1147,6 +1225,21 @@ class CollectorAdmissionTransaction(CallbackContinuation):
                 return TerminalDecision(abort_reason="recovery_ownership_unavailable")
             self._terminal_owner_mode = _TERMINAL_RECOVERY_OWNER
             return TerminalDecision(owns=True)
+        # Manual/passive identity owner: the exact strongly identified session is
+        # held by this transaction, but there is deliberately no RecoveryProof.
+        # Commit that owner by exact PN before entry creation.  This is the
+        # permanent Pending/manual boundary: no address or loose observation can
+        # substitute for the registry claim.
+        if self._state == _STATE_IDENTITY_CERTIFIED and self.holds_claim:
+            status = self._prepare_callback_identity_handoff(collector_pn)
+            if status == HANDOFF_ALREADY_CONFIGURED:
+                return TerminalDecision(abort_reason="already_configured")
+            if status == HANDOFF_NOT_PREPARED:
+                return TerminalDecision(
+                    abort_reason="recovery_ownership_unavailable"
+                )
+            self._terminal_owner_mode = _TERMINAL_IDENTITY
+            return TerminalDecision(owns=True)
         # INBOUND verified claim: commit at prepare via the existing handoff.
         if self._state == _STATE_VERIFIED and self.holds_claim:
             status = self.prepare_handoff(collector_pn)
@@ -1166,6 +1259,43 @@ class CollectorAdmissionTransaction(CallbackContinuation):
             return TerminalDecision(abort_reason="recovery_ownership_unavailable")
         return TerminalDecision()
 
+    def _prepare_callback_identity_handoff(self, collector_pn: str) -> str:
+        """Prepare the exact callback/passive identity owner for entry setup."""
+
+        if type(collector_pn) is not str or collector_pn != collector_pn.strip():
+            return HANDOFF_NOT_PREPARED
+        if not (
+            collector_pn
+            and self._state == _STATE_IDENTITY_CERTIFIED
+            and self.holds_claim
+            and self._certified_pn
+            and pn_is_same_identity(collector_pn, self._certified_pn)
+        ):
+            return HANDOFF_NOT_PREPARED
+        registry, owner = self._registry, self._owner
+        try:
+            prepared = bool(registry.prepare_handoff(owner, collector_pn))
+        except ValueError as exc:
+            logger.info("Callback handoff refused for %s: %s", collector_pn, exc)
+            self._release_owner()
+            self._state = _STATE_CLOSED
+            return HANDOFF_ALREADY_CONFIGURED
+        if not prepared:
+            self._release_owner()
+            self._state = _STATE_CLOSED
+            return HANDOFF_NOT_PREPARED
+        certified = ""
+        with suppress(Exception):
+            certified = registry.prepared_handoff_identity(owner, collector_pn)
+        if not certified or not pn_is_same_identity(certified, collector_pn):
+            self._release_owner()
+            self._state = _STATE_CLOSED
+            return HANDOFF_NOT_PREPARED
+        self._handed_off = True
+        self._handoff_pn = collector_pn
+        self._state = _STATE_HANDED_OFF
+        return HANDOFF_OK
+
     def commit_terminal(self) -> None:
         # RECOVERY_OWNER commits AFTER the terminal returns; INBOUND was already
         # committed at prepare_handoff (state HANDED_OFF).
@@ -1179,6 +1309,11 @@ class CollectorAdmissionTransaction(CallbackContinuation):
             # handed_off was never set; release exactly the adopted recovery owner.
             self._release_owner()
             self._state = _STATE_CLOSED
+        elif self._terminal_owner_mode == _TERMINAL_IDENTITY:
+            self._handed_off = False
+            self._handoff_pn = ""
+            self._release_owner()
+            self._state = _STATE_CLOSED
         elif self._terminal_owner_mode == _TERMINAL_INBOUND:
             self.rollback_handoff()
 
@@ -1188,8 +1323,104 @@ class CollectorAdmissionTransaction(CallbackContinuation):
         self.release()
 
 
+class ManualCallbackContinuationTransaction(CollectorAdmissionTransaction):
+    """Neutral transaction for manual, Pending-creation and reconfigure callback.
+
+    Unlike observed-session admission, this source may start with only a durable
+    expected PN (or no PN) and a user-editable route.  It therefore enters the
+    shared callback lifecycle directly and never fabricates an
+    :class:`ObservedCollectorSession`.  Identity/recovery authorities, owner
+    cleanup, exact-object recovery adoption and terminal handoff are inherited
+    unchanged from :class:`CollectorAdmissionTransaction`.
+    """
+
+    def __init__(
+        self,
+        identity_context: CallbackIdentityContext,
+        *,
+        registry_provider: Callable[[], Any],
+        listener_host: str,
+        policy_provider: Callable[[], OnboardingTimeoutPolicy] | None = None,
+        hass_provider: Callable[[], Any] | None = None,
+    ) -> None:
+        if type(identity_context) is not CallbackIdentityContext:
+            raise TypeError("callback_identity_context_required")
+        self._initialize(
+            request=None,
+            identity_context=identity_context,
+            registry_provider=registry_provider,
+            listener_host=listener_host,
+            policy_provider=policy_provider,
+            hass_provider=hass_provider,
+            initial_state=_STATE_CALLBACK_READY,
+        )
+
+    def identity_context_for_attempt(
+        self, declared_expected_pn: str
+    ) -> CallbackIdentityContext:
+        """Restore the durable manual declaration before each full retry."""
+
+        declared = _strict_normalized_string(
+            declared_expected_pn, field="callback_declared_expected_pn"
+        )
+        if self._state not in self._CALLBACK_RESETTABLE:
+            raise RuntimeError("manual_callback_transaction_identity_not_runnable")
+        # Manual/PN-less Pending creation may legitimately declare no PN.  A PN
+        # learned by a failed prior attempt is not durable evidence and must not
+        # constrain the retry; the next identity authority starts from the user's
+        # original declaration again.
+        self._expected_pn = declared
+        return self.identity_context
+
+    def adopt_passive_inbound_identity(
+        self, collector_pn: str, session_id: str
+    ) -> bool:
+        """Claim one explicitly selected strong passive session by exact id."""
+
+        pn = _strict_normalized_string(
+            collector_pn, field="passive_inbound_collector_pn"
+        )
+        sid = _strict_normalized_string(
+            session_id, field="passive_inbound_session_id"
+        )
+        if not pn or not sid:
+            raise ValueError("passive_inbound_identity_invalid")
+        if self._expected_pn and not pn_is_same_identity(self._expected_pn, pn):
+            return False
+        if self._state not in self._CALLBACK_RESETTABLE:
+            raise RuntimeError("manual_callback_transaction_identity_not_runnable")
+
+        self._reset_callback_attempt()
+        registry = self._registry_provider()
+        if registry is None:
+            return False
+        owner = f"callback_verification:{uuid.uuid4().hex}"
+        try:
+            registry.claim_session(owner, session_id=sid)
+            registry.promote_claim_to_full_pn(owner, pn)
+        except ValueError as exc:
+            logger.info(
+                "Manual callback verification: session for %s already claimed: %s",
+                pn,
+                exc,
+            )
+            with suppress(Exception):
+                registry.release(owner)
+            return False
+        self._registry = registry
+        self._owner = owner
+        self._certified_pn = pn
+        self._certified_session_id = sid
+        self._identity_previous_pn = self._expected_pn
+        self._identity_enrichment_pending = pn != self._expected_pn
+        self._expected_pn = pn
+        self._state = _STATE_IDENTITY_CERTIFIED
+        return True
+
+
 __all__ = [
     "CollectorAdmissionTransaction",
+    "ManualCallbackContinuationTransaction",
     "HANDOFF_ALREADY_CONFIGURED",
     "HANDOFF_NOT_PREPARED",
     "HANDOFF_OK",

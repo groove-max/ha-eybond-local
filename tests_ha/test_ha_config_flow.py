@@ -327,11 +327,10 @@ async def test_terminal_create_hands_prepared_claim_to_real_entry_setup(
         DOMAIN, context={"source": "user"}
     )
     flow = hass.config_entries.flow._progress[init["flow_id"]]
-    owner = "strategy_verification:ha-lane"
-    registry.claim_session(owner, session_id=session_id)
-    registry.promote_claim_to_full_pn(owner, SYNTHETIC_COLLECTOR_PN)
-    flow._verification_registry = registry
-    flow._verification_claim_owner = owner
+    assert flow._callback_continuation.adopt_passive_inbound_identity(
+        SYNTHETIC_COLLECTOR_PN, session_id
+    )
+    owner = flow._callback_continuation.owner
 
     entry_data = {
         "connection_type": "eybond",
@@ -434,11 +433,10 @@ async def test_terminal_exception_rolls_back_only_this_flows_claim(
         DOMAIN, context={"source": "user"}
     )
     flow = hass.config_entries.flow._progress[init["flow_id"]]
-    owner = "strategy_verification:ha-rollback"
-    registry.claim_session(owner, session_id=session_id)
-    registry.promote_claim_to_full_pn(owner, SYNTHETIC_COLLECTOR_PN)
-    flow._verification_registry = registry
-    flow._verification_claim_owner = owner
+    assert flow._callback_continuation.adopt_passive_inbound_identity(
+        SYNTHETIC_COLLECTOR_PN, session_id
+    )
+    owner = flow._callback_continuation.owner
 
     entries_before = len(hass.config_entries.async_entries(DOMAIN))
 
@@ -456,7 +454,7 @@ async def test_terminal_exception_rolls_back_only_this_flows_claim(
     # handoff, no entry; the unrelated boot entry's ownership is untouched.
     assert registry.owner_for_pn(SYNTHETIC_COLLECTOR_PN) == ""
     assert registry.prepared_handoff_identity(owner, SYNTHETIC_COLLECTOR_PN) == ""
-    assert flow._callback_ownership_handed_off is False
+    assert flow._callback_continuation.handed_off is False
     assert len(hass.config_entries.async_entries(DOMAIN)) == entries_before
     assert registry.claimed_identity(boot.entry_id) == "E5000099990003"
 

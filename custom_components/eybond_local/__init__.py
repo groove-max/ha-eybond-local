@@ -1540,9 +1540,7 @@ async def _async_setup_pending_entry(hass: HomeAssistant, entry: ConfigEntry) ->
             hass,
             entry,
             collector_pn=outcome.collector_pn,
-            evidence=outcome.evidence,
             handoff_owner=outcome.handoff_owner,
-            detected=outcome.detected,
         )
     except PendingPromotionError as exc:
         # Late collision / failure: roll the handoff back and stay pending,

@@ -300,6 +300,28 @@ from custom_components.eybond_local.config_flow import (
     _flatten_sections,
     _poll_interval_selector,
 )
+
+
+def _adopt_recovery_for_test(flow, outcome):
+    """Place a produced recovery outcome at the real transaction boundary.
+
+    Older scenario tests construct the outcome directly instead of running the
+    wire authority. They still exercise the production transaction's exact-object
+    adoption and owner replacement; no properties or methods are added to the
+    config-flow class.
+    """
+
+    txn = flow._callback_continuation
+    previous_registry = txn.registry
+    previous_owner = txn.owner
+    txn._produced_recovery_outcome = outcome
+    txn._recovery_outcome = None
+    txn._state = "recovery_consumed"
+    adopted = txn.adopt_recovery(outcome)
+    if adopted and previous_registry is not None and previous_owner:
+        if previous_owner != txn.owner:
+            previous_registry.release(previous_owner)
+    return adopted
 from custom_components.eybond_local.support.bundle import build_support_bundle_payload
 from custom_components.eybond_local.support.package import (
     build_shadow_learning_runtime_values,
@@ -689,7 +711,9 @@ def _capture_identity_requests(result=None):
         return outcome
 
     with patch.object(
-        config_flow_module, "async_run_callback_identity_transaction", new=_recorder
+        admission_transaction_module,
+        "async_run_callback_identity_transaction",
+        new=_recorder,
     ):
         yield captured
 
@@ -4801,7 +4825,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "manual_confirm")
         self.assertEqual(flow._manual_result.last_error, "callback_timeout")
-        self.assertEqual(flow._manual_verified_full_pn, "")
+        self.assertEqual(flow._callback_continuation._certified_pn, "")
         self.assertEqual(registry.owner_for_pn(passive_pn), "")
 
     async def test_manual_preexisting_sessions_never_create_ambiguity(self) -> None:
@@ -4825,7 +4849,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "manual_recovery_confirm")
-        self.assertEqual(flow._manual_verified_full_pn, answered_pn)
+        self.assertEqual(flow._callback_continuation._certified_pn, answered_pn)
         # The strangers stayed unclaimed and unadopted.
         self.assertEqual(registry.owner_for_pn("V000405SYN94677058"), "")
         self.assertEqual(registry.owner_for_pn("V000405SYN94677059"), "")
@@ -5094,11 +5118,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         # Post-attempt flow state: the user CHOSE callback_on_demand, the
         # transaction certified the PN, and no evidence was produced.
         flow._manual_chosen_strategy = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
-        flow._manual_verified_full_pn = "V001020SYN62344022"
+        flow._callback_continuation._certified_pn = "V001020SYN62344022"
         flow._verified_connection_strategy = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
         flow._verified_strategy_evidence = ""
 
-        self.assertFalse(flow._recovery_terminal.has_proof)
+        self.assertFalse(flow._callback_continuation._callback_terminal_input.has_proof)
         result = await flow.async_step_manual_create_pending()
 
         # The honest save: an explicit PENDING entry -- never a normal entry
@@ -5141,7 +5165,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             connection_mode="manual", next_action="create_pending_entry"
         )
         flow._manual_chosen_strategy = CONNECTION_STRATEGY_INBOUND
-        flow._manual_verified_full_pn = "V001020SYN62344022"
+        flow._callback_continuation._certified_pn = "V001020SYN62344022"
         flow._verified_connection_strategy = CONNECTION_STRATEGY_INBOUND
         flow._verified_strategy_evidence = (
             CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION
@@ -5179,8 +5203,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             connection_mode="known_ip", next_action="create_pending_entry"
         )
         # Verification context present, but no verified full PN was ever bound.
-        flow._verification_expected_pn = "V001020SYN62344022"
-        flow._manual_verified_full_pn = ""
+        flow._callback_continuation._expected_pn = "V001020SYN62344022"
+        flow._callback_continuation._certified_pn = ""
 
         result = await flow.async_step_manual_create_pending()
 
@@ -5516,7 +5540,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "manual_confirm")
-        self.assertEqual(flow._manual_verified_full_pn, answered_pn)
+        self.assertEqual(flow._callback_continuation._certified_pn, answered_pn)
         # The result is honest: the certified collector, and nothing invented.
         self.assertIsNone(flow._manual_result.match)
         self.assertEqual(flow._manual_result.collector.source, "callback_identity")
@@ -9839,7 +9863,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(legacy["type"], "form")
         self.assertEqual(legacy["step_id"], "manual")
         self.assertIsNone(legacy_flow._admission_transaction)
-        self.assertEqual(legacy_flow._verification_expected_pn, self.OTHER_FULL_PN)
+        self.assertEqual(legacy_flow._callback_continuation._expected_pn, self.OTHER_FULL_PN)
         self.assertEqual(legacy_flow._manual_defaults.get("collector_ip"), self.PEER_IP)
         self.assertEqual(legacy_flow._verified_connection_strategy, "")
 
@@ -10791,6 +10815,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         flow = self._make_flow()
         flow._admission_transaction = self._admission_transaction("integration_discovery", flow)
+        flow._callback_continuation = flow._admission_transaction
         # Integration discovery's selected result carries no observed_session.
         flow._selected_result = self._callback_listener_selected_result(
             with_observed_session=False
@@ -10812,11 +10837,24 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         flow = self._make_flow()
         flow._admission_transaction = self._admission_transaction("integration_discovery", flow)
+        flow._callback_continuation = flow._admission_transaction
         flow._selected_result = self._callback_listener_selected_result(
             with_observed_session=False
         )
         flow._verified_connection_strategy = CONNECTION_STRATEGY_INBOUND
-        flow._recovery_terminal = self._verified_inbound_terminal()
+        terminal = self._verified_inbound_terminal()
+        from custom_components.eybond_local.connection.recovery.verification import (
+            InboundRecoveryOutcome,
+            STATE_INBOUND_VERIFIED,
+        )
+
+        flow._admission_transaction._outcome = InboundRecoveryOutcome(
+            status=STATE_INBOUND_VERIFIED,
+            collector_pn=self.FULL_PN,
+            new_session_id=self.NEW_SESSION,
+            proof=terminal.inbound_proof,
+        )
+        flow._admission_transaction._state = "verified"
 
         sentinel = {"type": "create_entry", "created": True}
         with patch.object(
@@ -10832,6 +10870,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         flow = self._make_flow()
         flow._admission_transaction = self._admission_transaction("passive_scan", flow)
+        flow._callback_continuation = flow._admission_transaction
         flow._selected_result = self._callback_listener_selected_result(
             with_observed_session=True
         )
@@ -10878,9 +10917,9 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(flow._admission_transaction, txn)
         self.assertIs(flow._callback_continuation, txn)
         self.assertEqual(txn.state, "callback_ready")
-        # NO hand-across into legacy lifecycle fields.
-        self.assertEqual(flow._verification_expected_pn, "")
-        self.assertEqual(flow._verification_old_session_id, "")
+        # No hand-across: the same transaction retains its typed context.
+        self.assertEqual(txn.identity_context.expected_pn, self.FULL_PN)
+        self.assertEqual(txn.identity_context.old_session_id, self.OLD_SESSION)
         # The terminal guard is inert for a callback-strategy entry.
         self.assertFalse(
             flow._fresh_observed_session_entry_is_unverified(
@@ -11115,11 +11154,12 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # No strategy was guessed and no entry was created.
         self.assertEqual(flow._verified_connection_strategy, "")
         # 2D.2: the SAME transaction is KEPT as the continuation (no hand-across,
-        # no close) and is now callback-ready; no legacy field received authority.
+        # no close) and is now callback-ready with its typed identity context.
         self.assertIsNotNone(flow._admission_transaction)
         self.assertEqual(flow._admission_transaction.state, "callback_ready")
-        self.assertEqual(flow._verification_expected_pn, "")
-        self.assertEqual(flow._verification_old_session_id, "")
+        self.assertEqual(
+            flow._callback_continuation.identity_context.expected_pn, self.FULL_PN
+        )
 
     # Batch 7 -- the failure screen explains the exact reason in the user's
     # language (ru/uk), never the raw code, for every inbound failure code.
@@ -11189,8 +11229,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow._manual_preselected_strategy, "callback_on_demand")
         self.assertEqual(flow._manual_defaults.get("collector_ip"), self.PEER_IP)
         # 2D.2: NO hand-across -- the transaction (the continuation) carries the
-        # expected strong PN in its identity context; legacy fields stay empty.
-        self.assertEqual(flow._verification_expected_pn, "")
+        # expected strong PN in its identity context; nothing is copied to flow.
         self.assertEqual(
             flow._callback_continuation.identity_context.expected_pn, self.FULL_PN
         )
@@ -11208,10 +11247,10 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 self._manual_input(self.PEER_IP, connection_strategy="callback_on_demand")
             )
         self.assertEqual(routed["step_id"], "manual_recovery_confirm")
-        # 2D.2: the transaction (the continuation) holds the certified PN -- the
-        # admission-origin path writes no legacy _manual_verified_full_pn.
+        # The transaction (the continuation) holds the certified PN; nothing is
+        # copied into flow-owned callback lifecycle state.
         self.assertEqual(flow._callback_continuation.certified_pn, self.FULL_PN)
-        self.assertEqual(flow._manual_verified_full_pn, "")
+        self.assertNotIn("_manual_verified_full_pn", vars(flow))
         # A callback owner now holds the certified session (a NEW owner id).
         owner = registry.owner_for_pn(self.FULL_PN)
         self.assertTrue(owner.startswith("callback_verification:"))
@@ -11252,8 +11291,10 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(created["data"]["collector_pn"], "")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertNotIn("connection_strategy_evidence", created["data"])
-        self.assertEqual(flow._verification_expected_pn, "")
-        self.assertEqual(flow._manual_verified_full_pn, "")
+        self.assertEqual(
+            flow._callback_continuation.identity_context.expected_pn, self.FULL_PN
+        )
+        self.assertEqual(flow._callback_continuation.certified_pn, "")
 
     async def test_async_remove_during_admission_identity_releases_delayed_owner(
         self,
@@ -11416,7 +11457,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(transaction.state, "closed")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
-        self.assertIsNone(flow._manual_recovery_outcome)
+        self.assertIsNone(flow._callback_continuation._recovery_outcome)
 
     # C. Cancelling from the failure screen aborts cleanly: no claim, no task,
     # no prepared handoff -- and no entry.
@@ -11446,7 +11487,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cancelled["reason"], "discovery_cancelled")
         # Nothing is owned, held or prepared for the PN.
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
-        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertEqual(flow._callback_continuation._owner, "")
         self.assertIsNone(flow._admission_transaction)
 
     async def test_cancel_during_progress_cleans_up_via_async_remove(self) -> None:
@@ -11462,8 +11503,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         async def _hang() -> None:
             # The verifier claims the session, then never resolves until cancel.
             registry.claim_session("strategy_verification:hang", session_id=self.OLD_SESSION)
-            flow._verification_registry = registry
-            flow._verification_claim_owner = "strategy_verification:hang"
+            flow._callback_continuation._registry = registry
+            flow._callback_continuation._owner = "strategy_verification:hang"
             started.set()
             await asyncio.sleep(60)
 
@@ -11527,7 +11568,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # 2D.2: the proof travels ONLY inside the transaction's typed terminal
         # input (read through the continuation); no admission-origin
         # ``_recovery_terminal`` legacy write, and no loose proof field.
-        self.assertFalse(flow._recovery_terminal.has_proof)
+        self.assertFalse(flow._callback_continuation._callback_terminal_input.has_proof)
         terminal_input = flow._callback_continuation.terminal_input
         proof = terminal_input.inbound_proof
         self.assertIsNotNone(proof)
@@ -11802,7 +11843,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(order[-1], "release")
         self.assertEqual(order.count("release"), 1)
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
-        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertEqual(flow._callback_continuation._owner, "")
 
     # 8 (behavioral test A, flow level). Manual callback identity success keeps
     # the USER-CHOSEN callback_on_demand strategy and records NO recovery
@@ -11811,8 +11852,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     # was actually sent to.
     async def test_manual_callback_success_marks_callback_on_demand(self) -> None:
         flow = self._make_flow()
-        flow._verification_expected_pn = self.FULL_PN
-        flow._verification_old_session_id = self.OLD_SESSION
+        flow._callback_continuation._expected_pn = self.FULL_PN
+        flow._callback_continuation._old_session_id = self.OLD_SESSION
         # Pre-trigger: only the originally observed session exists (baseline).
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
         self._install_registry(flow, inventory)
@@ -11844,8 +11885,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     # the address stays editable for a retry.
     async def test_manual_callback_identity_mismatch_shows_error(self) -> None:
         flow = self._make_flow()
-        flow._verification_expected_pn = self.FULL_PN
-        flow._verification_old_session_id = self.OLD_SESSION
+        flow._callback_continuation._expected_pn = self.FULL_PN
+        flow._callback_continuation._old_session_id = self.OLD_SESSION
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
         self._install_registry(flow, inventory)
 
@@ -11880,8 +11921,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         flow = self._make_flow()
-        flow._verification_expected_pn = self.FULL_PN
-        flow._verification_old_session_id = self.OLD_SESSION
+        flow._callback_continuation._expected_pn = self.FULL_PN
+        flow._callback_continuation._old_session_id = self.OLD_SESSION
         registry = self._install_registry(flow, [])
 
         with self._identity_wire([], answers=()):
@@ -11920,8 +11961,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     # answers our trigger, so the attempt times out instead of adopting it.
     async def test_same_peer_ip_other_collector_does_not_confirm_callback(self) -> None:
         flow = self._make_flow()
-        flow._verification_expected_pn = self.FULL_PN
-        flow._verification_old_session_id = self.OLD_SESSION
+        flow._callback_continuation._expected_pn = self.FULL_PN
+        flow._callback_continuation._old_session_id = self.OLD_SESSION
         inventory = [self._inventory_session(self.NEW_SESSION, self.OTHER_FULL_PN)]
         registry = self._install_registry(flow, inventory)
 
@@ -11939,8 +11980,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     # session that never got stamped stays unprovable).
     async def test_manual_weak_new_session_does_not_confirm(self) -> None:
         flow = self._make_flow()
-        flow._verification_expected_pn = self.FULL_PN
-        flow._verification_old_session_id = self.OLD_SESSION
+        flow._callback_continuation._expected_pn = self.FULL_PN
+        flow._callback_continuation._old_session_id = self.OLD_SESSION
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
         registry = self._install_registry(flow, inventory)
 
@@ -12108,8 +12149,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         from custom_components.eybond_local.const import CONF_COLLECTOR_PN
 
         flow = self._make_flow()
-        flow._verification_expected_pn = self.FULL_PN
-        flow._verification_old_session_id = self.OLD_SESSION
+        flow._callback_continuation._expected_pn = self.FULL_PN
+        flow._callback_continuation._old_session_id = self.OLD_SESSION
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
         registry = self._install_registry(flow, inventory)
 
@@ -12144,7 +12185,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(created["data"][CONF_COLLECTOR_PN], self.FULL_PN)
         # The entry carries the proven recovery route (callback branch).
         self.assertIn("callback", created["data"]["recovery_contract"])
-        self.assertTrue(flow._callback_ownership_handed_off)
+        self.assertTrue(flow._callback_continuation._handed_off)
         owner = registry.owner_for_pn(self.FULL_PN)
         self.assertTrue(owner.startswith("callback_recovery:"))
         self.assertEqual(registry.claimed_identity(identity_owner), "")
@@ -12189,14 +12230,13 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("complete_handoff", setup_calls)
         self.assertIn("claim", setup_calls)  # restart / no-handoff fallback
 
-        # 2D.2: the callback-continuation claim's prepare_handoff is called by the
-        # legacy adapter's flow-owned prepare (non-admission), and the admission
-        # transaction's own prepare_handoff (admission inbound). Both are the
-        # single production callers -- no dead flow helper remains.
+        # Both manual identity and observed inbound handoff preparation live in
+        # the one neutral transaction module; no flow-owned helper remains.
         del EybondLocalConfigFlow
         prepare_src = textwrap.dedent(
             inspect.getsource(
-                config_flow_module._LegacyCallbackContinuation._prepare_flow_owned_claim
+                admission_transaction_module.CollectorAdmissionTransaction
+                ._prepare_callback_identity_handoff
             )
         )
         prepare_calls = {
@@ -12257,13 +12297,13 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         registry_inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
 
         flow_a = self._make_flow()
-        flow_a._verification_expected_pn = self.FULL_PN
-        flow_a._verification_old_session_id = self.OLD_SESSION
+        flow_a._callback_continuation._expected_pn = self.FULL_PN
+        flow_a._callback_continuation._old_session_id = self.OLD_SESSION
         registry = self._install_registry(flow_a, registry_inventory)
 
         flow_b = self._make_flow()
-        flow_b._verification_expected_pn = self.FULL_PN
-        flow_b._verification_old_session_id = self.OLD_SESSION
+        flow_b._callback_continuation._expected_pn = self.FULL_PN
+        flow_b._callback_continuation._old_session_id = self.OLD_SESSION
         # Same shared domain registry (one per HA process).
         flow_b.hass.data["eybond_local"] = flow_a.hass.data["eybond_local"]
 
@@ -12295,7 +12335,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # Flow A still owns it; flow B never became an owner.
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), owner_a)
         self.assertEqual(registry.claimed_session_id(owner_a), self.NEW_SESSION)
-        self.assertEqual(flow_b._verification_claim_owner, "")
+        self.assertEqual(flow_b._callback_continuation._owner, "")
 
     async def test_manual_callback_strategy_is_canonical_in_data_without_expected_pn(
         self,
@@ -12319,7 +12359,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = self._make_flow()
         inventory: list[dict[str, object]] = []
         self._install_registry(flow, inventory)
-        assert not flow._verification_expected_pn
+        assert not flow._callback_continuation._expected_pn
 
         def _answers():
             inventory.append(self._inventory_session(self.NEW_SESSION, self.FULL_PN))
@@ -12371,10 +12411,10 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         registry = self._install_registry(
             flow, [self._inventory_session(self.NEW_SESSION, self.FULL_PN)]
         )
-        assert not flow._verification_expected_pn
+        assert not flow._callback_continuation._expected_pn
 
         with patch.object(
-            config_flow_module,
+            admission_transaction_module,
             "async_run_callback_identity_transaction",
             side_effect=AssertionError("inbound must not run an active attempt"),
         ):
@@ -12557,7 +12597,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(routed["step_id"], "manual_recovery_confirm")
-        self.assertEqual(flow._manual_verified_full_pn, self.FULL_PN)
+        self.assertEqual(flow._callback_continuation._certified_pn, self.FULL_PN)
         owner = registry.owner_for_pn(self.FULL_PN)
         self.assertTrue(owner.startswith("callback_verification:"))
         self.assertEqual(registry.claimed_session_id(owner), self.NEW_SESSION)
@@ -12585,7 +12625,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         routed = await self._drive_generic_callback(flow, detector)
         self.assertEqual(routed["step_id"], "manual_recovery_confirm")
         # Only the target identity was claimed ...
-        self.assertEqual(flow._manual_verified_full_pn, self.FULL_PN)
+        self.assertEqual(flow._callback_continuation._certified_pn, self.FULL_PN)
         owner = registry.owner_for_pn(self.FULL_PN)
         self.assertTrue(owner.startswith("callback_verification:"))
         self.assertEqual(registry.claimed_session_id(owner), self.NEW_SESSION)
@@ -12611,7 +12651,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         routed = await self._drive_generic_callback(flow, detector)
 
         self._assert_callback_failure_menu(flow, routed, "callback_timeout")
-        self.assertEqual(flow._manual_verified_full_pn, "")
+        self.assertEqual(flow._callback_continuation._certified_pn, "")
         self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")
         self.assertNotEqual(
             getattr(flow, "_test_unique_id", ""), f"collector:{self.OTHER_FULL_PN}"
@@ -12640,9 +12680,9 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self._assert_callback_failure_menu(
             flow, routed, "callback_trigger_interference"
         )
-        self.assertEqual(flow._manual_verified_full_pn, "")
+        self.assertEqual(flow._callback_continuation._certified_pn, "")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
-        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertEqual(flow._callback_continuation._owner, "")
 
     async def test_timeout_after_our_trigger_is_timeout_not_interference(self) -> None:
         # BLOCKER 2 (B): our one trigger DID go out, then nothing answered. The
@@ -12704,7 +12744,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("callback", created["data"]["recovery_contract"])
         # The handoff was prepared for the RECOVERY transaction's owner (the
         # identity owner was released at the recovery handover).
-        self.assertTrue(flow._callback_ownership_handed_off)
+        self.assertTrue(flow._callback_continuation._handed_off)
         owner = registry.owner_for_pn(self.FULL_PN)
         self.assertTrue(owner.startswith("callback_recovery:"))
         self.assertEqual(
@@ -12733,14 +12773,14 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # Item 2/5 cleanup: a timeout (no confirming strong session) must leave
         # nothing owned.
         flow = self._make_flow()
-        flow._verification_expected_pn = self.FULL_PN
-        flow._verification_old_session_id = self.OLD_SESSION
+        flow._callback_continuation._expected_pn = self.FULL_PN
+        flow._callback_continuation._old_session_id = self.OLD_SESSION
         registry = self._install_registry(flow, [])
         with self._identity_wire([], answers=()):
             result = await flow.async_step_manual(self._manual_input("192.168.1.60"))
         self._assert_callback_failure_menu(flow, result, "callback_timeout")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
-        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertEqual(flow._callback_continuation._owner, "")
 
     async def test_expected_short_pn_is_not_saved_as_durable_identity(self) -> None:
         # Item 4: a discovery-time expected/short PN is NOT durable evidence. With
@@ -12751,8 +12791,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._manual_result = OnboardingResult(
             connection_mode="known_ip", next_action="create_pending_entry"
         )
-        flow._verification_expected_pn = self.FULL_PN
-        flow._manual_verified_full_pn = ""
+        flow._callback_continuation._expected_pn = self.FULL_PN
+        flow._callback_continuation._certified_pn = ""
 
         async def _passthrough_enrich(_user_input, result):
             return result
@@ -12820,7 +12860,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # Identity repair records NO callback recovery evidence.
         self.assertNotIn(CONF_CONNECTION_STRATEGY_EVIDENCE, entry.data)
         self.assertEqual(entry.unique_id, f"collector:{self.FULL_PN}")
-        self.assertTrue(flow._callback_ownership_handed_off)
+        self.assertTrue(flow._callback_continuation._handed_off)
         owner = registry.owner_for_pn(self.FULL_PN)
         self.assertTrue(owner.startswith("callback_verification:"))
 
@@ -12949,7 +12989,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         flow.context = {"entry_id": "entry-healthy", "source": "reconfigure"}
 
         with patch.object(
-            config_flow_module,
+            admission_transaction_module,
             "async_run_callback_identity_transaction",
             side_effect=AssertionError("healthy entry must not be probed/triggered"),
         ):
@@ -13057,8 +13097,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_create_terminal_exception_rolls_back_committed_handoff(self) -> None:
         flow = self._make_flow()
-        flow._verification_expected_pn = self.FULL_PN
-        flow._verification_old_session_id = self.OLD_SESSION
+        flow._callback_continuation._expected_pn = self.FULL_PN
+        flow._callback_continuation._old_session_id = self.OLD_SESSION
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
         registry = self._install_registry(flow, inventory)
 
@@ -13086,7 +13126,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # verified -- the adopted recovery owner must be fully rolled back.
         tx, _calls = self._recovery_transaction_stub(registry)
         with patch(
-            "custom_components.eybond_local.config_flow."
+            "custom_components.eybond_local.connection.admission_transaction."
             "async_run_callback_recovery_transaction",
             side_effect=tx,
         ), patch.object(
@@ -13104,9 +13144,9 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         # The committed handoff was rolled back: flag reset, owner released, so a
         # retry (or another flow) is not permanently blocked.
-        self.assertFalse(flow._callback_ownership_handed_off)
+        self.assertFalse(flow._callback_continuation._handed_off)
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
-        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertEqual(flow._callback_continuation._owner, "")
 
     async def test_reconfigure_terminal_exception_rolls_back_committed_handoff(self) -> None:
         flow = self._make_flow()
@@ -13130,7 +13170,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(RuntimeError):
                     await flow.async_step_reconfigure(self._manual_input("192.168.1.60"))
 
-        self.assertFalse(flow._callback_ownership_handed_off)
+        self.assertFalse(flow._callback_continuation._handed_off)
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(entry.data.get("collector_pn", ""), "")  # entry untouched
 
@@ -13156,8 +13196,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # Batch 6: a certified identity routes to the RECOVERY consent -- the
         # normal callback entry needs the proven recovery route first.
         self.assertEqual(routed["step_id"], "manual_recovery_confirm")
-        self.assertEqual(flow._manual_verified_full_pn, pn)
-        return flow._verification_claim_owner
+        self.assertEqual(flow._callback_continuation._certified_pn, pn)
+        return flow._callback_continuation._owner
 
     def _recovery_transaction_stub(
         self, registry, *, owner="callback_recovery:flowtest"
@@ -13217,7 +13257,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             return result
 
         with patch(
-            "custom_components.eybond_local.config_flow."
+            "custom_components.eybond_local.connection.admission_transaction."
             "async_run_callback_recovery_transaction",
             side_effect=tx,
         ), patch.object(
@@ -13277,8 +13317,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(owner_b.startswith("callback_verification:"))
         self.assertNotEqual(owner_b, owner_a)
         self.assertEqual(registry.claimed_session_id(owner_b), self.NEW_SESSION)
-        self.assertEqual(flow._manual_verified_full_pn, self.OTHER_FULL_PN)
-        self.assertEqual(flow._verification_claim_owner, owner_b)
+        self.assertEqual(flow._callback_continuation._certified_pn, self.OTHER_FULL_PN)
+        self.assertEqual(flow._callback_continuation._owner, owner_b)
 
         created, _calls = await self._drive_recovery_verified(flow, registry)
 
@@ -13313,10 +13353,10 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         routed = await self._probe_again(flow, self._recording_detector(results=()))
 
         self._assert_callback_failure_menu(flow, routed, "callback_timeout")
-        self.assertEqual(flow._manual_verified_full_pn, "")
+        self.assertEqual(flow._callback_continuation._certified_pn, "")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
-        self.assertEqual(flow._verification_claim_owner, "")
-        self.assertFalse(flow._callback_ownership_handed_off)
+        self.assertEqual(flow._callback_continuation._owner, "")
+        self.assertFalse(flow._callback_continuation._handed_off)
 
         # The stale identity cannot be turned into a normal entry for A.
         async def _passthrough_enrich(_user_input, result):
@@ -13359,11 +13399,11 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self._assert_callback_failure_menu(
             flow, routed, "callback_trigger_interference"
         )
-        self.assertEqual(flow._manual_verified_full_pn, "")
+        self.assertEqual(flow._callback_continuation._certified_pn, "")
         # The old claim is released and NO new claim was taken.
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(registry.claimed_identity(owner_a), "")
-        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertEqual(flow._callback_continuation._owner, "")
 
         async def _passthrough_enrich(_user_input, result):
             return result
@@ -13406,7 +13446,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(routed["step_id"], "manual_recovery_confirm")
-        self.assertEqual(flow._manual_verified_full_pn, self.OTHER_FULL_PN)
+        self.assertEqual(flow._callback_continuation._certified_pn, self.OTHER_FULL_PN)
         owner_b = registry.owner_for_pn(self.OTHER_FULL_PN)
         self.assertTrue(owner_b.startswith("callback_verification:"))
         # A NEW attempt identity: never the first attempt's owner, whose claim
@@ -13433,7 +13473,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         flow.async_remove()
 
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
-        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertEqual(flow._callback_continuation._owner, "")
 
 
     async def test_handoff_flag_stays_false_when_nothing_was_prepared(self) -> None:
@@ -13449,17 +13489,19 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         flow = self._make_flow()
         registry = self._install_registry(flow, [])
-        flow._verification_registry = registry
-        flow._verification_claim_owner = "callback_verification:vanished"
+        flow._callback_continuation._registry = registry
+        flow._callback_continuation._owner = "callback_verification:vanished"
+        flow._callback_continuation._certified_pn = self.FULL_PN
+        flow._callback_continuation._state = "identity_certified"
 
         decision = flow._callback_continuation.prepare_terminal(
             self.FULL_PN, RecoveryTerminalInput.none()
         )
 
         self.assertFalse(decision.owns)
-        self.assertEqual(decision.abort_reason, "")
-        self.assertFalse(flow._callback_ownership_handed_off)
-        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertEqual(decision.abort_reason, "recovery_ownership_unavailable")
+        self.assertFalse(flow._callback_continuation._handed_off)
+        self.assertEqual(flow._callback_continuation._owner, "")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
 
     async def test_handoff_refusal_aborts_and_releases_own_claim(self) -> None:
@@ -13475,17 +13517,20 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         registry = self._install_registry(flow, sessions)
         registry.claim_session("callback_verification:mine", session_id=self.OLD_SESSION)
         registry.promote_claim_to_full_pn("callback_verification:mine", self.FULL_PN)
-        flow._verification_registry = registry
-        flow._verification_claim_owner = "callback_verification:mine"
+        flow._callback_continuation._registry = registry
+        flow._callback_continuation._owner = "callback_verification:mine"
+        flow._callback_continuation._certified_pn = self.FULL_PN
+        flow._callback_continuation._state = "identity_certified"
 
         # The claim stands for A; handing off B is refused by the registry.
         decision = flow._callback_continuation.prepare_terminal(
             self.OTHER_FULL_PN, RecoveryTerminalInput.none()
         )
 
-        self.assertEqual(decision.abort_reason, "already_configured")
+        self.assertEqual(decision.abort_reason, "recovery_ownership_unavailable")
         self.assertFalse(decision.owns)
-        self.assertFalse(flow._callback_ownership_handed_off)
+        self.assertFalse(flow._callback_continuation._handed_off)
+        flow._callback_continuation.release_terminal_owner()
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")
 
@@ -13531,30 +13576,30 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = self._make_flow()
         registry, owner, outcome = self._prepared_callback_recovery(flow)
 
-        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+        self.assertTrue(_adopt_recovery_for_test(flow, outcome))
 
-        self.assertIs(flow._verification_registry, registry)
-        self.assertEqual(flow._verification_claim_owner, owner)
-        self.assertEqual(flow._recovery_terminal.prepared_handoff_owner, owner)
-        self.assertIsNotNone(flow._recovery_terminal.callback_proof)
-        self.assertFalse(flow._callback_ownership_handed_off)
+        self.assertIs(flow._callback_continuation._registry, registry)
+        self.assertEqual(flow._callback_continuation._owner, owner)
+        self.assertEqual(flow._callback_continuation._callback_terminal_input.prepared_handoff_owner, owner)
+        self.assertIsNotNone(flow._callback_continuation._callback_terminal_input.callback_proof)
+        self.assertFalse(flow._callback_continuation._handed_off)
 
     async def test_abort_after_adoption_releases_the_adopted_owner(self) -> None:
         flow = self._make_flow()
         registry, owner, outcome = self._prepared_callback_recovery(flow)
-        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+        self.assertTrue(_adopt_recovery_for_test(flow, outcome))
 
         # Any pre-terminal cleanup path (abort/cancel) funnels here.
-        flow._release_verification_claim()
+        flow._callback_continuation.release_terminal_owner()
 
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertEqual(registry.prepared_handoff_identity(owner, self.FULL_PN), "")
-        self.assertEqual(flow._verification_claim_owner, "")
+        self.assertEqual(flow._callback_continuation._owner, "")
 
     async def test_async_remove_after_adoption_releases_the_adopted_owner(self) -> None:
         flow = self._make_flow()
         registry, owner, outcome = self._prepared_callback_recovery(flow)
-        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+        self.assertTrue(_adopt_recovery_for_test(flow, outcome))
 
         flow.async_remove()
 
@@ -13568,7 +13613,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         flow = self._make_flow()
         registry, owner, outcome = self._prepared_callback_recovery(flow)
-        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+        self.assertTrue(_adopt_recovery_for_test(flow, outcome))
 
         sentinel = {"type": "create_entry", "reason": ""}
         with patch.object(
@@ -13578,7 +13623,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             side_effect=CallbackSessionRegistry.prepare_handoff,
         ) as prepare_mock:
             result = flow._create_entry_with_handoff(
-                self.FULL_PN, lambda: sentinel, recovery=flow._recovery_terminal
+                self.FULL_PN, lambda: sentinel, recovery=flow._callback_continuation._callback_terminal_input
             )
 
         self.assertIs(result, sentinel)
@@ -13587,7 +13632,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(prepare_mock.call_count, 0)
         # Success committed the flow: cleanup between CREATE_ENTRY and setup
         # must NOT release the prepared owner.
-        self.assertTrue(flow._callback_ownership_handed_off)
+        self.assertTrue(flow._callback_continuation._handed_off)
         flow.async_remove()
         self.assertEqual(
             registry.prepared_handoff_identity(owner, self.FULL_PN), self.FULL_PN
@@ -13626,7 +13671,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_adopted_stale_owner_is_refused_before_terminal(self) -> None:
         flow = self._make_flow()
         registry, owner, outcome = self._prepared_callback_recovery(flow)
-        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+        self.assertTrue(_adopt_recovery_for_test(flow, outcome))
         # The capability went stale AFTER adoption (released elsewhere).
         registry.release(owner)
         ran: list[int] = []
@@ -13634,7 +13679,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         result = flow._create_entry_with_handoff(
             self.FULL_PN,
             lambda: ran.append(1) or {"type": "create_entry"},
-            recovery=flow._recovery_terminal,
+            recovery=flow._callback_continuation._callback_terminal_input,
         )
 
         self.assertEqual(result["reason"], "recovery_ownership_unavailable")
@@ -13646,16 +13691,16 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # The capability died BEFORE adoption.
         registry.release(owner)
 
-        self.assertFalse(flow._adopt_callback_recovery_outcome(outcome))
+        self.assertFalse(_adopt_recovery_for_test(flow, outcome))
 
-        self.assertIsNone(flow._verification_registry)
-        self.assertEqual(flow._verification_claim_owner, "")
-        self.assertFalse(flow._recovery_terminal.has_proof)
+        self.assertIsNone(flow._callback_continuation._registry)
+        self.assertEqual(flow._callback_continuation._owner, "")
+        self.assertFalse(flow._callback_continuation._callback_terminal_input.has_proof)
 
     async def test_terminal_exception_releases_only_the_adopted_owner(self) -> None:
         flow = self._make_flow()
         registry, owner, outcome = self._prepared_callback_recovery(flow)
-        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+        self.assertTrue(_adopt_recovery_for_test(flow, outcome))
         # Another flow's unrelated claim must survive the rollback untouched.
         registry.claim(
             "callback_verification:other", collector_pn=self.OTHER_FULL_PN
@@ -13666,15 +13711,15 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(RuntimeError):
             flow._create_entry_with_handoff(
-                self.FULL_PN, _boom, recovery=flow._recovery_terminal
+                self.FULL_PN, _boom, recovery=flow._callback_continuation._callback_terminal_input
             )
 
         # Exactly this flow's adopted owner is gone, refs cleared...
         self.assertEqual(registry.prepared_handoff_identity(owner, self.FULL_PN), "")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertFalse(registry.complete_handoff(self.FULL_PN, "entry-x"))
-        self.assertEqual(flow._verification_claim_owner, "")
-        self.assertFalse(flow._callback_ownership_handed_off)
+        self.assertEqual(flow._callback_continuation._owner, "")
+        self.assertFalse(flow._callback_continuation._handed_off)
         # ...while the other owner's claim is untouched.
         self.assertEqual(
             registry.owner_for_pn(self.OTHER_FULL_PN), "callback_verification:other"
@@ -13689,15 +13734,15 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # owns a third identity.
         old_owner = "strategy_verification:old"
         registry.claim(old_owner, collector_pn=self.OTHER_FULL_PN)
-        flow._verification_registry = registry
-        flow._verification_claim_owner = old_owner
+        flow._callback_continuation._registry = registry
+        flow._callback_continuation._owner = old_owner
         registry.claim("callback_verification:bystander", collector_pn="V000405SYN94677999")
 
-        self.assertTrue(flow._adopt_callback_recovery_outcome(outcome))
+        self.assertTrue(_adopt_recovery_for_test(flow, outcome))
 
         # Only the flow's own previous claim was released.
         self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")
-        self.assertEqual(flow._verification_claim_owner, owner)
+        self.assertEqual(flow._callback_continuation._owner, owner)
         self.assertEqual(
             registry.owner_for_pn("V000405SYN94677999"),
             "callback_verification:bystander",
@@ -13716,8 +13761,24 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         owner = "strategy_verification:once"
         registry.claim_session(owner, session_id=self.NEW_SESSION)
         registry.promote_claim_to_full_pn(owner, self.FULL_PN)
-        flow._verification_registry = registry
-        flow._verification_claim_owner = owner
+        txn = self._admission_transaction("passive_scan", flow)
+        terminal_input = self._inbound_terminal_input()
+        from custom_components.eybond_local.connection.recovery.verification import (
+            InboundRecoveryOutcome,
+            STATE_INBOUND_VERIFIED,
+        )
+
+        txn._registry = registry
+        txn._owner = owner
+        txn._outcome = InboundRecoveryOutcome(
+            status=STATE_INBOUND_VERIFIED,
+            collector_pn=self.FULL_PN,
+            new_session_id=self.NEW_SESSION,
+            proof=terminal_input.inbound_proof,
+        )
+        txn._state = "verified"
+        flow._admission_transaction = txn
+        flow._callback_continuation = txn
 
         from custom_components.eybond_local.connection.session_registry import (
             CallbackSessionRegistry,
@@ -13731,7 +13792,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             side_effect=CallbackSessionRegistry.prepare_handoff,
         ) as prepare_mock:
             result = flow._create_entry_with_handoff(
-                self.FULL_PN, lambda: sentinel, recovery=self._inbound_terminal_input()
+                self.FULL_PN, lambda: sentinel, recovery=terminal_input
             )
 
         self.assertIs(result, sentinel)
@@ -13774,8 +13835,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         for label, registry, owner in cases:
             with self.subTest(case=label):
-                flow._verification_registry = registry
-                flow._verification_claim_owner = owner
+                flow._callback_continuation._registry = registry
+                flow._callback_continuation._owner = owner
                 result = flow._create_entry_with_handoff(
                     self.FULL_PN,
                     lambda: ran.append(1) or {"type": "create_entry"},
@@ -13791,8 +13852,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # terminal must refuse instead of creating an unowned entry.
         flow = self._make_flow()
         registry = self._install_registry(flow, [])
-        flow._verification_registry = registry
-        flow._verification_claim_owner = "strategy_verification:vanished"
+        flow._callback_continuation._registry = registry
+        flow._callback_continuation._owner = "strategy_verification:vanished"
         ran: list[int] = []
 
         result = flow._create_entry_with_handoff(
@@ -13804,7 +13865,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "abort")
         self.assertEqual(result["reason"], "recovery_ownership_unavailable")
         self.assertEqual(ran, [])
-        self.assertFalse(flow._callback_ownership_handed_off)
+        self.assertFalse(flow._callback_continuation._handed_off)
 
     async def test_uncertifiable_prepared_inbound_claim_refuses_terminal(self) -> None:
         # prepare_handoff succeeds (a PN-only claim exists) but the registry
@@ -13813,8 +13874,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         registry = self._install_registry(flow, [])
         owner = "strategy_verification:pn-only"
         registry.claim(owner, collector_pn=self.FULL_PN)
-        flow._verification_registry = registry
-        flow._verification_claim_owner = owner
+        flow._callback_continuation._registry = registry
+        flow._callback_continuation._owner = owner
         ran: list[int] = []
 
         result = flow._create_entry_with_handoff(
@@ -13825,7 +13886,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "abort")
         self.assertEqual(ran, [])
-        self.assertFalse(flow._callback_ownership_handed_off)
+        self.assertFalse(flow._callback_continuation._handed_off)
 
     async def test_no_proof_terminal_still_works_without_claim(self) -> None:
         # RecoveryTerminalInput.none(): an ordinary/manual entry without any
@@ -13861,7 +13922,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             return result
 
         with patch(
-            "custom_components.eybond_local.config_flow."
+            "custom_components.eybond_local.connection.admission_transaction."
             "async_run_callback_recovery_transaction",
             side_effect=AssertionError("declined recovery must not reboot/trigger"),
         ), patch.object(
@@ -13968,7 +14029,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def _drive_recovery_outcome(self, flow, tx):
         with patch(
-            "custom_components.eybond_local.config_flow."
+            "custom_components.eybond_local.connection.admission_transaction."
             "async_run_callback_recovery_transaction",
             side_effect=tx,
         ):
@@ -14042,7 +14103,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # The exact prepared owner is gone; nothing else was touched.
         self.assertEqual(registry.prepared_handoff_identity(owner, self.FULL_PN), "")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
-        self.assertIsNone(flow._manual_recovery_outcome)
+        self.assertIsNone(flow._callback_continuation._recovery_outcome)
 
     async def test_recovery_timeout_keeps_pending_available(self) -> None:
         flow = self._make_flow()
@@ -14087,7 +14148,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["step_id"], "manual_recovery_failed")
         self.assertEqual(flow._manual_recovery_error, "restart_not_supported")
-        self.assertFalse(flow._recovery_terminal.has_proof)
+        self.assertFalse(flow._callback_continuation._callback_terminal_input.has_proof)
 
     async def test_adoption_failure_releases_exact_outcome_owner(self) -> None:
         flow = self._make_flow()
@@ -14098,11 +14159,13 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         tx, _calls = self._recovery_transaction_stub(registry, owner=owner)
 
         with patch(
-            "custom_components.eybond_local.config_flow."
+            "custom_components.eybond_local.connection.admission_transaction."
             "async_run_callback_recovery_transaction",
             side_effect=tx,
         ), patch.object(
-            flow, "_adopt_callback_recovery_outcome", side_effect=RuntimeError("boom")
+            flow._callback_continuation,
+            "adopt_recovery",
+            side_effect=RuntimeError("boom"),
         ):
             progress = await flow.async_step_manual_recovery_verify()
             self.assertEqual(progress["type"], "progress")
@@ -14128,7 +14191,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(60)
 
         with patch(
-            "custom_components.eybond_local.config_flow."
+            "custom_components.eybond_local.connection.admission_transaction."
             "async_run_callback_recovery_transaction",
             side_effect=_hanging_tx,
         ):
@@ -14141,7 +14204,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await asyncio.wait_for(task, timeout=5.0)
 
-        self.assertIsNone(flow._manual_recovery_outcome)
+        self.assertIsNone(flow._callback_continuation._recovery_outcome)
         # The identity owner was released at the recovery handover; nothing
         # is left claimed for the PN.
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
@@ -14167,7 +14230,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(registry.prepared_handoff_identity(owner, self.FULL_PN), "")
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
-        self.assertIsNone(flow._manual_recovery_outcome)
+        self.assertIsNone(flow._callback_continuation._recovery_outcome)
 
     async def test_retry_after_recovery_failure_is_a_fresh_transaction(self) -> None:
         flow = self._make_flow()
@@ -14194,9 +14257,9 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(routed["step_id"], "manual_recovery_confirm")
         self.assertEqual(flow._manual_recovery_error, "")
-        self.assertIsNone(flow._manual_recovery_outcome)
-        self.assertFalse(flow._recovery_terminal.has_proof)
-        self.assertEqual(flow._manual_verified_session_id, "listener-18899-9")
+        self.assertIsNone(flow._callback_continuation._recovery_outcome)
+        self.assertFalse(flow._callback_continuation._callback_terminal_input.has_proof)
+        self.assertEqual(flow._callback_continuation._certified_session_id, "listener-18899-9")
 
 
 class CollectorOnlyResultTests(unittest.TestCase):
@@ -14330,7 +14393,7 @@ class ManualSilentBootstrapFlowTests(unittest.IsolatedAsyncioTestCase):
             silent_bootstrap_offer=SilentSessionBootstrapOffer("s-silent-7"),
         )
         with patch.object(
-            config_flow_module,
+            admission_transaction_module,
             "async_run_callback_identity_transaction",
             return_value=outcome,
         ):
@@ -14339,7 +14402,7 @@ class ManualSilentBootstrapFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "manual_confirm")
         self.assertEqual(flow._manual_result.last_error, "callback_session_silent")
-        self.assertEqual(flow._manual_silent_offer.session_id, "s-silent-7")
+        self.assertEqual(flow._callback_continuation._silent_offer.session_id, "s-silent-7")
         options = result["menu_options"]
         self.assertIn("manual_bootstrap_framed", options)
         self.assertIn("manual_bootstrap_at", options)
@@ -14357,7 +14420,7 @@ class ManualSilentBootstrapFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = self._make_flow()
         outcome = CallbackIdentityOutcome(result=IDENTITY_TIMEOUT)
         with patch.object(
-            config_flow_module,
+            admission_transaction_module,
             "async_run_callback_identity_transaction",
             return_value=outcome,
         ):
@@ -14390,14 +14453,14 @@ class ManualSilentBootstrapFlowTests(unittest.IsolatedAsyncioTestCase):
             return silent
 
         with patch.object(
-            config_flow_module,
+            admission_transaction_module,
             "async_run_callback_identity_transaction",
             side_effect=_tx,
         ):
             await flow.async_step_manual(self._manual_input())
             framed = await flow.async_step_manual_bootstrap_framed()
             # The silent target from THIS attempt re-arms the next retry.
-            self.assertEqual(flow._manual_silent_offer.session_id, "s-silent-9")
+            self.assertEqual(flow._callback_continuation._silent_offer.session_id, "s-silent-9")
             at = await flow.async_step_manual_bootstrap_at()
 
         self.assertEqual(len(seen_requests), 3)
@@ -14415,7 +14478,7 @@ class ManualSilentBootstrapFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_bootstrap_without_target_returns_to_menu(self) -> None:
         flow = self._make_flow()
         flow._manual_config = self._manual_input()
-        flow._manual_silent_offer = None
+        flow._callback_continuation._silent_offer = None
         flow._manual_result = OnboardingResult(connection_mode="manual")
 
         result = await flow.async_step_manual_bootstrap_framed()
@@ -14430,8 +14493,8 @@ class ManualRecoveryFailureExplanationTests(unittest.IsolatedAsyncioTestCase):
         flow = EybondLocalConfigFlow()
         flow.hass = _FakeHass(None)
         flow.context = {}
-        flow._manual_verified_full_pn = "V001020SYN62344022"
-        flow._verification_expected_pn = "V001020SYN62344022"
+        flow._callback_continuation._certified_pn = "V001020SYN62344022"
+        flow._callback_continuation._expected_pn = "V001020SYN62344022"
         return flow
 
     async def test_each_silent_reason_maps_to_a_distinct_sentence(self) -> None:

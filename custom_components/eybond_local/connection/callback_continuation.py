@@ -22,10 +22,10 @@ This is the NEUTRAL contract only. It:
 * owns the identity and recovery owners for one attempt (reset-on-new-attempt,
   release-on-abort, adopt-on-commit) and the terminal handoff decision
   (prepare-vs-verify, commit, rollback, release);
-* imports nothing from ``config_flow``/``onboarding``/``runtime``. The current
-  legacy implementation is a flow-backed adapter that lives beside the config
-  flow because it needs flow-owned fields; a future admission-transaction
-  implementation will satisfy the same contract without those fields.
+* imports nothing from ``config_flow``/``onboarding``/``runtime``. Both observed
+  admission and manual/reconfigure paths are implemented by neutral transaction
+  classes in :mod:`.admission_transaction`; callback lifecycle state never lives
+  on the config flow.
 
 Every method/property here has a production caller.
 """
@@ -89,7 +89,7 @@ class CallbackIdentityContext:
     ``""`` when none); ``old_session_id`` is the session an admission failure is
     superseding (or ``""``). Both are exact normalized strings -- the seam hands
     this to the shared attempt so it constructs its ``CallbackIdentityRequest``
-    without reading any legacy flow field.
+    without reading flow-owned callback lifecycle state.
     """
 
     expected_pn: str
@@ -111,7 +111,7 @@ class CallbackContinuation(ABC):
     owners privately, and decides/commits/rolls back the terminal handoff of the
     owner it holds. Callers see only the typed outcomes, the read-only snapshots,
     and the explicit operations -- there are deliberately no field-level
-    getters/setters for the legacy state.
+    getters/setters for callback lifecycle state.
     """
 
     # -- run phases ------------------------------------------------------- #
@@ -158,10 +158,9 @@ class CallbackContinuation(ABC):
     ) -> CallbackIdentityContext:
         """Return the context for a new attempt after applying its declaration.
 
-        The legacy implementation restores its durable pre-attempt declaration;
-        a transaction-backed implementation keeps a stronger same-identity PN it
-        learned itself.  This is the one source-neutral replacement for a caller
-        writing a legacy ``_verification_expected_pn`` field.
+        A manual transaction restores its durable pre-attempt declaration; an
+        observed-admission transaction keeps a stronger same-identity PN it
+        learned itself.  This is the one source-neutral identity-context update.
         """
 
     @abstractmethod

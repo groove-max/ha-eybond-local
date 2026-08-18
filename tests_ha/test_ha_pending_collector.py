@@ -251,9 +251,6 @@ async def test_callback_pending_promotes_and_starts_normal_runtime(
         return PendingAttemptOutcome(
             result="promoted",
             collector_pn=SYNTHETIC_COLLECTOR_PN,
-            # The identity path never mints recovery evidence (see
-            # onboarding/pending_attempt.py) -- promotion runs without it.
-            evidence="",
             handoff_owner=owner,
         )
 
@@ -334,7 +331,6 @@ async def test_pn_collision_keeps_entry_pending(hass: HomeAssistant, fake_runtim
         return PendingAttemptOutcome(
             result="promoted",
             collector_pn=SYNTHETIC_COLLECTOR_PN,
-            evidence="",
             handoff_owner=owner,
         )
 
@@ -557,7 +553,7 @@ async def test_manual_inbound_never_probes_or_triggers(
     flow_id = result["flow_id"]
 
     with patch(
-        "custom_components.eybond_local.config_flow."
+        "custom_components.eybond_local.connection.admission_transaction."
         "async_run_callback_identity_transaction",
         side_effect=AssertionError("inbound onboarding must not run an active attempt"),
     ):
@@ -594,7 +590,7 @@ async def test_manual_callback_requires_a_target(hass: HomeAssistant, fake_runti
     flow = hass.config_entries.flow._progress[result["flow_id"]]
 
     with patch(
-        "custom_components.eybond_local.config_flow."
+        "custom_components.eybond_local.connection.admission_transaction."
         "async_run_callback_identity_transaction",
         side_effect=AssertionError("must not run an attempt without a target"),
     ):

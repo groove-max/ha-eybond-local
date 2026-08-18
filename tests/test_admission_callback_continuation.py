@@ -34,9 +34,11 @@ from custom_components.eybond_local.connection.admission import (
 )
 from custom_components.eybond_local.connection.admission_transaction import (
     CollectorAdmissionTransaction,
+    ManualCallbackContinuationTransaction,
 )
 from custom_components.eybond_local.connection.callback_continuation import (
     CallbackContinuation,
+    CallbackIdentityContext,
     TerminalDecision,
 )
 from custom_components.eybond_local.connection.callback_identity import (
@@ -651,6 +653,72 @@ class TransactionAdoptAndTerminal(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(txn.holds_claim)
 
 
+class ManualCallbackContinuationBasics(unittest.IsolatedAsyncioTestCase):
+    """Manual/Pending/reconfigure uses the same neutral callback lifecycle."""
+
+    def _make(self, registry, *, expected_pn="", old_session_id=""):
+        return ManualCallbackContinuationTransaction(
+            CallbackIdentityContext(
+                expected_pn=expected_pn,
+                old_session_id=old_session_id,
+            ),
+            registry_provider=lambda: registry,
+            listener_host="0.0.0.0",
+            hass_provider=lambda: types.SimpleNamespace(data={}),
+        )
+
+    def test_is_concrete_callback_continuation_without_observed_request(self) -> None:
+        txn = self._make(_registry())
+        self.assertIsInstance(txn, CallbackContinuation)
+        self.assertEqual(txn.state, "callback_ready")
+        self.assertEqual(txn.identity_context.expected_pn, "")
+        self.assertEqual(txn.identity_context.old_session_id, "")
+        with self.assertRaises(RuntimeError):
+            _ = txn.request
+
+    async def test_pn_less_manual_identity_adopts_exact_transaction_owner(self) -> None:
+        registry = _registry([_wire_session(NEW_SESSION, PN)])
+        owner = "callback_verification:manual-A"
+        registry.claim_session(owner, session_id=NEW_SESSION)
+        registry.promote_claim_to_full_pn(owner, PN)
+        self.assertTrue(registry.prepare_handoff(owner, PN))
+        txn = self._make(registry)
+        request = _identity_request(expected_pn="", old_session_id="")
+        with _identity_returns(_certified_identity(owner)):
+            outcome = await txn.async_run_identity(request)
+        self.assertTrue(outcome.identity_certified)
+        self.assertEqual(txn.certified_pn, PN)
+        self.assertEqual(txn.certified_session_id, NEW_SESSION)
+        self.assertEqual(txn.owner, owner)
+
+    def test_manual_retry_restores_durable_declared_identity(self) -> None:
+        txn = self._make(_registry(), expected_pn=PN[:14])
+        txn._expected_pn = PN  # simulate same-attempt short->full enrichment
+        context = txn.identity_context_for_attempt(PN[:14])
+        self.assertEqual(context.expected_pn, PN[:14])
+
+    def test_passive_inbound_claim_prepares_exact_terminal_handoff(self) -> None:
+        registry = _registry([_wire_session(NEW_SESSION, PN)])
+        txn = self._make(registry, expected_pn=PN)
+        self.assertTrue(txn.adopt_passive_inbound_identity(PN, NEW_SESSION))
+        self.assertEqual(txn.adopt_certified_pn(PN), PN)
+        decision = txn.prepare_terminal(PN, RecoveryTerminalInput.none())
+        self.assertEqual(decision, TerminalDecision(owns=True))
+        self.assertTrue(txn.handed_off)
+        self.assertTrue(registry.prepared_handoff_identity(txn.owner, PN))
+        txn.commit_terminal()
+        txn.release_terminal_owner()
+        self.assertTrue(registry.prepared_handoff_identity(txn.owner, PN))
+
+    def test_passive_inbound_foreign_identity_is_zero_mutation(self) -> None:
+        registry = _registry([_wire_session(NEW_SESSION, PN)])
+        txn = self._make(registry, expected_pn=PN)
+        foreign = "V000405SYN94677058"
+        self.assertFalse(txn.adopt_passive_inbound_identity(foreign, NEW_SESSION))
+        self.assertFalse(txn.holds_claim)
+        self.assertEqual(registry.released_owners, [])
+
+
 class AdmissionConvergenceArchitectureGuards(unittest.TestCase):
     """§J: one owner authority; no shared branching; no hand-across; neutral."""
 
@@ -782,7 +850,38 @@ class AdmissionConvergenceArchitectureGuards(unittest.TestCase):
         # second matcher / verifier / recovery engine / handoff algorithm.
         tree = ast.parse(ADMISSION_TXN.read_text(encoding="utf-8"))
         classes = [n.name for n in tree.body if isinstance(n, ast.ClassDef)]
-        self.assertEqual(classes, ["CollectorAdmissionTransaction"])
+        self.assertEqual(
+            classes,
+            [
+                "CollectorAdmissionTransaction",
+                "ManualCallbackContinuationTransaction",
+            ],
+        )
+        manual = next(
+            n
+            for n in tree.body
+            if isinstance(n, ast.ClassDef)
+            and n.name == "ManualCallbackContinuationTransaction"
+        )
+        # The manual specialization may define only source-policy adapters.  The
+        # identity/recovery/terminal authorities stay inherited from the ONE
+        # transaction implementation above.
+        manual_methods = {
+            n.name
+            for n in manual.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        self.assertFalse(
+            manual_methods
+            & {
+                "async_run_identity",
+                "async_run_recovery",
+                "adopt_recovery",
+                "prepare_terminal",
+                "commit_terminal",
+                "rollback_terminal",
+            }
+        )
         funcs = [
             n.name
             for n in tree.body

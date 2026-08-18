@@ -324,9 +324,11 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
             "manual_recovery_confirm",
             getattr(flow._manual_result, "last_error", retried),
         )
-        self.assertEqual(flow._manual_verified_full_pn, FULL_PN)
+        self.assertEqual(flow._callback_continuation.certified_pn, FULL_PN)
         self.assertEqual(getattr(self._service, "pre_rx_heartbeats", 0), 0)
-        view = self._session_view(flow._manual_verified_session_id)
+        view = self._session_view(
+            flow._callback_continuation.certified_session_id
+        )
         self.assertIsNotNone(view)
         self.assertEqual(view.identity_source, "fc2_parameter_2")
         flow.async_remove()
@@ -371,8 +373,8 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
             "manual_recovery_confirm",
             result.get("errors") or result,
         )
-        self.assertEqual(flow._manual_verified_full_pn, FULL_PN)
-        identity_session = flow._manual_verified_session_id
+        self.assertEqual(flow._callback_continuation.certified_pn, FULL_PN)
+        identity_session = flow._callback_continuation.certified_session_id
         view = self._session_view(identity_session)
         self.assertIsNotNone(view)
         # ZERO unsolicited bytes before the probe; the FULL PN exists nowhere

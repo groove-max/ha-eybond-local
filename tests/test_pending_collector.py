@@ -233,7 +233,7 @@ class PromotionTests(unittest.TestCase):
         self.assertTrue(cp.is_collector_backed_callback_entry(entry.data, entry.options))
         self.assertFalse(cp.collector_identity_binding_required(entry.data, entry.options))
 
-    def test_identity_mapper_never_stamps_callback_evidence(self) -> None:
+    def test_identity_mapper_has_no_callback_evidence_or_detection_fields(self) -> None:
         # Behavioral test C (mapper level): a certified identity outcome maps to
         # PENDING_ATTEMPT_PROMOTED with EMPTY evidence. Converting identity into
         # CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER is exactly the false
@@ -268,8 +268,13 @@ class PromotionTests(unittest.TestCase):
 
         self.assertEqual(outcome.result, C.PENDING_ATTEMPT_PROMOTED)
         self.assertEqual(outcome.collector_pn, FULL_PN)
-        self.assertEqual(outcome.evidence, "")
         self.assertEqual(outcome.handoff_owner, "pending_attempt:xyz")
+        from dataclasses import fields
+
+        self.assertEqual(
+            {field.name for field in fields(outcome)},
+            {"result", "collector_pn", "handoff_owner"},
+        )
 
     def test_promotion_without_handoff_owner_is_refused(self) -> None:
         # A caller may not promote on a PN it merely believes in.

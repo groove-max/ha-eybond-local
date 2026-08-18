@@ -1,6 +1,6 @@
 """One bounded callback attempt for a pending collector entry.
 
-This is now a THIN compatibility caller of the shared identity transaction
+This is a thin product-lifecycle caller of the shared identity transaction
 (:mod:`connection.callback_identity`): it maps the pending entry's stored
 settings onto a transaction request and maps the transaction's typed outcome
 onto the pending status values the options flow shows. It owns no part of the
@@ -25,7 +25,7 @@ Contract (unchanged for callers):
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import logging
 from typing import Any
 
@@ -96,17 +96,16 @@ logger = logging.getLogger(__name__)
 class PendingAttemptOutcome:
     """Typed result of ONE pending callback attempt.
 
-    ``evidence`` stays EMPTY on the identity path -- a certified identity is
-    never converted into recovery/strategy evidence here. The field exists only
-    for the promotion API surface; a future RecoveryContract batch is the one
-    thing that may ever populate it, from its own explicit proof.
+    A certified identity is never converted into recovery/strategy evidence or
+    inverter metadata here.  Those fields are deliberately absent from this
+    model: callback Pending promotion proves only which collector answered.  An
+    explicit inbound candidate confirmation supplies its separate provenance
+    directly to the atomic promotion boundary.
     """
 
     result: str
     collector_pn: str = ""
-    evidence: str = ""
     handoff_owner: str = ""
-    detected: dict[str, Any] = field(default_factory=dict)
 
 
 def _pending_entry_strategy(entry: Any) -> str:
@@ -166,8 +165,8 @@ async def async_run_pending_callback_attempt(
         # which collector answered THIS attempt; it does not prove the callback
         # route will work again after the session is lost, so nothing here may
         # be persisted as CONF_CONNECTION_STRATEGY_EVIDENCE. Promotion keeps
-        # the entry's canonical (user-chosen) connection strategy untouched; an
-        # explicit recovery proof is the future RecoveryContract's job.
+        # the entry's canonical (user-chosen) connection strategy untouched;
+        # only the separate recovery transaction may produce RecoveryContract.
         handoff_owner=outcome.handoff_owner,
     )
 

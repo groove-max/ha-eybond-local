@@ -593,14 +593,15 @@ class TerminalArchitectureGuardTests(unittest.TestCase):
         self.assertNotIn("_admission_transaction", region)
         self.assertNotIn("_prepare_ownership_handoff", region)
         # The prepared-owner acceptance (verify_prepared_handoff /
-        # prepared_handoff_identity, NEVER a PN lookup) lives in the continuation
-        # implementations, not in the coordinator.
-        adapter_start = config_flow.index("class _LegacyCallbackContinuation")
-        adapter_end = config_flow.index("class EybondLocalConfigFlow")
-        adapter = config_flow[adapter_start:adapter_end]
-        self.assertNotIn("owner_for_pn", adapter)
-        self.assertIn("verify_prepared_handoff", adapter)
-        self.assertIn("prepared_handoff_identity", adapter)
+        # prepared_handoff_identity, NEVER a PN lookup) lives in the neutral
+        # transaction, not in the flow coordinator.
+        transaction = (
+            self._PACKAGE / "connection" / "admission_transaction.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("owner_for_pn", transaction)
+        self.assertIn("verify_prepared_handoff", transaction)
+        self.assertIn("prepared_handoff_identity", transaction)
+        self.assertNotIn("_LegacyCallbackContinuation", config_flow)
 
     def test_no_identity_outcome_to_contract_conversion_exists(self) -> None:
         # The only constructors accepting outcomes are the two classmethods,
