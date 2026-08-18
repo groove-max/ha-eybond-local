@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 import sys
 import unittest
@@ -10,7 +11,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.connection.ui import EYBOND_CONNECTION_DISPLAY_METADATA
 from custom_components.eybond_local.connection.admission import ObservedCollectorSession
 from custom_components.eybond_local.connection.recovery.verification import (
     CallbackRecoveryRoute,
@@ -23,17 +23,9 @@ from custom_components.eybond_local.models import (
     ProbeTarget,
 )
 from custom_components.eybond_local.onboarding.presentation import (
-    build_choose_placeholders,
-    build_scan_result_line,
-    build_scan_results_placeholders,
-    confidence_label,
-    default_control_summary,
     has_smartess_collector_hint,
-    result_label,
-    result_placeholders,
     scan_result_sort_key,
     scan_result_status_code,
-    scan_result_status_label,
 )
 
 
@@ -86,7 +78,7 @@ class OnboardingPresentationTests(unittest.TestCase):
             )
         )
 
-    def test_status_code_and_label_follow_collector_first_addability(self) -> None:
+    def test_status_code_follows_collector_first_addability(self) -> None:
         self.assertEqual(scan_result_status_code(self._matched_result()), "found")
         self.assertEqual(
             scan_result_status_code(self._matched_result(confidence="medium")),
@@ -117,7 +109,6 @@ class OnboardingPresentationTests(unittest.TestCase):
             ),
         )
         self.assertEqual(scan_result_status_code(ambiguous), "found")
-        self.assertEqual(scan_result_status_label(ambiguous), "Found")
         self.assertTrue(has_smartess_collector_hint(self._smartess_hint_result()))
         self.assertEqual(scan_result_status_code(self._smartess_hint_result()), "found")
         self.assertEqual(scan_result_status_code(self._collector_only_result()), "found")
@@ -153,7 +144,6 @@ class OnboardingPresentationTests(unittest.TestCase):
             ),
         )
         self.assertEqual(scan_result_status_code(passive), "address_required")
-        self.assertEqual(scan_result_status_label(passive), "Needs confirmation")
         active = OnboardingResult(
             collector=passive.collector,
             observed_session=passive.observed_session,
@@ -167,95 +157,15 @@ class OnboardingPresentationTests(unittest.TestCase):
             ),
         )
         self.assertEqual(scan_result_status_code(active), "found")
-        self.assertEqual(scan_result_status_label(active), "Found")
-        self.assertEqual(scan_result_status_label(self._smartess_hint_result()), "Found")
-        self.assertEqual(scan_result_status_label(self._matched_result()), "Found")
-        self.assertEqual(scan_result_status_label(self._matched_result(), already_added=True), "Already added")
+        self.assertEqual(
+            scan_result_status_code(self._matched_result(), already_added=True),
+            "already_added",
+        )
 
     def test_sort_key_prioritizes_addable_before_address_only(self) -> None:
         found_key = scan_result_sort_key(self._matched_result())
         address_key = scan_result_sort_key(self._collector_only_result(replied=True))
         self.assertLess(found_key, address_key)
-
-    def test_result_label_and_placeholders_are_branch_aware(self) -> None:
-        result = self._matched_result(confidence="medium")
-        label = result_label(result, display=EYBOND_CONNECTION_DISPLAY_METADATA)
-        placeholders = result_placeholders(result, display=EYBOND_CONNECTION_DISPLAY_METADATA)
-
-        self.assertIn("Found", label)
-        self.assertIn("PN PN123", label)
-        self.assertIn("192.168.1.55", label)
-        self.assertEqual(placeholders["collector_pn"], "PN123")
-        self.assertEqual(placeholders["confidence"], "Medium confidence")
-        self.assertEqual(placeholders["control_summary"], "The integration will start in **monitoring-only** mode.")
-
-        smartess_label = result_label(self._smartess_hint_result(), display=EYBOND_CONNECTION_DISPLAY_METADATA)
-        self.assertIn("Found", smartess_label)
-        self.assertIn("PN PN789", smartess_label)
-
-    def test_scan_results_placeholders_cover_empty_and_ready_states(self) -> None:
-        empty = build_scan_results_placeholders(
-            display=EYBOND_CONNECTION_DISPLAY_METADATA,
-            selected_scan_interface="eth0 - 192.168.1.50",
-            detected_count=0,
-            available_count=0,
-            already_added_count=0,
-            ready_model_names=[],
-        )
-        ready = build_scan_results_placeholders(
-            display=EYBOND_CONNECTION_DISPLAY_METADATA,
-            selected_scan_interface="eth0 - 192.168.1.50",
-            detected_count=3,
-            available_count=2,
-            already_added_count=1,
-            ready_model_names=["SMG 6200", "SMG 6200", "PowMr 4.2kW"],
-        )
-
-        self.assertIn("No compatible devices", empty["scan_summary"])
-        self.assertIn("2", ready["scan_summary"])
-        self.assertNotIn("SMG 6200", ready["scan_summary"])
-        self.assertIn("Choose a device or address", ready["scan_next_hint"])
-
-    def test_scan_results_placeholders_ignore_runtime_inverter_preview(self) -> None:
-        placeholders = build_scan_results_placeholders(
-            display=EYBOND_CONNECTION_DISPLAY_METADATA,
-            selected_scan_interface="eth0 - 192.168.1.50",
-            detected_count=1,
-            available_count=1,
-            already_added_count=0,
-            ready_model_names=[],
-        )
-
-        self.assertIn("Ready to set up", placeholders["scan_summary"])
-        self.assertNotIn("inverter", placeholders["scan_summary"].lower())
-        self.assertNotIn("pending", placeholders["scan_next_hint"].lower())
-
-    def test_scan_result_line_includes_existing_entry_hint(self) -> None:
-        line = build_scan_result_line(
-            1,
-            self._collector_only_result(),
-            display=EYBOND_CONNECTION_DISPLAY_METADATA,
-            existing_entry_title="EyeBond Local (192.168.1.56)",
-        )
-        self.assertIn("Already added", line)
-        self.assertIn('already added as "EyeBond Local (192.168.1.56)"', line)
-
-        smartess_line = build_scan_result_line(
-            2,
-            self._smartess_hint_result(),
-            display=EYBOND_CONNECTION_DISPLAY_METADATA,
-        )
-        self.assertIn("Found", smartess_line)
-        # Scan presentation does not expose runtime-only SmartESS/driver hints.
-        self.assertNotIn("SmartESS metadata", smartess_line)
-        self.assertNotIn("connected", smartess_line)
-
-    def test_simple_choose_and_confidence_helpers(self) -> None:
-        placeholders = build_choose_placeholders(4)
-        self.assertIn("4", placeholders["choose_summary"])
-        self.assertEqual(confidence_label("high"), "High confidence")
-        self.assertEqual(default_control_summary("high"), "Tested controls will be enabled automatically.")
-
 
 class AlreadyConfiguredStatusTests(unittest.TestCase):
     def test_already_configured_result_maps_to_already_added_status(self) -> None:
@@ -269,7 +179,30 @@ class AlreadyConfiguredStatusTests(unittest.TestCase):
         )
 
         self.assertEqual(scan_result_status_code(result), "already_added")
-        self.assertEqual(scan_result_status_label(result), "Already added")
+
+
+class PresentationArchitectureTests(unittest.TestCase):
+    def test_module_has_no_parallel_unlocalized_ui_renderer(self) -> None:
+        path = (
+            REPO_ROOT
+            / "custom_components/eybond_local/onboarding/presentation.py"
+        )
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        public_functions = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+        self.assertEqual(
+            public_functions,
+            {
+                "confidence_sort_score",
+                "has_smartess_collector_hint",
+                "scan_result_sort_key",
+                "scan_result_status_code",
+            },
+        )
 
 
 if __name__ == "__main__":
