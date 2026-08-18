@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 import sys
 import unittest
@@ -27,6 +28,32 @@ class ConnectionBranchRegistryTests(unittest.TestCase):
 
         self.assertEqual(branch.connection_type, "eybond")
         self.assertIs(branch.spec_type, EybondConnectionSpec)
+        self.assertFalse(hasattr(branch, "create_runtime_manager"))
+        self.assertFalse(hasattr(branch, "create_onboarding_manager"))
+
+    def test_neutral_registry_imports_no_runtime_or_onboarding_implementation(self) -> None:
+        source = (
+            REPO_ROOT
+            / "custom_components"
+            / "eybond_local"
+            / "connection"
+            / "branch_registry.py"
+        ).read_text(encoding="utf-8")
+        imported_modules = {
+            node.module or ""
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.ImportFrom)
+        }
+
+        self.assertFalse(
+            any(
+                module.startswith(("onboarding", "runtime"))
+                or ".onboarding" in module
+                or ".runtime" in module
+                for module in imported_modules
+            ),
+            imported_modules,
+        )
 
     def test_get_connection_branch_for_spec_validates_branch_spec_type(self) -> None:
         with self.assertRaisesRegex(ValueError, "connection_spec_branch_mismatch:eybond:ConnectionSpec"):

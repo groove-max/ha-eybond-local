@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +33,7 @@ class OnboardingFactoryTests(unittest.TestCase):
 
         self.assertIsInstance(manager, OnboardingDetector)
 
-    def test_create_onboarding_manager_delegates_to_connection_branch_registry(self) -> None:
+    def test_onboarding_factory_owns_concrete_detector_construction(self) -> None:
         connection = EybondConnectionSpec(
             server_ip="192.168.1.50",
             collector_ip="192.168.1.14",
@@ -44,18 +44,16 @@ class OnboardingFactoryTests(unittest.TestCase):
             heartbeat_interval=60,
             request_timeout=5.0,
         )
-        branch = Mock()
-        branch.create_onboarding_manager.return_value = object()
+        manager = object()
 
         with patch(
-            "custom_components.eybond_local.onboarding.factory.get_connection_branch_for_spec",
-            return_value=branch,
-        ) as get_branch:
-            manager = create_onboarding_manager(connection)
+            "custom_components.eybond_local.onboarding.factory.OnboardingDetector",
+            return_value=manager,
+        ) as create_detector:
+            result = create_onboarding_manager(connection)
 
-        self.assertIs(manager, branch.create_onboarding_manager.return_value)
-        get_branch.assert_called_once_with(connection)
-        branch.create_onboarding_manager.assert_called_once_with(connection)
+        self.assertIs(result, manager)
+        create_detector.assert_called_once_with(connection=connection)
 
 
 if __name__ == "__main__":

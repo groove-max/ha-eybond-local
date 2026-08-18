@@ -29,7 +29,6 @@ from ..const import (
     CONF_TCP_PORT,
     CONF_UDP_PORT,
     CONNECTION_TYPE_EYBOND,
-    DEFAULT_DRIVER_DETECTION_STRATEGY,
     DEFAULT_COLLECTOR_IP,
     DEFAULT_DISCOVERY_INTERVAL,
     DEFAULT_DISCOVERY_TARGET,
@@ -42,10 +41,6 @@ from ..collector.transport_profile import (
     apply_observed_collector_session_protocol,
     resolve_collector_transport_profile_from_entry_context,
 )
-from ..onboarding.eybond import OnboardingDetector
-from ..runtime.hub import EybondHub
-from ..onboarding.manager import OnboardingManager
-from ..runtime.manager import RuntimeManager
 
 
 def _optional_int(value: object) -> int:
@@ -71,8 +66,6 @@ class ConnectionBranch:
     build_auto_values: Callable[..., dict[str, Any]]
     build_manual_base_values: Callable[..., dict[str, Any]]
     build_runtime_option_values: Callable[..., dict[str, Any]]
-    create_runtime_manager: Callable[..., RuntimeManager]
-    create_onboarding_manager: Callable[..., OnboardingManager]
 
 
 def _build_eybond_connection_spec(
@@ -145,31 +138,6 @@ def _build_eybond_connection_spec(
     )
 
 
-def _create_eybond_runtime_manager(
-    connection: ConnectionSpec,
-    *,
-    driver_hint: str,
-    driver_detection_strategy: str = DEFAULT_DRIVER_DETECTION_STRATEGY,
-    connection_mode: str = "",
-) -> RuntimeManager:
-    if not isinstance(connection, EybondConnectionSpec):
-        raise ValueError(f"connection_spec_branch_mismatch:{CONNECTION_TYPE_EYBOND}:{type(connection).__name__}")
-    return EybondHub(
-        connection=connection,
-        driver_hint=driver_hint,
-        driver_detection_strategy=driver_detection_strategy,
-        connection_mode=connection_mode,
-    )
-
-
-def _create_eybond_onboarding_manager(
-    connection: ConnectionSpec,
-) -> OnboardingManager:
-    if not isinstance(connection, EybondConnectionSpec):
-        raise ValueError(f"connection_spec_branch_mismatch:{CONNECTION_TYPE_EYBOND}:{type(connection).__name__}")
-    return OnboardingDetector(connection=connection)
-
-
 _CONNECTION_BRANCHES: dict[str, ConnectionBranch] = {
     CONNECTION_TYPE_EYBOND: ConnectionBranch(
         connection_type=CONNECTION_TYPE_EYBOND,
@@ -180,8 +148,6 @@ _CONNECTION_BRANCHES: dict[str, ConnectionBranch] = {
         build_auto_values=build_eybond_auto_values,
         build_manual_base_values=build_eybond_manual_base_values,
         build_runtime_option_values=build_eybond_runtime_option_values,
-        create_runtime_manager=_create_eybond_runtime_manager,
-        create_onboarding_manager=_create_eybond_onboarding_manager,
     ),
 }
 

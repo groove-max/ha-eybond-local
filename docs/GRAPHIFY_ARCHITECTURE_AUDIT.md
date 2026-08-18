@@ -106,10 +106,23 @@ extract only a journey with a typed state/terminal contract.
   undirected visualization cannot establish ownership direction.
 - A high degree is a reason to inspect a node, not a refactoring requirement.
 
+## Concrete back-edge removed
+
+The adjusted audit found one real dependency-placement defect that raw God Node
+ranking did not highlight: `connection/branch_registry.py` imported both
+`runtime.hub.EybondHub` and `onboarding.eybond.OnboardingDetector`.  A neutral
+connection registry therefore acted as the composition root for two upper
+layers.
+
+The registry now contains only connection metadata and typed spec/value
+builders.  `runtime/factory.py` owns construction of the runtime implementation,
+and `onboarding/factory.py` owns construction of the onboarding implementation.
+The branch validation stays shared; no connection or detection algorithm was
+duplicated.  An architecture test prevents the upper-layer imports from
+returning.
+
 ## Current priority
 
-No trust-boundary defect was found by the God Node audit.  Typed Telemetry has a
-stronger concrete payoff and is now separated through driver production,
-runtime storage, Home Assistant projection, support export, and fixture replay.
-The next architectural extraction should therefore wait for either a specific
-lifecycle defect or a measurable unwanted production dependency.
+No runtime trust-boundary defect was found by the God Node audit.  After the
+composition-root back-edge above, further extraction should wait for either a
+specific lifecycle defect or a measurable unwanted production dependency.

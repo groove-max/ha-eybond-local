@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -35,7 +35,7 @@ class RuntimeFactoryTests(unittest.TestCase):
 
         self.assertIsInstance(runtime, EybondHub)
 
-    def test_create_runtime_manager_delegates_to_connection_branch_registry(self) -> None:
+    def test_runtime_factory_owns_concrete_runtime_construction(self) -> None:
         connection = EybondConnectionSpec(
             server_ip="192.168.1.50",
             collector_ip="192.168.1.14",
@@ -46,23 +46,21 @@ class RuntimeFactoryTests(unittest.TestCase):
             heartbeat_interval=60,
             request_timeout=5.0,
         )
-        branch = Mock()
-        branch.create_runtime_manager.return_value = object()
+        runtime = object()
 
         with patch(
-            "custom_components.eybond_local.runtime.factory.get_connection_branch_for_spec",
-            return_value=branch,
-        ) as get_branch:
-            runtime = create_runtime_manager(
+            "custom_components.eybond_local.runtime.factory.EybondHub",
+            return_value=runtime,
+        ) as create_hub:
+            result = create_runtime_manager(
                 connection,
                 driver_hint="auto",
                 connection_mode="known_ip",
             )
 
-        self.assertIs(runtime, branch.create_runtime_manager.return_value)
-        get_branch.assert_called_once_with(connection)
-        branch.create_runtime_manager.assert_called_once_with(
-            connection,
+        self.assertIs(result, runtime)
+        create_hub.assert_called_once_with(
+            connection=connection,
             driver_hint="auto",
             driver_detection_strategy="first_match",
             connection_mode="known_ip",
