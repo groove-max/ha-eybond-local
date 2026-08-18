@@ -17,10 +17,40 @@ from custom_components.eybond_local.derived_energy import (
     derived_energy_descriptions_for_keys,
     derived_energy_entity_descriptions_for_keys,
 )
+from custom_components.eybond_local.models import RuntimeSnapshot
+from custom_components.eybond_local.telemetry import (
+    TypedTelemetryFrame,
+    fold_driver_telemetry,
+)
 from custom_components.eybond_local.drivers.registry import measurements_for_runtime
 
 
 class DerivedEnergyTests(unittest.TestCase):
+    def test_typed_runtime_view_overrides_conflicting_legacy_power(self) -> None:
+        descriptions = {
+            item.key: item
+            for item in derived_energy_descriptions_for_keys({"output_power"})
+        }
+        frame = fold_driver_telemetry(
+            TypedTelemetryFrame.empty(),
+            driver_key="pi30",
+            values={"output_power": 800.0},
+            replace=True,
+        )
+        snapshot = RuntimeSnapshot(
+            values={"output_power": 100.0, "runtime_status": "ready"},
+            telemetry=frame,
+        )
+
+        self.assertEqual(
+            compute_derived_power(
+                snapshot.runtime_values(),
+                descriptions["estimated_load_energy"],
+            ),
+            800.0,
+        )
+        self.assertEqual(snapshot.runtime_values()["runtime_status"], "ready")
+
     def test_smg_available_keys_enable_practical_energy_sensors(self) -> None:
         descriptions = derived_energy_descriptions_for_keys(
             {"output_power", "pv_power", "battery_average_power", "grid_power"}

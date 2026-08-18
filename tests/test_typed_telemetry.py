@@ -279,6 +279,13 @@ class TypedTelemetryFrameTests(unittest.TestCase):
         self.assertFalse(snapshot.has_runtime_value("missing"))
         self.assertEqual(snapshot.runtime_value("missing", "fallback"), "fallback")
 
+        view = snapshot.runtime_values()
+        self.assertEqual(view["battery_voltage"], 51.2)
+        self.assertEqual(view["collector_pn"], "E50000200000000001")
+        self.assertIsNone(view["unknown_value"])
+        view["battery_voltage"] = 99.0
+        self.assertEqual(snapshot.runtime_value("battery_voltage"), 51.2)
+
 
 class TypedTelemetryArchitectureTests(unittest.TestCase):
     def test_model_is_neutral_and_has_no_ha_runtime_or_driver_dependency(self) -> None:
@@ -298,6 +305,41 @@ class TypedTelemetryArchitectureTests(unittest.TestCase):
             ),
             imported,
         )
+
+    def test_derived_energy_consumers_use_the_typed_first_snapshot_view(self) -> None:
+        path = REPO_ROOT / "custom_components/eybond_local/sensor.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        classes = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+        }
+        for class_name in (
+            "EybondDerivedEnergySensor",
+            "EybondDerivedEnergyCycleSensor",
+        ):
+            with self.subTest(class_name=class_name):
+                handler = next(
+                    node
+                    for node in classes[class_name].body
+                    if isinstance(node, ast.FunctionDef)
+                    and node.name == "_handle_coordinator_update"
+                )
+                runtime_view_calls = [
+                    node
+                    for node in ast.walk(handler)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "runtime_values"
+                ]
+                broad_value_reads = [
+                    node
+                    for node in ast.walk(handler)
+                    if isinstance(node, ast.Attribute)
+                    and node.attr == "values"
+                ]
+                self.assertEqual(len(runtime_view_calls), 1)
+                self.assertEqual(broad_value_reads, [])
 
 
 if __name__ == "__main__":

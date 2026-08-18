@@ -461,7 +461,7 @@ class EybondDerivedEnergySensor(
             self.async_write_ha_state()
             return
 
-        power_w = compute_derived_power(snapshot.values, self._description)
+        power_w = compute_derived_power(snapshot.runtime_values(), self._description)
         if power_w is None:
             self._accumulator.reset_sample()
             self.async_write_ha_state()
@@ -548,7 +548,10 @@ class EybondDerivedEnergyCycleSensor(
             self.async_write_ha_state()
             return
 
-        power_w = compute_derived_power(snapshot.values, self._source_description)
+        power_w = compute_derived_power(
+            snapshot.runtime_values(),
+            self._source_description,
+        )
         if power_w is None:
             self._accumulator.reset_sample()
             self.async_write_ha_state()

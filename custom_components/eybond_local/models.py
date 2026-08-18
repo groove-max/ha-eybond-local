@@ -690,6 +690,18 @@ class RuntimeSnapshot:
             return point.value
         return self.values.get(key, default)
 
+    def runtime_values(self) -> dict[str, Any]:
+        """Return the typed-first compatibility view for mapping consumers.
+
+        Metadata, blockers, and not-yet-migrated values remain available from
+        ``values``. Typed telemetry wins only for keys covered by the strict
+        frame. Neither source mapping is mutated.
+        """
+
+        merged = dict(self.values)
+        merged.update(self.telemetry.values())
+        return merged
+
 
 def _evaluate_conditions(
     conditions: tuple[CapabilityCondition, ...],
