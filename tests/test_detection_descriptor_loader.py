@@ -28,7 +28,8 @@ class DetectionDescriptorLoaderTests(unittest.TestCase):
         protocol = catalog.protocols["modbus_smg"]
 
         self.assertEqual(protocol.transport_key, "eybond_modbus")
-        self.assertIn((171, 14), [(block.start, block.count) for block in protocol.read_blocks])
+        self.assertIn((171, 1), [(block.start, block.count) for block in protocol.read_blocks])
+        self.assertIn((184, 1), [(block.start, block.count) for block in protocol.read_blocks])
         self.assertIn((186, 12), [(block.start, block.count) for block in protocol.read_blocks])
         fields = {field.key: (field.register, field.words) for field in protocol.fields}
         self.assertEqual(fields["fingerprint.layout_code"], (184, 1))

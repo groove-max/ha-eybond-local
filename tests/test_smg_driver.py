@@ -60,7 +60,8 @@ class SmgSupportCaptureRangeTests(unittest.TestCase):
             _support_capture_ranges(),
             (
                 (100, 10),
-                (171, 14),
+                (171, 1),
+                (184, 1),
                 (186, 12),
                 (201, 34),
                 (277, 5),
@@ -81,7 +82,8 @@ class SmgSupportCaptureRangeTests(unittest.TestCase):
             _support_capture_ranges("modbus_smg/models/anenji_4200_protocol_1.json"),
             (
                 (100, 10),
-                (171, 14),
+                (171, 1),
+                (184, 1),
                 (186, 12),
                 (201, 34),
                 (277, 5),
@@ -130,7 +132,8 @@ class SmgSupportCaptureRangeTests(unittest.TestCase):
             _support_capture_ranges("modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json"),
             (
                 (100, 10),
-                (171, 14),
+                (171, 1),
+                (184, 1),
                 (186, 46),
                 (252, 5),
                 (277, 5),
@@ -173,7 +176,7 @@ class SmgSupportCaptureEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             evidence["capture_notes"],
             [
-                "Includes supplemental SMG identity and family discovery ranges: 171-184, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704.",
+                "Includes supplemental SMG identity points and family discovery ranges: 171, 184, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704.",
                 "Protocol-1 SMG layouts also include documented fault/log windows: 700-744.",
             ],
         )
@@ -184,7 +187,8 @@ class SmgSupportCaptureEvidenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence["range_failures"], [])
 
         captured_by_start = {item["start"]: item for item in evidence["captured_ranges"]}
-        self.assertEqual(captured_by_start[171]["count"], 14)
+        self.assertEqual(captured_by_start[171]["count"], 1)
+        self.assertEqual(captured_by_start[184]["count"], 1)
         self.assertEqual(captured_by_start[300]["count"], 54)
         self.assertEqual(captured_by_start[607]["words"], [607])
         self.assertEqual(captured_by_start[626]["count"], 8)
@@ -351,7 +355,16 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
     async def test_probe_selects_anenji_variant_and_tested_capability_profile(self) -> None:
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
-        transport = FixtureTransport(
+
+        class PointIdentityOnlyTransport(FixtureTransport):
+            def _handle_read_holding(self, payload: bytes) -> bytes:
+                address = int.from_bytes(payload[2:4], "big")
+                count = int.from_bytes(payload[4:6], "big")
+                if address in {171, 184} and count != 1:
+                    raise RuntimeError("illegal_data_address")
+                return super()._handle_read_holding(payload)
+
+        transport = PointIdentityOnlyTransport(
             registers=self._anenji_registers(),
             command_responses=None,
             probe_target=target,
@@ -1072,9 +1085,11 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
 
         assert inverter is not None
         self.assertEqual(inverter.variant_key, "default")
-        # Identification = the catalog identity window, read before anything else.
-        self.assertEqual(transport.read_requests[0], (171, 14))
-        self.assertIn((186, 12), transport.read_requests[:3])
+        # Required identity points are independent reads before the selected
+        # full-schema probe; sparse 171..184 reads are not wire-compatible with
+        # every confirmed SMG-family device.
+        self.assertEqual(transport.read_requests[:2], [(171, 1), (184, 1)])
+        self.assertIn((186, 12), transport.read_requests[:4])
         self.assertIn((643, 1), transport.read_requests)
         # Full-schema probing happens once, for the catalog-selected binding.
         self.assertIn((406, 1), transport.read_requests)
@@ -1097,7 +1112,7 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
                 address = int.from_bytes(payload[2:4], "big")
                 count = int.from_bytes(payload[4:6], "big")
                 self.read_requests.append((address, count))
-                if not self.failed_identity_read and address == 171 and count == 14:
+                if not self.failed_identity_read and address == 171 and count == 1:
                     self.failed_identity_read = True
                     raise RuntimeError("identity read failed")
                 return super()._handle_read_holding(payload)

@@ -144,6 +144,7 @@ class DeviceCatalogLoadTest(unittest.TestCase):
             tuple(action.key for action in protocol.probe_actions),
             (
                 "modbus_smg.identity.171",
+                "modbus_smg.identity.184",
                 "modbus_smg.identity.186",
                 "modbus_smg.identity.643",
             ),

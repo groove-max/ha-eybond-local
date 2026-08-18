@@ -159,7 +159,44 @@ async def async_walk_detection_dag(
     failed_evidence: set[str] = set()
     unsupported_evidence: set[str] = set()
 
+    async def _execute_and_record(
+        action: CompiledProbeAction,
+        *,
+        required: bool,
+    ) -> None:
+        outcome = await execute_action(action)
+        if outcome == "executed":
+            executed.append(action.key)
+            return
+        if outcome == "unsupported":
+            unsupported.append(action.key)
+            unsupported_evidence.update(
+                field.key for field in action.evidence_fields
+            )
+            if raise_on_required_failure and required:
+                raise RuntimeError(
+                    f"required_catalog_action_unsupported:{action.key}"
+                )
+            return
+        failed.append(action.key)
+        failed_evidence.update(field.key for field in action.evidence_fields)
+        if raise_on_required_failure and required:
+            raise RuntimeError(f"required_catalog_action_failed:{action.key}")
+
     while True:
+        # ``optional: false`` is a protocol contract, not merely an action-order
+        # hint.  Execute every supported required action before allowing the
+        # decision tree to resolve; otherwise an early branch can omit another
+        # required identity field (for example a split model/layout fingerprint).
+        required_action = _next_unexecuted_required_action(
+            protocol,
+            excluded_action_keys=frozenset((*executed, *failed, *unsupported)),
+            supported_kinds=supported_kinds,
+        )
+        if required_action is not None:
+            await _execute_and_record(required_action, required=True)
+            continue
+
         unavailable = frozenset((*failed_evidence, *unsupported_evidence))
         evaluation = evaluate_detection_decision_tree(
             tree,
@@ -176,46 +213,7 @@ async def async_walk_detection_dag(
         if action is None or action.kind not in supported_kinds:
             unsupported_evidence.add(evaluation.missing_anchor_key or "")
             continue
-        if action.optional:
-            required_action = _next_unexecuted_required_action(
-                protocol,
-                excluded_action_keys=frozenset((*executed, *failed, *unsupported)),
-                supported_kinds=supported_kinds,
-            )
-            if required_action is not None:
-                outcome = await execute_action(required_action)
-                if outcome == "executed":
-                    executed.append(required_action.key)
-                elif outcome == "unsupported":
-                    unsupported.append(required_action.key)
-                    unsupported_evidence.update(
-                        field.key for field in required_action.evidence_fields
-                    )
-                    if raise_on_required_failure:
-                        raise RuntimeError(
-                            f"required_catalog_action_unsupported:{required_action.key}"
-                        )
-                else:
-                    failed.append(required_action.key)
-                    failed_evidence.update(
-                        field.key for field in required_action.evidence_fields
-                    )
-                    if raise_on_required_failure:
-                        raise RuntimeError(
-                            f"required_catalog_action_failed:{required_action.key}"
-                        )
-                continue
-        outcome = await execute_action(action)
-        if outcome == "executed":
-            executed.append(action.key)
-        elif outcome == "unsupported":
-            unsupported.append(action.key)
-            unsupported_evidence.update(field.key for field in action.evidence_fields)
-        else:
-            failed.append(action.key)
-            failed_evidence.update(field.key for field in action.evidence_fields)
-            if raise_on_required_failure and not action.optional:
-                raise RuntimeError(f"required_catalog_action_failed:{action.key}")
+        await _execute_and_record(action, required=not action.optional)
 
     return DagWalkResult(
         evaluation=evaluation,

@@ -68,7 +68,8 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
         self.assertEqual(
             tuple((action.kind, action.register, action.count) for action in protocol.probe_actions),
             (
-                (PROBE_ACTION_MODBUS_READ, 171, 14),
+                (PROBE_ACTION_MODBUS_READ, 171, 1),
+                (PROBE_ACTION_MODBUS_READ, 184, 1),
                 (PROBE_ACTION_MODBUS_READ, 186, 12),
                 (PROBE_ACTION_MODBUS_READ, 643, 2),
             ),

@@ -1,6 +1,6 @@
 {
  "schema_version": 2,
- "catalog_version": "2026.08.2",
+ "catalog_version": "2026.08.3",
  "description": "Universal offline inverter catalog with reusable protocol actions, runtime surfaces, and deterministic identity evidence.",
  "protocols": [
   {
@@ -19,7 +19,7 @@
      "key": "modbus_smg.identity.171",
      "kind": "modbus_read",
      "register": 171,
-     "count": 14,
+     "count": 1,
      "cost": 1,
      "optional": false,
      "evidence_fields": [
@@ -27,7 +27,17 @@
        "key": "fingerprint.model_code",
        "source_key": "model_code",
        "register": 171
-      },
+      }
+     ]
+    },
+    {
+     "key": "modbus_smg.identity.184",
+     "kind": "modbus_read",
+     "register": 184,
+     "count": 1,
+     "cost": 1,
+     "optional": false,
+     "evidence_fields": [
       {
        "key": "fingerprint.layout_code",
        "source_key": "layout_code",
@@ -760,7 +770,11 @@
    "ranges": [
     [
      171,
-     14
+     1
+    ],
+    [
+     184,
+     1
     ],
     [
      277,
@@ -796,7 +810,7 @@
     ]
    ],
    "notes": [
-    "Includes supplemental SMG identity and family discovery ranges: 171-184, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704.",
+    "Includes supplemental SMG identity points and family discovery ranges: 171, 184, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704.",
     "Protocol-1 SMG layouts also include documented fault/log windows: 700-744."
    ]
   },
@@ -804,7 +818,11 @@
    "ranges": [
     [
      171,
-     14
+     1
+    ],
+    [
+     184,
+     1
     ],
     [
      277,
@@ -868,7 +886,7 @@
     ]
    ],
    "notes": [
-    "Includes supplemental SMG identity and family discovery ranges: 171-184, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704."
+    "Includes supplemental SMG identity points and family discovery ranges: 171, 184, 277-281, 338-353, 389-391, 607, 626-633, 643-644, 696-704."
    ]
   },
   "pi_ascii": {

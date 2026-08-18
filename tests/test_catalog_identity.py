@@ -56,6 +56,16 @@ class _FailingSession:
         raise RuntimeError("transport_down")
 
 
+class _PointIdentityOnlySession(_RegisterSession):
+    """Model a device that rejects the former sparse 171..184 block read."""
+
+    async def read_holding(self, register: int, count: int) -> list[int]:
+        if register in {171, 184} and count != 1:
+            self.reads.append((register, count))
+            raise RuntimeError("illegal_data_address")
+        return await super().read_holding(register, count)
+
+
 def _smg_6200_identity_registers() -> dict[int, int]:
     registers = {171: 7680, 184: 1, 643: 6200, 644: 4}
     for offset, value in _ascii_words("92632500000001", word_count=12).items():
@@ -86,16 +96,34 @@ class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(probe.rated_power)
         self.assertEqual(probe.serial_ascii, "")
         self.assertFalse(probe_indicates_link_down(probe))
-        # The probe must stay within the declared identity window.
-        self.assertEqual(session.reads, [(171, 14)])
+        # Fingerprint registers are intentionally read as independent points:
+        # some confirmed SMG-family devices reject the sparse 171..184 block.
+        self.assertEqual(session.reads, [(171, 1), (184, 1)])
         self.assertEqual(
             probe.probe_action_keys,
-            ("modbus_smg.identity.171",),
+            ("modbus_smg.identity.171", "modbus_smg.identity.184"),
         )
         self.assertEqual(probe.failed_probe_action_keys, ())
         self.assertIsNotNone(probe.compiled_resolution)
         self.assertEqual(probe.compiled_resolution.resolution, "exact")
         self.assertEqual(probe.compiled_resolution.candidate_keys, ("smg_6200",))
+
+    async def test_point_identity_reads_restore_confirmed_anenji_11kw(self) -> None:
+        session = _PointIdentityOnlySession({171: 32768, 184: 4})
+
+        probe = await async_probe_catalog_identity(session)
+
+        self.assertIsNotNone(probe)
+        assert probe is not None
+        self.assertEqual(probe.match.kind, MATCH_DEVICE)
+        self.assertEqual(probe.match.entry.entry_key, "anenji_anj_11kw")
+        self.assertEqual(probe.layout_code, 4)
+        self.assertEqual(probe.model_code, 32768)
+        self.assertEqual(session.reads, [(171, 1), (184, 1)])
+        self.assertEqual(
+            probe.probe_action_keys,
+            ("modbus_smg.identity.171", "modbus_smg.identity.184"),
+        )
 
     async def test_force_unsupported_uses_compiled_family_resolution(self) -> None:
         with patch(

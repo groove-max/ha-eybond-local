@@ -73,6 +73,10 @@ from .link_baud_sweep import (
 from ..link_models import EybondLinkRoute
 from ..link_transport import async_send_payload, select_payload_route
 from ..models import CapabilityBlocker, DetectedInverter, RuntimeSnapshot, WriteCapability
+from ..metadata.compiled_detection_catalog import (
+    PROBE_ACTION_MODBUS_READ,
+    load_compiled_detection_catalog,
+)
 from ..telemetry import TypedTelemetryFrame, fold_driver_telemetry
 from ..payload.modbus import ModbusSession, to_signed_16
 from ..runtime_labels import runtime_path_label
@@ -2421,7 +2425,10 @@ class EybondHub:
                 continue
 
             target = probe_targets[0]
-            ranges = _capture_ranges_from_schema(schema)
+            ranges = _capture_ranges_from_schema(
+                schema,
+                driver_key=driver.key,
+            )
             if not ranges:
                 continue
 
@@ -3517,8 +3524,19 @@ class EybondHub:
         return snapshot
 
 
-def _capture_ranges_from_schema(schema: Any) -> tuple[tuple[int, int], ...]:
-    """Build one generic support-capture plan from register schema metadata."""
+def _capture_ranges_from_schema(
+    schema: Any,
+    *,
+    driver_key: str = "",
+) -> tuple[tuple[int, int], ...]:
+    """Build one generic support-capture plan including catalog identity reads.
+
+    Failed detection means no model-specific driver is available to contribute
+    support evidence.  Preserve the compiled protocol's exact read boundaries
+    here so a support archive can show why identity failed; merging sparse
+    fingerprint points back into one block would reproduce the detection bug we
+    are trying to diagnose.
+    """
 
     planned: list[tuple[int, int]] = []
     for block_key in ("status", "serial", "live", "config"):
@@ -3541,7 +3559,44 @@ def _capture_ranges_from_schema(schema: Any) -> tuple[tuple[int, int], ...]:
         (register, 1)
         for register in sorted(set(scalar_registers.values()))
     )
-    return _merge_capture_ranges(planned)
+    schema_ranges = _merge_capture_ranges(planned)
+    identity_ranges = _catalog_identity_capture_ranges(driver_key)
+    if not identity_ranges:
+        return schema_ranges
+
+    # Identity actions run first and retain their exact boundaries.  Avoid only
+    # exact duplicates: a narrower schema read can still succeed when a broader
+    # optional identity action is rejected by the device.
+    remaining_schema_ranges = tuple(
+        item
+        for item in schema_ranges
+        if item not in identity_ranges
+    )
+    return tuple(dict.fromkeys((*identity_ranges, *remaining_schema_ranges)))
+
+
+def _catalog_identity_capture_ranges(driver_key: object) -> tuple[tuple[int, int], ...]:
+    """Return exact read-only Modbus action ranges for one compiled protocol."""
+
+    if (
+        type(driver_key) is not str
+        or not driver_key
+        or driver_key != driver_key.strip()
+    ):
+        return ()
+    protocol = load_compiled_detection_catalog().protocols.get(driver_key)
+    if protocol is None:
+        return ()
+    return tuple(
+        dict.fromkeys(
+            (action.register, action.count)
+            for action in protocol.probe_actions
+            if action.kind == PROBE_ACTION_MODBUS_READ
+            and action.register is not None
+            and action.count is not None
+            and action.count > 0
+        )
+    )
 
 
 def _merge_capture_ranges(

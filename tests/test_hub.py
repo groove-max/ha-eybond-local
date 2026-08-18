@@ -1112,6 +1112,62 @@ class HubSnapshotTests(unittest.TestCase):
         self.assertEqual(evidence["detection_error"], "smartess_local:probe_timeout")
         self.assertEqual(evidence["captures"], [])
 
+    def test_generic_support_evidence_keeps_compiled_identity_point_reads(self) -> None:
+        async def _run() -> tuple[dict[str, object], list[tuple[int, int]]]:
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+                driver_hint="modbus_smg",
+            )
+            hub._link_manager = _FakeLinkManager()
+            reads: list[tuple[int, int]] = []
+
+            class _RecordingSession:
+                def __init__(self, *_args, **_kwargs) -> None:
+                    pass
+
+                async def read_holding(self, start: int, count: int) -> list[int]:
+                    reads.append((start, count))
+                    return [0] * count
+
+            with (
+                patch(
+                    "custom_components.eybond_local.runtime.hub.ModbusSession",
+                    _RecordingSession,
+                ),
+                patch.object(
+                    hub,
+                    "_async_capture_at_text_ascii_probe",
+                    AsyncMock(return_value=None),
+                ),
+            ):
+                evidence = await hub._async_capture_generic_support_evidence(
+                    "modbus_smg:no_match"
+                )
+            return evidence, reads
+
+        evidence, reads = asyncio.run(_run())
+
+        captures = evidence["captures"]
+        self.assertEqual(len(captures), 1)
+        planned = [
+            (item["start"], item["count"])
+            for item in captures[0]["planned_ranges"]
+        ]
+        self.assertEqual(planned[:2], [(171, 1), (184, 1)])
+        self.assertNotIn((171, 14), planned)
+        self.assertIn((643, 2), planned)
+        self.assertIn((643, 1), planned)
+        self.assertEqual(reads, planned)
+
     def test_build_snapshot_recomputes_smg_canonical_battery_power(self) -> None:
         hub = EybondHub(
             connection=EybondConnectionSpec(
