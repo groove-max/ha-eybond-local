@@ -13,7 +13,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.models import RuntimeSnapshot
+from custom_components.eybond_local.models import (
+    CapabilityCondition,
+    RuntimeSnapshot,
+    WriteCapability,
+)
 from custom_components.eybond_local.telemetry import (
     TelemetryFreshness,
     TelemetryOrigin,
@@ -286,6 +290,43 @@ class TypedTelemetryFrameTests(unittest.TestCase):
         view["battery_voltage"] = 99.0
         self.assertEqual(snapshot.runtime_value("battery_voltage"), 51.2)
 
+    def test_capability_view_combines_typed_state_with_legacy_blockers(self) -> None:
+        frame = fold_driver_telemetry(
+            TypedTelemetryFrame.empty(),
+            driver_key="modbus_smg",
+            values={"operating_mode": "Power On", "output_mode": "Single"},
+            replace=True,
+        )
+        capability = WriteCapability(
+            key="output_mode",
+            register=300,
+            value_kind="enum",
+            note="",
+            visible_if=(
+                CapabilityCondition(
+                    key="operating_mode",
+                    operator="eq",
+                    value="Power On",
+                    effect="hide",
+                ),
+            ),
+        )
+        snapshot = RuntimeSnapshot(
+            values={
+                "operating_mode": "Fault",
+                "output_mode": "3 Phase-P1",
+                "capability_block_reason_output_mode": "write rejected",
+            },
+            telemetry=frame,
+        )
+
+        self.assertFalse(capability.runtime_state(snapshot.values).visible)
+        state = capability.runtime_state(snapshot.runtime_values())
+        self.assertTrue(state.visible)
+        self.assertFalse(state.editable)
+        self.assertEqual(state.reasons, ("write rejected",))
+        self.assertEqual(snapshot.runtime_value(capability.value_key), "Single")
+
 
 class TypedTelemetryArchitectureTests(unittest.TestCase):
     def test_model_is_neutral_and_has_no_ha_runtime_or_driver_dependency(self) -> None:
@@ -340,6 +381,73 @@ class TypedTelemetryArchitectureTests(unittest.TestCase):
                 ]
                 self.assertEqual(len(runtime_view_calls), 1)
                 self.assertEqual(broad_value_reads, [])
+
+    def test_capability_consumers_never_bypass_the_snapshot_view(self) -> None:
+        class_names_by_path = {
+            "number.py": ("EybondCapabilityNumber",),
+            "select.py": ("EybondCapabilitySelect",),
+            "switch.py": ("EybondCapabilitySwitch",),
+            "button.py": ("EybondPresetButton", "EybondCapabilityButton"),
+        }
+        for filename, class_names in class_names_by_path.items():
+            path = REPO_ROOT / f"custom_components/eybond_local/{filename}"
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            classes = {
+                node.name: node
+                for node in tree.body
+                if isinstance(node, ast.ClassDef)
+            }
+            for class_name in class_names:
+                with self.subTest(filename=filename, class_name=class_name):
+                    broad_value_reads = [
+                        node
+                        for node in ast.walk(classes[class_name])
+                        if isinstance(node, ast.Attribute)
+                        and node.attr == "values"
+                    ]
+                    runtime_view_calls = [
+                        node
+                        for node in ast.walk(classes[class_name])
+                        if isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr in {"runtime_value", "runtime_values"}
+                    ]
+                    self.assertEqual(broad_value_reads, [])
+                    self.assertTrue(runtime_view_calls)
+
+    def test_hub_write_authority_uses_typed_first_snapshot_values(self) -> None:
+        path = REPO_ROOT / "custom_components/eybond_local/runtime/hub.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        hub_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "EybondHub"
+        )
+        for method_name in ("async_write_capability", "async_apply_preset"):
+            with self.subTest(method_name=method_name):
+                method = next(
+                    node
+                    for node in hub_class.body
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == method_name
+                )
+                snapshot_values_reads = [
+                    node
+                    for node in ast.walk(method)
+                    if isinstance(node, ast.Attribute)
+                    and node.attr == "values"
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == "snapshot"
+                ]
+                typed_view_calls = [
+                    node
+                    for node in ast.walk(method)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in {"runtime_value", "runtime_values"}
+                ]
+                self.assertEqual(snapshot_values_reads, [])
+                self.assertTrue(typed_view_calls)
 
 
 if __name__ == "__main__":

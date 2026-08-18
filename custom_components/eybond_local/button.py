@@ -260,7 +260,10 @@ class EybondPresetButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntity
             return False
         if not any(preset.key == self._preset.key for preset in inverter.capability_presets):
             return False
-        return self._preset.runtime_state(inverter, snapshot.values).visible
+        return self._preset.runtime_state(
+            inverter,
+            snapshot.runtime_values(),
+        ).visible
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -268,7 +271,11 @@ class EybondPresetButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntity
         inverter = snapshot.inverter
         if inverter is None:
             return {}
-        return serialize_preset(self._preset, inverter, snapshot.values)
+        return serialize_preset(
+            self._preset,
+            inverter,
+            snapshot.runtime_values(),
+        )
 
     async def async_press(self) -> None:
         await self.coordinator.async_apply_preset(self._preset.key)
@@ -306,7 +313,7 @@ class EybondCapabilityButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEn
             return False
         if not any(cap.key == self._capability.key for cap in inverter.capabilities):
             return False
-        runtime_state = self._capability.runtime_state(snapshot.values)
+        runtime_state = self._capability.runtime_state(snapshot.runtime_values())
         return runtime_state.visible and runtime_state.editable
 
     @property
@@ -315,7 +322,11 @@ class EybondCapabilityButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEn
         inverter = snapshot.inverter
         if inverter is None:
             return {}
-        return serialize_capability(self._capability, inverter, snapshot.values)
+        return serialize_capability(
+            self._capability,
+            inverter,
+            snapshot.runtime_values(),
+        )
 
     async def async_press(self) -> None:
         await self.coordinator.async_write_capability(self._capability.key, None)
@@ -496,7 +507,7 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
             for capability in capabilities:
                 if not self.coordinator.can_expose_capability(capability):
                     return False
-                runtime_state = capability.runtime_state(snapshot.values)
+                runtime_state = capability.runtime_state(snapshot.runtime_values())
                 if not (runtime_state.visible and runtime_state.editable):
                     return False
             return True

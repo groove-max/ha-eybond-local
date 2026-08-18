@@ -9696,7 +9696,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         inverter = self.data.inverter
         metadata = self.effective_metadata
         smartess_protocol = metadata.smartess_protocol
-        values = dict(self.data.values)
+        values = self.data.runtime_values()
         values.update(integration_build_values or _integration_build_runtime_values())
         values.update(self._collector_transport_profile_runtime_values())
         values.update(
@@ -9712,7 +9712,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             values["cloud_evidence_path"] = str(cloud_evidence_record.path)
         inverter_payload = None
         if inverter is not None:
-            values["ui_schema"] = build_runtime_ui_schema(inverter, self.data.values)
+            values["ui_schema"] = build_runtime_ui_schema(
+                inverter,
+                self.data.runtime_values(),
+            )
             inverter_payload = self._inverter_payload(inverter)
         marker = self._driver_support_marker(inverter, metadata)
         return build_support_bundle_payload(

@@ -211,11 +211,11 @@ class EybondCapabilitySelect(CoordinatorEntity[EybondLocalCoordinator], SelectEn
             return False
         if not any(cap.key == self._capability.key for cap in inverter.capabilities):
             return False
-        return self._capability.runtime_state(snapshot.values).visible
+        return self._capability.runtime_state(snapshot.runtime_values()).visible
 
     @property
     def current_option(self) -> str | None:
-        value = self.coordinator.data.values.get(self._capability.value_key)
+        value = self.coordinator.data.runtime_value(self._capability.value_key)
         return value if isinstance(value, str) else None
 
     @property
@@ -224,7 +224,11 @@ class EybondCapabilitySelect(CoordinatorEntity[EybondLocalCoordinator], SelectEn
         inverter = snapshot.inverter
         if inverter is None:
             return {}
-        return serialize_capability(self._capability, inverter, snapshot.values)
+        return serialize_capability(
+            self._capability,
+            inverter,
+            snapshot.runtime_values(),
+        )
 
     async def async_select_option(self, option: str) -> None:
         await self.coordinator.async_write_capability(self._capability.key, option)

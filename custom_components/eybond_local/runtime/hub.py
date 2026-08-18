@@ -1788,7 +1788,8 @@ class EybondHub:
 
         snapshot = await self.async_refresh()
         capability = self._inverter.get_capability(capability_key)
-        runtime_state = capability.runtime_state(snapshot.values)
+        runtime_values = snapshot.runtime_values()
+        runtime_state = capability.runtime_state(runtime_values)
         if not runtime_state.editable:
             reasons = "; ".join(runtime_state.reasons) or "capability_not_editable"
             raise ValueError(f"capability_not_editable:{capability_key}:{reasons}")
@@ -1818,7 +1819,7 @@ class EybondHub:
                 classification = self._driver.classify_write_error(
                     capability,
                     exc,
-                    operating_mode=snapshot.values.get("operating_mode"),
+                    operating_mode=runtime_values.get("operating_mode"),
                 )
                 if classification.user_error is not None:
                     raise classification.user_error from exc
@@ -1847,7 +1848,7 @@ class EybondHub:
             logger.warning("Refresh after write reported: %s", snapshot.last_error)
 
         if _should_confirm_write(capability):
-            readback_value = snapshot.values.get(capability.value_key)
+            readback_value = snapshot.runtime_value(capability.value_key)
             if not _write_readback_matches(
                 capability,
                 requested_value=value,
@@ -1881,7 +1882,10 @@ class EybondHub:
 
         snapshot = await self.async_refresh()
         preset = self._inverter.get_capability_preset(preset_key)
-        runtime_state = preset.runtime_state(self._inverter, snapshot.values)
+        runtime_state = preset.runtime_state(
+            self._inverter,
+            snapshot.runtime_values(),
+        )
         if not runtime_state.visible:
             reasons = "; ".join(runtime_state.reasons) or "preset_not_visible"
             raise ValueError(f"preset_not_visible:{preset_key}:{reasons}")
@@ -1892,7 +1896,7 @@ class EybondHub:
         results: list[dict[str, object]] = []
         for item in sorted(preset.items, key=lambda item: (item.order, item.capability_key)):
             capability = self._inverter.get_capability(item.capability_key)
-            current_value = snapshot.values.get(capability.value_key)
+            current_value = snapshot.runtime_value(capability.value_key)
             target_label = capability.enum_value_map.get(item.value, item.value)
             if current_value == item.value or current_value == target_label:
                 results.append(
