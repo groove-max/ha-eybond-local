@@ -20,6 +20,7 @@ from custom_components.eybond_local.collector.transport import (
     SharedCollectorAtTransport,
     SharedEybondTransport,
     SharedProxyCaptureRoute,
+    _BACKGROUND_TASKS,
     _LISTENERS,
     _CollectorAtConnection,
     _CollectorConnection,
@@ -3559,6 +3560,75 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
+    async def test_callback_storm_is_bounded_and_releases_process_descriptors(self) -> None:
+        """Repeated ownerless accepts never accumulate sockets after teardown."""
+
+        fd_dir = Path("/proc/self/fd")
+        if not fd_dir.is_dir():
+            self.skipTest("process descriptor accounting requires procfs")
+
+        baseline_fd_count = len(tuple(fd_dir.iterdir()))
+        port = _free_tcp_port()
+        key = ("127.0.0.1", port)
+        transport = SharedEybondTransport(
+            host="127.0.0.1",
+            port=port,
+            request_timeout=1.0,
+            heartbeat_interval=60.0,
+            collector_ip="",
+        )
+        client_writers: list[asyncio.StreamWriter] = []
+
+        await transport.start()
+        listener = transport._listener
+        self.assertIsNotNone(listener)
+        assert listener is not None
+        try:
+            # Model repeated callback redials with no initial payload. Every
+            # accepted stream is initially independent, but the listener must
+            # converge to its explicit parked-socket cap instead of retaining
+            # one descriptor per historical callback.
+            for _ in range(listener._MAX_PARKED_SOCKETS * 4):
+                _reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                client_writers.append(writer)
+
+            deadline = monotonic() + 2.0
+            while (
+                len(listener._pending_sockets) > listener._MAX_PARKED_SOCKETS
+                and monotonic() < deadline
+            ):
+                await asyncio.sleep(0.01)
+
+            self.assertLessEqual(
+                len(listener._pending_sockets),
+                listener._MAX_PARKED_SOCKETS,
+            )
+        finally:
+            for writer in client_writers:
+                writer.close()
+            await asyncio.gather(
+                *(writer.wait_closed() for writer in client_writers),
+                return_exceptions=True,
+            )
+            await transport.stop()
+
+        await asyncio.sleep(0)
+        self.assertNotIn(key, _LISTENERS)
+        self.assertFalse(
+            [
+                task
+                for task in _BACKGROUND_TASKS
+                if not task.done()
+                and task.get_name().startswith(
+                    ("collector_pending_sniff_", "collector_parked_watch_")
+                )
+            ]
+        )
+        self.assertLessEqual(
+            len(tuple(fd_dir.iterdir())),
+            baseline_fd_count + 1,
+        )
+
     """Session-epoch, bounded teardown, and pending-socket ownership rules."""
 
     async def test_replaced_run_finally_does_not_tear_down_successor(self) -> None:
