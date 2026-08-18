@@ -20,12 +20,32 @@ from custom_components.eybond_local.collector_endpoint import (  # noqa: E402
     parse_collector_server_endpoint,
     resolve_collector_server_endpoint,
 )
+from custom_components.eybond_local.collector.callback_endpoint import (  # noqa: E402
+    home_assistant_callback_endpoint,
+)
 from custom_components.eybond_local.metadata.collector_cloud_profile_catalog_loader import (  # noqa: E402
     resolve_collector_cloud_family_by_host,
 )
 
 
 class CollectorEndpointTests(unittest.TestCase):
+    def test_home_assistant_callback_uses_listener_port_not_template_port(self) -> None:
+        self.assertEqual(
+            home_assistant_callback_endpoint(
+                server_host="192.168.1.50",
+                listener_port=8899,
+                template_endpoint="dtu_ess.eybond.com,18899,TCP",
+            ),
+            "192.168.1.50,8899,TCP",
+        )
+
+    def test_neutral_endpoint_parser_does_not_import_cloud_classification(self) -> None:
+        source = (
+            REPO_ROOT / "custom_components" / "eybond_local" / "collector_endpoint.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("collector.cloud_family", source)
+
     def test_default_port_is_catalog_backed_with_compatibility_fallback(self) -> None:
         self.assertEqual(default_collector_server_port(cloud_family="legacy_binary"), 502)
         self.assertEqual(default_collector_server_port(cloud_family="smartess_at"), 18899)

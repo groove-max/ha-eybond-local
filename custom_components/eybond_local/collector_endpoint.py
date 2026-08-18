@@ -293,62 +293,6 @@ def parse_collector_server_endpoint(
     return parsed.host, parsed.port, parsed.protocol
 
 
-def home_assistant_callback_endpoint(
-    *,
-    server_host: str,
-    listener_port: int,
-    template_endpoint: str = "",
-    cloud_family: str = "",
-) -> str:
-    """Build THE Home Assistant callback endpoint for a collector.
-
-    Single owner of the rule that shipped broken from two call sites: the
-    callback target always carries this entry's LISTENER port. The
-    collector-reported endpoint template only shapes the protocol/format —
-    its port is the vendor cloud (or proxy-capture) port and must never be
-    inherited. With no usable listener port the cloud-family default applies
-    as a last resort.
-    """
-
-    normalized_template = str(template_endpoint or "").strip()
-    normalized_family = str(cloud_family or "").strip().lower()
-    server_protocol = DEFAULT_COLLECTOR_SERVER_PROTOCOL
-    if normalized_template:
-        if not normalized_family:
-            # Lazy import: cloud_family imports this module for parsing.
-            from .collector.cloud_family import (
-                collector_cloud_family_observation_from_endpoint,
-            )
-
-            observed = collector_cloud_family_observation_from_endpoint(
-                normalized_template
-            ).family
-            if observed and observed != "unknown":
-                normalized_family = observed
-        try:
-            _host, _template_port, server_protocol = resolve_collector_server_endpoint(
-                normalized_template,
-                require_explicit_port=False,
-                require_explicit_protocol=False,
-                cloud_family=normalized_family,
-            )
-        except ValueError:
-            server_protocol = DEFAULT_COLLECTOR_SERVER_PROTOCOL
-    server_port = (
-        int(listener_port)
-        if int(listener_port or 0) > 0
-        else default_collector_server_port(cloud_family=normalized_family)
-    )
-    return format_collector_server_endpoint_for_cloud_profile(
-        server_host=server_host,
-        cloud_family=normalized_family,
-        server_port=server_port,
-        server_protocol=server_protocol,
-        template_endpoint=normalized_template,
-        require_tcp=True,
-    )
-
-
 def resolve_collector_server_endpoint(
     endpoint: str,
     *,

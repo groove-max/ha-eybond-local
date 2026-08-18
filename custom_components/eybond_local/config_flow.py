@@ -46,8 +46,8 @@ from .collector_endpoint import (
     format_collector_server_endpoint,
     inspect_collector_server_endpoint,
     resolve_collector_server_endpoint,
-    home_assistant_callback_endpoint,
 )
+from .collector.callback_endpoint import home_assistant_callback_endpoint
 from .collector.transport_profile import (
     collector_session_protocol_from_inventory_state,
     normalize_collector_session_protocol,

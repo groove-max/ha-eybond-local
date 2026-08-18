@@ -126,6 +126,12 @@ Immutable connection models now contain no factory imports; the three
 branch-aware builders live in `connection/spec_factory.py`, which is the single
 composition point over models and branch metadata.
 
+A second small cycle, `collector_endpoint ↔ collector.cloud_family`, came from
+one high-level callback formatter living in the neutral endpoint parser.  That
+formatter now lives in `collector/callback_endpoint.py`; the parser no longer
+imports cloud classification, while the callback composition module may depend
+on both facts explicitly.
+
 ## Current priority
 
 No runtime trust-boundary defect was found by the God Node audit.  After the

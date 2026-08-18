@@ -34,8 +34,8 @@ from ..collector_endpoint import (
     normalize_collector_server_endpoint as normalize_runtime_collector_server_endpoint,
     parse_collector_server_endpoint as parse_runtime_collector_server_endpoint,
     resolve_collector_server_endpoint as resolve_runtime_collector_server_endpoint,
-    home_assistant_callback_endpoint,
 )
+from ..collector.callback_endpoint import home_assistant_callback_endpoint
 from ..collector.cloud_family import (
     COLLECTOR_CLOUD_FAMILY_LEGACY_BINARY,
     COLLECTOR_CLOUD_FAMILY_UNKNOWN,
@@ -764,7 +764,7 @@ def _format_home_assistant_collector_endpoint(
 
     Deliberately keeps the template port: the proxy-capture listener mirrors
     the cloud port. The HA CALLBACK target must never use this — it goes
-    through collector_endpoint.home_assistant_callback_endpoint, which pins
+    through collector.callback_endpoint.home_assistant_callback_endpoint, which pins
     the entry's listener port.
     """
 
