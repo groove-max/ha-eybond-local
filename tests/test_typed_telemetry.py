@@ -415,6 +415,36 @@ class TypedTelemetryArchitectureTests(unittest.TestCase):
                     self.assertEqual(broad_value_reads, [])
                     self.assertTrue(runtime_view_calls)
 
+    def test_tooling_measurement_attributes_use_the_typed_first_snapshot_view(self) -> None:
+        path = REPO_ROOT / "custom_components/eybond_local/button.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tooling_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "EybondToolingButton"
+        )
+        attributes_handler = next(
+            node
+            for node in tooling_class.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "extra_state_attributes"
+        )
+        broad_value_reads = [
+            node
+            for node in ast.walk(attributes_handler)
+            if isinstance(node, ast.Attribute) and node.attr == "values"
+        ]
+        runtime_view_calls = [
+            node
+            for node in ast.walk(attributes_handler)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "runtime_values"
+        ]
+
+        self.assertEqual(broad_value_reads, [])
+        self.assertEqual(len(runtime_view_calls), 1)
+
     def test_hub_write_authority_uses_typed_first_snapshot_values(self) -> None:
         path = REPO_ROOT / "custom_components/eybond_local/runtime/hub.py"
         tree = ast.parse(path.read_text(encoding="utf-8"))

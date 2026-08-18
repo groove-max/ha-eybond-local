@@ -515,7 +515,7 @@ class EybondToolingButton(CoordinatorEntity[EybondLocalCoordinator], ButtonEntit
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        values = self.coordinator.data.values
+        values = self.coordinator.data.runtime_values()
         attributes = {
             "tool_key": self._spec.key,
             "profile_name": self.coordinator.effective_profile_name,

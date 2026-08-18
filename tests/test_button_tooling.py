@@ -92,6 +92,10 @@ from custom_components.eybond_local.button import (  # noqa: E402
     _tooling_button_specs_for_runtime,
 )
 from custom_components.eybond_local.models import CollectorInfo, RuntimeSnapshot  # noqa: E402
+from custom_components.eybond_local.telemetry import (  # noqa: E402
+    TypedTelemetryFrame,
+    fold_driver_telemetry,
+)
 
 
 class _CoordinatorStub:
@@ -211,6 +215,37 @@ class _CoordinatorStub:
 
 
 class ToolingButtonTests(unittest.TestCase):
+    def test_clock_attributes_prefer_typed_telemetry(self) -> None:
+        coordinator = _CoordinatorStub()
+        coordinator.data = RuntimeSnapshot(
+            connected=True,
+            values={
+                **coordinator.data.values,
+                "inverter_date": "2026-01-01",
+                "inverter_time": "00:00:00",
+            },
+            telemetry=fold_driver_telemetry(
+                TypedTelemetryFrame.empty(),
+                driver_key="modbus_smg",
+                values={
+                    "inverter_date": "2026-08-18",
+                    "inverter_time": "14:25:00",
+                },
+                replace=True,
+            ),
+        )
+        spec = _ToolingButtonSpec(
+            key="sync_inverter_clock",
+            name="Synchronize Inverter Clock",
+            icon="mdi:clock-check-outline",
+        )
+
+        attributes = EybondToolingButton(coordinator, spec).extra_state_attributes
+
+        self.assertEqual(attributes["current_inverter_date"], "2026-08-18")
+        self.assertEqual(attributes["current_inverter_time"], "14:25:00")
+        self.assertEqual(attributes["proxy_capture_status"], "running")
+
     def test_collector_endpoint_attributes_prefer_typed_collector_info(self) -> None:
         coordinator = _CoordinatorStub()
         coordinator.data.collector = CollectorInfo(
