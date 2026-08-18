@@ -98,17 +98,94 @@ class DriverReadContractTests(unittest.TestCase):
         original = DriverReadResult(values={"a": 1}, mode=DriverReadMode.DELTA)
         self.assertIs(coerce_driver_read_result(original), original)
 
+    def test_direct_constructor_rejects_malformed_field_types(self) -> None:
+        cases = (
+            {"values": [], "mode": DriverReadMode.FULL},
+            {"values": {}, "mode": "full"},
+            {
+                "values": {},
+                "mode": DriverReadMode.DELTA,
+                "removed_keys": {"a"},
+            },
+            {
+                "values": {},
+                "mode": DriverReadMode.FULL,
+                "diagnostics": [],
+            },
+        )
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs), self.assertRaises(TypeError):
+                DriverReadResult(**kwargs)  # type: ignore[arg-type]
+
+    def test_direct_constructor_rejects_untrusted_keys(self) -> None:
+        cases = (
+            {"values": {1: "x"}, "mode": DriverReadMode.FULL},
+            {"values": {" padded ": 1}, "mode": DriverReadMode.FULL},
+            {
+                "values": {},
+                "mode": DriverReadMode.DELTA,
+                "removed_keys": frozenset({""}),
+            },
+            {
+                "values": {},
+                "mode": DriverReadMode.FULL,
+                "diagnostics": {" padded ": 1},
+            },
+        )
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
+                DriverReadResult(**kwargs)  # type: ignore[arg-type]
+
+    def test_direct_constructor_rejects_contradictory_key_ownership(self) -> None:
+        cases = (
+            {
+                "values": {},
+                "mode": DriverReadMode.FULL,
+                "removed_keys": frozenset({"a"}),
+            },
+            {
+                "values": {"a": 1},
+                "mode": DriverReadMode.DELTA,
+                "removed_keys": frozenset({"a"}),
+            },
+            {
+                "values": {"a": 1},
+                "mode": DriverReadMode.FULL,
+                "diagnostics": {"a": "diagnostic"},
+            },
+            {
+                "values": {},
+                "mode": DriverReadMode.DELTA,
+                "removed_keys": frozenset({"a"}),
+                "diagnostics": {"a": "diagnostic"},
+            },
+        )
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                DriverReadResult(**kwargs)
+
     def test_unknown_result_type_is_rejected(self) -> None:
         for bad in (None, 5, "x", ["a"], object()):
             with self.assertRaises(TypeError):
                 coerce_driver_read_result(bad, driver_key="pi30")
 
     def test_invalid_mode_is_rejected(self) -> None:
-        # A DriverReadResult with a non-enum mode must fail closed, never be
-        # silently applied as FULL or DELTA.
-        broken = DriverReadResult(values={}, mode="sideways")  # type: ignore[arg-type]
         with self.assertRaises(TypeError):
-            coerce_driver_read_result(broken, driver_key="pi30")
+            DriverReadResult(values={}, mode="sideways")  # type: ignore[arg-type]
+
+    def test_coercion_rejects_dict_and_result_subclasses(self) -> None:
+        class DictSubclass(dict):
+            pass
+
+        class ResultSubclass(DriverReadResult):
+            pass
+
+        for raw in (
+            DictSubclass(a=1),
+            ResultSubclass(values={"a": 1}),
+        ):
+            with self.subTest(raw=raw), self.assertRaises(TypeError):
+                coerce_driver_read_result(raw, driver_key="pi30")
 
 
 # --- Hub cache: FULL / DELTA / removal / merge --------------------------------
