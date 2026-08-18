@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from ..const import (
-    CONF_CONNECTION_TYPE,
-    CONNECTION_TYPE_EYBOND,
-)
 from .confirmed_session_protocol import ConfirmedSessionProtocolEvidence
 
 
@@ -134,37 +129,3 @@ class EybondConnectionSpec(ConnectionSpec):
         """Return the endpoint TCP port that will be advertised to the collector."""
 
         return self.advertised_tcp_port or self.tcp_port
-
-
-def resolve_connection_type(data: Mapping[str, object]) -> ConnectionType:
-    """Return the effective connection type for stored config-entry data."""
-
-    connection_type = str(data.get(CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND) or CONNECTION_TYPE_EYBOND)
-    from .branch_registry import get_connection_branch
-
-    branch = get_connection_branch(connection_type)
-    return branch.connection_type
-
-
-def build_connection_spec(
-    data: Mapping[str, object],
-    options: Mapping[str, object],
-) -> ConnectionSpec:
-    """Build one typed connection spec from config-entry data and options."""
-
-    connection_type = resolve_connection_type(data)
-    from .branch_registry import get_connection_branch
-
-    branch = get_connection_branch(connection_type)
-    return branch.build_connection_spec(data, options)
-
-
-def build_connection_spec_from_values(
-    connection_type: str,
-    values: Mapping[str, object],
-) -> ConnectionSpec:
-    """Build one typed connection spec from branch-local values alone."""
-
-    raw_data = dict(values)
-    raw_data[CONF_CONNECTION_TYPE] = connection_type or CONNECTION_TYPE_EYBOND
-    return build_connection_spec(raw_data, {})

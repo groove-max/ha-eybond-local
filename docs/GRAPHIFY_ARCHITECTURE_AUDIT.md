@@ -121,6 +121,11 @@ The branch validation stays shared; no connection or detection algorithm was
 duplicated.  An architecture test prevents the upper-layer imports from
 returning.
 
+The same pass removed the adjacent `models ↔ branch_registry` import cycle.
+Immutable connection models now contain no factory imports; the three
+branch-aware builders live in `connection/spec_factory.py`, which is the single
+composition point over models and branch metadata.
+
 ## Current priority
 
 No runtime trust-boundary defect was found by the God Node audit.  After the

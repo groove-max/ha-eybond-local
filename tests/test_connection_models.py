@@ -12,6 +12,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.connection.models import (
     EybondConnectionSpec,
+)
+from custom_components.eybond_local.connection.spec_factory import (
     build_connection_spec,
     build_connection_spec_from_values,
     resolve_connection_type,

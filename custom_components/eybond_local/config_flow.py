@@ -64,7 +64,10 @@ from .connection.connection_policy import (
     resolve_endpoint_control_policy,
     resolve_connection_strategy,
 )
-from .connection.models import build_connection_spec, build_connection_spec_from_values
+from .connection.spec_factory import (
+    build_connection_spec,
+    build_connection_spec_from_values,
+)
 from .connection.operating_profile import (
     CollectorOperatingProfile,
     OPERATING_PROFILE_CUSTOM,

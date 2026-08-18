@@ -55,6 +55,17 @@ class ConnectionBranchRegistryTests(unittest.TestCase):
             imported_modules,
         )
 
+    def test_models_do_not_import_the_branch_registry(self) -> None:
+        source = (
+            REPO_ROOT
+            / "custom_components"
+            / "eybond_local"
+            / "connection"
+            / "models.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("branch_registry", source)
+
     def test_get_connection_branch_for_spec_validates_branch_spec_type(self) -> None:
         with self.assertRaisesRegex(ValueError, "connection_spec_branch_mismatch:eybond:ConnectionSpec"):
             get_connection_branch_for_spec(ConnectionSpec(type="eybond"))

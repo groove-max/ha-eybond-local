@@ -113,7 +113,7 @@ from custom_components.eybond_local.config_flow import EybondLocalConfigFlow  # 
 from custom_components.eybond_local.connection.callback_ledger import (  # noqa: E402
     get_callback_trigger_ledger,
 )
-from custom_components.eybond_local.connection.models import (  # noqa: E402
+from custom_components.eybond_local.connection.spec_factory import (  # noqa: E402
     build_connection_spec,
 )
 from custom_components.eybond_local.connection.recovery_contract import (  # noqa: E402

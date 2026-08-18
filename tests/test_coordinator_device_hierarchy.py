@@ -202,7 +202,10 @@ def _install_coordinator_stubs() -> None:
     const.LOCAL_METADATA_DIR = "eybond_local"
 
     connection_models = _ensure_module("custom_components.eybond_local.connection.models")
-    connection_models.build_connection_spec = lambda *args, **kwargs: None
+    connection_spec_factory = _ensure_module(
+        "custom_components.eybond_local.connection.spec_factory"
+    )
+    connection_spec_factory.build_connection_spec = lambda *args, **kwargs: None
 
     entity_scope = importlib.import_module(
         "custom_components.eybond_local.collector.entity_scope"

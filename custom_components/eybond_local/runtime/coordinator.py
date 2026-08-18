@@ -130,7 +130,7 @@ from ..const import (
     POLL_MODE_AUTO,
     POLL_MODE_MANUAL,
 )
-from ..connection.models import build_connection_spec
+from ..connection.spec_factory import build_connection_spec
 from ..connection.connection_policy import (
     collector_identity_binding_required,
     may_auto_manage_endpoint,
