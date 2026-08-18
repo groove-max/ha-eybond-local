@@ -709,6 +709,9 @@ class RuntimeSnapshot:
     connected: bool = False
     collector: CollectorInfo | None = None
     inverter: DetectedInverter | None = None
+    # Broad non-telemetry runtime metadata and diagnostics. Driver scalar
+    # values are published by ``telemetry`` and merged only by the explicit
+    # typed-first compatibility view below.
     values: dict[str, Any] = field(default_factory=dict)
     last_error: str | None = None
     # Typed scalar driver telemetry lives beside the broad legacy ``values``
@@ -742,9 +745,9 @@ class RuntimeSnapshot:
     def runtime_values(self) -> dict[str, Any]:
         """Return the typed-first compatibility view for mapping consumers.
 
-        Metadata, blockers, and not-yet-migrated values remain available from
-        ``values``. Typed telemetry wins only for keys covered by the strict
-        frame. Neither source mapping is mutated.
+        Metadata, blockers, and structured diagnostics remain available from
+        ``values``. Typed telemetry supplies driver scalar values. Neither
+        source mapping is mutated.
         """
 
         merged = dict(self.values)

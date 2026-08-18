@@ -2522,7 +2522,8 @@ class HubWriteBlockerTests(unittest.TestCase):
 
             self.assertTrue(snapshot.connected)
             self.assertIsNone(snapshot.last_error)
-            self.assertEqual(snapshot.values["output_power"], 420)
+            self.assertEqual(snapshot.runtime_value("output_power"), 420)
+            self.assertNotIn("output_power", snapshot.values)
             self.assertEqual(snapshot.values["runtime_reconnect_count"], 1)
             self.assertEqual(snapshot.values["runtime_recovery_streak"], 0)
 
@@ -2556,8 +2557,10 @@ class HubWriteBlockerTests(unittest.TestCase):
 
             self.assertTrue(snapshot.connected)
             self.assertIsNone(snapshot.last_error)
-            self.assertEqual(snapshot.values["output_power"], 420)
-            self.assertEqual(snapshot.values["battery_power"], -180)
+            self.assertEqual(snapshot.runtime_value("output_power"), 420)
+            self.assertEqual(snapshot.runtime_value("battery_power"), -180)
+            self.assertNotIn("output_power", snapshot.values)
+            self.assertNotIn("battery_power", snapshot.values)
             self.assertEqual(snapshot.values["runtime_recovery_streak"], 0)
             self.assertEqual(snapshot.values["runtime_reconnect_count"], 0)
             self.assertEqual(hub._link_manager.reset_calls, 0)

@@ -327,7 +327,7 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
                 if (
                     snapshot is not None
                     and snapshot.connected
-                    and "battery_voltage" in (snapshot.values or {})
+                    and snapshot.has_runtime_value("battery_voltage")
                     and entry.data.get("collector_confirmed_session_protocol")
                 ):
                     break
@@ -369,7 +369,7 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
                 if (
                     snapshot is not None
                     and snapshot.connected
-                    and "battery_voltage" in (snapshot.values or {})
+                    and snapshot.has_runtime_value("battery_voltage")
                 ):
                     break
                 assert (
@@ -380,7 +380,8 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
             # Zero unsolicited bytes before the reconnect probe, and the live
             # values really came from a valid PI30 poll.
             assert getattr(service, "pre_rx_heartbeats", 0) == 0
-            assert snapshot.values["battery_voltage"] > 0
+            assert snapshot.runtime_value("battery_voltage") > 0
+            assert "battery_voltage" not in snapshot.values
     finally:
         if entry is not None and entry.state is ConfigEntryState.LOADED:
             await hass.config_entries.async_unload(entry.entry_id)

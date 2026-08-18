@@ -560,8 +560,9 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
             # real SMG Modbus driver and parses at least one live FC=4 poll.
             self.assertEqual(snapshot2.inverter.driver_key, "modbus_smg")
             self.assertEqual(snapshot2.inverter.model_name, "SMG 6200")
-            self.assertTrue(snapshot2.values, "no SMG values polled")
-            self.assertIn("battery_voltage", snapshot2.values)
+            self.assertTrue(snapshot2.telemetry.points, "no SMG telemetry polled")
+            self.assertTrue(snapshot2.has_runtime_value("battery_voltage"))
+            self.assertNotIn("battery_voltage", snapshot2.values)
             # And no unsolicited pre-probe bytes on this socket either.
             self.assertEqual(getattr(self._service, "pre_rx_heartbeats", 0), 0)
             # The runtime really triggered (the collector cannot dial on its
@@ -582,7 +583,7 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
         trace: list[str] = []
         while True:
             last = await runtime.async_refresh()
-            values = last.values or {}
+            values = last.runtime_values()
             trace.append(
                 f"{last.connected}/{last.last_error}/"
                 f"{values.get('runtime_driver_state')}/"
@@ -591,8 +592,7 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
             )
             if (
                 last.connected
-                and last.values
-                and "battery_voltage" in last.values
+                and last.has_runtime_value("battery_voltage")
             ):
                 return last
             if asyncio.get_running_loop().time() >= deadline:

@@ -345,8 +345,10 @@ class HubMeasurementCacheTests(unittest.TestCase):
             offline.telemetry.point("battery_voltage").freshness,
             TelemetryFreshness.CARRIED,
         )
-        self.assertEqual(live.values["battery_voltage"], 27.3)
-        self.assertEqual(offline.values["battery_voltage"], 27.3)
+        self.assertEqual(live.runtime_value("battery_voltage"), 27.3)
+        self.assertEqual(offline.runtime_value("battery_voltage"), 27.3)
+        self.assertNotIn("battery_voltage", live.values)
+        self.assertNotIn("battery_voltage", offline.values)
 
     def test_snapshot_projects_canonical_values_from_the_same_driver_frame(self) -> None:
         hub = _hub()
@@ -366,7 +368,8 @@ class HubMeasurementCacheTests(unittest.TestCase):
 
         snapshot = hub._build_snapshot(connected=True)
 
-        self.assertEqual(snapshot.values["grid_voltage"], 230.0)
+        self.assertEqual(snapshot.runtime_value("grid_voltage"), 230.0)
+        self.assertNotIn("grid_voltage", snapshot.values)
         self.assertEqual(snapshot.telemetry.value("grid_voltage"), 230.0)
         point = snapshot.telemetry.point("grid_voltage")
         self.assertIs(point.origin, TelemetryOrigin.CANONICAL)
@@ -423,7 +426,7 @@ class HubDriverDiagnosticLifecycleTests(unittest.TestCase):
 
 class SnapshotNeverRevertsToDetailsTests(unittest.TestCase):
     def _snapshot_value(self, hub, key):
-        return hub._build_snapshot().values.get(key)
+        return hub._build_snapshot().runtime_value(key)
 
     def test_regression_partial_poll_keeps_live_value_not_detection(self) -> None:
         # The exact reported regression: detection says 27.2, the first live poll
@@ -484,7 +487,7 @@ class SnapshotNeverRevertsToDetailsTests(unittest.TestCase):
         hub._resolve_runtime_measurements(
             DriverReadResult(values={"battery_voltage": 27.4}, mode=DriverReadMode.DELTA)
         )
-        snap = hub._build_snapshot().values
+        snap = hub._build_snapshot().runtime_values()
         self.assertEqual(snap["battery_voltage"], 27.4)  # fast updated
         self.assertEqual(snap["alarm_status"], "Line fail warning")  # medium retained
         self.assertEqual(snap["pv_generation_sum"], 12345)  # slow retained
@@ -600,7 +603,7 @@ class Pi30ThroughHubCacheTests(unittest.TestCase):
         hub._accept_inverter_binding_identity()
         hub._resolve_runtime_measurements(first)
         hub._resolve_runtime_measurements(second)
-        snap = hub._build_snapshot().values
+        snap = hub._build_snapshot().runtime_values()
 
         # Fresh QPIGS value applied; alarm_status retained (transient failure).
         self.assertEqual(snap["battery_voltage"], 27.4)
@@ -631,7 +634,7 @@ class RuntimeOwnedKeyRemovalTests(unittest.TestCase):
 
     def _commit(self, hub) -> dict:
         hub._last_snapshot = hub._build_snapshot()
-        return hub._last_snapshot.values
+        return hub._last_snapshot.runtime_values()
 
     def test_full_snapshot_removes_missing_non_canonical_key(self) -> None:
         hub = _hub()
@@ -1054,7 +1057,7 @@ class Pi30UnsupportedRemovalTests(unittest.TestCase):
         )
         hub._resolve_runtime_measurements(result)
         hub._last_snapshot = hub._build_snapshot()
-        return result, hub._last_snapshot.values
+        return result, hub._last_snapshot.runtime_values()
 
     def test_qpiws_lifecycle_success_transient_verdict_recheck(self) -> None:
         async def _run():

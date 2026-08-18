@@ -3446,11 +3446,23 @@ class EybondHub:
         if last_error or not snapshot_connected:
             typed_telemetry = typed_telemetry.as_carried()
 
+        # ``values`` is the mutable assembly workspace: canonical projection,
+        # write-blocker transitions, and runtime-state derivation intentionally
+        # see the complete typed-first compatibility view while this snapshot is
+        # being built.  The published broad mapping, however, owns only keys
+        # that are not already represented by the immutable telemetry frame.
+        # This removes the historical duplicate measurement authority without
+        # changing the single internal snapshot assembly path.
+        typed_keys = set(typed_telemetry.values())
+        broad_values = {
+            key: value for key, value in values.items() if key not in typed_keys
+        }
+
         snapshot = RuntimeSnapshot(
             connected=snapshot_connected,
             collector=collector,
             inverter=self._inverter,
-            values=values,
+            values=broad_values,
             last_error=last_error,
             telemetry=typed_telemetry,
         )

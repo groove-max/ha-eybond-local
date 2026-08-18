@@ -35,8 +35,10 @@ result through the single `coerce_driver_read_result()` compatibility boundary;
 an exact legacy `dict` still means FULL, while duck-typed results fail closed.
 
 This foundation is deliberately not a second runtime authority. Driver reads
-remain authoritative, and the legacy mapping remains unchanged while consumers
-are migrated.
+remain authoritative. The hub now publishes driver scalar values only through
+the typed frame; `RuntimeSnapshot.values` retains metadata and structured
+diagnostics, while `runtime_values()` constructs an explicit compatibility view
+for mapping consumers.
 
 ## Migration order
 
@@ -50,19 +52,21 @@ are migrated.
    entities, write validation, clock tooling, and support UI schema use the same
    typed-first compatibility view. Lifecycle/tooling metadata stays in the
    legacy source until it has an explicit typed model.
-4. Remove broad-map measurement interpretation only after parity tests prove
+4. Remove the stored broad-map measurement copy only after parity tests prove
    that every supported driver and learned overlay has typed coverage.
+   **Implemented.** Mapping-oriented callers use the non-stored
+   `runtime_values()` compatibility view.
 
 ## Current compatibility boundary
 
-`RuntimeSnapshot.values` still contains a compatibility copy of driver
-measurements. This is deliberate and is not a second measurement authority:
-the driver read, last-good cache, and `TypedTelemetryFrame` are resolved at one
-hub boundary, while the broad mapping preserves older diagnostics, support
-artifacts, and callers during migration. Typed points win whenever a migrated
-consumer requests the same key.
+`RuntimeSnapshot.values` no longer contains the hub's compatibility copy of
+driver scalar values. The driver read, last-good cache, and
+`TypedTelemetryFrame` are resolved at one hub boundary. The broad mapping keeps
+metadata, structured diagnostics, support artifacts, and lifecycle state;
+`RuntimeSnapshot.runtime_values()` merges both views for the remaining mapping
+consumers without creating a second stored measurement authority.
 
-Phase 4 must not remove that copy until all of the following are true:
+Phase 4 removed that copy after all of the following became true:
 
 - every built-in driver declares FULL or DELTA explicitly instead of relying on
   the exact-dict FULL adapter; **implemented** (`FULL`: SMG, SRNE, MUST, catalog
