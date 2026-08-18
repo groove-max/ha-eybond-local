@@ -20,3 +20,4 @@ Ukrainian readers can also use the [Ukrainian README](../README.uk.md).
 If you are extending or maintaining the project, use [../CONTRIBUTING.md](../CONTRIBUTING.md).
 
 - [Collector Connection Architecture](CONNECTION_ARCHITECTURE.md) — maintainer reference for the connection axes, session/PN ownership, `callback_on_demand`, endpoint ownership rules, and what must not be reintroduced.
+- [Typed Telemetry Migration](TYPED_TELEMETRY.md) — staged replacement of the broad runtime value mapping with a strict measurement contract.

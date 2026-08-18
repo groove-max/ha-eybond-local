@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .link_models import EybondLinkRoute
+from .telemetry import TypedTelemetryFrame
 
 if TYPE_CHECKING:
     from .connection.admission import ObservedCollectorSession
@@ -661,6 +662,10 @@ class RuntimeSnapshot:
     inverter: DetectedInverter | None = None
     values: dict[str, Any] = field(default_factory=dict)
     last_error: str | None = None
+    # Typed scalar driver telemetry lives beside the broad legacy ``values``
+    # mapping during migration. Tooling/metadata dicts and lists deliberately
+    # remain outside this frame.
+    telemetry: TypedTelemetryFrame = field(default_factory=TypedTelemetryFrame.empty)
 
 
 def _evaluate_conditions(

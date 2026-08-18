@@ -30,6 +30,7 @@ from custom_components.eybond_local.drivers.read_result import (
 )
 from custom_components.eybond_local.models import CollectorInfo, DetectedInverter, ProbeTarget
 from custom_components.eybond_local.runtime.hub import EybondHub
+from custom_components.eybond_local.telemetry import TelemetryFreshness
 
 
 class _FakeLink:
@@ -190,6 +191,68 @@ class HubMeasurementCacheTests(unittest.TestCase):
         self.assertEqual(diag["runtime_measurement_fresh_count"], 1)  # battery_voltage
         self.assertEqual(diag["runtime_measurement_reused_count"], 1)  # grid_voltage
         self.assertEqual(diag["runtime_measurement_value_count"], 2)
+
+    def test_typed_frame_tracks_full_delta_and_structured_diagnostics(self) -> None:
+        hub = _hub()
+        _bind(hub, _inverter())
+        self._resolve(
+            hub,
+            {
+                "battery_voltage": 27.3,
+                "grid_voltage": 220.0,
+                "command_timings": [{"command": "QPI"}],
+            },
+            mode=DriverReadMode.FULL,
+        )
+        self._resolve(
+            hub,
+            {"battery_voltage": 27.4},
+            mode=DriverReadMode.DELTA,
+        )
+
+        frame = hub._runtime_measurement_telemetry
+        self.assertEqual(
+            frame.values(),
+            {"battery_voltage": 27.4, "grid_voltage": 220.0},
+        )
+        self.assertIs(
+            frame.point("battery_voltage").freshness,
+            TelemetryFreshness.FRESH,
+        )
+        self.assertIs(
+            frame.point("grid_voltage").freshness,
+            TelemetryFreshness.CARRIED,
+        )
+        self.assertIsNone(frame.point("command_timings"))
+        # The compatibility mapping remains byte-for-byte broad.
+        self.assertIn("command_timings", hub._runtime_measurement_values)
+
+    def test_snapshot_carries_typed_frame_and_offline_marks_it_reused(self) -> None:
+        hub = _hub()
+        _bind(hub, _inverter())
+        self._resolve(
+            hub,
+            {"battery_voltage": 27.3},
+            mode=DriverReadMode.FULL,
+        )
+
+        live = hub._build_snapshot(connected=True)
+        offline = hub._build_snapshot(
+            connected=False,
+            last_error="collector_not_connected",
+            preserve_inverter_values=True,
+        )
+
+        self.assertIs(
+            live.telemetry.point("battery_voltage").freshness,
+            TelemetryFreshness.FRESH,
+        )
+        self.assertIs(
+            offline.telemetry.point("battery_voltage").freshness,
+            TelemetryFreshness.CARRIED,
+        )
+        self.assertEqual(live.values["battery_voltage"], 27.3)
+        self.assertEqual(offline.values["battery_voltage"], 27.3)
 
 
 # --- Snapshot integration: no revert to detection details ---------------------

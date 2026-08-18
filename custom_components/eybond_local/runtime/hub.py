@@ -67,6 +67,7 @@ from .link_baud_sweep import (
 from ..link_models import EybondLinkRoute
 from ..link_transport import async_send_payload, select_payload_route
 from ..models import CapabilityBlocker, DetectedInverter, RuntimeSnapshot, WriteCapability
+from ..telemetry import TypedTelemetryFrame, fold_driver_telemetry
 from ..payload.modbus import ModbusSession, to_signed_16
 from ..runtime_labels import runtime_path_label
 from ..support.shadow_learning import ShadowWriteObservation
@@ -575,6 +576,7 @@ class EybondHub:
         # invalidated only when that durable identity actually changes -- a plain
         # reconnect of the same PN/driver keeps the last-good values.
         self._runtime_measurement_values: dict[str, Any] = {}
+        self._runtime_measurement_telemetry = TypedTelemetryFrame.empty()
         self._runtime_measurement_owned_keys: set[str] = set()
         # Keys the PREVIOUS identity owned. When the binding changes they are
         # remembered here so the next snapshot also purges them from the carried
@@ -1534,6 +1536,7 @@ class EybondHub:
         """Drop last-good runtime measurements (a different device/driver)."""
 
         self._runtime_measurement_values = {}
+        self._runtime_measurement_telemetry = TypedTelemetryFrame.empty()
         self._runtime_measurement_owned_keys = set()
         self._runtime_measurement_last_mode = ""
         self._runtime_measurement_fresh_count = 0
@@ -1572,6 +1575,13 @@ class EybondHub:
         """
 
         fresh_keys = set(result.values)
+        self._runtime_measurement_telemetry = fold_driver_telemetry(
+            self._runtime_measurement_telemetry,
+            driver_key=getattr(self._inverter, "driver_key", ""),
+            values=result.values,
+            replace=result.mode is DriverReadMode.FULL,
+            removed_keys=result.removed_keys,
+        )
         if result.mode is DriverReadMode.FULL:
             self._runtime_measurement_values = dict(result.values)
             reused = 0
@@ -1597,6 +1607,20 @@ class EybondHub:
             "runtime_measurement_value_count": len(self._runtime_measurement_values),
             "runtime_measurement_owned_key_count": len(
                 self._runtime_measurement_owned_keys
+            ),
+            "runtime_typed_telemetry_count": len(
+                self._runtime_measurement_telemetry.points
+            ),
+            "runtime_typed_telemetry_fresh_count": (
+                self._runtime_measurement_telemetry.fresh_count
+            ),
+            "runtime_typed_telemetry_carried_count": (
+                self._runtime_measurement_telemetry.carried_count
+            ),
+            "runtime_untyped_driver_value_count": max(
+                0,
+                len(self._runtime_measurement_values)
+                - len(self._runtime_measurement_telemetry.points),
             ),
         }
 
@@ -3419,12 +3443,17 @@ class EybondHub:
             # converges, so the learned controls reliably become entities and are writable.
             self._inverter = self._inverter_overlay_applier(self._inverter, collector)
 
+        typed_telemetry = self._runtime_measurement_telemetry
+        if last_error or not snapshot_connected:
+            typed_telemetry = typed_telemetry.as_carried()
+
         return RuntimeSnapshot(
             connected=snapshot_connected,
             collector=collector,
             inverter=self._inverter,
             values=values,
             last_error=last_error,
+            telemetry=typed_telemetry,
         )
 
 
