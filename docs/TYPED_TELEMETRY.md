@@ -27,6 +27,13 @@ last-good driver-value cache. A disconnected or failed snapshot retains the
 last values but marks every typed point as carried. `RuntimeSnapshot.telemetry`
 publishes the frame beside `RuntimeSnapshot.values`.
 
+`DriverReadResult` is the strict driver-to-runtime envelope. Its direct
+constructor rejects malformed field types, unnormalized keys, contradictory
+FULL/removal semantics, and overlapping measurement/diagnostic ownership. The
+three production call sites that invoke `async_read_values()` all pass the
+result through the single `coerce_driver_read_result()` compatibility boundary;
+an exact legacy `dict` still means FULL, while duck-typed results fail closed.
+
 This foundation is deliberately not a second runtime authority. Driver reads
 remain authoritative, and the legacy mapping remains unchanged while consumers
 are migrated.
@@ -38,13 +45,33 @@ are migrated.
    existing canonical compatibility aliases. **Implemented.**
 3. Move sensor and binary-sensor reads to typed points where coverage is proven;
    keep an explicit compatibility path for metadata and diagnostics.
-   **Implemented for direct value reads.**
+   **Implemented for all Home Assistant measurement consumers.**
    Derived energy, summary attributes, display-precision repair, capability
-   entities, write validation, and support UI schema use the same typed-first
-   compatibility view; lifecycle/tooling metadata stays in the legacy source
-   until it has an explicit typed model.
+   entities, write validation, clock tooling, and support UI schema use the same
+   typed-first compatibility view. Lifecycle/tooling metadata stays in the
+   legacy source until it has an explicit typed model.
 4. Remove broad-map measurement interpretation only after parity tests prove
    that every supported driver and learned overlay has typed coverage.
+
+## Current compatibility boundary
+
+`RuntimeSnapshot.values` still contains a compatibility copy of driver
+measurements. This is deliberate and is not a second measurement authority:
+the driver read, last-good cache, and `TypedTelemetryFrame` are resolved at one
+hub boundary, while the broad mapping preserves older diagnostics, support
+artifacts, and callers during migration. Typed points win whenever a migrated
+consumer requests the same key.
+
+Phase 4 must not remove that copy until all of the following are true:
+
+- every built-in driver declares FULL or DELTA explicitly instead of relying on
+  the exact-dict FULL adapter;
+- learned/device-scoped overlays have parity coverage for their exposed scalar
+  values;
+- support bundles and fixture tooling intentionally choose typed measurements
+  versus broad metadata rather than depending on an undifferentiated mapping;
+- an architecture test proves no Home Assistant measurement consumer reads the
+  broad mapping directly.
 
 ## Invariants
 
