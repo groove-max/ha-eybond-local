@@ -449,6 +449,52 @@ class TypedTelemetryArchitectureTests(unittest.TestCase):
                 self.assertEqual(snapshot_values_reads, [])
                 self.assertTrue(typed_view_calls)
 
+    def test_sensor_measurement_projections_use_typed_first_snapshot_values(self) -> None:
+        sensor_path = REPO_ROOT / "custom_components/eybond_local/sensor.py"
+        sensor_tree = ast.parse(sensor_path.read_text(encoding="utf-8"))
+        sensor_class = next(
+            node
+            for node in sensor_tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "EybondValueSensor"
+        )
+        broad_reads = [
+            node
+            for node in ast.walk(sensor_class)
+            if isinstance(node, ast.Attribute) and node.attr == "values"
+        ]
+        typed_calls = [
+            node
+            for node in ast.walk(sensor_class)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"runtime_value", "runtime_values"}
+        ]
+        self.assertEqual(broad_reads, [])
+        self.assertTrue(typed_calls)
+
+        init_path = REPO_ROOT / "custom_components/eybond_local/__init__.py"
+        init_tree = ast.parse(init_path.read_text(encoding="utf-8"))
+        precision_repair = next(
+            node
+            for node in init_tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "_async_self_heal_sensor_display_precision"
+        )
+        broad_reads = [
+            node
+            for node in ast.walk(precision_repair)
+            if isinstance(node, ast.Attribute) and node.attr == "values"
+        ]
+        typed_calls = [
+            node
+            for node in ast.walk(precision_repair)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "runtime_value"
+        ]
+        self.assertEqual(broad_reads, [])
+        self.assertTrue(typed_calls)
+
 
 if __name__ == "__main__":
     unittest.main()

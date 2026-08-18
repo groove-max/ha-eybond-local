@@ -352,7 +352,7 @@ class EybondValueSensor(CoordinatorEntity[EybondLocalCoordinator], SensorEntity)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        values = self.coordinator.data.values
+        values = self.coordinator.data.runtime_values()
         fields = _SUMMARY_ATTRIBUTE_MAP.get(self._description.key)
         if not fields:
             return None

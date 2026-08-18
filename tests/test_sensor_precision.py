@@ -226,6 +226,42 @@ class SensorPrecisionTests(unittest.TestCase):
         self.assertNotIn("session_protocol", attributes)
         self.assertNotIn("identity_strategy", attributes)
 
+    def test_summary_attributes_prefer_typed_state_and_keep_legacy_metadata(self) -> None:
+        from custom_components.eybond_local.telemetry import (
+            TypedTelemetryFrame,
+            fold_driver_telemetry,
+        )
+
+        coordinator = _FakeCoordinator("output_settings_state", "Configured")
+        coordinator.data.values.update(
+            {
+                "operating_mode": "Fault",
+                "configuration_safe_mode": True,
+                "remote_control_enabled": False,
+            }
+        )
+        coordinator.data.telemetry = fold_driver_telemetry(
+            TypedTelemetryFrame.empty(),
+            driver_key="pi30",
+            values={"operating_mode": "Power On"},
+            replace=True,
+        )
+        description = MeasurementDescription(
+            key="output_settings_state",
+            name="Output Settings",
+        )
+
+        attributes = EybondValueSensor(coordinator, description).extra_state_attributes
+
+        self.assertEqual(
+            attributes,
+            {
+                "operating_mode": "Power On",
+                "configuration_safe_mode": True,
+                "remote_control_enabled": False,
+            },
+        )
+
     def test_explicit_precision_overrides_float_fallback(self) -> None:
         coordinator = _FakeCoordinator("battery_voltage", 52.0)
         description = MeasurementDescription(

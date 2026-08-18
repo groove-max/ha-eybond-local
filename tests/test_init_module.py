@@ -93,6 +93,7 @@ from custom_components.eybond_local import (
     _async_self_heal_collector_cloud_family,
     _async_self_heal_entry_title,
     _async_self_heal_expert_defaults,
+    _async_self_heal_sensor_display_precision,
     _async_self_heal_enabled_defaults,
     _async_self_heal_valuecloud_driver_hint,
     _default_enabled_unique_ids,
@@ -111,6 +112,7 @@ from custom_components.eybond_local.tooling import (
 from custom_components.eybond_local.models import (
     BinarySensorDescription,
     MeasurementDescription,
+    RuntimeSnapshot,
     WriteCapability,
 )
 
@@ -1556,6 +1558,88 @@ class InitModuleTests(unittest.TestCase):
             self_heal.assert_awaited_once_with(hass, entry)
             legacy_cleanup.assert_awaited_once_with(hass, entry)
             sensor_precision.assert_awaited_once_with(hass, entry)
+
+        asyncio.run(_run())
+
+    def test_sensor_precision_repair_prefers_typed_runtime_value(self) -> None:
+        async def _run() -> None:
+            from custom_components.eybond_local.telemetry import (
+                TypedTelemetryFrame,
+                fold_driver_telemetry,
+            )
+
+            telemetry = fold_driver_telemetry(
+                TypedTelemetryFrame.empty(),
+                driver_key="pi30",
+                values={"battery_voltage": 51.25},
+                replace=True,
+            )
+            coordinator = types.SimpleNamespace(
+                data=RuntimeSnapshot(
+                    values={"battery_voltage": 52.0},
+                    telemetry=telemetry,
+                )
+            )
+            entry = types.SimpleNamespace(
+                entry_id="entry123",
+                runtime_data=coordinator,
+            )
+            entity_entry = types.SimpleNamespace(
+                entity_id="sensor.battery_voltage",
+                unique_id="entry123_battery_voltage",
+                options={"sensor": {"suggested_display_precision": 0}},
+            )
+
+            class _Registry:
+                def async_update_entity_options(
+                    self,
+                    entity_id: str,
+                    domain: str,
+                    options: dict[str, object],
+                ) -> None:
+                    self.entity_id = entity_id
+                    self.domain = domain
+                    self.options = dict(options)
+
+            registry = _Registry()
+            driver = types.SimpleNamespace(key="pi30", write_capabilities=())
+            inverter = types.SimpleNamespace(
+                register_schema_name="pi30",
+                variant_key="",
+                capabilities=(),
+            )
+            description = MeasurementDescription(
+                key="battery_voltage",
+                name="Battery Voltage",
+                device_class="voltage",
+            )
+
+            with (
+                patch(
+                    "homeassistant.helpers.entity_registry.async_get",
+                    return_value=registry,
+                ),
+                patch(
+                    "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
+                    return_value=[entity_entry],
+                ),
+                patch(
+                    "custom_components.eybond_local.entity_setup_context",
+                    return_value=(driver, inverter, True),
+                ),
+                patch(
+                    "custom_components.eybond_local.drivers.registry.measurements_for_runtime",
+                    return_value=(description,),
+                ),
+            ):
+                await _async_self_heal_sensor_display_precision(
+                    types.SimpleNamespace(),
+                    entry,
+                )
+
+            self.assertEqual(registry.entity_id, "sensor.battery_voltage")
+            self.assertEqual(registry.domain, "sensor")
+            self.assertEqual(registry.options["suggested_display_precision"], 2)
 
         asyncio.run(_run())
 

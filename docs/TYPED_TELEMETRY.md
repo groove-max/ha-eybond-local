@@ -39,9 +39,10 @@ are migrated.
 3. Move sensor and binary-sensor reads to typed points where coverage is proven;
    keep an explicit compatibility path for metadata and diagnostics.
    **Implemented for direct value reads.**
-   Derived energy, capability entities, write validation, and support UI schema
-   use the same typed-first compatibility view; lifecycle/tooling metadata stays
-   in the legacy source until it has an explicit typed model.
+   Derived energy, summary attributes, display-precision repair, capability
+   entities, write validation, and support UI schema use the same typed-first
+   compatibility view; lifecycle/tooling metadata stays in the legacy source
+   until it has an explicit typed model.
 4. Remove broad-map measurement interpretation only after parity tests prove
    that every supported driver and learned overlay has typed coverage.
 

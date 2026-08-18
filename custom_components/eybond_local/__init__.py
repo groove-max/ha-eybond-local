@@ -1079,7 +1079,6 @@ async def _async_self_heal_sensor_display_precision(
             collector_only_mode=not has_inverter_identity,
         )
     }
-    values = coordinator.data.values
     unique_id_prefix = f"{entry.entry_id}_"
 
     for entity_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
@@ -1094,7 +1093,7 @@ async def _async_self_heal_sensor_display_precision(
 
         desired_precision = description.suggested_display_precision
         if desired_precision is None and description.device_class in _FLOAT_PRECISION_DEVICE_CLASSES:
-            native_value = values.get(description.key)
+            native_value = coordinator.data.runtime_value(description.key)
             if isinstance(native_value, float):
                 desired_precision = _infer_sensor_display_precision(native_value)
         if desired_precision is None:
