@@ -142,7 +142,7 @@ async def test_collector_first_entry_is_enriched_by_runtime_detection(
     fake_runtime,
     monkeypatch,
 ) -> None:
-    """A new entry starts collector-only; the runtime owns inverter identity."""
+    """Late runtime identity reloads collector-only platforms exactly once."""
 
     from conftest import FakeRuntimeManager
     from custom_components.eybond_local.models import (
@@ -152,12 +152,17 @@ async def test_collector_first_entry_is_enriched_by_runtime_detection(
         RuntimeSnapshot,
     )
 
+    first_refresh_started = asyncio.Event()
+    allow_detection = asyncio.Event()
+
     async def _detected_refresh(
         self,
         *,
         poll_interval: float | None = None,
     ) -> RuntimeSnapshot:
         del self, poll_interval
+        first_refresh_started.set()
+        await allow_detection.wait()
         return RuntimeSnapshot(
             connected=True,
             collector=CollectorInfo(
@@ -185,14 +190,40 @@ async def test_collector_first_entry_is_enriched_by_runtime_detection(
     assert not entry.data.get("detected_serial")
 
     assert await hass.config_entries.async_setup(entry.entry_id)
+    await first_refresh_started.wait()
+
+    # Startup is deliberately not held open waiting for inverter detection.
+    # The first platform pass is therefore collector-only, and no model entity
+    # may be created speculatively from a driver hint.
+    assert entry.state is ConfigEntryState.LOADED
+    assert len(fake_runtime) == 1
+    registry = er.async_get(hass)
+    first_unique_ids = {
+        entity.unique_id
+        for entity in er.async_entries_for_config_entry(registry, entry.entry_id)
+    }
+    assert f"{entry.entry_id}_collector_pn" in first_unique_ids
+    assert f"{entry.entry_id}_driver_key" not in first_unique_ids
+
+    # Runtime detection completes after the platforms are initialized. The
+    # coordinator persists the identity and schedules one state-gated reload;
+    # the second setup then materializes driver-specific entities from the
+    # persisted identity instead of polling in the setup path.
+    allow_detection.set()
     await hass.async_block_till_done()
 
     assert entry.state is ConfigEntryState.LOADED
+    assert len(fake_runtime) == 2
     assert entry.data["detected_model"] == "SMG 6200"
     assert entry.data["detected_serial"] == "92632500000001"
     assert entry.data["driver_hint"] == "auto"
     assert entry.data["detected_driver"] == "modbus_smg"
     assert entry.data["detection_confidence"] == "high"
+    reloaded_unique_ids = {
+        entity.unique_id
+        for entity in er.async_entries_for_config_entry(registry, entry.entry_id)
+    }
+    assert f"{entry.entry_id}_driver_key" in reloaded_unique_ids
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
