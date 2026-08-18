@@ -169,7 +169,6 @@ from ..metadata.register_schema_loader import (
     builtin_base_schema_name,
     load_register_schema,
 )
-from ..naming import collector_display_name
 from ..metadata.smartess_draft import SmartEssKnownFamilyDraftPlan
 from ..metadata.smartess_smg_bridge import SmartEssSmgBridgePlan
 from ..models import (
@@ -183,6 +182,10 @@ from ..models import (
 from ..naming import installation_title, legacy_installation_titles
 from .factory import create_runtime_manager
 from .manager import RuntimeManager
+from .device_projection import (
+    build_collector_device_info_payload,
+    build_inverter_device_info_payload,
+)
 from ..drivers.registry import poll_policy_for_driver_key, serial_is_stable
 from ..drivers.registry import support_marker as driver_support_marker
 from .poll_scheduler import PollDecision, PollScheduler, clamp_interval, normalize_poll_mode
@@ -9698,131 +9701,41 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             profile_name=str(getattr(metadata, "profile_name", "") or ""),
         )
 
-    def _build_inverter_device_info(self, snapshot: RuntimeSnapshot | None = None) -> DeviceInfo:
-        """Build stable metadata for the main inverter device."""
-
-        snapshot = snapshot or self.data
-        collector_identifier = (DOMAIN, f"{self.config_entry.entry_id}:collector")
-        name = "EyeBond Inverter"
-        model = None
-        serial_number = None
-        detected_model = str(self.config_entry.data.get(CONF_DETECTED_MODEL) or "").strip()
-        detected_serial = str(self.config_entry.data.get(CONF_DETECTED_SERIAL) or "").strip()
-        runtime_model = str(getattr(snapshot.inverter, "model_name", "") or "").strip()
-        runtime_serial = str(getattr(snapshot.inverter, "serial_number", "") or "").strip()
-
-        if runtime_model or runtime_serial:
-            name = runtime_model or detected_model or name
-            model = runtime_model or detected_model or None
-            serial_number = runtime_serial or detected_serial or None
-        else:
-            if detected_model:
-                name = detected_model
-                model = detected_model
-            elif self.config_entry.title:
-                name = self.config_entry.title
-            if detected_serial:
-                serial_number = detected_serial
-
-        info: dict[str, object] = {
-            "identifiers": {(DOMAIN, self.config_entry.entry_id)},
-            "name": name,
-            "manufacturer": "OEM / EyeBond",
-            "via_device": collector_identifier,
-        }
-        if model:
-            info["model"] = model
-        if serial_number:
-            info["serial_number"] = serial_number
-        return DeviceInfo(**info)
-
-    def _build_collector_device_info(self, snapshot: RuntimeSnapshot | None = None) -> DeviceInfo:
-        """Build stable metadata for the collector-side device."""
-
-        snapshot = snapshot or self.data
-        collector = snapshot.collector
-        values = snapshot.values or {}
-        model = "EyeBond Collector"
-        serial_number = self._preferred_collector_pn(snapshot)
-        collector_ip = str(self.config_entry.data.get(CONF_COLLECTOR_IP, "") or "").strip()
-        sw_version = ""
-        hw_version = str(values.get("collector_hardware_version") or "").strip()
-        collector_type = str(values.get("collector_type") or "").strip()
-
-        manufacturer = ""
-        configuration_url = ""
-        profile = collector_capability_profile_from_runtime(
-            collector=collector,
-            values=values if isinstance(values, dict) else {},
-            data=dict(getattr(self.config_entry, "data", {}) or {}),
-            options=dict(getattr(self.config_entry, "options", {}) or {}),
-        )
-        is_virtual_bridge = profile.virtual_bridge
-
-        if collector is not None:
-            if collector_type:
-                model = collector_type
-            elif collector.profile_name:
-                model = collector.profile_name
-            elif collector.smartess_protocol_name:
-                model = collector.smartess_protocol_name
-            elif collector.smartess_protocol_asset_name:
-                model = collector.smartess_protocol_asset_name
-            if collector.smartess_collector_version:
-                sw_version = collector.smartess_collector_version
-        elif collector_type:
-            model = collector_type
-
-        if is_virtual_bridge:
-            # A detected community bridge gets an honest identity instead of the
-            # generic factory "EyeBond Collector" / "Wi-Fi.DTU" model. It never
-            # talks to the SmartESS cloud, so its parsed semver is authoritative.
-            manufacturer = "ESP EyeBond Collector (community)"
-            model = "ESP EyeBond Collector"
-            bridge_version = str(
-                getattr(collector, "collector_bridge_version", "")
-                or values.get("collector_bridge_version")
-                or self.config_entry.options.get("collector_bridge_version")
-                or self.config_entry.data.get("collector_bridge_version")
-                or ""
-            ).strip()
-            if bridge_version:
-                sw_version = bridge_version
-            configuration_url = "https://github.com/groove-max/esp-eybond-collector"
-
-        name = collector_display_name(
-            collector_pn=serial_number,
-            collector_ip=collector_ip,
-        )
-
-        info: dict[str, object] = {
-            "identifiers": {(DOMAIN, f"{self.config_entry.entry_id}:collector")},
-            "name": name,
-            "model": model,
-        }
-        if manufacturer:
-            info["manufacturer"] = manufacturer
-        if serial_number:
-            info["serial_number"] = serial_number
-        if sw_version:
-            info["sw_version"] = sw_version
-        if hw_version:
-            info["hw_version"] = hw_version
-        if configuration_url:
-            info["configuration_url"] = configuration_url
-        return DeviceInfo(**info)
-
     def inverter_device_info(self) -> DeviceInfo:
         """Build stable device metadata for inverter-owned entities."""
 
         if not self.has_inverter_identity:
             return self.collector_device_info()
-        return self._build_inverter_device_info(self.data)
+        return DeviceInfo(
+            **build_inverter_device_info_payload(
+                entry_id=self.config_entry.entry_id,
+                entry_title=self.config_entry.title,
+                detected_model=self.config_entry.data.get(CONF_DETECTED_MODEL),
+                detected_serial=self.config_entry.data.get(CONF_DETECTED_SERIAL),
+                inverter=self.data.inverter,
+            )
+        )
 
     def collector_device_info(self) -> DeviceInfo:
         """Build stable device metadata for collector-owned entities."""
 
-        return self._build_collector_device_info(self.data)
+        return DeviceInfo(**self._collector_device_info_payload(self.data))
+
+    def _collector_device_info_payload(
+        self,
+        snapshot: RuntimeSnapshot,
+    ) -> dict[str, object]:
+        """Supply coordinator-owned context to the pure collector projector."""
+
+        return build_collector_device_info_payload(
+            entry_id=self.config_entry.entry_id,
+            collector_ip=self.config_entry.data.get(CONF_COLLECTOR_IP),
+            collector_pn=self._preferred_collector_pn(snapshot),
+            collector=snapshot.collector,
+            values=snapshot.values,
+            entry_data=self.config_entry.data,
+            entry_options=self.config_entry.options,
+        )
 
     def device_info_for_key(self, key: str) -> DeviceInfo:
         """Return the owning device metadata for one entity key."""
@@ -9861,7 +9774,14 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             self._last_synced_device_meta = ("", "", "", "", "")
             return
 
-        info = self._build_inverter_device_info(snapshot)
+        snapshot = snapshot or self.data
+        info = build_inverter_device_info_payload(
+            entry_id=self.config_entry.entry_id,
+            entry_title=self.config_entry.title,
+            detected_model=self.config_entry.data.get(CONF_DETECTED_MODEL),
+            detected_serial=self.config_entry.data.get(CONF_DETECTED_SERIAL),
+            inverter=snapshot.inverter,
+        )
         identifiers = info.get("identifiers")
         if not identifiers:
             return
@@ -9893,7 +9813,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def _async_sync_collector_device_registry(self, snapshot: RuntimeSnapshot | None = None) -> None:
         """Update the collector HA device entry with the latest metadata."""
 
-        info = self._build_collector_device_info(snapshot)
+        info = self._collector_device_info_payload(snapshot or self.data)
         identifiers = info.get("identifiers")
         if not identifiers:
             return
