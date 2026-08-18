@@ -18,6 +18,7 @@ from custom_components.eybond_local.collector_identity import (  # noqa: E402
     pn_is_same_identity,
     prefer_full_pn,
     prefer_identity_source,
+    reconcile_durable_pn,
     reconcile_pn,
     validated_collector_pn,
 )
@@ -34,6 +35,7 @@ IDENTITY_HELPERS = {
     "pn_is_same_identity",
     "prefer_full_pn",
     "prefer_identity_source",
+    "reconcile_durable_pn",
     "reconcile_pn",
 }
 
@@ -65,6 +67,25 @@ class CollectorIdentityBehaviorTests(unittest.TestCase):
         self.assertEqual(
             prefer_identity_source("framed_heartbeat", "at_dtupn"),
             "at_dtupn",
+        )
+
+    def test_durable_reconciliation_uses_the_canonical_prefix_boundary(self) -> None:
+        self.assertEqual(
+            reconcile_durable_pn(FULL_PN, SHORT_PN),
+            (FULL_PN, False),
+        )
+        self.assertEqual(
+            reconcile_durable_pn(SHORT_PN, FULL_PN),
+            (FULL_PN, False),
+        )
+        self.assertEqual(
+            reconcile_durable_pn(FULL_PN, FOREIGN_PN),
+            (FULL_PN, True),
+        )
+        self.assertEqual(reconcile_durable_pn("", SHORT_PN), (SHORT_PN, False))
+        self.assertEqual(
+            reconcile_durable_pn(FULL_PN, FULL_PN[:5]),
+            (FULL_PN, True),
         )
 
 
@@ -120,6 +141,25 @@ class CollectorIdentityArchitectureTests(unittest.TestCase):
                     )
 
         self.assertEqual(violations, [])
+
+    def test_runtime_and_transport_do_not_wrap_reconciliation(self) -> None:
+        forbidden = {
+            "_prefer_more_complete_collector_pn",
+            "_prefer_more_complete_identity",
+            "_reconcile_durable_collector_pn",
+        }
+        root = REPO_ROOT / "custom_components/eybond_local"
+        definitions: list[str] = []
+        for path in root.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if node.name in forbidden:
+                        definitions.append(
+                            f"{path.relative_to(REPO_ROOT)}:{node.lineno}:{node.name}"
+                        )
+
+        self.assertEqual(definitions, [])
 
 
 if __name__ == "__main__":

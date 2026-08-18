@@ -738,6 +738,33 @@ class HubSnapshotTests(unittest.TestCase):
             "fresh.example,18899,TCP",
         )
 
+    def test_build_snapshot_refuses_foreign_collector_pn_override(self) -> None:
+        durable_pn = "V001020SYN62344022"
+        foreign_pn = "V001020ABC99999999"
+        hub = EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                collector_pn=durable_pn,
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+        hub._link_manager = _FakeLinkManager()
+        hub._link_manager.collector_info.collector_pn = durable_pn
+
+        snapshot = hub._build_snapshot(
+            extra_values={"collector_pn": foreign_pn}
+        )
+
+        self.assertEqual(snapshot.collector.collector_pn, durable_pn)
+        self.assertEqual(snapshot.values["collector_pn"], durable_pn)
+        self.assertTrue(snapshot.values["collector_pn_identity_conflict"])
+
     def test_build_snapshot_synchronizes_fresh_cloud_profile_as_one_value(self) -> None:
         hub = EybondHub(
             connection=EybondConnectionSpec(

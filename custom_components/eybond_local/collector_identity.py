@@ -116,6 +116,25 @@ def reconcile_pn(current: object, candidate: object) -> str:
     return a
 
 
+def reconcile_durable_pn(durable: object, observed: object) -> tuple[str, bool]:
+    """Reconcile a live observation without replacing a durable identity.
+
+    Returns ``(collector_pn, conflict)``. A short/full observation is merged
+    only through the canonical minimum-prefix rule; a foreign or too-short
+    prefix keeps the durable PN and reports a conflict.
+    """
+
+    durable_pn = normalize_pn(durable)
+    observed_pn = normalize_pn(observed)
+    if not durable_pn:
+        return observed_pn, False
+    if not observed_pn:
+        return durable_pn, False
+    if not pn_is_same_identity(durable_pn, observed_pn):
+        return durable_pn, True
+    return reconcile_pn(durable_pn, observed_pn), False
+
+
 __all__ = [
     "CALLBACK_PN_PREFIX_MATCH_MIN_LEN",
     "identity_source_is_strong",
@@ -123,6 +142,7 @@ __all__ = [
     "pn_is_same_identity",
     "prefer_full_pn",
     "prefer_identity_source",
+    "reconcile_durable_pn",
     "reconcile_pn",
     "validated_collector_pn",
 ]

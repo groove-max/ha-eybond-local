@@ -30,7 +30,7 @@ from custom_components.eybond_local.connection.session_handle import (
 )
 from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
 from custom_components.eybond_local.link_transport import select_payload_route
-from custom_components.eybond_local.collector_identity import reconcile_pn
+from custom_components.eybond_local.collector_identity import reconcile_durable_pn
 from custom_components.eybond_local.connection.session_registry import (
     CallbackSessionRegistry,
     SESSION_STATE_CLOSED,
@@ -45,7 +45,6 @@ from custom_components.eybond_local.const import (
     CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE,
     COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE,
 )
-from custom_components.eybond_local.runtime.hub import _reconcile_durable_collector_pn
 from custom_components.eybond_local.runtime.link import (
     EybondRuntimeLinkManager,
     _UnavailablePayloadTransport,
@@ -441,54 +440,24 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
 
 class PnStabilityTests(unittest.TestCase):
     def test_short_heartbeat_does_not_downgrade_durable_full_pn(self) -> None:
-        pn, conflict = _reconcile_durable_collector_pn(FULL_PN, SHORT_PN)
+        pn, conflict = reconcile_durable_pn(FULL_PN, SHORT_PN)
         self.assertEqual(pn, FULL_PN)
         self.assertFalse(conflict)
 
     def test_longer_same_identity_pn_enriches_durable(self) -> None:
-        pn, conflict = _reconcile_durable_collector_pn(SHORT_PN, FULL_PN)
+        pn, conflict = reconcile_durable_pn(SHORT_PN, FULL_PN)
         self.assertEqual(pn, FULL_PN)
         self.assertFalse(conflict)
 
     def test_different_full_pn_is_identity_conflict_keeps_durable(self) -> None:
-        pn, conflict = _reconcile_durable_collector_pn(FULL_PN, OTHER_FULL_PN)
+        pn, conflict = reconcile_durable_pn(FULL_PN, OTHER_FULL_PN)
         self.assertEqual(pn, FULL_PN)
         self.assertTrue(conflict)
 
     def test_no_durable_uses_observed(self) -> None:
-        pn, conflict = _reconcile_durable_collector_pn("", SHORT_PN)
+        pn, conflict = reconcile_durable_pn("", SHORT_PN)
         self.assertEqual(pn, SHORT_PN)
         self.assertFalse(conflict)
-
-
-class RegistryPnReconciliationTests(unittest.TestCase):
-    """Phase 5: short/full PN reconciliation has a single home in the registry."""
-
-    def test_reconcile_pn_enriches_short_to_full(self) -> None:
-        self.assertEqual(reconcile_pn(SHORT_PN, FULL_PN), FULL_PN)
-        self.assertEqual(reconcile_pn(FULL_PN, SHORT_PN), FULL_PN)
-
-    def test_reconcile_pn_keeps_current_on_identity_conflict(self) -> None:
-        # A genuinely different PN must not silently switch identity.
-        self.assertEqual(reconcile_pn(FULL_PN, OTHER_FULL_PN), FULL_PN)
-
-    def test_reconcile_pn_handles_empty(self) -> None:
-        self.assertEqual(reconcile_pn("", FULL_PN), FULL_PN)
-        self.assertEqual(reconcile_pn(FULL_PN, ""), FULL_PN)
-
-    def test_transport_and_link_helpers_delegate_to_registry(self) -> None:
-        # The transport/link connection-level helpers must resolve identically to
-        # the package's single pure reconciliation function.
-        from custom_components.eybond_local.collector.transport import (
-            _prefer_more_complete_identity,
-        )
-        from custom_components.eybond_local.runtime.link import (
-            _prefer_more_complete_collector_pn,
-        )
-
-        for a, b in ((SHORT_PN, FULL_PN), (FULL_PN, SHORT_PN), (FULL_PN, OTHER_FULL_PN)):
-            self.assertEqual(_prefer_more_complete_identity(a, b), reconcile_pn(a, b))
-            self.assertEqual(_prefer_more_complete_collector_pn(a, b), reconcile_pn(a, b))
 
 
 def _set_sessions(link, sessions) -> None:

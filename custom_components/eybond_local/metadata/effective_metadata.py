@@ -324,7 +324,7 @@ def _device_scope_matches_runtime(
         # Prefix-tolerant compare: the datalogger PN is reported as a short physical
         # prefix (e.g. "E5000020000000") early in the handshake and upgraded to the
         # full PN (e.g. "E50000200000000001") once more frames arrive
-        # (``_prefer_more_complete_collector_pn``). An exact compare here intermittently
+        # (``reconcile_pn``). An exact compare here intermittently
         # failed the device-scope match during the early refreshes that gate entity
         # setup, so the activated overlay was suppressed and its learned controls never
         # materialized. One value being a prefix of the other is the same datalogger.

@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Awaitable, Callable, Protocol
 
-from ..collector_identity import validated_collector_pn
 from .at import CollectorAtResponse, build_at_query, build_at_write, parse_at_response
 from .cloud_family import (
     apply_collector_cloud_family_observation,
@@ -19,7 +18,8 @@ from .cloud_family import (
 from ..collector_identity import (
     identity_source_is_strong,
     prefer_identity_source,
-    reconcile_pn as _reconcile_pn,
+    reconcile_pn,
+    validated_collector_pn,
 )
 from ..link_models import EybondLinkRoute, LinkRoute, RawSerialLinkRoute
 from ..link_transport import PayloadLinkTransport
@@ -251,12 +251,6 @@ def _mask_identity_token(value: str) -> str:
     return f"{token[:3]}{'*' * max(len(token) - 6, 3)}{token[-3:]}"
 
 
-def _prefer_more_complete_identity(current: str, candidate: str) -> str:
-    # Short/full PN reconciliation lives in the callback session registry; the
-    # transport defers to it instead of re-implementing the prefix logic.
-    return _reconcile_pn(current, candidate)
-
-
 def _seed_connection_collector_pn(connection: object, collector_pn: str) -> None:
     """Seed a PN-owned connection's visible CollectorInfo before first heartbeat.
 
@@ -272,7 +266,7 @@ def _seed_connection_collector_pn(connection: object, collector_pn: str) -> None
     if collector is None:
         return
     current = str(getattr(collector, "collector_pn", "") or "").strip()
-    seeded = _prefer_more_complete_identity(current, normalized)
+    seeded = reconcile_pn(current, normalized)
     if not seeded:
         return
     collector.collector_pn = seeded
@@ -832,7 +826,10 @@ class _CollectorConnection:
 
     def _apply_at_response_metadata(self, response: CollectorAtResponse) -> None:
         if response.command == "DTUPN" and response.value:
-            self._collector.collector_pn = _prefer_more_complete_identity(self._collector.collector_pn, response.value)
+            self._collector.collector_pn = reconcile_pn(
+                self._collector.collector_pn,
+                response.value,
+            )
             self._record_session_identity(response.value, "at_dtupn")
         elif response.command == "FWVER" and response.value:
             self._collector.smartess_collector_version = response.value
@@ -903,7 +900,10 @@ class _CollectorConnection:
                 if header.fcode == FC_HEARTBEAT:
                     pn = parse_heartbeat_pn(payload)
                     if pn:
-                        self._collector.collector_pn = _prefer_more_complete_identity(self._collector.collector_pn, pn)
+                        self._collector.collector_pn = reconcile_pn(
+                            self._collector.collector_pn,
+                            pn,
+                        )
                         self._record_session_identity(pn, "framed_heartbeat")
                     self._collector.heartbeat_devcode = header.devcode
                     self._collector.heartbeat_payload_hex = payload.hex()
@@ -911,7 +911,10 @@ class _CollectorConnection:
                 elif header.fcode == FC_QUERY_COLLECTOR:
                     pn = _parse_fc2_collector_pn(payload)
                     if pn:
-                        self._collector.collector_pn = _prefer_more_complete_identity(self._collector.collector_pn, pn)
+                        self._collector.collector_pn = reconcile_pn(
+                            self._collector.collector_pn,
+                            pn,
+                        )
                         self._record_session_identity(pn, "fc2_parameter_2")
                 future = self._pending.get(header.tid)
                 if future and not future.done():
@@ -1481,7 +1484,10 @@ class _CollectorAtConnection:
                     if header.fcode == FC_HEARTBEAT:
                         pn = parse_heartbeat_pn(payload)
                         if pn:
-                            self._collector.collector_pn = _prefer_more_complete_identity(self._collector.collector_pn, pn)
+                            self._collector.collector_pn = reconcile_pn(
+                                self._collector.collector_pn,
+                                pn,
+                            )
                             self._record_session_identity(pn, "framed_heartbeat")
                         self._collector.heartbeat_devcode = header.devcode
                         self._collector.heartbeat_payload_hex = payload.hex()
@@ -1492,7 +1498,10 @@ class _CollectorAtConnection:
                             continue
                         pn = _parse_fc2_collector_pn(payload)
                         if pn:
-                            self._collector.collector_pn = _prefer_more_complete_identity(self._collector.collector_pn, pn)
+                            self._collector.collector_pn = reconcile_pn(
+                                self._collector.collector_pn,
+                                pn,
+                            )
                             self._record_session_identity(pn, "fc2_parameter_2")
                     else:
                         logger.debug(
@@ -1615,7 +1624,10 @@ class _CollectorAtConnection:
 
     def _apply_response_metadata(self, response: CollectorAtResponse) -> None:
         if response.command == "DTUPN" and response.value:
-            self._collector.collector_pn = _prefer_more_complete_identity(self._collector.collector_pn, response.value)
+            self._collector.collector_pn = reconcile_pn(
+                self._collector.collector_pn,
+                response.value,
+            )
             self._record_session_identity(response.value, "at_dtupn")
         elif response.command == "FWVER" and response.value:
             self._collector.smartess_collector_version = response.value
@@ -2504,7 +2516,7 @@ class _SharedEybondListener:
             return
         entry = self._session_inventory.get(session_id)
         if entry is not None:
-            entry.collector_pn = _prefer_more_complete_identity(
+            entry.collector_pn = reconcile_pn(
                 entry.collector_pn,
                 normalized_pn,
             )

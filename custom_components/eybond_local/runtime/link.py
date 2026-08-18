@@ -157,11 +157,6 @@ class _UnavailablePayloadTransport:
         raise TypeError("inverter_forward_adapter_not_available")
 
 
-def _prefer_more_complete_collector_pn(current: str, candidate: str) -> str:
-    # Short/full PN reconciliation lives in the registry; this defers to it.
-    return reconcile_pn(current, candidate)
-
-
 def _default_local_ip() -> str:
     """Return the primary local IPv4 used for outbound traffic."""
 
@@ -818,7 +813,7 @@ class EybondRuntimeLinkManager:
             collector.raw_last_total_duration_ms = (
                 at_collector.raw_last_total_duration_ms
             )
-        merged_pn = _prefer_more_complete_collector_pn(
+        merged_pn = reconcile_pn(
             collector.collector_pn,
             at_collector.collector_pn,
         )

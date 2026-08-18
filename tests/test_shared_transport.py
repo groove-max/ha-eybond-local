@@ -4069,20 +4069,6 @@ class Phase2TransportOwnershipCloseTests(unittest.IsolatedAsyncioTestCase):
         transport.set_negotiated_wire("")
         self.assertTrue(transport._uses_at_text_session())
 
-    def test_prefer_more_complete_identity_is_downgrade_and_conflict_safe(self) -> None:
-        from custom_components.eybond_local.collector.transport import (
-            _prefer_more_complete_identity as prefer,
-        )
-
-        # Short heartbeat PN must not downgrade a durable full PN.
-        self.assertEqual(prefer(self._PN_A, self._SHORT_A), self._PN_A)
-        # Longer same-identity PN enriches a short one.
-        self.assertEqual(prefer(self._SHORT_A, self._PN_A), self._PN_A)
-        # A different full PN is not silently switched to -- keep current.
-        self.assertEqual(prefer(self._PN_A, self._PN_B), self._PN_A)
-        # No current -> take the observed.
-        self.assertEqual(prefer("", self._SHORT_A), self._SHORT_A)
-
     def test_listener_key_is_stable_public_identity(self) -> None:
         transport = SharedCollectorAtTransport(
             host="127.0.0.1",

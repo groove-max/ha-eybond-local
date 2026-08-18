@@ -21,6 +21,7 @@ from ..const import (
 )
 from ..connection.models import EybondConnectionSpec
 from ..connection.session_handle import ADAPTER_COLLECTOR_AT_COMMANDS
+from ..collector_identity import reconcile_durable_pn
 from ..collector.capabilities import (
     collector_capability_profile_from_runtime,
     parse_esp_collector_hardware_token,
@@ -92,51 +93,6 @@ logger = logging.getLogger(__name__)
 # longer wait is enabled only by an observed owned-session generation change.
 _SESSION_HANDOVER_CONNECT_TIMEOUT = 5.0
 _SESSION_HANDOVER_MAX_GENERATIONS = 3
-
-
-def _prefer_more_complete_collector_pn(current: object, candidate: object) -> str:
-    normalized_current = str(current or "").strip()
-    normalized_candidate = str(candidate or "").strip()
-    if not normalized_candidate:
-        return normalized_current
-    if not normalized_current:
-        return normalized_candidate
-    if normalized_candidate == normalized_current:
-        return normalized_candidate
-    if normalized_candidate.startswith(normalized_current):
-        return normalized_candidate
-    if normalized_current.startswith(normalized_candidate):
-        return normalized_current
-    return normalized_candidate
-
-
-def _reconcile_durable_collector_pn(
-    durable: object,
-    observed: object,
-) -> tuple[str, bool]:
-    """Reconcile the durable (entry/registry) PN against a live observed PN.
-
-    Phase 2 PN stability: the durable full PN is authoritative. A shorter live
-    heartbeat PN (a prefix of the durable one) must never downgrade it; a longer
-    same-identity PN enriches it; a genuinely different full PN is an identity
-    conflict -- keep the durable PN and report the conflict rather than silently
-    switching identity. Returns ``(pn, conflict)``.
-    """
-
-    durable_pn = str(durable or "").strip()
-    observed_pn = str(observed or "").strip()
-    if not durable_pn:
-        return observed_pn, False
-    if not observed_pn or observed_pn == durable_pn:
-        return durable_pn, False
-    if observed_pn.startswith(durable_pn):
-        # Live session revealed the fuller same-identity PN -> enrich.
-        return observed_pn, False
-    if durable_pn.startswith(observed_pn):
-        # Live heartbeat carried only a prefix -> keep the durable full PN.
-        return durable_pn, False
-    # Different identities entirely: keep the durable PN, flag the conflict.
-    return durable_pn, True
 
 
 def _split_collector_endpoint(endpoint: object) -> tuple[str, int | None, str]:
@@ -3064,7 +3020,7 @@ class EybondHub:
         ).strip()
         collector_pn_identity_conflict = False
         if durable_collector_pn:
-            reconciled_pn, collector_pn_identity_conflict = _reconcile_durable_collector_pn(
+            reconciled_pn, collector_pn_identity_conflict = reconcile_durable_pn(
                 durable_collector_pn,
                 collector.collector_pn,
             )
@@ -3081,9 +3037,12 @@ class EybondHub:
 
         collector_field_overrides = extra_values or {}
         if collector_field_overrides:
-            merged_collector_pn = _prefer_more_complete_collector_pn(
+            merged_collector_pn, override_pn_conflict = reconcile_durable_pn(
                 collector.collector_pn,
                 collector_field_overrides.get("collector_pn"),
+            )
+            collector_pn_identity_conflict = (
+                collector_pn_identity_conflict or override_pn_conflict
             )
             if merged_collector_pn and merged_collector_pn != collector.collector_pn:
                 collector.collector_pn = merged_collector_pn
@@ -3326,7 +3285,13 @@ class EybondHub:
             values.update(self._runtime_measurement_values)
 
         if extra_values:
-            values.update(extra_values)
+            safe_extra_values = dict(extra_values)
+            if "collector_pn" in safe_extra_values:
+                if collector.collector_pn:
+                    safe_extra_values["collector_pn"] = collector.collector_pn
+                else:
+                    safe_extra_values.pop("collector_pn", None)
+            values.update(safe_extra_values)
 
         if self._inverter_detection_probe_log:
             values["runtime_inverter_probe_log"] = [
