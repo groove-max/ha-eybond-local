@@ -254,6 +254,7 @@ from ..support.shadow_learning_session import (
     shadow_learning_session_timestamp,
 )
 from ..support.diagnostic_export import export_diagnostic_run
+from ..support.diagnostic_projection import build_runtime_transport_debug
 from ..support.diagnostic_runner import (
     DiagnosticRuntimeContext,
     DiagnosticSingleFlight,
@@ -1864,7 +1865,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             entry_id=self.config_entry.entry_id,
             integration_version=integration_version,
             catalog_detection=self._diagnostic_catalog_detection(),
-            runtime_debug=self._diagnostic_runtime_debug(transport),
+            runtime_debug=build_runtime_transport_debug(transport),
             default_stop_on_error=stop_on_error,
             default_operation_timeout=operation_timeout,
             confirm_write=confirm_write,
@@ -1875,114 +1876,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if callable(accessor):
             return accessor()
         return None
-
-    def _diagnostic_runtime_debug(self, transport: object) -> dict[str, object]:
-        """Return transport internals needed to diagnose raw command routing."""
-
-        debug: dict[str, object] = {
-            "transport_type": type(transport).__name__ if transport is not None else "",
-            "transport_id": id(transport) if transport is not None else 0,
-            "transport_connected": bool(getattr(transport, "connected", False)),
-        }
-        try:
-            collector = getattr(transport, "collector_info", None)
-            if collector is not None:
-                debug.update(
-                    {
-                        "collector_remote_ip": getattr(collector, "remote_ip", "") or "",
-                        "collector_remote_port": getattr(collector, "remote_port", None),
-                        "collector_pn_present": bool(
-                            str(getattr(collector, "collector_pn", "") or "").strip()
-                        ),
-                        "raw_request_count": getattr(collector, "raw_request_count", 0),
-                        "raw_response_count": getattr(collector, "raw_response_count", 0),
-                        "raw_timeout_count": getattr(collector, "raw_timeout_count", 0),
-                        "raw_unhandled_line_count": getattr(
-                            collector,
-                            "raw_unhandled_line_count",
-                            0,
-                        ),
-                        "raw_last_spacing_wait_ms": getattr(
-                            collector,
-                            "raw_last_spacing_wait_ms",
-                            0,
-                        ),
-                        "raw_last_response_duration_ms": getattr(
-                            collector,
-                            "raw_last_response_duration_ms",
-                            0,
-                        ),
-                        "raw_last_total_duration_ms": getattr(
-                            collector,
-                            "raw_last_total_duration_ms",
-                            0,
-                        ),
-                        "raw_last_request_ascii": getattr(
-                            collector,
-                            "raw_last_request_ascii",
-                            "",
-                        )
-                        or "",
-                        "raw_last_response_ascii": getattr(
-                            collector,
-                            "raw_last_response_ascii",
-                            "",
-                        )
-                        or "",
-                        "raw_last_timeout_request_ascii": getattr(
-                            collector,
-                            "raw_last_timeout_request_ascii",
-                            "",
-                        )
-                        or "",
-                        "raw_last_parser": getattr(collector, "raw_last_parser", "")
-                        or "",
-                        "raw_last_frame_format": getattr(
-                            collector,
-                            "raw_last_frame_format",
-                            "",
-                        )
-                        or "",
-                    }
-                )
-        except Exception as exc:  # noqa: BLE001 - diagnostics must not block scenario
-            debug["collector_info_error"] = str(exc)
-
-        try:
-            connection_getter = getattr(transport, "_at_connection", None)
-            if callable(connection_getter):
-                connection = connection_getter(create_placeholder=False)
-                debug["at_connection_id"] = id(connection) if connection is not None else 0
-                debug["at_connection_connected"] = bool(
-                    getattr(connection, "connected", False)
-                )
-                if connection is not None:
-                    reader_task = getattr(connection, "_reader_task", None)
-                    writer = getattr(connection, "_writer", None)
-                    pending_raw = getattr(connection, "_pending_raw_response", None)
-                    debug.update(
-                        {
-                            "at_reader_task_done": bool(
-                                reader_task is not None and reader_task.done()
-                            ),
-                            "at_writer_closing": bool(
-                                writer is not None and writer.is_closing()
-                            ),
-                            "at_pending_raw_present": pending_raw is not None,
-                            "at_pending_raw_done": bool(
-                                pending_raw is not None and pending_raw.done()
-                            ),
-                            "at_raw_frame_format": getattr(
-                                connection,
-                                "_raw_passthrough_frame_format",
-                                "",
-                            )
-                            or "",
-                        }
-                    )
-        except Exception as exc:  # noqa: BLE001 - diagnostics must not block scenario
-            debug["connection_debug_error"] = str(exc)
-        return debug
 
     @staticmethod
     def _diagnostic_default_probe_target(driver_key: str):
@@ -2018,7 +1911,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     ) -> dict:
         async with self._runtime_operation_lock:
             result = await run_scenario(commands, context)
-        result.context["runtime_debug_after"] = self._diagnostic_runtime_debug(
+        result.context["runtime_debug_after"] = build_runtime_transport_debug(
             getattr(context, "transport", None)
         )
         config_dir = Path(self.hass.config.config_dir)
