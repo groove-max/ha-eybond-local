@@ -223,6 +223,59 @@ class NoUnscopedEvidenceReadGuardTests(unittest.TestCase):
             _read(_CC / "metadata" / "smartess_draft.py"),
         )
 
+    def test_disk_loader_is_reachable_only_through_executor_cache_warm(self) -> None:
+        """No synchronous UI/property path may reach provider.load_latest()."""
+
+        source = _read(_COORDINATOR)
+        tree = ast.parse(source)
+        callers: list[str] = []
+
+        class _Visitor(ast.NodeVisitor):
+            def __init__(self) -> None:
+                self.functions: list[str] = []
+
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                self.functions.append(node.name)
+                self.generic_visit(node)
+                self.functions.pop()
+
+            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+                self.functions.append(node.name)
+                self.generic_visit(node)
+                self.functions.pop()
+
+            def visit_Call(self, node: ast.Call) -> None:
+                if (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "load_latest"
+                ):
+                    callers.append(self.functions[-1] if self.functions else "")
+                self.generic_visit(node)
+
+        _Visitor().visit(tree)
+
+        self.assertEqual(callers, ["_async_warm_smartess_cloud_evidence_cache"])
+        warm = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "_async_warm_smartess_cloud_evidence_cache"
+        )
+        warm_source = ast.unparse(warm)
+        self.assertIn("async_add_executor_job", warm_source)
+        self.assertIn("provider.load_latest(context)", warm_source)
+
+        cached_accessor = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_latest_smartess_cloud_evidence_record"
+        )
+        accessor_source = ast.unparse(cached_accessor)
+        self.assertNotIn("load_latest", accessor_source)
+        self.assertNotIn("read_text", accessor_source)
+        self.assertNotIn("glob", accessor_source)
+
 
 class ProviderIsolationGuardTests(unittest.TestCase):
     def test_smartess_export_names_only_smartess_fetch(self) -> None:

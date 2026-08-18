@@ -8934,19 +8934,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return None
         return self._cached_smartess_cloud_evidence_record
 
-    def _load_latest_smartess_cloud_evidence_record_blocking(self):
-        """Return the latest evidence record via the ACTIVE PROVIDER (executor-only).
-
-        Routes through the provider contract so provenance validation + provider
-        scoping happen in one place; the coordinator never reads the disk loader
-        directly. Resolves the provider at call time -- use only for a synchronous
-        read; the async warm path binds the provider up-front to avoid a race.
-        """
-
-        return self._cloud_evidence_provider_impl().load_latest(
-            self._cloud_evidence_context()
-        )
-
     async def _async_warm_smartess_cloud_evidence_cache(self) -> None:
         """Refresh the cached cloud-evidence record from disk via the provider.
 
