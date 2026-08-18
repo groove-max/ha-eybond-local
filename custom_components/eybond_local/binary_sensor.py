@@ -83,7 +83,7 @@ class EybondBinaryValueSensor(
     @property
     def available(self) -> bool:
         snapshot = self.coordinator.data
-        if self._description.key not in snapshot.values:
+        if not snapshot.has_runtime_value(self._description.key):
             return False
         if self._description.live and not snapshot.connected:
             return False
@@ -91,7 +91,7 @@ class EybondBinaryValueSensor(
 
     @property
     def is_on(self) -> bool | None:
-        value = self.coordinator.data.values.get(self._description.key)
+        value = self.coordinator.data.runtime_value(self._description.key)
         if isinstance(value, bool):
             return value
         if isinstance(value, (int, float)):

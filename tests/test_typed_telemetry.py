@@ -251,6 +251,34 @@ class TypedTelemetryFrameTests(unittest.TestCase):
         self.assertEqual(second.telemetry, TypedTelemetryFrame.empty())
         self.assertIsNot(first.values, second.values)
 
+    def test_runtime_snapshot_prefers_typed_value_with_explicit_legacy_fallback(self) -> None:
+        frame = fold_driver_telemetry(
+            TypedTelemetryFrame.empty(),
+            driver_key="pi30",
+            values={"battery_voltage": 51.2, "unknown_value": None},
+            replace=True,
+        )
+        snapshot = RuntimeSnapshot(
+            values={
+                "battery_voltage": 24.0,
+                "collector_pn": "E50000200000000001",
+                "unknown_value": "legacy",
+            },
+            telemetry=frame,
+        )
+
+        self.assertTrue(snapshot.has_runtime_value("battery_voltage"))
+        self.assertEqual(snapshot.runtime_value("battery_voltage"), 51.2)
+        self.assertTrue(snapshot.has_runtime_value("collector_pn"))
+        self.assertEqual(
+            snapshot.runtime_value("collector_pn"),
+            "E50000200000000001",
+        )
+        self.assertTrue(snapshot.has_runtime_value("unknown_value"))
+        self.assertIsNone(snapshot.runtime_value("unknown_value"))
+        self.assertFalse(snapshot.has_runtime_value("missing"))
+        self.assertEqual(snapshot.runtime_value("missing", "fallback"), "fallback")
+
 
 class TypedTelemetryArchitectureTests(unittest.TestCase):
     def test_model_is_neutral_and_has_no_ha_runtime_or_driver_dependency(self) -> None:

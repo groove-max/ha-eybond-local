@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .link_models import EybondLinkRoute
-from .telemetry import TypedTelemetryFrame
+from .telemetry import TelemetryPoint, TypedTelemetryFrame
 
 if TYPE_CHECKING:
     from .connection.admission import ObservedCollectorSession
@@ -666,6 +666,29 @@ class RuntimeSnapshot:
     # mapping during migration. Tooling/metadata dicts and lists deliberately
     # remain outside this frame.
     telemetry: TypedTelemetryFrame = field(default_factory=TypedTelemetryFrame.empty)
+
+    def telemetry_point(self, key: str) -> TelemetryPoint | None:
+        """Return a typed point when this runtime key has migrated coverage."""
+
+        return self.telemetry.point(key)
+
+    def has_runtime_value(self, key: str) -> bool:
+        """Check typed telemetry first, then the explicit legacy fallback."""
+
+        return self.telemetry_point(key) is not None or key in self.values
+
+    def runtime_value(self, key: str, default: Any = None) -> Any:
+        """Read typed telemetry first, falling back to broad legacy values.
+
+        The fallback keeps metadata and not-yet-migrated measurements available
+        while entity consumers move incrementally. A present typed ``None`` is
+        authoritative and is not confused with an absent point.
+        """
+
+        point = self.telemetry_point(key)
+        if point is not None:
+            return point.value
+        return self.values.get(key, default)
 
 
 def _evaluate_conditions(

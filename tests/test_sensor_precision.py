@@ -124,14 +124,14 @@ def _install_sensor_stubs() -> None:
 _install_sensor_stubs()
 
 
-from custom_components.eybond_local.models import MeasurementDescription
+from custom_components.eybond_local.models import MeasurementDescription, RuntimeSnapshot
 from custom_components.eybond_local.sensor import EybondValueSensor
 
 
 class _FakeCoordinator:
     def __init__(self, key: str, value: object, *, collector_cloud_family: str = "") -> None:
         self.config_entry = types.SimpleNamespace(entry_id="entry123")
-        self.data = types.SimpleNamespace(values={key: value}, connected=True)
+        self.data = RuntimeSnapshot(values={key: value}, connected=True)
         self.collector_cloud_family = collector_cloud_family
 
     def device_info(self) -> dict[str, str]:
@@ -155,6 +155,31 @@ class _FakeRegistry:
 
 
 class SensorPrecisionTests(unittest.TestCase):
+    def test_sensor_prefers_typed_telemetry_over_legacy_compatibility_value(self) -> None:
+        from custom_components.eybond_local.telemetry import (
+            TypedTelemetryFrame,
+            fold_driver_telemetry,
+        )
+
+        coordinator = _FakeCoordinator("battery_voltage", 24.0)
+        coordinator.data.telemetry = fold_driver_telemetry(
+            TypedTelemetryFrame.empty(),
+            driver_key="pi30",
+            values={"battery_voltage": 51.2},
+            replace=True,
+        )
+        description = MeasurementDescription(
+            key="battery_voltage",
+            name="Battery Voltage",
+            unit="V",
+            device_class="voltage",
+        )
+
+        sensor = EybondValueSensor(coordinator, description)
+
+        self.assertTrue(sensor.available)
+        self.assertEqual(sensor.native_value, 51.2)
+
     def test_callback_identity_attributes_separate_live_confirmed_and_expected_wire(self) -> None:
         coordinator = _FakeCoordinator("collector_callback_identity_status", "idle")
         coordinator.data.values.update(

@@ -38,6 +38,7 @@ are migrated.
    existing canonical compatibility aliases. **Implemented.**
 3. Move sensor and binary-sensor reads to typed points where coverage is proven;
    keep an explicit compatibility path for metadata and diagnostics.
+   **Implemented for direct value reads.**
 4. Remove broad-map measurement interpretation only after parity tests prove
    that every supported driver and learned overlay has typed coverage.
 
