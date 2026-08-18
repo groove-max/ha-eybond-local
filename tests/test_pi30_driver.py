@@ -194,6 +194,46 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.profile_name, "pi30_ascii/models/vmii_nxpw5kw.json")
         self.assertEqual(inverter.register_schema_name, "pi30_ascii/models/vmii_nxpw5kw.json")
 
+    async def test_yingfa_6200_support_archive_replays_as_pi30_max(self) -> None:
+        driver = Pi30Driver()
+        target = ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0)
+        transport = _FakeTransport(
+            {
+                (0x0994, 0xFF, "QPI"): "PI30",
+                (0x0994, 0xFF, "QID"): "8092809280929054",
+                (0x0994, 0xFF, "QPIRI"): (
+                    "230.0 26.9 230.0 50.0 26.9 6200 6200 48.0 46.0 42.0 "
+                    "56.4 54.0 2 030 010 1 1 1 1 01 0 0 54.0 0 1 46.0 10 44.0"
+                ),
+                (0x0994, 0xFF, "QMN"): "VMII-NXPW5KW",
+                (0x0994, 0xFF, "QFLAG"): "ExzDabjkuvygld",
+                (0x0994, 0xFF, "QMOD"): "L",
+                (0x0994, 0xFF, "QPIWS"): "00000000000000000000000000000000",
+                (0x0994, 0xFF, "QPIGS"): (
+                    "224.5 49.9 224.5 49.9 0314 0210 005 377 01.60 000 000 "
+                    "0029 00.6 336.9 00.00 00000 10010000 00 00 00220 010"
+                ),
+                (0x0994, 0xFF, "QVFW"): "VERFW:00074.09",
+                (0x0994, 0xFF, "QVFW2"): "VERFW2:00000.00",
+                (0x0994, 0xFF, "Q1"): "01 00 00 000 027 008 029 00 00 000 0030 0000 11",
+            }
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.model_name, "PI30 6200")
+        self.assertEqual(inverter.variant_key, "pi30_max")
+        self.assertEqual(inverter.profile_name, "pi30_ascii/models/pi30_max.json")
+        self.assertEqual(inverter.register_schema_name, "pi30_ascii/models/pi30_max.json")
+        self.assertEqual(inverter.details["output_rating_active_power"], 6200)
+
+        values = await _read_values(driver, transport, inverter)
+        self.assertEqual(values["operating_mode"], "Line")
+        self.assertEqual(values["output_active_power"], 210)
+        self.assertEqual(values["battery_voltage"], 1.6)
+        self.assertEqual(values["pv_input_voltage"], 336.9)
+
     async def test_probe_selects_vmii_model_overlay_when_model_number_matches(self) -> None:
         driver = Pi30Driver()
         target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_issue_27_yingfa_yf6_2k_lel_1b",
+  "kind": "support_archive",
+  "title": "Yingfa YF6.2K-LEL-1B PI30 MAX support archive",
+  "reference": "project-issue:27",
+  "captured_at": "2026-08-14",
+  "visibility": "public",
+  "summary_publishable": true,
+  "summary": "Issue #27 support archive for a Yingfa YF6.2K-LEL-1B. The anonymized fixture records QPI=PI30, QMN=VMII-NXPW5KW, a 28-field 6200 W / 48 V QPIRI response, live QPIGS telemetry, QFLAG, QMOD, QPIWS, firmware responses, and high-confidence selection of the built-in pi30_max runtime profile.",
+  "assertions": [
+    "commercial_identity",
+    "runtime_compatibility",
+    "telemetry_validation"
+  ]
+}

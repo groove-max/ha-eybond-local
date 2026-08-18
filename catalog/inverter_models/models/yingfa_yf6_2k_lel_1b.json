@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "model_key": "yingfa_yf6_2k_lel_1b",
+  "manufacturer": "Yingfa",
+  "model": "YF6.2K-LEL-1B",
+  "aliases": [
+    "Yingfa 6.2K"
+  ],
+  "lifecycle": "supported",
+  "variants": [
+    {
+      "variant_key": "pi30_max_qpiri",
+      "label": "PI30 MAX 6200W raw-ASCII runtime over EyeBond AT collector",
+      "device_descriptor_keys": [
+        "pi30_max_qpiri"
+      ],
+      "known_firmware": [
+        "VERFW:00074.09",
+        "VERFW2:00000.00"
+      ]
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "confirmed",
+    "controls": "partial"
+  },
+  "coverage": {
+    "runtime_control_surface": "available",
+    "smartess_control_surface": "unknown",
+    "vendor_register_map": "unknown",
+    "notes": [
+      "Issue #27 support evidence detects the inverter at high confidence through the built-in PI30 MAX runtime.",
+      "QPI reports PI30, QMN reports the generic raw model VMII-NXPW5KW, and QPIRI reports a 6200 W / 48 V 28-field rating."
+    ]
+  },
+  "known_limitations": [
+    "The inverter identity command reports the generic raw model VMII-NXPW5KW rather than the commercial Yingfa model name.",
+    "Writable controls were exposed by the runtime but were not independently exercised in the attached support archive."
+  ],
+  "knowledge_summary": "Yingfa YF6.2K-LEL-1B support is confirmed by the issue #27 support archive. The inverter uses the existing PI30 MAX profile over an EyeBond AT-text collector and provides valid rating, live telemetry, warning, mode, and firmware responses.",
+  "source_keys": [
+    "support_archive_issue_27_yingfa_yf6_2k_lel_1b"
+  ]
+}
