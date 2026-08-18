@@ -1,6 +1,6 @@
 {
  "schema_version": 2,
- "catalog_version": "2026.06.4",
+ "catalog_version": "2026.08.2",
  "description": "Universal offline inverter catalog with reusable protocol actions, runtime surfaces, and deterministic identity evidence.",
  "protocols": [
   {
@@ -705,6 +705,46 @@
        "words": 1
       }
      ]
+    },
+    {
+     "key": "modbus_catalog.deye_3ph_identity_protocol_version",
+     "kind": "modbus_read",
+     "register": 2,
+     "count": 1,
+     "function": 3,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.deye_3ph_protocol_version_raw",
+       "source_key": "deye_3ph_protocol_version_raw",
+       "register": 2,
+       "words": 1
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.deye_3ph_identity_rated_power",
+     "kind": "modbus_read",
+     "register": 20,
+     "count": 2,
+     "function": 3,
+     "cost": 2,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.deye_3ph_rated_power_low_raw",
+       "source_key": "deye_3ph_rated_power_low_raw",
+       "register": 20,
+       "words": 1
+      },
+      {
+       "key": "identity.deye_3ph_rated_power_high_raw",
+       "source_key": "deye_3ph_rated_power_high_raw",
+       "register": 21,
+       "words": 1
+      }
+     ]
     }
    ],
    "layouts": [],
@@ -1080,6 +1120,65 @@
    "notes": [
     "Deye single-phase LV storage/hybrid map: everything is holding registers (function 3 only; writes use function 16). 32-bit counters are low-word-first; temperatures are (raw-1000)*0.1 degC. Registers 150-218 are the STORAGE meaning of an address space that string inverters reuse differently — device type (register 0) must be 0x0300. Modbus RTU 9600, slave address in register 1 (default 1)."
    ]
+  },
+  "deye_3ph_high_80kw": {
+   "ranges": [
+    [
+     0,
+     3
+    ],
+    [
+     11,
+     11
+    ],
+    [
+     500,
+     1
+    ],
+    [
+     514,
+     15
+    ],
+    [
+     529,
+     7
+    ],
+    [
+     541,
+     1
+    ],
+    [
+     553,
+     6
+    ],
+    [
+     586,
+     6
+    ],
+    [
+     598,
+     15
+    ],
+    [
+     616,
+     10
+    ],
+    [
+     644,
+     12
+    ],
+    [
+     661,
+     7
+    ],
+    [
+     671,
+     13
+    ]
+   ],
+   "notes": [
+    "Read-only Deye-compatible three-phase high-power hybrid map observed on the Kevolt PD0080G-TPM-EU. All ranges use holding-register function 3 and stay at 15 words or fewer, matching the successful request shape in the supplied cloud proxy capture. No write surface is exposed."
+   ]
   }
  },
  "surfaces": [
@@ -1364,6 +1463,17 @@
    "tier": "full",
    "read_only": false,
    "support_capture_policy": "deye_lv"
+  },
+  {
+   "key": "deye_3ph_high_80kw_read_only",
+   "protocol_key": "modbus_catalog",
+   "driver_key": "modbus_catalog",
+   "variant_key": "deye_3ph_high_80kw",
+   "profile_name": "",
+   "register_schema_name": "deye_3ph_high_80kw/base.json",
+   "tier": "partial",
+   "read_only": true,
+   "support_capture_policy": "deye_3ph_high_80kw"
   }
  ],
  "devices": [
@@ -2505,6 +2615,43 @@
      "Deye Modbus RTU protocol V1.18 (storage/string/micro) and V1.19 (one-phase) — same register map; SUN-xK-SG04LP1-class single-phase LV hybrids. Device type 0x0300 (768) selects the storage meaning of the overloaded 150-218 register area; rated power anchor reads the low word of the 0.1 W u32 (covers units up to 6.5 kW)."
     ],
     "confidence": "datasheet-unconfirmed"
+   }
+  },
+  {
+   "entry_key": "deye_3ph_high_80kw",
+   "surface_key": "deye_3ph_high_80kw_read_only",
+   "model_name": "Deye-Compatible Three-Phase Hybrid 80 kW (Modbus)",
+   "aliases": [
+    "Kevolt PD0080G-TPM-EU"
+   ],
+   "priority": 118,
+   "anchors": [
+    {
+     "key": "identity.deye_device_type_raw",
+     "equals": 5,
+     "cost": 1
+    },
+    {
+     "key": "identity.deye_3ph_protocol_version_raw",
+     "equals": 260,
+     "cost": 1
+    },
+    {
+     "key": "identity.deye_3ph_rated_power_low_raw",
+     "equals": 14464,
+     "cost": 2
+    },
+    {
+     "key": "identity.deye_3ph_rated_power_high_raw",
+     "equals": 1,
+     "cost": 2
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "GitHub issue #15 identifies the commercial hardware as Kevolt PD0080G-TPM-EU. Its SmartValue proxy capture repeatedly shows Modbus FC03, device type 5, protocol version 0x0104, and low-first rated-power words 0x3880/0x0001 (80000 raw), followed by the documented Deye-compatible three-phase runtime map at registers 500-683. The public protocol-document mirror corroborates register meanings, while the captured request/response pairs establish the exact wire layout."
+    ],
+    "confidence": "capture-confirmed"
    }
   }
  ],

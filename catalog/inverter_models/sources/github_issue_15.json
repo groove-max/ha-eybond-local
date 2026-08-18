@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_15",
+  "kind": "github_issue",
+  "title": "Kevolt PD0080G-TPM-EU support report",
+  "reference": "project-issue:15",
+  "captured_at": "2026-07-16",
+  "visibility": "public",
+  "summary": "The owner reports a Kevolt PD0080G-TPM-EU three-phase hybrid inverter connected through an EyeBond Wi-Fi stick and used with SmartValue/ValueCloud. Earlier integration versions detected a device but decoded the wrong register layout.",
+  "assertions": [
+    "commercial_identity",
+    "runtime_compatibility"
+  ]
+}

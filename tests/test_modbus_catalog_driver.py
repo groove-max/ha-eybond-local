@@ -175,6 +175,97 @@ def _deye_holding_registers() -> dict[int, int]:
     return registers
 
 
+def _deye_3ph_high_holding_registers() -> dict[int, int]:
+    """Return a sanitized replay of the issue #15 FC03 capture."""
+
+    registers: dict[int, int] = {}
+    for start, count in (
+        (0, 3),
+        (11, 11),
+        (500, 1),
+        (514, 15),
+        (529, 7),
+        (541, 1),
+        (553, 6),
+        (586, 6),
+        (598, 15),
+        (616, 10),
+        (644, 12),
+        (661, 7),
+        (671, 13),
+    ):
+        for offset in range(count):
+            registers[start + offset] = 0
+    registers.update(
+        {
+            0: 5,          # observed compact three-phase device type
+            2: 260,        # protocol version 0x0104
+            20: 14464,     # low-first u32: 0x0001_3880 = 80000 W
+            21: 1,
+            500: 2,        # Normal
+            514: 189,      # battery charge today 18.9 kWh
+            515: 97,       # battery discharge today 9.7 kWh
+            516: 24745,
+            518: 23156,
+            520: 9,
+            521: 74,
+            522: 21529,
+            524: 4544,
+            525: 1,
+            526: 173,
+            527: 62709,
+            529: 284,      # PV today 28.4 kWh
+            534: 19750,
+            535: 1,
+            541: 1495,     # offset-1000 temperature: 49.5 C
+            586: 307,      # battery temperature 30.7 C (no offset)
+            587: 5307,     # 53.07 V
+            588: 99,
+            590: 97,
+            591: 184,
+            598: 2348,
+            599: 2369,
+            600: 2384,
+            609: 5000,
+            610: 131,
+            611: 116,
+            612: 124,
+            616: 64887,    # signed -649 W
+            617: 64872,    # signed -664 W
+            618: 64955,    # signed -581 W
+            619: 63787,    # signed -1749 W
+            622: 64833,    # signed -703 W
+            623: 64865,    # signed -671 W
+            624: 64861,    # signed -675 W
+            625: 63487,    # signed -2049 W
+            644: 2350,
+            645: 2379,
+            646: 2384,
+            650: 134,
+            651: 410,
+            652: 0,
+            653: 83,
+            655: 5000,
+            661: 2343,
+            662: 2373,
+            663: 2369,
+            664: 0,
+            665: 0,
+            666: 1801,
+            667: 1801,
+            672: 0,
+            673: 0,
+            674: 0,
+            675: 0,
+            676: 3259,
+            677: 0,
+            678: 3230,
+            679: 0,
+        }
+    )
+    return registers
+
+
 class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
     async def test_probe_matches_aohai_plausibility_anchors(self) -> None:
         driver = ModbusCatalogDriver()
@@ -379,6 +470,93 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
 
         apply_canonical_measurements("modbus_catalog", values, variant_key="deye_lv")
         self.assertEqual(values["pv_power"], 2000)
+
+    async def test_probe_matches_kevolt_deye_3ph_high_exact_fingerprint(self) -> None:
+        driver = ModbusCatalogDriver()
+        transport = _transport(
+            input_registers={},
+            holding_registers=_deye_3ph_high_holding_registers(),
+        )
+
+        inverter = await driver.async_probe(transport, _target())
+
+        assert inverter is not None
+        self.assertEqual(
+            inverter.model_name,
+            "Deye-Compatible Three-Phase Hybrid 80 kW (Modbus)",
+        )
+        self.assertEqual(inverter.variant_key, "deye_3ph_high_80kw")
+        self.assertEqual(
+            inverter.register_schema_name,
+            "deye_3ph_high_80kw/base.json",
+        )
+        self.assertEqual(inverter.profile_name, "")
+        self.assertEqual(inverter.capabilities, ())
+        evidence = inverter.details["identity_evidence"]
+        self.assertEqual(evidence["deye_device_type_raw"], 5)
+        self.assertEqual(evidence["deye_3ph_protocol_version_raw"], 260)
+        self.assertEqual(evidence["deye_3ph_rated_power_low_raw"], 14464)
+        self.assertEqual(evidence["deye_3ph_rated_power_high_raw"], 1)
+
+    async def test_kevolt_deye_3ph_read_values_match_captured_scaling(self) -> None:
+        from custom_components.eybond_local.canonical_telemetry import (
+            apply_canonical_measurements,
+        )
+
+        driver = ModbusCatalogDriver()
+        transport = _transport(
+            input_registers={},
+            holding_registers=_deye_3ph_high_holding_registers(),
+        )
+        inverter = await driver.async_probe(transport, _target())
+        assert inverter is not None
+
+        values = await driver.async_read_values(transport, inverter)
+
+        self.assertEqual(values["rated_power"], 80000)
+        self.assertEqual(values["run_state"], "Normal")
+        self.assertEqual(values["battery_charge_day"], 18.9)
+        self.assertEqual(values["battery_discharge_day"], 9.7)
+        self.assertEqual(values["grid_export_sum"], 7008.0)
+        self.assertEqual(values["pv_generation_day"], 28.4)
+        self.assertEqual(values["pv_generation_sum"], 8528.6)
+        self.assertEqual(values["heat_sink_temperature"], 49.5)
+        self.assertEqual(values["battery_temperature"], 30.7)
+        self.assertEqual(values["battery_voltage"], 53.07)
+        self.assertEqual(values["battery_percent"], 99)
+        # Sign meaning is not promoted to canonical battery telemetry yet.
+        self.assertEqual(values["battery_output_power"], 97)
+        self.assertEqual(values["battery_output_current"], 1.84)
+        self.assertEqual(values["grid_voltage_l1"], 234.8)
+        self.assertEqual(values["grid_voltage_l2"], 236.9)
+        self.assertEqual(values["grid_voltage_l3"], 238.4)
+        self.assertEqual(values["grid_frequency"], 50.0)
+        self.assertEqual(values["grid_power"], -2049)
+
+        apply_canonical_measurements(
+            "modbus_catalog", values, variant_key="deye_3ph_high_80kw"
+        )
+        self.assertEqual(values["output_power"], 544.0)
+        self.assertEqual(values["pv_power"], 0.0)
+        self.assertNotIn("battery_power", values)
+
+    async def test_kevolt_deye_3ph_fingerprint_rejects_near_collisions(self) -> None:
+        mutations = (
+            (0, 1280),       # documented generic 0x0500 is not this capture
+            (2, 261),        # different protocol revision
+            (20, 14465),     # different low rated-power word
+            (21, 0),         # different high rated-power word
+        )
+        driver = ModbusCatalogDriver()
+        for register, value in mutations:
+            with self.subTest(register=register, value=value):
+                registers = _deye_3ph_high_holding_registers()
+                registers[register] = value
+                inverter = await driver.async_probe(
+                    _transport(input_registers={}, holding_registers=registers),
+                    _target(),
+                )
+                self.assertIsNone(inverter)
 
     async def test_probe_attaches_pack_profile_capabilities(self) -> None:
         from custom_components.eybond_local.control_policy import can_expose_capability

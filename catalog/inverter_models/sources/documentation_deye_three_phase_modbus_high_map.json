@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source_key": "documentation_deye_three_phase_modbus_high_map",
+  "kind": "register_map",
+  "title": "Deye three-phase hybrid Modbus register map (public translated mirror)",
+  "reference": "documentation:deye-three-phase-hybrid-modbus-en-mirror",
+  "captured_at": "2026-08-18",
+  "visibility": "public",
+  "summary": "A public English translation mirror of the Deye three-phase hybrid Modbus document defines holding-register telemetry at 500-683. The observed Kevolt proxy trace independently corroborates the implemented addresses and most scales. Where the translated rated-power unit conflicts with the reported hardware and captured raw value, the implementation follows the hardware-correlated trace and records the discrepancy. The mirror is treated as register-map evidence, not as proof of official hosting or model identity.",
+  "assertions": [
+    "register_map"
+  ]
+}

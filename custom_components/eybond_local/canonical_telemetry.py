@@ -105,6 +105,16 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("household_load_power", "backup_load_power"),
                 compute="sum",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("deye_3ph_high_80kw",),
+                source_keys=(
+                    "load_phase_power_l1",
+                    "load_phase_power_l2",
+                    "load_phase_power_l3",
+                ),
+                compute="sum",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -212,6 +222,17 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
             CanonicalTelemetryVariant(
                 driver_keys=("modbus_catalog",),
                 variant_keys=("deye_lv",),
+                source_keys=(
+                    "pv1_input_power",
+                    "pv2_input_power",
+                    "pv3_input_power",
+                    "pv4_input_power",
+                ),
+                compute="sum",
+            ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("deye_3ph_high_80kw",),
                 source_keys=(
                     "pv1_input_power",
                     "pv2_input_power",
