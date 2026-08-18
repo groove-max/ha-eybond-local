@@ -166,7 +166,7 @@ def parse_qflag(payload: str) -> dict[str, Any]:
         raise Pi18Error("qflag_field_count")
 
     values: dict[str, Any] = {}
-    for key, raw in zip(_QFLAG_KEYS, fields, strict=False):
+    for key, raw in zip(PI18_QFLAG_FLAG_KEYS, fields, strict=False):
         if raw not in {"0", "1"}:
             raise Pi18Error("qflag_value_invalid")
         values[key] = raw == "1"
@@ -185,7 +185,7 @@ def parse_qfws(payload: str) -> dict[str, Any]:
         "warning_active": fault_code != 0,
     }
     active_flags: list[str] = []
-    for key, raw in zip(_QFWS_KEYS, fields[1:], strict=False):
+    for key, raw in zip(PI18_QFWS_FLAG_KEYS, fields[1:], strict=False):
         if raw not in {"0", "1"}:
             raise Pi18Error("qfws_value_invalid")
         state = raw == "1"
@@ -294,7 +294,7 @@ _QPIGS_LAYOUT: tuple[tuple[str, str], ...] = (
     ("local_parallel_id", "int"),
 )
 
-_QFLAG_KEYS: tuple[str, ...] = (
+PI18_QFLAG_FLAG_KEYS: tuple[str, ...] = (
     "buzzer_enabled",
     "overload_bypass_enabled",
     "lcd_reset_to_default_enabled",
@@ -306,7 +306,7 @@ _QFLAG_KEYS: tuple[str, ...] = (
     "reserved_flag_enabled",
 )
 
-_QFWS_KEYS: tuple[str, ...] = (
+PI18_QFWS_FLAG_KEYS: tuple[str, ...] = (
     "line_fail_warning",
     "output_circuit_short_warning",
     "inverter_over_temperature_warning",
@@ -323,4 +323,17 @@ _QFWS_KEYS: tuple[str, ...] = (
     "mppt2_overload_warning",
     "battery_too_low_scc1_warning",
     "battery_too_low_scc2_warning",
+)
+
+PI18_QFLAG_VALUE_KEYS: frozenset[str] = frozenset(
+    (*PI18_QFLAG_FLAG_KEYS, "capability_flags_raw")
+)
+PI18_QFWS_VALUE_KEYS: frozenset[str] = frozenset(
+    (
+        "fault_code",
+        "warning_active",
+        *PI18_QFWS_FLAG_KEYS,
+        "warning_flags_raw",
+        "warning_status",
+    )
 )

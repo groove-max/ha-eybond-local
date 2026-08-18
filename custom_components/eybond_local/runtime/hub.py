@@ -52,9 +52,7 @@ from ..drivers.read_result import (
     coerce_driver_read_result,
 )
 from ..drivers.command_support import (
-    apply_unsupported_diagnostics,
     clear_unsupported_commands,
-    commit_cycle_failures,
     seed_unsupported_commands,
 )
 from ..drivers.registry import iter_drivers
@@ -1366,9 +1364,7 @@ class EybondHub:
                 return snapshot
 
         self._record_refresh_success()
-        commit_cycle_failures(self._runtime_read_state)
         merged_values = {**collector_values, **runtime_values}
-        apply_unsupported_diagnostics(merged_values, self._runtime_read_state)
         snapshot = self._build_snapshot(
             extra_values=merged_values,
             last_error=detect_error or None,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ..link_transport import PayloadLinkTransport
 from ..models import (
@@ -18,10 +18,8 @@ from ..models import (
 from ..poll_policy import DEFAULT_POLL_POLICY, PollPolicy
 from .support_marker import DriverSupportMarker
 from .support_probe import SupportProbeRequest
+from .read_result import DriverReadResult
 from .write_error import EMPTY_WRITE_ERROR_CLASSIFICATION, WriteErrorClassification
-
-if TYPE_CHECKING:
-    from .read_result import DriverReadResult
 
 
 class InverterDriver(ABC):
@@ -173,20 +171,15 @@ class InverterDriver(ABC):
         runtime_state: dict[str, Any] | None = None,
         poll_interval: float | None = None,
         now_monotonic: float | None = None,
-    ) -> "dict[str, Any] | DriverReadResult":
+    ) -> DriverReadResult:
         """Read and decode the current inverter state.
 
-        A driver returns either:
-
-        * a bare ``dict`` -- interpreted as a FULL runtime snapshot (the legacy
-          contract; the runtime replaces its measurement state with it), or
-        * a :class:`~.read_result.DriverReadResult` -- an explicit FULL or DELTA
-          update. A driver whose cycle may omit some measurements (e.g. PI30,
-          whose optional/energy commands can fail transiently, be skipped as
-          unsupported, or early-exit) MUST return ``DELTA`` so the runtime
-          overlays the read values onto the last-good ones instead of reverting
-          the omitted ones to detection-time defaults, and invalidates removed
-          values explicitly via ``removed_keys``.
+        Every built-in driver returns an exact
+        :class:`~.read_result.DriverReadResult` with an explicit FULL or DELTA
+        mode. A driver whose cycle may omit measurements MUST return DELTA so
+        the runtime carries last-good values rather than describing omissions as
+        a complete current snapshot. Confirmed invalidations use
+        ``removed_keys``; non-measurement cycle state belongs in ``diagnostics``.
 
         The runtime never guesses full-vs-delta from the driver key; the mode is
         carried in the typed result.

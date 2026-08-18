@@ -48,13 +48,12 @@ from .base import InverterDriver
 from .read_result import DriverReadMode, DriverReadResult
 from .support_probe import SupportProbeRequest
 from .command_support import (
-    apply_unsupported_diagnostics,
     command_skipped_as_unsupported as _command_skipped_as_unsupported,
     commit_cycle_failures as _commit_cycle_failures,
     record_command_failure as _record_command_failure,
     record_command_success as _record_command_success,
+    unsupported_command_diagnostics as _unsupported_command_diagnostics,
     unsupported_commands as _unsupported_commands,
-    unsupported_diagnostics_removed_keys as _unsupported_diagnostics_removed_keys,
 )
 from .catalog_probe import (
     async_probe_ascii_catalog,
@@ -762,16 +761,12 @@ async def _async_collect_runtime_values(
     removed_keys: frozenset[str] = frozenset()
     if runtime_state is not None:
         _commit_cycle_failures(runtime_state)
-        apply_unsupported_diagnostics(values, runtime_state)
         # Invalidate values owned by any command that reached a FINAL unsupported
-        # verdict (incl. energy-chain reachability) plus the ephemeral unsupported
-        # diagnostics key when the set is empty. Never remove a value read THIS cycle.
+        # verdict (incl. energy-chain reachability). Never remove a value read
+        # THIS cycle; unsupported-command reporting is a separate diagnostic.
         removed_keys = frozenset(
-            (
-                _pi30_removed_keys_for_unsupported(
-                    frozenset(_unsupported_commands(runtime_state))
-                )
-                | _unsupported_diagnostics_removed_keys(runtime_state)
+            _pi30_removed_keys_for_unsupported(
+                frozenset(_unsupported_commands(runtime_state))
             )
             - set(values)
         )
@@ -781,6 +776,7 @@ async def _async_collect_runtime_values(
         command_timings=command_timings,
         cycle_wall_ms=cycle_wall_ms,
     )
+    diagnostics.update(_unsupported_command_diagnostics(runtime_state))
     return values, removed_keys, diagnostics
 
 

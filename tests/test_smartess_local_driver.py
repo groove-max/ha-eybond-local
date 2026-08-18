@@ -11,9 +11,19 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.drivers.registry import driver_options  # noqa: E402
+from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
+    DriverReadMode,
+    DriverReadResult,
+)
 from custom_components.eybond_local.drivers.smartess_local import SmartEssLocalDriver  # noqa: E402
 from custom_components.eybond_local.fixtures.transport import FixtureTransport, FixtureTransportError  # noqa: E402
 from custom_components.eybond_local.models import DetectedInverter, ProbeTarget  # noqa: E402
+
+
+def _delta_projection(result: DriverReadResult) -> dict[str, object]:
+    if type(result) is not DriverReadResult or result.mode is not DriverReadMode.DELTA:
+        raise AssertionError("SmartESS runtime read must be an exact DELTA result")
+    return {**result.values, **result.diagnostics}
 
 
 def _registers_for_0925() -> dict[int, int]:
@@ -178,13 +188,13 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(detected.capabilities), 30)
 
     async def test_read_values_decodes_schema_blocks(self) -> None:
-        values = await self.driver.async_read_values(
+        values = _delta_projection(await self.driver.async_read_values(
             self._transport(),
             self._inverter(),
             runtime_state={},
             poll_interval=10.0,
             now_monotonic=100.0,
-        )
+        ))
 
         self.assertEqual(values["protocol_id"], "SMARTESS_0925_MODBUS")
         self.assertEqual(values["ac_input_voltage"], 230.1)
@@ -199,6 +209,34 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["all_energy"], 678.81)
         self.assertIs(values["lcd_backlight_enabled"], True)
 
+    async def test_cached_slow_blocks_are_not_reported_fresh_on_fast_cycle(self) -> None:
+        runtime_state: dict[str, object] = {}
+        transport = self._transport()
+        inverter = self._inverter()
+
+        first = await self.driver.async_read_values(
+            transport,
+            inverter,
+            runtime_state=runtime_state,
+            poll_interval=10.0,
+            now_monotonic=100.0,
+        )
+        second = await self.driver.async_read_values(
+            transport,
+            inverter,
+            runtime_state=runtime_state,
+            poll_interval=10.0,
+            now_monotonic=110.0,
+        )
+
+        self.assertIs(first.mode, DriverReadMode.DELTA)
+        self.assertIs(second.mode, DriverReadMode.DELTA)
+        self.assertIn("battery_type", first.values)
+        self.assertNotIn("battery_type", second.values)
+        self.assertIn("output_active_power", second.values)
+        self.assertNotIn("driver_slow_requests", second.values)
+        self.assertIn("driver_slow_requests", second.diagnostics)
+
     async def test_write_lcd_backlight_uses_single_register_function(self) -> None:
         transport = self._transport()
         inverter = self._inverter()
@@ -212,13 +250,13 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(result, False)
         self.assertIs(inverter.details["lcd_backlight_enabled"], False)
-        values = await self.driver.async_read_values(
+        values = _delta_projection(await self.driver.async_read_values(
             transport,
             inverter,
             runtime_state={},
             poll_interval=10.0,
             now_monotonic=100.0,
-        )
+        ))
         self.assertIs(values["lcd_backlight_enabled"], False)
 
     async def test_write_enum_control_uses_config_state_route(self) -> None:
@@ -233,23 +271,23 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, "SOL")
-        values = await self.driver.async_read_values(
+        values = _delta_projection(await self.driver.async_read_values(
             transport,
             inverter,
             runtime_state={},
             poll_interval=10.0,
             now_monotonic=100.0,
-        )
+        ))
         self.assertEqual(values["output_source_priority"], "SOL")
 
     async def test_read_values_falls_back_to_single_config_control_reads(self) -> None:
-        values = await self.driver.async_read_values(
+        values = _delta_projection(await self.driver.async_read_values(
             self._transport(fail_config_bulk=True),
             self._inverter(),
             runtime_state={},
             poll_interval=10.0,
             now_monotonic=100.0,
-        )
+        ))
 
         self.assertIs(values["buzzer_enabled"], False)
         self.assertIs(values["power_saving_enabled"], False)
@@ -269,33 +307,36 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
 
         transport._handle_read_holding = _counting
         runtime_state: dict[str, object] = {}
+        known_values: dict[str, object] = {}
 
         # Four cycles collect the failure strikes for the rejected bulk reads.
         for now in (100.0, 200.0, 300.0, 400.0):
-            await self.driver.async_read_values(
+            cycle = await self.driver.async_read_values(
                 transport,
                 self._inverter(),
                 runtime_state=runtime_state,
                 poll_interval=10.0,
                 now_monotonic=now,
             )
+            known_values.update(cycle.values)
         attempts_after_learning = len(bulk_attempts)
         self.assertGreater(attempts_after_learning, 0)
 
-        values = await self.driver.async_read_values(
+        values = _delta_projection(await self.driver.async_read_values(
             transport,
             self._inverter(),
             runtime_state=runtime_state,
             poll_interval=10.0,
             now_monotonic=500.0,
-        )
+        ))
+        known_values.update(values)
 
         # No further bulk attempts for the rejected blocks.
         self.assertEqual(len(bulk_attempts), attempts_after_learning)
         self.assertIn("block:config", values["driver_unsupported_commands"])
         # Capability values still come from the single-register fallbacks.
-        self.assertIs(values["lcd_backlight_enabled"], True)
-        self.assertIs(values["buzzer_enabled"], False)
+        self.assertIs(known_values["lcd_backlight_enabled"], True)
+        self.assertIs(known_values["buzzer_enabled"], False)
 
     async def test_support_capture_reads_0925_config_controls_individually(self) -> None:
         evidence = await self.driver.async_capture_support_evidence(

@@ -23,12 +23,13 @@ from ..payload.register_decode import decode_block as shared_decode_block
 from .base import InverterDriver
 from .modbus_write_error import ModbusWriteErrorMixin
 from .command_support import (
-    apply_unsupported_diagnostics,
     command_skipped_as_unsupported,
     commit_cycle_failures,
     record_command_failure,
     record_command_success,
+    unsupported_command_diagnostics,
 )
+from .read_result import DriverReadMode, DriverReadResult
 
 
 SMARTESS_LOCAL_0925_PROFILE_NAME = "smartess_local/models/0925.json"
@@ -211,13 +212,15 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
         runtime_state: dict[str, Any] | None = None,
         poll_interval: float | None = None,
         now_monotonic: float | None = None,
-    ) -> dict[str, Any]:
+    ) -> DriverReadResult:
         schema = load_register_schema(inverter.register_schema_name or self.register_schema_name)
         now = time.monotonic() if now_monotonic is None else float(now_monotonic)
         cache = _runtime_cache(runtime_state)
         values_cache: dict[str, Any] = cache.setdefault("values", {})
         register_cache: dict[int, int] = cache.setdefault("registers", {})
         last_read: dict[str, float] = cache.setdefault("last_read", {})
+        cycle_values: dict[str, Any] = {}
+        cycle_registers: dict[int, int] = {}
 
         request_timings: list[tuple[str, int, str]] = []
 
@@ -259,6 +262,7 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
                     block_start=block.start,
                     block_count=block.count,
                     register_cache=register_cache,
+                    updated_registers=cycle_registers,
                     runtime_state=runtime_state,
                 )
                 continue
@@ -281,6 +285,7 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
                     block_start=block.start,
                     block_count=block.count,
                     register_cache=register_cache,
+                    updated_registers=cycle_registers,
                     runtime_state=runtime_state,
                 )
                 continue
@@ -288,24 +293,37 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
             last_read[block.key] = now
             read_blocks.append((block.start, words))
             for index, raw in enumerate(words):
-                register_cache[block.start + index] = int(raw)
-            values_cache.update(_decode_block(block.start, words, schema.spec_sets.get(block.key, ())))
+                register = block.start + index
+                register_cache[register] = int(raw)
+                cycle_registers[register] = int(raw)
+            decoded = _decode_block(
+                block.start,
+                words,
+                schema.spec_sets.get(block.key, ()),
+            )
+            values_cache.update(decoded)
+            cycle_values.update(decoded)
 
-        if read_blocks or "protocol_id" not in values_cache:
-            values_cache.setdefault("protocol_id", "SMARTESS_0925_MODBUS")
-            values_cache.setdefault("smartess_protocol_asset_id", "0925")
-            values_cache.setdefault("smartess_profile_key", "smartess_0925")
-            values_cache.setdefault("smartess_device_address", inverter.probe_target.payload_address)
-            values_cache.setdefault("smartess_data_collector_addr", _SMARTESS_0925_DATA_COLLECTOR_ADDR)
-            values_cache.setdefault("smartess_config_collector_addr", _SMARTESS_0925_CONFIG_COLLECTOR_ADDR)
+        static_values = {
+            "protocol_id": "SMARTESS_0925_MODBUS",
+            "smartess_protocol_asset_id": "0925",
+            "smartess_profile_key": "smartess_0925",
+            "smartess_device_address": inverter.probe_target.payload_address,
+            "smartess_data_collector_addr": _SMARTESS_0925_DATA_COLLECTOR_ADDR,
+            "smartess_config_collector_addr": _SMARTESS_0925_CONFIG_COLLECTOR_ADDR,
+        }
+        for key, value in static_values.items():
+            if key not in values_cache:
+                values_cache[key] = value
+                cycle_values[key] = value
 
         _apply_capability_read_back(values_cache, self.write_capabilities, register_cache)
+        _apply_capability_read_back(cycle_values, self.write_capabilities, cycle_registers)
         commit_cycle_failures(runtime_state)
-        result = dict(values_cache)
-        apply_unsupported_diagnostics(result, runtime_state)
+        diagnostics = unsupported_command_diagnostics(runtime_state)
         if request_timings:
             slowest = sorted(request_timings, key=lambda item: -item[1])[:5]
-            result["driver_slow_requests"] = ", ".join(
+            diagnostics["driver_slow_requests"] = ", ".join(
                 f"{label}={elapsed_ms}ms:{outcome}" for label, elapsed_ms, outcome in slowest
             )
             _LOGGER.debug(
@@ -315,7 +333,15 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
                     for label, elapsed_ms, outcome in request_timings
                 ),
             )
-        return result
+        # The internal cache helps decode slower blocks and capability readback,
+        # but it is not freshness evidence. Publish only fields whose registers
+        # were actually read in this cycle; the hub's DELTA cache carries the
+        # rest as last-good values.
+        return DriverReadResult(
+            values=cycle_values,
+            mode=DriverReadMode.DELTA,
+            diagnostics=diagnostics,
+        )
 
     async def async_write_capability(
         self,
@@ -517,6 +543,7 @@ async def _read_capability_register_fallbacks(
     block_start: int,
     block_count: int,
     register_cache: dict[int, int],
+    updated_registers: dict[int, int] | None = None,
     runtime_state: dict[str, Any] | None = None,
 ) -> None:
     """Read individual capability registers when a bulk metadata block is rejected."""
@@ -542,6 +569,8 @@ async def _read_capability_register_fallbacks(
         record_command_success(runtime_state, register_cache_key)
         if words:
             register_cache[register] = int(words[0])
+            if updated_registers is not None:
+                updated_registers[register] = int(words[0])
 
 
 async def _capture_individual_control_registers(

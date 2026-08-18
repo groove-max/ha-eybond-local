@@ -40,12 +40,13 @@ from ..payload.ascii_line import (
 from .base import InverterDriver
 from .support_probe import SupportProbeRequest
 from .command_support import (
-    apply_unsupported_diagnostics,
     command_skipped_as_unsupported,
     commit_cycle_failures,
     record_command_failure,
     record_command_success,
+    unsupported_command_diagnostics,
 )
+from .read_result import DriverReadMode, DriverReadResult
 from .catalog_probe import catalog_model_name
 
 
@@ -279,14 +280,25 @@ class EybondGAsciiDriver(InverterDriver):
         runtime_state: dict[str, Any] | None = None,
         poll_interval: float | None = None,
         now_monotonic: float | None = None,
-    ) -> dict[str, Any]:
-        return await _async_collect_eybond_g_ascii_values(
+    ) -> DriverReadResult:
+        values = await _async_collect_eybond_g_ascii_values(
             self._session(transport, inverter.probe_target),
             probe=False,
             capabilities=inverter.capabilities,
             runtime_state=runtime_state,
             poll_interval=poll_interval,
             now_monotonic=now_monotonic,
+        )
+        diagnostics = _take_g_ascii_driver_diagnostics(values)
+        diagnostics.update(unsupported_command_diagnostics(runtime_state))
+        # G-ASCII is intrinsically partial: optional/fingerprint/BMS/readback
+        # commands may be absent in any one cycle. Omission therefore carries
+        # the last-good point as CARRIED; only values actually decoded in this
+        # cycle are fresh. The driver does not invent command-to-value removals.
+        return DriverReadResult(
+            values=values,
+            mode=DriverReadMode.DELTA,
+            diagnostics=diagnostics,
         )
 
     async def async_capture_support_evidence(
@@ -651,9 +663,32 @@ async def _async_collect_eybond_g_ascii_values(
     )
 
     commit_cycle_failures(state)
-    apply_unsupported_diagnostics(values, state)
 
     return values
+
+
+def _take_g_ascii_driver_diagnostics(values: dict[str, Any]) -> dict[str, Any]:
+    """Remove non-measurement cycle diagnostics from one driver payload."""
+
+    exact_keys = {
+        "eybond_g_ascii_runtime_command_timings",
+        "eybond_g_ascii_runtime_slowest_command",
+        "eybond_g_ascii_runtime_command_count",
+        "eybond_g_ascii_runtime_polled_groups",
+        "eybond_g_ascii_gbms_skipped_reason",
+        "eybond_g_ascii_gbms_retry_after_s",
+        "eybond_g_ascii_suppressed_readback_commands",
+    }
+    prefixes = (
+        "capability_hidden_reason_",
+        "eybond_g_ascii_readback_timeout_count_",
+        "g_ascii_readback_available_",
+    )
+    diagnostics: dict[str, Any] = {}
+    for key in tuple(values):
+        if key in exact_keys or key.startswith(prefixes):
+            diagnostics[key] = values.pop(key)
+    return diagnostics
 
 
 async def _async_collect_eybond_g_ascii_secondary_values(

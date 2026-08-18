@@ -65,7 +65,8 @@ consumer requests the same key.
 Phase 4 must not remove that copy until all of the following are true:
 
 - every built-in driver declares FULL or DELTA explicitly instead of relying on
-  the exact-dict FULL adapter;
+  the exact-dict FULL adapter; **implemented** (`FULL`: SMG, SRNE, MUST, catalog
+  Modbus; `DELTA`: PI30, PI18, G-ASCII, SmartESS 0925);
 - learned/device-scoped overlays have parity coverage for their exposed scalar
   values;
 - support bundles and fixture tooling intentionally choose typed measurements
@@ -83,6 +84,10 @@ Phase 4 must not remove that copy until all of the following are true:
 - An error or disconnected snapshot cannot describe retained data as fresh.
 - Metadata, tooling state, lists, and dictionaries are not silently classified
   as measurements.
+- Driver diagnostics have an exact per-identity replacement lifecycle in the
+  hub. They remain in the broad compatibility snapshot, never enter the typed
+  measurement frame, and disappear when omitted by the next successful result
+  or when the selected inverter identity changes.
 - The typed layer must not decide connection, recovery, ownership, or driver
   selection.
 

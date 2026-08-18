@@ -126,30 +126,12 @@ def clear_unsupported_commands(runtime_state: dict[str, Any] | None) -> None:
         runtime_state.pop(UNSUPPORTED_COMMANDS_STATE_KEY, None)
 
 
-def apply_unsupported_diagnostics(
-    values: dict[str, Any],
+def unsupported_command_diagnostics(
     runtime_state: dict[str, Any] | None,
-) -> None:
-    """Expose the skipped set in the runtime values for diagnostics."""
+) -> dict[str, Any]:
+    """Return the exact current unsupported-command diagnostic snapshot."""
 
     skipped = unsupported_commands(runtime_state)
-    if skipped:
-        values[UNSUPPORTED_COMMANDS_VALUE_KEY] = ", ".join(skipped)
-
-
-def unsupported_diagnostics_removed_keys(
-    runtime_state: dict[str, Any] | None,
-) -> frozenset[str]:
-    """Return the diagnostics value keys to invalidate this cycle.
-
-    :func:`apply_unsupported_diagnostics` only ADDS ``driver_unsupported_commands``
-    while the set is non-empty. Under a DELTA contract, a value that stops being
-    produced would otherwise persist as last-good. When the set is empty, this
-    returns the diagnostics key so the driver can carry it in ``removed_keys`` and
-    the field disappears from the snapshot. Shared by every ASCII driver, so the
-    runtime never has to know which key it is.
-    """
-
-    if unsupported_commands(runtime_state):
-        return frozenset()
-    return frozenset({UNSUPPORTED_COMMANDS_VALUE_KEY})
+    if not skipped:
+        return {}
+    return {UNSUPPORTED_COMMANDS_VALUE_KEY: ", ".join(skipped)}

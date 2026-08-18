@@ -22,10 +22,12 @@ from custom_components.eybond_local.payload.pi30 import crc16_xmodem
 
 
 async def _read_values(driver, *args, **kwargs):
-    """Call async_read_values and return the value dict (unwraps DriverReadResult)."""
+    """Return the legacy broad projection used by these decoder tests."""
 
     result = await driver.async_read_values(*args, **kwargs)
-    return result.values if isinstance(result, DriverReadResult) else result
+    if isinstance(result, DriverReadResult):
+        return {**result.values, **result.diagnostics}
+    return result
 
 
 def _frame(payload: str) -> bytes:

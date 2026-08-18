@@ -10,6 +10,8 @@ from typing import Any
 from ..models import DetectedInverter, ProbeTarget
 from ..payload.pi18 import (
     Pi18Error,
+    PI18_QFLAG_VALUE_KEYS,
+    PI18_QFWS_VALUE_KEYS,
     Pi18Session,
     parse_current_time,
     parse_energy_counter,
@@ -26,12 +28,14 @@ from ..metadata.compiled_detection_catalog import load_compiled_detection_catalo
 from ..metadata.register_schema_loader import load_register_schema
 from .base import InverterDriver
 from .command_support import (
-    apply_unsupported_diagnostics,
     command_skipped_as_unsupported,
     commit_cycle_failures,
     record_command_failure,
     record_command_success,
+    unsupported_command_diagnostics,
+    unsupported_commands,
 )
+from .read_result import DriverReadMode, DriverReadResult
 from .catalog_probe import (
     async_probe_ascii_catalog,
     catalog_model_name,
@@ -44,14 +48,47 @@ class Pi18CommandSpec:
     command: str
     parser: Callable[[str], dict[str, Any]]
     optional: bool = False
+    value_keys: frozenset[str] = frozenset()
 
 
 _RUNTIME_COMMAND_SPECS: tuple[Pi18CommandSpec, ...] = (
     Pi18CommandSpec(command="^P005GS", parser=parse_qpigs),
     Pi18CommandSpec(command="^P006MOD", parser=parse_qmod),
-    Pi18CommandSpec(command="^P007FLAG", parser=parse_qflag, optional=True),
-    Pi18CommandSpec(command="^P005FWS", parser=parse_qfws, optional=True),
+    Pi18CommandSpec(
+        command="^P007FLAG",
+        parser=parse_qflag,
+        optional=True,
+        value_keys=PI18_QFLAG_VALUE_KEYS,
+    ),
+    Pi18CommandSpec(
+        command="^P005FWS",
+        parser=parse_qfws,
+        optional=True,
+        value_keys=PI18_QFWS_VALUE_KEYS,
+    ),
 )
+
+_PI18_UNSUPPORTED_VALUE_KEYS: dict[str, frozenset[str]] = {
+    **{
+        spec.command: spec.value_keys
+        for spec in _RUNTIME_COMMAND_SPECS
+        if spec.optional and spec.value_keys
+    },
+    "^P005ET": frozenset(
+        {
+            "pv_generation_sum",
+            "pv_generation_year",
+            "pv_generation_month",
+            "pv_generation_day",
+        }
+    ),
+    "^P004T": frozenset(
+        {"pv_generation_year", "pv_generation_month", "pv_generation_day"}
+    ),
+    "^P009EY": frozenset({"pv_generation_year"}),
+    "^P011EM": frozenset({"pv_generation_month"}),
+    "^P013ED": frozenset({"pv_generation_day"}),
+}
 
 _CATALOG_PARSERS = {
     "pi18.protocol_id": parse_protocol_id,
@@ -151,7 +188,7 @@ class Pi18Driver(InverterDriver):
         runtime_state: dict[str, Any] | None = None,
         poll_interval: float | None = None,
         now_monotonic: float | None = None,
-    ) -> dict[str, Any]:
+    ) -> DriverReadResult:
         session = self._session(transport, inverter.probe_target)
         values = await _async_collect_values(
             session,
@@ -163,8 +200,18 @@ class Pi18Driver(InverterDriver):
             await _async_collect_energy_values(session, runtime_state=runtime_state)
         )
         commit_cycle_failures(runtime_state)
-        apply_unsupported_diagnostics(values, runtime_state)
-        return values
+        removed_keys = frozenset(
+            key
+            for command in unsupported_commands(runtime_state)
+            for key in _PI18_UNSUPPORTED_VALUE_KEYS.get(command, ())
+            if key not in values
+        )
+        return DriverReadResult(
+            values=values,
+            mode=DriverReadMode.DELTA,
+            removed_keys=removed_keys,
+            diagnostics=unsupported_command_diagnostics(runtime_state),
+        )
 
     async def async_write_capability(self, transport, inverter: DetectedInverter, capability_key: str, value: Any) -> Any:
         raise ValueError(f"unsupported_capability:{self.key}:{capability_key}")

@@ -12,10 +12,20 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.drivers.pi18 import Pi18Driver
+from custom_components.eybond_local.drivers.read_result import (
+    DriverReadMode,
+    DriverReadResult,
+)
 from custom_components.eybond_local.canonical_telemetry import canonical_measurements_for_driver
 from custom_components.eybond_local.entity_descriptions import BASE_SENSOR_DESCRIPTIONS
-from custom_components.eybond_local.models import CollectorInfo, ProbeTarget
+from custom_components.eybond_local.models import CollectorInfo, DetectedInverter, ProbeTarget
 from custom_components.eybond_local.payload.pi30 import crc16_xmodem
+
+
+def _delta_values(result: DriverReadResult) -> dict[str, object]:
+    if type(result) is not DriverReadResult or result.mode is not DriverReadMode.DELTA:
+        raise AssertionError("PI18 runtime read must be an exact DELTA result")
+    return result.values
 
 
 def _frame(payload: str) -> bytes:
@@ -47,6 +57,47 @@ class _FakeTransport:
 
 
 class Pi18DriverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_optional_values_are_carried_then_removed_on_unsupported_verdict(self) -> None:
+        driver = Pi18Driver()
+        target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
+        inverter = DetectedInverter(
+            driver_key=driver.key,
+            protocol_family="pi18",
+            model_name="PI18 test",
+            serial_number="123456",
+            probe_target=target,
+            register_schema_name=driver.register_schema_name,
+        )
+        responses = {
+            (0x0994, 0x01, "^P005GS"): "2301,500,2300,500,4500,4200,80,520,515,514,20,30,90,35,33,34,1200,800,3200,3100,1,2,1,1,2,2,1,0",
+            (0x0994, 0x01, "^P006MOD"): "05",
+            (0x0994, 0x01, "^P007FLAG"): "1,1,0,0,0,1,1,1,0",
+        }
+        transport = _FakeTransport(responses)
+        runtime_state: dict[str, object] = {}
+
+        first = await driver.async_read_values(
+            transport, inverter, runtime_state=runtime_state
+        )
+        self.assertIs(first.mode, DriverReadMode.DELTA)
+        self.assertTrue(first.values["buzzer_enabled"])
+        del transport._responses[(0x0994, 0x01, "^P007FLAG")]
+
+        for _ in range(3):
+            transient = await driver.async_read_values(
+                transport, inverter, runtime_state=runtime_state
+            )
+            self.assertNotIn("buzzer_enabled", transient.values)
+            self.assertNotIn("buzzer_enabled", transient.removed_keys)
+
+        verdict = await driver.async_read_values(
+            transport, inverter, runtime_state=runtime_state
+        )
+        self.assertNotIn("buzzer_enabled", verdict.values)
+        self.assertIn("buzzer_enabled", verdict.removed_keys)
+        self.assertNotIn("driver_unsupported_commands", verdict.values)
+        self.assertIn("^P007FLAG", verdict.diagnostics["driver_unsupported_commands"])
+
     async def test_probe_detects_pi18_inverter(self) -> None:
         driver = Pi18Driver()
         target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
@@ -84,7 +135,7 @@ class Pi18DriverTests(unittest.IsolatedAsyncioTestCase):
         )
 
         assert inverter is not None
-        values = await driver.async_read_values(
+        values = _delta_values(await driver.async_read_values(
             _FakeTransport(
                 {
                     (0x0994, 0x01, "^P005GS"): "2301,500,2300,500,4500,4200,80,520,515,514,20,30,90,35,33,34,1200,800,3200,3100,1,2,1,1,2,2,1,0",
@@ -99,7 +150,7 @@ class Pi18DriverTests(unittest.IsolatedAsyncioTestCase):
                 }
             ),
             inverter,
-        )
+        ))
 
         self.assertEqual(values["operating_mode"], "Hybrid")
         self.assertEqual(values["output_active_power"], 4200)
@@ -155,7 +206,7 @@ class Pi18DriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(probe_transport, target)
 
         assert inverter is not None
-        runtime_values = await driver.async_read_values(
+        runtime_values = _delta_values(await driver.async_read_values(
             _FakeTransport(
                 {
                     (0x0994, 0x01, "^P005GS"): "2301,500,2300,500,4500,4200,80,520,515,514,20,30,90,35,33,34,1200,800,3200,3100,1,2,1,1,2,2,1,0",
@@ -170,7 +221,7 @@ class Pi18DriverTests(unittest.IsolatedAsyncioTestCase):
                 }
             ),
             inverter,
-        )
+        ))
 
         entity_keys = {
             *(description.key for description in BASE_SENSOR_DESCRIPTIONS),

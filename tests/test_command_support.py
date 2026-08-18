@@ -11,13 +11,13 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.drivers.command_support import (  # noqa: E402
-    apply_unsupported_diagnostics,
     clear_unsupported_commands,
     command_skipped_as_unsupported,
     commit_cycle_failures,
     record_command_failure,
     record_command_success,
     seed_unsupported_commands,
+    unsupported_command_diagnostics,
     unsupported_commands,
 )
 
@@ -57,15 +57,13 @@ class CommandSupportCacheTests(unittest.TestCase):
         seed_unsupported_commands(state, ("QET", "Q1", ""))
         self.assertEqual(unsupported_commands(state), ("Q1", "QET"))
 
-        values: dict[str, object] = {}
-        apply_unsupported_diagnostics(values, state)
-        self.assertEqual(values["driver_unsupported_commands"], "Q1, QET")
+        diagnostics = unsupported_command_diagnostics(state)
+        self.assertEqual(diagnostics["driver_unsupported_commands"], "Q1, QET")
 
         clear_unsupported_commands(state)
         self.assertEqual(unsupported_commands(state), ())
-        values = {}
-        apply_unsupported_diagnostics(values, state)
-        self.assertNotIn("driver_unsupported_commands", values)
+        diagnostics = unsupported_command_diagnostics(state)
+        self.assertNotIn("driver_unsupported_commands", diagnostics)
 
     def test_none_state_is_a_no_op(self) -> None:
         record_command_failure(None, "QPIWS")

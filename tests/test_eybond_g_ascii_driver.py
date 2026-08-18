@@ -18,6 +18,10 @@ from custom_components.eybond_local.drivers.eybond_g_ascii import (  # noqa: E40
     _async_collect_eybond_g_ascii_values,
     _looks_like_eybond_g_ascii,
 )
+from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
+    DriverReadMode,
+    DriverReadResult,
+)
 from custom_components.eybond_local.fixtures.replay import (  # noqa: E402
     detect_fixture_payload,
     read_fixture_values,
@@ -60,6 +64,48 @@ class _DefaultingFakeEybondGAsciiSession(_FakeEybondGAsciiSession):
 
 
 class EybondGAsciiDriverTests(unittest.TestCase):
+    def test_runtime_driver_returns_delta_and_separates_diagnostics(self) -> None:
+        driver = EybondGAsciiDriver()
+        session = _DefaultingFakeEybondGAsciiSession(
+            {
+                "GMOD": "B",
+                "GPDAT0": (
+                    "0 5 4003 0 00 219.7 50.01 000.0 00.00 216.4 50.00 "
+                    "04.11 26.4 015.8 025 0904 0904 100 172.8 015.8 0844 048.0"
+                ),
+                "GPV": (
+                    "183.1 027.6 00.43 05.31 00972 03 1 0 448.0 449.0 "
+                    "424.0 426.0 176.0 01 01039 01039 1193 3422 1823 0050 "
+                    "00589 00000 36363 0000000000000000"
+                ),
+            }
+        )
+        inverter = DetectedInverter(
+            driver_key=driver.key,
+            protocol_family="eybond_g_ascii",
+            model_name="test",
+            serial_number="",
+            probe_target=ProbeTarget(devcode=0x0994, collector_addr=1, device_addr=0),
+        )
+
+        with patch.object(driver, "_session", return_value=session):
+            result = asyncio.run(
+                driver.async_read_values(
+                    object(),
+                    inverter,
+                    runtime_state={},
+                    now_monotonic=100.0,
+                )
+            )
+
+        self.assertIs(type(result), DriverReadResult)
+        self.assertIs(result.mode, DriverReadMode.DELTA)
+        self.assertEqual(result.values["operating_mode"], "Battery")
+        self.assertNotIn("eybond_g_ascii_runtime_command_count", result.values)
+        self.assertIn("eybond_g_ascii_runtime_command_count", result.diagnostics)
+        self.assertNotIn("eybond_g_ascii_runtime_command_timings", result.values)
+        self.assertIn("eybond_g_ascii_runtime_command_timings", result.diagnostics)
+
     def test_capability_visible_if_controls_runtime_visibility(self) -> None:
         capability = WriteCapability(
             key="bms_communication",

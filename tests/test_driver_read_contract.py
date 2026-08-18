@@ -11,6 +11,7 @@ replace-everything behaviour.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from pathlib import Path
 import sys
 import unittest
@@ -28,6 +29,7 @@ from custom_components.eybond_local.drivers.read_result import (
     DriverReadResult,
     coerce_driver_read_result,
 )
+from custom_components.eybond_local.drivers.registry import iter_drivers
 from custom_components.eybond_local.models import CollectorInfo, DetectedInverter, ProbeTarget
 from custom_components.eybond_local.runtime.hub import EybondHub
 from custom_components.eybond_local.telemetry import (
@@ -88,6 +90,17 @@ def _bind(hub: EybondHub, inverter: DetectedInverter) -> None:
 
 
 class DriverReadContractTests(unittest.TestCase):
+    def test_every_builtin_driver_declares_the_typed_result_boundary(self) -> None:
+        for driver in iter_drivers("auto"):
+            with self.subTest(driver=driver.key):
+                signature = inspect.signature(driver.async_read_values)
+                self.assertIn(
+                    signature.return_annotation,
+                    {DriverReadResult, "DriverReadResult"},
+                )
+                source = inspect.getsource(driver.async_read_values)
+                self.assertIn("DriverReadResult(", source)
+
     def test_bare_dict_is_full(self) -> None:
         result = coerce_driver_read_result({"a": 1}, driver_key="pi30")
         self.assertIsInstance(result, DriverReadResult)
