@@ -1211,6 +1211,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             inverter=inverter,
             values=values,
         )
+        if endpoint:
+            snapshot.set_collector_server_endpoint(endpoint)
         try:
             snapshot.last_error = "startup_detection_pending"
         except Exception:
@@ -2746,7 +2748,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         return bool(collector_ip and _same_ipv4_24(host, collector_ip))
 
     async def _async_remember_collector_server_endpoint(self, snapshot: RuntimeSnapshot) -> None:
-        current_endpoint = str(snapshot.values.get("collector_server_endpoint") or "").strip()
+        current_endpoint = snapshot.collector_server_endpoint
         if not current_endpoint:
             return
         try:
@@ -3262,7 +3264,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             self._collector_operation_pending_target_endpoint = ""
             snapshot.values["collector_operation_endpoint_sync_status"] = "external_not_managed"
             return
-        current_endpoint = str(snapshot.values.get("collector_server_endpoint") or "").strip()
+        current_endpoint = snapshot.collector_server_endpoint
         current_parts = self._endpoint_effective_parts(current_endpoint)
         pending_target_endpoint = str(
             getattr(self, "_collector_operation_pending_target_endpoint", "") or ""
@@ -3298,7 +3300,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
 
         if pending_matches_target and snapshot.connected and not current_endpoint:
             self._collector_operation_pending_target_endpoint = ""
-            snapshot.values["collector_server_endpoint"] = pending_target_endpoint
+            snapshot.set_collector_server_endpoint(pending_target_endpoint)
             snapshot.values["collector_operation_endpoint_sync_status"] = "aligned"
             return
 
@@ -3356,12 +3358,16 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         finally:
             _OP_AUTHORITY.release(self.config_entry.entry_id, _op.token)
 
-        snapshot.values["collector_server_endpoint"] = str(
-            result.get("readback_endpoint") or result.get("requested_endpoint") or target_endpoint
+        snapshot.set_collector_server_endpoint(
+            str(
+                result.get("readback_endpoint")
+                or result.get("requested_endpoint")
+                or target_endpoint
+            )
         )
-        self._collector_operation_pending_target_endpoint = snapshot.values[
-            "collector_server_endpoint"
-        ]
+        self._collector_operation_pending_target_endpoint = (
+            snapshot.collector_server_endpoint
+        )
         snapshot.values["collector_operation_endpoint_sync_status"] = str(
             result.get("status") or "applied"
         )
@@ -9440,6 +9446,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return
         snapshot = self.data
         for key, value in values.items():
+            if key == "collector_server_endpoint":
+                snapshot.set_collector_server_endpoint("" if value is None else value)
+                continue
             if value is None:
                 snapshot.values.pop(key, None)
             else:

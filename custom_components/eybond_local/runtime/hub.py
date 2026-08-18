@@ -3457,7 +3457,7 @@ class EybondHub:
         if last_error or not snapshot_connected:
             typed_telemetry = typed_telemetry.as_carried()
 
-        return RuntimeSnapshot(
+        snapshot = RuntimeSnapshot(
             connected=snapshot_connected,
             collector=collector,
             inverter=self._inverter,
@@ -3465,6 +3465,16 @@ class EybondHub:
             last_error=last_error,
             telemetry=typed_telemetry,
         )
+        endpoint = ""
+        if extra_values is not None:
+            candidate = extra_values.get("collector_server_endpoint", "")
+            if type(candidate) is str and candidate and candidate == candidate.strip():
+                endpoint = candidate
+        if not endpoint:
+            endpoint = snapshot.collector_server_endpoint
+        if endpoint:
+            snapshot.set_collector_server_endpoint(endpoint)
+        return snapshot
 
 
 def _capture_ranges_from_schema(schema: Any) -> tuple[tuple[int, int], ...]:

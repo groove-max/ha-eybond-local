@@ -705,6 +705,39 @@ class HubSnapshotTests(unittest.TestCase):
             "pi30_ascii/models/vmii_nxpw5kw.json",
         )
 
+    def test_build_snapshot_synchronizes_fresh_endpoint_into_collector_info(self) -> None:
+        hub = EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+        hub._link_manager = _FakeLinkManager()
+        hub._link_manager.collector_info.collector_server_endpoint = (
+            "old.example,18899,TCP"
+        )
+
+        snapshot = hub._build_snapshot(
+            extra_values={
+                "collector_server_endpoint": "fresh.example,18899,TCP",
+            }
+        )
+
+        self.assertEqual(
+            snapshot.collector.collector_server_endpoint,
+            "fresh.example,18899,TCP",
+        )
+        self.assertEqual(
+            snapshot.values["collector_server_endpoint"],
+            "fresh.example,18899,TCP",
+        )
+
     def test_build_snapshot_does_not_reuse_stale_collector_identity_values(self) -> None:
         hub = EybondHub(
             connection=EybondConnectionSpec(

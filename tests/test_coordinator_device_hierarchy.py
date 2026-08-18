@@ -385,8 +385,21 @@ def _install_coordinator_stubs() -> None:
             self.collector = collector
             self.connected = connected
 
+        @property
+        def collector_server_endpoint(self):
+            candidate = getattr(self.collector, "collector_server_endpoint", "")
+            return candidate or self.values.get("collector_server_endpoint", "")
+
+        def set_collector_server_endpoint(self, endpoint):
+            if self.collector is not None:
+                self.collector.collector_server_endpoint = endpoint
+            if endpoint:
+                self.values["collector_server_endpoint"] = endpoint
+            else:
+                self.values.pop("collector_server_endpoint", None)
+
     class CollectorInfo:
-        pass
+        collector_server_endpoint = ""
 
     models.CollectorInfo = CollectorInfo
     models.CapabilityChoice = CapabilityChoice
@@ -7627,6 +7640,32 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(values["collector_original_endpoint_source"], "")
         self.assertEqual(values["collector_original_endpoint_observed_at"], "")
 
+    def test_publish_snapshot_endpoint_keeps_collector_and_legacy_in_sync(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        collector = types.SimpleNamespace(
+            collector_server_endpoint="old.example,18899,TCP"
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            collector=collector,
+            values={"collector_server_endpoint": "old.example,18899,TCP"},
+        )
+        published: list[object] = []
+        coordinator.async_set_updated_data = published.append
+
+        coordinator._publish_snapshot_values(
+            collector_server_endpoint="new.example,18899,TCP"
+        )
+
+        self.assertEqual(
+            collector.collector_server_endpoint,
+            "new.example,18899,TCP",
+        )
+        self.assertEqual(
+            coordinator.data.values["collector_server_endpoint"],
+            "new.example,18899,TCP",
+        )
+        self.assertEqual(published, [coordinator.data])
+
     def test_prime_startup_snapshot_publishes_detection_pending_collector_state(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator.config_entry = types.SimpleNamespace(
@@ -7657,6 +7696,10 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertTrue(coordinator.data.connected)
         self.assertEqual(coordinator.data.collector.remote_ip, "192.168.1.51")
         self.assertEqual(coordinator.data.values["collector_pn"], "V0000000000001")
+        self.assertEqual(
+            coordinator.data.collector.collector_server_endpoint,
+            coordinator.data.values["collector_server_endpoint"],
+        )
         self.assertEqual(coordinator.data.values["runtime_driver_state"], "driver_unbound")
         self.assertEqual(
             coordinator.data.values["runtime_detection_status"],

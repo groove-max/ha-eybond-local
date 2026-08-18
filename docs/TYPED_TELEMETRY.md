@@ -58,3 +58,14 @@ are migrated.
   as measurements.
 - The typed layer must not decide connection, recovery, ownership, or driver
   selection.
+
+## Adjacent collector metadata boundary
+
+Collector connection metadata does not belong in telemetry. The existing
+`CollectorInfo` model remains its typed owner; creating a second generic
+`RuntimeMetadata` frame would only duplicate authority. During the compatibility
+migration, `RuntimeSnapshot.set_collector_server_endpoint()` synchronizes the
+typed collector endpoint with the legacy `values` projection atomically. Reads
+prefer `CollectorInfo` and fall back only for old or partially constructed
+snapshots. Endpoint validation, persistence, wire writes, and recovery remain
+owned by their existing authorities.

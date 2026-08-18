@@ -702,6 +702,42 @@ class RuntimeSnapshot:
         merged.update(self.telemetry.values())
         return merged
 
+    @property
+    def collector_server_endpoint(self) -> str:
+        """Return the typed collector endpoint with a legacy fallback.
+
+        ``CollectorInfo`` is the typed owner. The mapping fallback keeps old and
+        partially constructed snapshots readable while endpoint writers migrate
+        to :meth:`set_collector_server_endpoint`.
+        """
+
+        collector = self.collector
+        candidate = (
+            getattr(collector, "collector_server_endpoint", "")
+            if collector is not None
+            else ""
+        )
+        if type(candidate) is str and candidate and candidate == candidate.strip():
+            return candidate
+        legacy = self.values.get("collector_server_endpoint", "")
+        if type(legacy) is str and legacy and legacy == legacy.strip():
+            return legacy
+        return ""
+
+    def set_collector_server_endpoint(self, endpoint: str) -> None:
+        """Synchronize one normalized endpoint into both runtime projections."""
+
+        if type(endpoint) is not str:
+            raise TypeError("collector_server_endpoint_not_string")
+        if endpoint != endpoint.strip():
+            raise ValueError("collector_server_endpoint_not_normalized")
+        if self.collector is not None:
+            self.collector.collector_server_endpoint = endpoint
+        if endpoint:
+            self.values["collector_server_endpoint"] = endpoint
+        else:
+            self.values.pop("collector_server_endpoint", None)
+
 
 def _evaluate_conditions(
     conditions: tuple[CapabilityCondition, ...],
