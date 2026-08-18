@@ -9,8 +9,8 @@ It creates one ZIP file with the information needed to understand the problem wi
 Create a Support Archive when:
 
 - setup fails;
-- the device stays in **EyeBond Setup Pending**;
-- the device is shown as **Collector only**;
+- a manually saved fallback stays in **EyeBond Setup Pending**;
+- the collector was added but runtime detection did not identify the inverter;
 - sensors are missing or unavailable;
 - controls are missing;
 - a control is rejected by the inverter;

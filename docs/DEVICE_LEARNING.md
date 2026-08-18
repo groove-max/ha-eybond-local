@@ -35,9 +35,10 @@ Do not use it when only the collector was found and no inverter was detected. In
 Check these first:
 
 - The collector has stable Wi-Fi.
-- The collector uses the **Home Assistant only** connection profile. Control
-  discovery temporarily owns its endpoint and is not started from the
-  Cloud + Home Assistant profile.
+- The collector uses the **Cloud + Home Assistant** connection profile. Control
+  discovery temporarily routes its cloud traffic through Home Assistant under
+  the same protected endpoint transaction used by proxy capture, then restores
+  the original cloud endpoint.
 - Home Assistant can read live data from the inverter.
 - You know the cloud/app username and password for this device, if the learning
   flow asks for them.

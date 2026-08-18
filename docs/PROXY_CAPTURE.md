@@ -23,7 +23,7 @@ Make sure:
 
 - the collector has stable Wi-Fi;
 - Home Assistant can already reach the collector;
-- the collector uses the **Home Assistant only** operating profile;
+- the collector uses the **Cloud + Home Assistant** operating profile;
 - you are ready to keep the capture short;
 - you can check that the vendor app still works afterward if you use one.
 

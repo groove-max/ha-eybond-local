@@ -7,6 +7,8 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+## [0.3.0-beta.2] - 2026-08-18
+
 ### Added
 
 - Added a **Show discovered devices again** action to the
@@ -16,10 +18,49 @@ the GitHub release body should be rendered from the matching version section her
 - Added a persistent **EyeBond Local — Discovery** service entry so passive
   callback discovery remains available after all collector entries are removed
   and across Home Assistant restarts.
-- Added the release-branch Anenji model extensions to the development branch:
-  **ANENJI ANJ-5KW-48V-WIFI** now has a model-specific SMG layout-11 profile, and
-  **Anenji ANJ-11KW-48V-WIFI-P** keeps the secondary-output / secondary-charging
-  controls confirmed by user shadow-learning evidence.
+- Added model-specific support backed by protocol documents and sanitized
+  hardware evidence:
+  - **Gootu GT-H2436M14P5** — exact G-ASCII fingerprint, telemetry, and only the
+    charging-priority writes confirmed by the captured device.
+  - **Kevolt PD0080G-TPM-EU 80 kW** — exact Deye-compatible high-register
+    fingerprint and read-only three-phase, PV, battery, generator, and energy
+    telemetry.
+  - **Anenji ANJ-11KW-48V-WIFI-P** — documented Secondary Output Priority
+    read-back; writes remain conditional and appear only in Full Control until
+    hardware confirms them. Its separately confirmed Secondary Charging
+    Priority remains available.
+  - **Yingfa YF6.2K-LEL-1B** — a separate commercial model record and replay
+    evidence confirming the existing PI30 MAX runtime path.
+- Added collector-first onboarding: setup saves the identified collector, then
+  runtime detection identifies the inverter and creates its entities on the
+  owned session.
+- Added one bounded network scan that combines broadcast responses, reachable
+  local addresses, and already connected unconfigured collectors. The old
+  quick/deep split is no longer presented to users.
+
+### Changed
+
+- **Collector connection is now presented as one product-level operating
+  profile:** **Cloud + Home Assistant** keeps the vendor cloud working and asks
+  the collector to connect when needed; **Home Assistant only** verifies a
+  permanent collector connection and stops normal cloud reporting.
+- Switching profiles is a verified endpoint transaction. Home Assistant records
+  the previous cloud endpoint when it can, checks that the same collector PN
+  returns, and retains a recoverable transition state if activation is
+  interrupted.
+- Proxy capture and device learning now share one exclusive cloud-traffic
+  operation path. New operations start from **Cloud + Home Assistant**, restore
+  the original endpoint on exit, and retain explicit recovery state if restore
+  cannot be confirmed.
+- Inverter protocol selection is now a runtime concern. When more than one
+  protocol genuinely matches, the options flow offers the proven candidates
+  instead of persisting a speculative setup-time identity.
+- The legacy writable **Collector Operation Mode** is retired. Its existing
+  entity identity is retained only as a read-only operating-profile view for
+  compatibility.
+- Remote / NAT collectors are identified and owned by collector PN and exact
+  session, never by peer IP. Multiple collectors behind one router remain
+  distinct.
 
 ### Fixed
 
@@ -34,29 +75,15 @@ the GitHub release body should be rendered from the matching version section her
   high-confidence inverter when a startup catalog probe temporarily times out;
   the saved model is resolved through one unambiguous full catalog surface and
   remains provisional until live detection confirms it.
-
-## [0.3.0-beta.2] - 2026-07-09
-
-### Changed
-
-- **Collector connection is now described by how it connects, not a "Cloud + HA /
-  HA-only" mode.** The main collector choice is **How the collector connects**:
-  *Collector connects to Home Assistant on its own* (Home Assistant just waits and
-  sends nothing), or *Ask the collector to connect when needed* (Home Assistant
-  sends one connection request per attempt). Whether the collector still reaches
-  its vendor cloud is now controlled by explicit endpoint actions instead of a
-  named mode.
-- **Home Assistant never silently redirects or restores a collector's server.**
-  Pointing a collector at Home Assistant (*Write Home Assistant endpoint*) and
-  putting its server back (*Restore previous collector endpoint*) are explicit,
-  reversible actions. The previous endpoint is only restored when you ask for it.
-- **Callback ("ask the collector to connect") sends exactly one request per
-  attempt** — no constant background traffic — and reports a clear reason when a
-  collector does not answer (callback timeout, identity mismatch, or already
-  owned by another entry).
-- The legacy **Collector Operation Mode** control remains only as a
-  compatibility/migration setting and no longer drives runtime behavior; its
-  label is now the provider-neutral **Cloud + HA** everywhere.
+- Fixed 24 V Anenji control validation so model-specific 48 V limits no longer
+  reject valid writes before the inverter can validate them.
+- Fixed duplicate placeholder inverter serials collapsing separate
+  collector-PN devices.
+- Fixed signed SMG output-power decoding and clamped negative idle noise.
+- Added the confirmed PI30 MAX `MCHGC` / `MUCHGC` charge-current controls.
+- Hardened silent callback identification, same-IP/NAT admission, cancellation,
+  ownership handoff, and recovery so stale or foreign sessions cannot be saved
+  as the selected collector.
 
 ### Migration
 

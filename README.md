@@ -122,7 +122,8 @@ It is a small ESP8266/ESP32-based bridge that connects directly to the inverter 
 
 ## Setup
 
-The setup wizard starts with the collector, then confirms the inverter.
+The setup wizard identifies and adds the collector first. After the entry is
+created, runtime detection identifies the inverter and creates its entities.
 
 ### 1. Put the collector on the same network
 
@@ -137,11 +138,14 @@ when your collector supports it.
 
 ### 2. Scan for devices
 
-Choose the Home Assistant network interface and start a scan. The quick scan usually finishes in a few seconds.
+Choose the Home Assistant network interface and start a scan. One bounded scan
+checks broadcast replies, reachable local addresses, and already connected
+collectors.
 
 <p align="center"><img src="docs/images/setup-02-scanning.png" alt="Scanning the local network" width="480"></p>
 
-If the quick scan finds nothing, open advanced setup to run a deeper scan or enter the collector address manually.
+If the scan finds nothing, run it again, choose a different Home Assistant
+interface, or use advanced setup to enter the collector address manually.
 
 <p align="center"><img src="docs/images/setup-04-scan-interface.png" alt="Advanced scan options" width="480"></p>
 
@@ -149,17 +153,20 @@ If the quick scan finds nothing, open advanced setup to run a deeper scan or ent
 
 ### 3. Review the result
 
-The wizard can show:
+The wizard can show collector candidates such as:
 
-- **Ready** — the device was found and can be added.
-- **Review** — the device was found, but you should double-check the result.
-- **Collector only** — the collector answered, but the inverter was not identified confidently yet.
+- **Ready to set up** — the collector was identified and can be added.
+- **Needs confirmation** — the collector was identified through an incoming
+  connection, but its reachable address must be confirmed.
+- **Check address** — an address responded and can be probed directly.
 
 <p align="center"><img src="docs/images/setup-06-detected-devices.png" alt="Detected devices" width="480"></p>
 
-### 4. Confirm detection and refresh mode
+### 4. Confirm the collector and refresh mode
 
-Confirm the detected device and choose how sensors should refresh.
+Confirm the collector and choose how sensors should refresh. Home Assistant
+then creates the entry and detects the inverter on the owned runtime session.
+The inverter device may appear shortly after the collector device.
 
 Collector mode is managed later from **Connection and polling**, after the
 integration has created the device and read its collector capabilities.
@@ -269,10 +276,10 @@ Use these issue templates:
 
 | Problem | Try this |
 |---|---|
-| Auto-scan finds nothing | Choose a different network interface, then retry quick scan or deep scan. If needed, use manual setup with the collector IP from your router. |
+| Auto-scan finds nothing | Retry the scan or choose a different Home Assistant network interface. If needed, use advanced setup with the collector IP from your router. |
 | Bluetooth Wi-Fi setup is unavailable | Make sure Home Assistant has Bluetooth access near the collector. An ESPHome Bluetooth Proxy near the collector can help. |
-| Device stays on **EyeBond Setup Pending** | Wait a few minutes, refresh the device page, then retry scan or manual setup. If it still stays pending, create a Support Archive. |
-| Stuck on **Collector only** | The collector answered, but the inverter was not identified confidently. Create a Support Archive. |
+| A manually saved fallback stays on **EyeBond Setup Pending** | Retry setup with the collector reachable. If it still stays pending, create a Support Archive. |
+| Only the collector device appears | Runtime detection has not identified the inverter yet. Wait for one detection cycle, then create a Support Archive if it remains unidentified. |
 | Sensors stay unavailable | Check that the collector and Home Assistant are on the same network and that the collector has stable Wi-Fi. |
 | Vendor app stopped showing live data | If you pointed the collector at Home Assistant only, that disconnects it from its cloud by design. Use **Restore previous collector endpoint** to bring the vendor app back. |
 | Vendor app works, but Home Assistant says unavailable | The collector may have reconnected to its cloud faster than it reconnected locally. Wait a few minutes and check Wi-Fi stability. |
