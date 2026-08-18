@@ -151,7 +151,7 @@ from ..control_policy import (
 )
 from ..drivers.registry import get_driver
 from ..drivers.registry import all_write_capabilities
-from ..fixtures.utils import anonymize_fixture_json, build_command_fixture_responses
+from ..fixtures.utils import anonymize_fixture_json
 from ..metadata.effective_metadata import resolve_effective_metadata_selection
 from ..metadata.effective_metadata_snapshot import (
     EffectiveMetadataSnapshot,
@@ -262,6 +262,12 @@ from ..support.download import (
 )
 from ..support.memory_guard import read_available_memory_mib, shadow_learning_memory_blocker
 from ..support.package import export_support_package
+from ..support.runtime_projection import (
+    build_collector_support_payload,
+    build_inverter_support_payload,
+    build_support_fixture,
+    metadata_source_payload,
+)
 from ..support.shadow_learning_review_model import normalize_activation_selection
 from ..support.workflow import build_support_workflow_state
 from .shadow_learning_facade import ShadowLearningRuntimeFacade
@@ -8633,7 +8639,15 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         support_bundle_payload, raw_capture = await self._async_build_support_package_payloads(
             integration_build_values=integration_build_values,
         )
-        fixture = self._build_support_fixture(raw_capture)
+        collector_payload = build_collector_support_payload(
+            self.data.collector,
+            self.collector_cloud_profile,
+        )
+        fixture = build_support_fixture(
+            raw_capture,
+            inverter=self.data.inverter,
+            collector_payload=collector_payload,
+        )
         anonymized_fixture = anonymize_fixture_json(fixture) if fixture is not None else None
         profile_metadata = self.effective_profile_metadata
         register_schema_metadata = self.effective_register_schema_metadata
@@ -8647,8 +8661,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 raw_capture=raw_capture,
                 fixture=fixture,
                 anonymized_fixture=anonymized_fixture,
-                profile_source=self._metadata_source_payload(profile_metadata),
-                register_schema_source=self._metadata_source_payload(register_schema_metadata),
+                profile_source=metadata_source_payload(profile_metadata),
+                register_schema_source=metadata_source_payload(register_schema_metadata),
             )
         )
         path = export_result.path
@@ -9639,13 +9653,16 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 inverter,
                 self.data.runtime_values(),
             )
-            inverter_payload = self._inverter_payload(inverter)
+            inverter_payload = build_inverter_support_payload(inverter)
         marker = self._driver_support_marker(inverter, metadata)
         return build_support_bundle_payload(
             entry_id=self.config_entry.entry_id,
             entry_title=self._support_context_title(),
             connected=self.data.connected,
-            collector=self._collector_payload(),
+            collector=build_collector_support_payload(
+                self.data.collector,
+                self.collector_cloud_profile,
+            ),
             inverter=inverter_payload,
             values=values,
             data=dict(self.config_entry.data),
@@ -9680,126 +9697,6 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             variant_key=str(getattr(inverter, "variant_key", "") or ""),
             profile_name=str(getattr(metadata, "profile_name", "") or ""),
         )
-
-    def _collector_payload(self) -> dict[str, Any] | None:
-        if self.data.collector is None:
-            return None
-        cloud_profile = self.collector_cloud_profile
-        return {
-            "remote_ip": self.data.collector.remote_ip,
-            "remote_port": self.data.collector.remote_port,
-            "connection_count": self.data.collector.connection_count,
-            "connection_replace_count": self.data.collector.connection_replace_count,
-            "disconnect_count": self.data.collector.disconnect_count,
-            "pending_request_drop_count": self.data.collector.pending_request_drop_count,
-            "last_disconnect_reason": self.data.collector.last_disconnect_reason,
-            "discovery_restart_count": self.data.collector.discovery_restart_count,
-            "last_discovery_reason": self.data.collector.last_discovery_reason,
-            "collector_pn": self.data.collector.collector_pn,
-            "profile_key": self.data.collector.profile_key,
-            "profile_name": self.data.collector.profile_name,
-            "last_udp_reply": self.data.collector.last_udp_reply,
-            "last_udp_reply_from": self.data.collector.last_udp_reply_from,
-            "last_devcode": self.data.collector.last_devcode,
-            "smartess_collector_version": self.data.collector.smartess_collector_version,
-            "smartess_protocol_raw_id": self.data.collector.smartess_protocol_raw_id,
-            "smartess_protocol_asset_id": self.data.collector.smartess_protocol_asset_id,
-            "smartess_protocol_asset_name": self.data.collector.smartess_protocol_asset_name,
-            "smartess_protocol_suffix": self.data.collector.smartess_protocol_suffix,
-            "smartess_protocol_profile_key": self.data.collector.smartess_protocol_profile_key,
-            "smartess_protocol_name": self.data.collector.smartess_protocol_name,
-            "smartess_device_address": self.data.collector.smartess_device_address,
-            "collector_cloud_profile_key": cloud_profile.key,
-            "collector_cloud_profile_label": cloud_profile.label,
-            "collector_cloud_profile_source": cloud_profile.source,
-            "collector_cloud_profile_confidence": cloud_profile.confidence,
-        }
-
-    @staticmethod
-    def _inverter_payload(inverter) -> dict[str, Any]:
-        return {
-            "driver_key": inverter.driver_key,
-            "protocol_family": inverter.protocol_family,
-            "model_name": inverter.model_name,
-            "variant_key": inverter.variant_key,
-            "serial_number": inverter.serial_number,
-            "profile_name": inverter.profile_name,
-            "register_schema_name": inverter.register_schema_name,
-            "probe_target": {
-                "devcode": inverter.probe_target.devcode,
-                "collector_addr": inverter.probe_target.collector_addr,
-                "device_addr": inverter.probe_target.device_addr,
-            },
-            "details": dict(inverter.details),
-        }
-
-    def _build_support_fixture(
-        self,
-        raw_capture: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        inverter = self.data.inverter
-        ranges = list(raw_capture.get("fixture_ranges") or [])
-        command_responses = build_command_fixture_responses(raw_capture)
-        probe_target = None
-        fixture_name = ""
-        if inverter is not None:
-            probe_target = {
-                "devcode": inverter.probe_target.devcode,
-                "collector_addr": inverter.probe_target.collector_addr,
-                "device_addr": inverter.probe_target.device_addr,
-            }
-            fixture_name = f"{inverter.driver_key}_support_capture"
-        elif raw_capture.get("capture_kind") == "generic_register_dump":
-            best_capture = self._best_generic_capture(raw_capture)
-            if best_capture is not None:
-                ranges = list(best_capture.get("fixture_ranges") or ranges)
-                probe_target = dict(best_capture.get("probe_target") or {})
-                fixture_name = f"{best_capture.get('driver_key', 'unknown')}_support_capture"
-        if not ranges and not command_responses:
-            return None
-
-        collector_payload = self._collector_payload() or {}
-        fixture: dict[str, Any] = {
-            "fixture_version": 1,
-            "name": fixture_name or "unknown_driver_support_capture",
-            "collector": {
-                "remote_ip": collector_payload.get("remote_ip"),
-                "collector_pn": collector_payload.get("collector_pn"),
-                "last_devcode": collector_payload.get("last_devcode"),
-                "profile_key": collector_payload.get("profile_key"),
-                "profile_name": collector_payload.get("profile_name"),
-            },
-            "probe_target": probe_target,
-        }
-        if ranges:
-            fixture["ranges"] = ranges
-        if command_responses:
-            fixture["command_responses"] = command_responses
-        return fixture
-
-    @staticmethod
-    def _best_generic_capture(raw_capture: dict[str, Any]) -> dict[str, Any] | None:
-        captures = list(raw_capture.get("captures") or [])
-        if not captures:
-            return None
-        return max(
-            captures,
-            key=lambda capture: (
-                len(capture.get("fixture_ranges") or []),
-                -len(capture.get("range_failures") or []),
-            ),
-        )
-
-
-    @staticmethod
-    def _metadata_source_payload(metadata) -> dict[str, Any] | None:
-        if metadata is None:
-            return None
-        return {
-            "name": getattr(metadata, "source_name", ""),
-            "scope": getattr(metadata, "source_scope", ""),
-            "path": getattr(metadata, "source_path", ""),
-        }
 
     def _build_inverter_device_info(self, snapshot: RuntimeSnapshot | None = None) -> DeviceInfo:
         """Build stable metadata for the main inverter device."""
