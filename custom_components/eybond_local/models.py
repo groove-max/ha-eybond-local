@@ -515,6 +515,55 @@ class CollectorInfo:
     collector_bridge_version: str = ""
 
 
+def _strict_optional_metadata_text(value: object, *, field_name: str) -> str:
+    """Validate one already-normalized metadata field without coercion."""
+
+    if type(value) is not str:
+        raise TypeError(f"{field_name}_not_string")
+    if value != value.strip():
+        raise ValueError(f"{field_name}_not_normalized")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class CollectorCloudProfile:
+    """One coherent collector cloud-profile identity and its provenance.
+
+    This is runtime metadata, not inverter telemetry and not provider
+    selection. The profile key owns its label/source/confidence as one value
+    object so callers cannot accidentally combine fields from different
+    runtime or persisted observations.
+    """
+
+    key: str = ""
+    label: str = ""
+    source: str = ""
+    confidence: str = ""
+
+    def __post_init__(self) -> None:
+        _strict_optional_metadata_text(self.key, field_name="collector_cloud_profile_key")
+        _strict_optional_metadata_text(
+            self.label,
+            field_name="collector_cloud_profile_label",
+        )
+        _strict_optional_metadata_text(
+            self.source,
+            field_name="collector_cloud_profile_source",
+        )
+        _strict_optional_metadata_text(
+            self.confidence,
+            field_name="collector_cloud_profile_confidence",
+        )
+        if not self.key and (self.label or self.source or self.confidence):
+            raise ValueError("collector_cloud_profile_metadata_without_key")
+
+    @property
+    def known(self) -> bool:
+        """Return whether a concrete cloud profile is present."""
+
+        return bool(self.key)
+
+
 @dataclass(slots=True)
 class CollectorCandidate:
     """One collector candidate found during onboarding discovery."""
@@ -737,6 +786,148 @@ class RuntimeSnapshot:
             self.values["collector_server_endpoint"] = endpoint
         else:
             self.values.pop("collector_server_endpoint", None)
+
+    @staticmethod
+    def _cloud_profile_candidate(
+        *,
+        key: object,
+        label: object,
+        source: object,
+        confidence: object,
+    ) -> CollectorCloudProfile | None:
+        """Build one strict profile candidate, failing closed without coercion."""
+
+        try:
+            normalized_key = _strict_optional_metadata_text(
+                key,
+                field_name="collector_cloud_profile_key",
+            )
+            normalized_label = _strict_optional_metadata_text(
+                label,
+                field_name="collector_cloud_profile_label",
+            )
+            normalized_source = _strict_optional_metadata_text(
+                source,
+                field_name="collector_cloud_profile_source",
+            )
+            normalized_confidence = _strict_optional_metadata_text(
+                confidence,
+                field_name="collector_cloud_profile_confidence",
+            )
+            if not normalized_key:
+                return None
+            return CollectorCloudProfile(
+                key=normalized_key,
+                label=normalized_label,
+                source=normalized_source,
+                confidence=normalized_confidence,
+            )
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _first_cloud_profile_value(*values: object) -> str | None:
+        """Select the first non-empty strict string or reject the source layer."""
+
+        for value in values:
+            if type(value) is not str or value != value.strip():
+                return None
+            if value:
+                return value
+        return ""
+
+    @property
+    def collector_cloud_profile(self) -> CollectorCloudProfile:
+        """Return one typed-first cloud profile with an explicit legacy fallback.
+
+        A candidate is selected as a whole. Its key, label and provenance are
+        never assembled from different layers. The SmartESS-named fields are
+        compatibility inputs for the older AT protocol parser; they do not
+        imply that the provider itself is SmartESS.
+        """
+
+        collector = self.collector
+        if collector is not None:
+            explicit_key = getattr(collector, "collector_cloud_profile_key", "")
+            key = self._first_cloud_profile_value(
+                explicit_key,
+                getattr(collector, "smartess_protocol_profile_key", ""),
+            )
+            label = self._first_cloud_profile_value(
+                getattr(collector, "collector_cloud_profile_label", ""),
+                getattr(collector, "smartess_protocol_name", ""),
+                getattr(collector, "smartess_protocol_asset_name", ""),
+            )
+            source = self._first_cloud_profile_value(
+                getattr(collector, "collector_cloud_profile_source", ""),
+            )
+            confidence = self._first_cloud_profile_value(
+                getattr(collector, "collector_cloud_profile_confidence", ""),
+            )
+            if None in (key, label, source, confidence):
+                return CollectorCloudProfile()
+            candidate = self._cloud_profile_candidate(
+                key=key,
+                label=label,
+                source=source or ("runtime_observed" if key else ""),
+                confidence=confidence or ("high" if key else ""),
+            )
+            if candidate is not None:
+                return candidate
+            # A malformed explicit typed key must not resurrect a stale legacy
+            # mapping. Empty typed fields are the compatibility case.
+            if explicit_key:
+                return CollectorCloudProfile()
+
+        values = self.values
+        explicit_key = values.get("collector_cloud_profile_key", "")
+        key = self._first_cloud_profile_value(
+            explicit_key,
+            values.get("smartess_protocol_profile_key", ""),
+            values.get("smartess_profile_key", ""),
+        )
+        label = self._first_cloud_profile_value(
+            values.get("collector_cloud_profile_label", ""),
+            values.get("smartess_protocol_name", ""),
+            values.get("smartess_protocol_asset_name", ""),
+        )
+        source = self._first_cloud_profile_value(
+            values.get("collector_cloud_profile_source", ""),
+        )
+        confidence = self._first_cloud_profile_value(
+            values.get("collector_cloud_profile_confidence", ""),
+        )
+        if None in (key, label, source, confidence):
+            return CollectorCloudProfile()
+        return self._cloud_profile_candidate(
+            key=key,
+            label=label,
+            source=source or ("runtime_observed" if key else ""),
+            confidence=confidence or ("high" if key else ""),
+        ) or CollectorCloudProfile()
+
+    def set_collector_cloud_profile(self, profile: CollectorCloudProfile) -> None:
+        """Synchronize one exact cloud profile into both runtime projections."""
+
+        if type(profile) is not CollectorCloudProfile:
+            raise TypeError("collector_cloud_profile_invalid")
+        collector = self.collector
+        if collector is not None:
+            collector.collector_cloud_profile_key = profile.key
+            collector.collector_cloud_profile_label = profile.label
+            collector.collector_cloud_profile_source = profile.source
+            collector.collector_cloud_profile_confidence = profile.confidence
+        fields = {
+            "collector_cloud_profile_key": profile.key,
+            "collector_cloud_profile_label": profile.label,
+            "collector_cloud_profile_source": profile.source,
+            "collector_cloud_profile_confidence": profile.confidence,
+        }
+        for key, value in fields.items():
+            if value:
+                self.values[key] = value
+            else:
+                self.values.pop(key, None)
 
 
 def _evaluate_conditions(

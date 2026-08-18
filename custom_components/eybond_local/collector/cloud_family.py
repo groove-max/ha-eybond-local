@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from ..collector_endpoint import inspect_collector_server_endpoint
@@ -41,6 +42,21 @@ class CollectorCloudFamilyObservation:
     family: str = COLLECTOR_CLOUD_FAMILY_UNKNOWN
     source: str = ""
     confidence: str = ""
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("family", self.family),
+            ("source", self.source),
+            ("confidence", self.confidence),
+        ):
+            if type(value) is not str:
+                raise TypeError(f"collector_cloud_family_{field_name}_not_string")
+            if value != value.strip():
+                raise ValueError(f"collector_cloud_family_{field_name}_not_normalized")
+        if self.family in {"", COLLECTOR_CLOUD_FAMILY_UNKNOWN} and (
+            self.source or self.confidence
+        ):
+            raise ValueError("collector_cloud_family_provenance_without_family")
 
     @property
     def known(self) -> bool:
@@ -111,15 +127,49 @@ def collector_cloud_family_observation_from_collector(
     if collector is None:
         return CollectorCloudFamilyObservation()
 
-    family = str(getattr(collector, "collector_cloud_family", "") or "").strip()
+    family = getattr(collector, "collector_cloud_family", "")
+    source = getattr(collector, "collector_cloud_family_source", "")
+    confidence = getattr(collector, "collector_cloud_family_confidence", "")
+    if any(
+        type(value) is not str or value != value.strip()
+        for value in (family, source, confidence)
+    ):
+        return CollectorCloudFamilyObservation()
     if not family:
         return CollectorCloudFamilyObservation()
 
     return CollectorCloudFamilyObservation(
         family=family,
-        source=str(getattr(collector, "collector_cloud_family_source", "") or "").strip(),
-        confidence=str(getattr(collector, "collector_cloud_family_confidence", "") or "").strip(),
+        source=source,
+        confidence=confidence,
     )
+
+
+def collector_cloud_family_observation_from_mapping(
+    values: Mapping[str, object] | None,
+) -> CollectorCloudFamilyObservation:
+    """Read one exact family/provenance tuple from a runtime mapping."""
+
+    if not isinstance(values, Mapping):
+        return CollectorCloudFamilyObservation()
+    family = values.get("collector_cloud_family", "")
+    source = values.get("collector_cloud_family_source", "")
+    confidence = values.get("collector_cloud_family_confidence", "")
+    if any(
+        type(value) is not str or value != value.strip()
+        for value in (family, source, confidence)
+    ):
+        return CollectorCloudFamilyObservation()
+    if not family:
+        return CollectorCloudFamilyObservation()
+    try:
+        return CollectorCloudFamilyObservation(
+            family=family,
+            source=source,
+            confidence=confidence,
+        )
+    except (TypeError, ValueError):
+        return CollectorCloudFamilyObservation()
 
 
 def default_collector_cloud_host(cloud_family: str) -> str:

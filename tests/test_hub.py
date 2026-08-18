@@ -738,6 +738,85 @@ class HubSnapshotTests(unittest.TestCase):
             "fresh.example,18899,TCP",
         )
 
+    def test_build_snapshot_synchronizes_fresh_cloud_profile_as_one_value(self) -> None:
+        hub = EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+        hub._link_manager = _FakeLinkManager()
+        hub._link_manager.collector_info.collector_cloud_profile_key = "stale"
+        hub._link_manager.collector_info.collector_cloud_profile_label = "Stale"
+        hub._link_manager.collector_info.collector_cloud_profile_source = "entry_persisted"
+        hub._link_manager.collector_info.collector_cloud_profile_confidence = "low"
+
+        snapshot = hub._build_snapshot(
+            extra_values={
+                "collector_cloud_profile_key": "valuecloud_at",
+                "collector_cloud_profile_label": "ValueCloud AT",
+                "collector_cloud_profile_source": "transport_sniff",
+                "collector_cloud_profile_confidence": "high",
+            }
+        )
+
+        self.assertEqual(snapshot.collector_cloud_profile.key, "valuecloud_at")
+        self.assertEqual(snapshot.collector_cloud_profile.label, "ValueCloud AT")
+        self.assertEqual(snapshot.collector_cloud_profile.source, "transport_sniff")
+        self.assertEqual(snapshot.collector_cloud_profile.confidence, "high")
+        self.assertEqual(
+            snapshot.collector.collector_cloud_profile_key,
+            "valuecloud_at",
+        )
+        self.assertEqual(
+            snapshot.values["collector_cloud_profile_key"],
+            "valuecloud_at",
+        )
+
+    def test_build_snapshot_synchronizes_stronger_cloud_family_provenance(self) -> None:
+        hub = EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+        hub._link_manager = _FakeLinkManager()
+        collector = hub._link_manager.collector_info
+        collector.collector_cloud_family = "smartess_at"
+        collector.collector_cloud_family_source = "endpoint_host"
+        collector.collector_cloud_family_confidence = "low"
+
+        snapshot = hub._build_snapshot(
+            extra_values={
+                "collector_cloud_family": "valuecloud_at",
+                "collector_cloud_family_source": "transport_sniff",
+                "collector_cloud_family_confidence": "high",
+            }
+        )
+
+        self.assertEqual(snapshot.collector.collector_cloud_family, "valuecloud_at")
+        self.assertEqual(
+            snapshot.collector.collector_cloud_family_source,
+            "transport_sniff",
+        )
+        self.assertEqual(snapshot.values["collector_cloud_family"], "valuecloud_at")
+        self.assertEqual(
+            snapshot.values["collector_cloud_family_confidence"],
+            "high",
+        )
+
     def test_build_snapshot_does_not_reuse_stale_collector_identity_values(self) -> None:
         hub = EybondHub(
             connection=EybondConnectionSpec(

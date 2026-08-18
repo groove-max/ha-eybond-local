@@ -25,6 +25,12 @@ from ..collector.capabilities import (
     collector_capability_profile_from_runtime,
     parse_esp_collector_hardware_token,
 )
+from ..collector.cloud_family import (
+    apply_collector_cloud_family_observation,
+    collector_cloud_family_observation_from_collector,
+    collector_cloud_family_observation_from_mapping,
+    select_preferred_collector_cloud_family,
+)
 from ..collector_endpoint import (
     DEFAULT_COLLECTOR_SERVER_PORT,
     inspect_collector_server_endpoint,
@@ -3474,6 +3480,45 @@ class EybondHub:
             endpoint = snapshot.collector_server_endpoint
         if endpoint:
             snapshot.set_collector_server_endpoint(endpoint)
+        family_observation = select_preferred_collector_cloud_family(
+            collector_cloud_family_observation_from_collector(snapshot.collector),
+            collector_cloud_family_observation_from_mapping(extra_values),
+        )
+        if family_observation.known:
+            apply_collector_cloud_family_observation(
+                snapshot.collector,
+                family_observation,
+            )
+            snapshot.values["collector_cloud_family"] = family_observation.family
+            if family_observation.source:
+                snapshot.values["collector_cloud_family_source"] = (
+                    family_observation.source
+                )
+            else:
+                snapshot.values.pop("collector_cloud_family_source", None)
+            if family_observation.confidence:
+                snapshot.values["collector_cloud_family_confidence"] = (
+                    family_observation.confidence
+                )
+            else:
+                snapshot.values.pop("collector_cloud_family_confidence", None)
+        # An explicit fresh cloud-profile record wins as one value. The older
+        # SmartESS-named protocol fields remain compatibility inputs only and
+        # therefore cannot replace an already-explicit cloud profile.
+        fresh_profile = None
+        if extra_values is not None:
+            explicit_key = extra_values.get("collector_cloud_profile_key", "")
+            if type(explicit_key) is str and explicit_key:
+                fresh_profile = RuntimeSnapshot(
+                    values=dict(extra_values)
+                ).collector_cloud_profile
+        profile = (
+            fresh_profile
+            if fresh_profile is not None and fresh_profile.known
+            else snapshot.collector_cloud_profile
+        )
+        if profile.known:
+            snapshot.set_collector_cloud_profile(profile)
         return snapshot
 
 

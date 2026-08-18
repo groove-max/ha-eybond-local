@@ -11,10 +11,111 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.models import CollectorInfo, RuntimeSnapshot
+from custom_components.eybond_local.models import (
+    CollectorCloudProfile,
+    CollectorInfo,
+    RuntimeSnapshot,
+)
 
 
 class RuntimeSnapshotCollectorMetadataTests(unittest.TestCase):
+    def test_cloud_profile_constructor_is_strict_and_key_owns_metadata(self) -> None:
+        profile = CollectorCloudProfile(
+            key="valuecloud_at",
+            label="ValueCloud AT",
+            source="runtime_observed",
+            confidence="high",
+        )
+
+        self.assertTrue(profile.known)
+        for invalid in (None, 1, b"profile"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(TypeError):
+                    CollectorCloudProfile(key=invalid)  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            CollectorCloudProfile(key=" padded ")
+        with self.assertRaises(ValueError):
+            CollectorCloudProfile(label="orphan")
+
+    def test_typed_cloud_profile_wins_as_one_coherent_candidate(self) -> None:
+        snapshot = RuntimeSnapshot(
+            collector=CollectorInfo(
+                collector_cloud_profile_key="valuecloud_at",
+                collector_cloud_profile_label="ValueCloud AT",
+                collector_cloud_profile_source="transport_sniff",
+                collector_cloud_profile_confidence="high",
+            ),
+            values={
+                "collector_cloud_profile_key": "stale_profile",
+                "collector_cloud_profile_label": "Stale label",
+                "collector_cloud_profile_source": "entry_persisted",
+                "collector_cloud_profile_confidence": "low",
+            },
+        )
+
+        self.assertEqual(
+            snapshot.collector_cloud_profile,
+            CollectorCloudProfile(
+                key="valuecloud_at",
+                label="ValueCloud AT",
+                source="transport_sniff",
+                confidence="high",
+            ),
+        )
+
+    def test_legacy_protocol_profile_is_projected_without_provider_assumption(self) -> None:
+        snapshot = RuntimeSnapshot(
+            values={
+                "smartess_protocol_profile_key": "smartvalue_at",
+                "smartess_protocol_name": "SmartValue AT",
+            },
+        )
+
+        self.assertEqual(
+            snapshot.collector_cloud_profile,
+            CollectorCloudProfile(
+                key="smartvalue_at",
+                label="SmartValue AT",
+                source="runtime_observed",
+                confidence="high",
+            ),
+        )
+
+    def test_malformed_typed_cloud_profile_fails_closed(self) -> None:
+        collector = CollectorInfo()
+        collector.collector_cloud_profile_key = object()  # type: ignore[assignment]
+        snapshot = RuntimeSnapshot(
+            collector=collector,
+            values={
+                "collector_cloud_profile_key": "stale_profile",
+                "collector_cloud_profile_source": "entry_persisted",
+            },
+        )
+
+        self.assertEqual(snapshot.collector_cloud_profile, CollectorCloudProfile())
+
+    def test_set_cloud_profile_updates_both_projections_atomically(self) -> None:
+        collector = CollectorInfo()
+        snapshot = RuntimeSnapshot(collector=collector)
+        profile = CollectorCloudProfile(
+            key="smartess_at",
+            label="Cloud AT",
+            source="runtime_observed",
+            confidence="high",
+        )
+
+        snapshot.set_collector_cloud_profile(profile)
+
+        self.assertEqual(snapshot.collector_cloud_profile, profile)
+        self.assertEqual(collector.collector_cloud_profile_key, profile.key)
+        self.assertEqual(
+            snapshot.values["collector_cloud_profile_source"],
+            profile.source,
+        )
+        with self.assertRaises(TypeError):
+            snapshot.set_collector_cloud_profile(object())  # type: ignore[arg-type]
+        self.assertEqual(snapshot.collector_cloud_profile, profile)
+
     def test_typed_collector_endpoint_wins_over_legacy_projection(self) -> None:
         snapshot = RuntimeSnapshot(
             collector=CollectorInfo(
@@ -97,6 +198,21 @@ class RuntimeSnapshotCollectorMetadataTests(unittest.TestCase):
             and isinstance(node.func, ast.Attribute)
         }
         self.assertIn("set_collector_server_endpoint", builder_calls)
+
+    def test_cloud_profile_projection_never_splits_fields_in_coordinator(self) -> None:
+        coordinator_source = (
+            REPO_ROOT / "custom_components/eybond_local/runtime/coordinator.py"
+        ).read_text(encoding="utf-8")
+        for key in (
+            "collector_cloud_profile_key",
+            "collector_cloud_profile_label",
+            "collector_cloud_profile_source",
+            "collector_cloud_profile_confidence",
+        ):
+            self.assertNotIn(f'values.get("{key}")', coordinator_source)
+            self.assertNotIn(f'snapshot.values["{key}"] =', coordinator_source)
+        self.assertIn("snapshot.set_collector_cloud_profile", coordinator_source)
+        self.assertIn("self.collector_cloud_profile", coordinator_source)
 
     def test_collector_endpoint_ui_never_reads_the_legacy_slot_directly(self) -> None:
         for relative_path in (

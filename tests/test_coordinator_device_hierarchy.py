@@ -398,10 +398,70 @@ def _install_coordinator_stubs() -> None:
             else:
                 self.values.pop("collector_server_endpoint", None)
 
+        @property
+        def collector_cloud_profile(self):
+            key = getattr(self.collector, "collector_cloud_profile_key", "")
+            key = key or getattr(self.collector, "smartess_protocol_profile_key", "")
+            if not key:
+                key = self.values.get("collector_cloud_profile_key", "")
+            if not key:
+                key = self.values.get("smartess_protocol_profile_key", "")
+            if not key:
+                return CollectorCloudProfile()
+            return CollectorCloudProfile(
+                key=key,
+                label=(
+                    getattr(self.collector, "collector_cloud_profile_label", "")
+                    or getattr(self.collector, "smartess_protocol_name", "")
+                    or getattr(self.collector, "smartess_protocol_asset_name", "")
+                    or self.values.get("collector_cloud_profile_label", "")
+                    or self.values.get("smartess_protocol_name", "")
+                ),
+                source=(
+                    getattr(self.collector, "collector_cloud_profile_source", "")
+                    or self.values.get("collector_cloud_profile_source", "")
+                    or "runtime_observed"
+                ),
+                confidence=(
+                    getattr(self.collector, "collector_cloud_profile_confidence", "")
+                    or self.values.get("collector_cloud_profile_confidence", "")
+                    or "high"
+                ),
+            )
+
+        def set_collector_cloud_profile(self, profile):
+            if self.collector is not None:
+                self.collector.collector_cloud_profile_key = profile.key
+                self.collector.collector_cloud_profile_label = profile.label
+                self.collector.collector_cloud_profile_source = profile.source
+                self.collector.collector_cloud_profile_confidence = profile.confidence
+            for key, value in {
+                "collector_cloud_profile_key": profile.key,
+                "collector_cloud_profile_label": profile.label,
+                "collector_cloud_profile_source": profile.source,
+                "collector_cloud_profile_confidence": profile.confidence,
+            }.items():
+                if value:
+                    self.values[key] = value
+                else:
+                    self.values.pop(key, None)
+
     class CollectorInfo:
         collector_server_endpoint = ""
 
+    class CollectorCloudProfile:
+        def __init__(self, key="", label="", source="", confidence=""):
+            self.key = key
+            self.label = label
+            self.source = source
+            self.confidence = confidence
+
+        @property
+        def known(self):
+            return bool(self.key)
+
     models.CollectorInfo = CollectorInfo
+    models.CollectorCloudProfile = CollectorCloudProfile
     models.CapabilityChoice = CapabilityChoice
     models.CapabilityCondition = CapabilityCondition
     models.CapabilityGroup = CapabilityGroup

@@ -16,12 +16,54 @@ from custom_components.eybond_local.collector.cloud_family import (  # noqa: E40
     COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST,
     COLLECTOR_CLOUD_FAMILY_SOURCE_EXPLICIT_ENDPOINT_PORT,
     COLLECTOR_CLOUD_FAMILY_UNKNOWN,
+    CollectorCloudFamilyObservation,
+    collector_cloud_family_observation_from_mapping,
     collector_cloud_family_observation_from_endpoint,
     default_collector_cloud_host,
 )
 
 
 class CollectorCloudFamilyTests(unittest.TestCase):
+    def test_observation_constructor_is_strict(self) -> None:
+        observation = CollectorCloudFamilyObservation(
+            family="smartvalue_at",
+            source="transport_sniff",
+            confidence="high",
+        )
+
+        self.assertTrue(observation.known)
+        with self.assertRaises(TypeError):
+            CollectorCloudFamilyObservation(family=1)  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            CollectorCloudFamilyObservation(family=" smartvalue_at ")
+        with self.assertRaises(ValueError):
+            CollectorCloudFamilyObservation(source="transport_sniff")
+
+    def test_mapping_projection_is_atomic_and_fail_closed(self) -> None:
+        self.assertEqual(
+            collector_cloud_family_observation_from_mapping(
+                {
+                    "collector_cloud_family": "valuecloud_at",
+                    "collector_cloud_family_source": "endpoint_host",
+                    "collector_cloud_family_confidence": "high",
+                }
+            ),
+            CollectorCloudFamilyObservation(
+                family="valuecloud_at",
+                source="endpoint_host",
+                confidence="high",
+            ),
+        )
+        self.assertFalse(
+            collector_cloud_family_observation_from_mapping(
+                {
+                    "collector_cloud_family": "valuecloud_at",
+                    "collector_cloud_family_source": object(),
+                    "collector_cloud_family_confidence": "high",
+                }
+            ).known
+        )
+
     def test_classifies_host_only_legacy_endpoint(self) -> None:
         observation = collector_cloud_family_observation_from_endpoint("ess.eybond.com")
 

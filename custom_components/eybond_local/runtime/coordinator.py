@@ -174,6 +174,7 @@ from ..metadata.smartess_draft import SmartEssKnownFamilyDraftPlan
 from ..metadata.smartess_smg_bridge import SmartEssSmgBridgePlan
 from ..models import (
     CapabilityPreset,
+    CollectorCloudProfile,
     DetectedInverter,
     ProbeTarget,
     RuntimeSnapshot,
@@ -636,9 +637,11 @@ def _known_collector_cloud_family(value: object) -> str:
 
 
 def _known_collector_cloud_profile_value(value: object) -> str:
-    """Return one normalized non-empty collector cloud profile metadata value."""
+    """Return one exact normalized collector cloud-profile metadata value."""
 
-    return str(value or "").strip()
+    if type(value) is not str or value != value.strip():
+        return ""
+    return value
 
 
 def _package_dir() -> Path:
@@ -2970,37 +2973,22 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
                 if getattr(collector, "smartess_device_address", None) is not None
                 else snapshot.values.get("smartess_device_address"),
             )
-            collector_cloud_profile_key = (
-                getattr(collector, "collector_cloud_profile_key", "")
-                or getattr(collector, "smartess_protocol_profile_key", "")
-                or snapshot.values.get("collector_cloud_profile_key")
-                or snapshot.values.get("smartess_protocol_profile_key")
-                or snapshot.values.get("smartess_profile_key")
-            )
+            collector_cloud_profile = snapshot.collector_cloud_profile
             _set_data_if_value(
                 _CONF_COLLECTOR_CLOUD_PROFILE_KEY,
-                collector_cloud_profile_key,
+                collector_cloud_profile.key,
             )
             _set_data_if_value(
                 _CONF_COLLECTOR_CLOUD_PROFILE_LABEL,
-                getattr(collector, "collector_cloud_profile_label", "")
-                or getattr(collector, "smartess_protocol_name", "")
-                or getattr(collector, "smartess_protocol_asset_name", "")
-                or snapshot.values.get("collector_cloud_profile_label")
-                or snapshot.values.get("smartess_protocol_name")
-                or snapshot.values.get("smartess_protocol_asset_name"),
+                collector_cloud_profile.label,
             )
             _set_data_if_value(
                 _CONF_COLLECTOR_CLOUD_PROFILE_SOURCE,
-                getattr(collector, "collector_cloud_profile_source", "")
-                or snapshot.values.get("collector_cloud_profile_source")
-                or ("runtime_observed" if collector_cloud_profile_key else ""),
+                collector_cloud_profile.source,
             )
             _set_data_if_value(
                 _CONF_COLLECTOR_CLOUD_PROFILE_CONFIDENCE,
-                getattr(collector, "collector_cloud_profile_confidence", "")
-                or snapshot.values.get("collector_cloud_profile_confidence")
-                or ("high" if collector_cloud_profile_key else ""),
+                collector_cloud_profile.confidence,
             )
 
         inverter = snapshot.inverter
@@ -4073,20 +4061,9 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         collector_cloud_family = self.collector_cloud_family
         if collector_cloud_family:
             snapshot.values["collector_cloud_family"] = collector_cloud_family
-        collector_cloud_profile_key = self.collector_cloud_profile_key
-        if collector_cloud_profile_key:
-            snapshot.values["collector_cloud_profile_key"] = collector_cloud_profile_key
-        collector_cloud_profile_label = self.collector_cloud_profile_label
-        if collector_cloud_profile_label:
-            snapshot.values["collector_cloud_profile_label"] = collector_cloud_profile_label
-        collector_cloud_profile_source = self.collector_cloud_profile_source
-        if collector_cloud_profile_source:
-            snapshot.values["collector_cloud_profile_source"] = collector_cloud_profile_source
-        collector_cloud_profile_confidence = self.collector_cloud_profile_confidence
-        if collector_cloud_profile_confidence:
-            snapshot.values["collector_cloud_profile_confidence"] = (
-                collector_cloud_profile_confidence
-            )
+        collector_cloud_profile = self.collector_cloud_profile
+        if collector_cloud_profile.known:
+            snapshot.set_collector_cloud_profile(collector_cloud_profile)
         return snapshot
 
     def _maybe_persist_unsupported_commands(self, snapshot: RuntimeSnapshot) -> None:
@@ -6123,126 +6100,63 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return ""
 
     @property
-    def collector_cloud_profile_key(self) -> str:
-        """Return the best available observed collector cloud profile key."""
+    def collector_cloud_profile(self) -> CollectorCloudProfile:
+        """Return one coherent runtime or persisted collector cloud profile."""
 
-        collector = getattr(self.data, "collector", None)
-        key = _known_collector_cloud_profile_value(
-            getattr(collector, "collector_cloud_profile_key", "")
-        )
-        if key:
-            return key
-        key = _known_collector_cloud_profile_value(
-            getattr(collector, "smartess_protocol_profile_key", "")
-        )
-        if key:
-            return key
-
-        values = getattr(self.data, "values", {})
-        key = _known_collector_cloud_profile_value(values.get("collector_cloud_profile_key"))
-        if key:
-            return key
-        key = _known_collector_cloud_profile_value(values.get("smartess_protocol_profile_key"))
-        if key:
-            return key
-        key = _known_collector_cloud_profile_value(values.get("smartess_profile_key"))
-        if key:
-            return key
-
+        runtime_profile = getattr(self.data, "collector_cloud_profile", None)
+        if type(runtime_profile) is CollectorCloudProfile and runtime_profile.known:
+            return runtime_profile
         config_entry = getattr(self, "config_entry", None)
         config_data = getattr(config_entry, "data", {}) if config_entry is not None else {}
-        key = _known_collector_cloud_profile_value(config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_KEY))
-        if key:
-            return key
-        return _known_collector_cloud_profile_value(config_data.get(CONF_SMARTESS_PROFILE_KEY))
+        key = _known_collector_cloud_profile_value(
+            config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_KEY)
+        ) or _known_collector_cloud_profile_value(
+            config_data.get(CONF_SMARTESS_PROFILE_KEY)
+        )
+        if not key:
+            return CollectorCloudProfile()
+        return CollectorCloudProfile(
+            key=key,
+            label=_known_collector_cloud_profile_value(
+                config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_LABEL)
+            ),
+            source=(
+                _known_collector_cloud_profile_value(
+                    config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_SOURCE)
+                )
+                or "entry_persisted"
+            ),
+            confidence=(
+                _known_collector_cloud_profile_value(
+                    config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_CONFIDENCE)
+                )
+                or "low"
+            ),
+        )
+
+    @property
+    def collector_cloud_profile_key(self) -> str:
+        """Return the selected collector cloud profile key."""
+
+        return self.collector_cloud_profile.key
 
     @property
     def collector_cloud_profile_label(self) -> str:
-        """Return the best available observed collector cloud profile label."""
+        """Return the selected collector cloud profile label."""
 
-        collector = getattr(self.data, "collector", None)
-        for candidate in (
-            getattr(collector, "collector_cloud_profile_label", ""),
-            getattr(collector, "smartess_protocol_name", ""),
-            getattr(collector, "smartess_protocol_asset_name", ""),
-        ):
-            label = _known_collector_cloud_profile_value(candidate)
-            if label:
-                return label
-
-        values = getattr(self.data, "values", {})
-        for candidate in (
-            values.get("collector_cloud_profile_label"),
-            values.get("smartess_protocol_name"),
-            values.get("smartess_protocol_asset_name"),
-        ):
-            label = _known_collector_cloud_profile_value(candidate)
-            if label:
-                return label
-
-        config_entry = getattr(self, "config_entry", None)
-        config_data = getattr(config_entry, "data", {}) if config_entry is not None else {}
-        return _known_collector_cloud_profile_value(config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_LABEL))
+        return self.collector_cloud_profile.label
 
     @property
     def collector_cloud_profile_source(self) -> str:
-        """Return the source of the observed collector cloud profile identity."""
+        """Return the selected collector cloud profile provenance."""
 
-        collector = getattr(self.data, "collector", None)
-        source = _known_collector_cloud_profile_value(
-            getattr(collector, "collector_cloud_profile_source", "")
-        )
-        if source:
-            return source
-
-        values = getattr(self.data, "values", {})
-        source = _known_collector_cloud_profile_value(values.get("collector_cloud_profile_source"))
-        if source:
-            return source
-
-        config_entry = getattr(self, "config_entry", None)
-        config_data = getattr(config_entry, "data", {}) if config_entry is not None else {}
-        source = _known_collector_cloud_profile_value(config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_SOURCE))
-        if source:
-            return source
-
-        if self.collector_cloud_profile_key:
-            if getattr(self.data, "collector", None) is not None:
-                return "runtime_observed"
-            if _known_collector_cloud_profile_value(config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_KEY)):
-                return "entry_persisted"
-        return ""
+        return self.collector_cloud_profile.source
 
     @property
     def collector_cloud_profile_confidence(self) -> str:
-        """Return confidence for the observed collector cloud profile identity."""
+        """Return confidence for the selected collector cloud profile."""
 
-        collector = getattr(self.data, "collector", None)
-        confidence = _known_collector_cloud_profile_value(
-            getattr(collector, "collector_cloud_profile_confidence", "")
-        )
-        if confidence:
-            return confidence
-
-        values = getattr(self.data, "values", {})
-        confidence = _known_collector_cloud_profile_value(values.get("collector_cloud_profile_confidence"))
-        if confidence:
-            return confidence
-
-        config_entry = getattr(self, "config_entry", None)
-        config_data = getattr(config_entry, "data", {}) if config_entry is not None else {}
-        confidence = _known_collector_cloud_profile_value(
-            config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_CONFIDENCE)
-        )
-        if confidence:
-            return confidence
-
-        if self.collector_cloud_profile_key:
-            if getattr(self.data, "collector", None) is not None:
-                return "high"
-            if _known_collector_cloud_profile_value(config_data.get(_CONF_COLLECTOR_CLOUD_PROFILE_KEY)):
-                return "low"
-        return ""
+        return self.collector_cloud_profile.confidence
 
     @property
     def detection_confidence(self) -> str:
@@ -9770,6 +9684,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
     def _collector_payload(self) -> dict[str, Any] | None:
         if self.data.collector is None:
             return None
+        cloud_profile = self.collector_cloud_profile
         return {
             "remote_ip": self.data.collector.remote_ip,
             "remote_port": self.data.collector.remote_port,
@@ -9794,22 +9709,10 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             "smartess_protocol_profile_key": self.data.collector.smartess_protocol_profile_key,
             "smartess_protocol_name": self.data.collector.smartess_protocol_name,
             "smartess_device_address": self.data.collector.smartess_device_address,
-            "collector_cloud_profile_key": (
-                self.data.collector.collector_cloud_profile_key
-                or self.collector_cloud_profile_key
-            ),
-            "collector_cloud_profile_label": (
-                self.data.collector.collector_cloud_profile_label
-                or self.collector_cloud_profile_label
-            ),
-            "collector_cloud_profile_source": (
-                self.data.collector.collector_cloud_profile_source
-                or self.collector_cloud_profile_source
-            ),
-            "collector_cloud_profile_confidence": (
-                self.data.collector.collector_cloud_profile_confidence
-                or self.collector_cloud_profile_confidence
-            ),
+            "collector_cloud_profile_key": cloud_profile.key,
+            "collector_cloud_profile_label": cloud_profile.label,
+            "collector_cloud_profile_source": cloud_profile.source,
+            "collector_cloud_profile_confidence": cloud_profile.confidence,
         }
 
     @staticmethod
