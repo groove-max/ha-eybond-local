@@ -39,6 +39,12 @@
       "2": "PV-Battery-Utility",
       "3": "PV-Utility-Battery (Grid-Tied PV)"
     },
+    "secondary_output_priority": {
+      "0": "OFF",
+      "1": "SUB",
+      "2": "SBU",
+      "3": "SUF"
+    },
     "charge_source_priority": {
       "1": "PV Priority",
       "2": "PV and Utility",
@@ -241,6 +247,11 @@
         "key": "output_source_priority",
         "register": 601,
         "enum_table": "output_source_priority"
+      },
+      {
+        "key": "secondary_output_priority",
+        "register": 602,
+        "enum_table": "secondary_output_priority"
       },
       {
         "key": "output_rating_voltage",

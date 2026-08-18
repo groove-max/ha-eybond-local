@@ -95,6 +95,50 @@
       ]
     },
     {
+      "key": "secondary_output_priority",
+      "register": 602,
+      "value_kind": "enum",
+      "title": "Secondary Output Priority",
+      "group": "output",
+      "order": 125,
+      "advanced": true,
+      "tested": false,
+      "provenance": "doc_backed",
+      "support_tier": "conditional",
+      "support_notes": "Protocol No. 3-10, the SmartESS field catalog, and a live register read agree on register 602 and values 0..3. Local write behavior still requires hardware retesting, so this control is available only in Full Control.",
+      "enabled_default": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the priority used by the inverter's secondary output.",
+      "note": "Secondary output priority at register 602. Read mapping is hardware-correlated; local writes are not yet hardware-confirmed.",
+      "choices": [
+        {
+          "value": 0,
+          "label": "OFF",
+          "order": 0,
+          "description": "Disable secondary output priority."
+        },
+        {
+          "value": 1,
+          "label": "SUB",
+          "order": 1,
+          "description": "Vendor mode SUB."
+        },
+        {
+          "value": 2,
+          "label": "SBU",
+          "order": 2,
+          "description": "Vendor mode SBU."
+        },
+        {
+          "value": 3,
+          "label": "SUF",
+          "order": 3,
+          "description": "Vendor mode SUF."
+        }
+      ]
+    },
+    {
       "key": "output_rating_voltage",
       "template": "output_rating_voltage",
       "register": 606

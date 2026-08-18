@@ -556,11 +556,16 @@ class ProfileLoaderTests(unittest.TestCase):
             )
         )
         self.assertEqual(len(profile.groups), 4)
-        self.assertEqual(len(profile.capabilities), 52)
+        self.assertEqual(len(profile.capabilities), 53)
         self.assertEqual(len(profile.presets), 0)
 
         self.assertEqual(profile.get_capability("output_mode").register, 600)
         self.assertEqual(profile.get_capability("output_mode").enum_value_map[6], "Split-Phase-P2")
+        secondary_output = profile.get_capability("secondary_output_priority")
+        self.assertEqual(secondary_output.register, 602)
+        self.assertEqual(secondary_output.enum_value_map, {0: "OFF", 1: "SUB", 2: "SBU", 3: "SUF"})
+        self.assertFalse(secondary_output.tested)
+        self.assertEqual(secondary_output.provenance, "doc_backed")
         self.assertEqual(profile.get_capability("force_eq_charge").register, 656)
         self.assertEqual(profile.get_capability("input_mode").register, 677)
         self.assertEqual(profile.get_capability("input_mode").enum_value_map[2], "GNT")
@@ -597,7 +602,13 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.get_capability("inverter_date_write").word_count, 3)
         self.assertEqual(profile.get_capability("inverter_time_write").register, 699)
         self.assertEqual(profile.get_capability("inverter_time_write").word_count, 3)
-        self.assertTrue(all(capability.tested for capability in profile.capabilities))
+        self.assertTrue(
+            all(
+                capability.tested
+                for capability in profile.capabilities
+                if capability.key != "secondary_output_priority"
+            )
+        )
         self.assertEqual(profile.get_capability("clear_generation_data").register, 705)
         self.assertEqual(profile.get_capability("reset_user_parameters").register, 706)
         self.assertEqual(profile.get_capability("ground_relay_enabled").register, 707)

@@ -88,6 +88,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
   - Coverage notes:
     - Device-specific runtime profile is user-confirmed.
     - Private Anenji Protocol No. 3-10 documentation backs a model-specific register map for this runtime family.
+    - Register 602 secondary-output priority is documented and hardware-read-correlated; local write behavior remains conditional pending a device retest.
 - Summary: Anenji 11kW unit with a model-specific profile and register schema, backed by donor captures, user-confirmed controls, and the Protocol No. 3-10 register documentation.
 - Variants:
   - `layout4_model32768` — Anenji 11kW variant
@@ -96,9 +97,10 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `anenji_anj_11kw` → surface `anenji_anj_11kw_full` (driver modbus_smg, variant anenji_anj_11kw_48v_wifi_p)
       - Protocol: modbus_smg | Detection: fingerprint (layout 4, model 32768, rated —)
       - Tier: full | Read-only: no | Profile: modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json | Schema: modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json
-      - Capabilities: 52 (tested 52); support tiers: conditional 42, standard 10 | Telemetry: 122 measurements, 18 binary sensors
-- Known limitations: —
-- Evidence: 3 source(s)
+      - Capabilities: 53 (tested 52, untested 1); support tiers: conditional 43, standard 10 | Telemetry: 122 measurements, 18 binary sensors
+- Known limitations:
+  - Secondary Output Priority writes are available only in Full Control until register 602 is write-tested on hardware.
+- Evidence: 4 source(s)
 
 ### Anenji — ANJ-4000W-24V (`anenji_4200_protocol_1`)
 

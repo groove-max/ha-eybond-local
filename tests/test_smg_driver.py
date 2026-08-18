@@ -356,13 +356,30 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
             "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
         )
         self.assertEqual(len(inverter.capability_groups), 4)
-        # Pinned tested-control count for this profile. It grows only as
-        # shadow-learned controls are deliberately graduated into the builtin
-        # catalog (each still tested=True and exposable, asserted below), so a
-        # change here must be a reviewed catalog change, never a silent runtime
-        # over-exposure of controls on real hardware.
-        self.assertEqual(len(inverter.capabilities), 52)
+        # Pinned control count for this profile. Document-backed controls may
+        # be present as explicit Full-Control-only candidates, but must not be
+        # silently exposed by the automatic policy before a hardware retest.
+        self.assertEqual(len(inverter.capabilities), 53)
         self.assertEqual(inverter.get_capability("output_mode").register, 600)
+        secondary_output = inverter.get_capability("secondary_output_priority")
+        self.assertEqual(secondary_output.register, 602)
+        self.assertFalse(secondary_output.tested)
+        self.assertEqual(secondary_output.provenance, "doc_backed")
+        self.assertEqual(secondary_output.resolved_support_tier, "conditional")
+        self.assertFalse(
+            can_expose_capability(
+                secondary_output,
+                control_mode="auto",
+                detection_confidence="high",
+            )
+        )
+        self.assertTrue(
+            can_expose_capability(
+                secondary_output,
+                control_mode="full",
+                detection_confidence="high",
+            )
+        )
         self.assertEqual(inverter.get_capability("charge_source_priority").register, 632)
         self.assertEqual(inverter.get_capability("force_eq_charge").register, 656)
         self.assertEqual(inverter.get_capability("input_mode").register, 677)
@@ -374,7 +391,13 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.get_capability("inverter_time_write").register, 699)
         with self.assertRaises(KeyError):
             inverter.get_capability("remote_switch")
-        self.assertTrue(all(capability.tested for capability in inverter.capabilities))
+        self.assertTrue(
+            all(
+                capability.tested
+                for capability in inverter.capabilities
+                if capability.key != "secondary_output_priority"
+            )
+        )
         self.assertTrue(
             all(
                 can_expose_capability(
@@ -383,6 +406,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
                     detection_confidence="high",
                 )
                 for capability in inverter.capabilities
+                if capability.key != "secondary_output_priority"
             )
         )
         self.assertEqual(inverter.details["device_type"], 32768)
@@ -454,6 +478,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["pv2_current"], 0.0)
         self.assertEqual(values["pv2_power"], 0)
         self.assertEqual(values["input_mode"], "UPS")
+        self.assertEqual(values["secondary_output_priority"], "OFF")
         self.assertEqual(values["parallel_pv_detection_mode"], 0)
         self.assertEqual(values["external_ct_enabled"], "Disabled")
         self.assertEqual(values["warning_mask_i"], 4294962687)
@@ -550,6 +575,30 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
 
         values = await driver.async_read_values(transport, inverter)
         self.assertEqual(values["warning_mask_i"], 0x12345678)
+
+    async def test_documented_secondary_output_write_targets_register_602(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        transport = FixtureTransport(
+            registers=self._anenji_registers(),
+            command_responses=None,
+            probe_target=target,
+        )
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        capability = inverter.get_capability("secondary_output_priority")
+        self.assertFalse(capability.tested)
+
+        written = await driver.async_write_capability(
+            transport,
+            inverter,
+            "secondary_output_priority",
+            "SBU",
+        )
+
+        self.assertEqual(written, "SBU")
+        self.assertEqual(transport._registers[602], 2)
 
     def _op2_inverter(self, target: ProbeTarget) -> DetectedInverter:
         from custom_components.eybond_local.metadata.profile_loader import load_driver_profile

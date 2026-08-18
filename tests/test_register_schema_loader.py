@@ -392,6 +392,16 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         schema = load_register_schema("modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json")
 
         config_specs = {spec.key: spec for spec in schema.spec_set("config")}
+        self.assertEqual(config_specs["secondary_output_priority"].register, 602)
+        self.assertEqual(
+            config_specs["secondary_output_priority"].enum_map,
+            {
+                0: "OFF",
+                1: "SUB",
+                2: "SBU",
+                3: "SUF",
+            },
+        )
         self.assertEqual(config_specs["op2_overload_alarm_setting"].register, 608)
         self.assertEqual(config_specs["secondary_charging_priority"].register, 633)
         self.assertEqual(

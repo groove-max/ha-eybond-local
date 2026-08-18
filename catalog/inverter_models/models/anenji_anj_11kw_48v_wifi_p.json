@@ -26,14 +26,18 @@
     "vendor_register_map": "documented",
     "notes": [
       "Device-specific runtime profile is user-confirmed.",
-      "Private Anenji Protocol No. 3-10 documentation backs a model-specific register map for this runtime family."
+      "Private Anenji Protocol No. 3-10 documentation backs a model-specific register map for this runtime family.",
+      "Register 602 secondary-output priority is documented and hardware-read-correlated; local write behavior remains conditional pending a device retest."
     ]
   },
-  "known_limitations": [],
+  "known_limitations": [
+    "Secondary Output Priority writes are available only in Full Control until register 602 is write-tested on hardware."
+  ],
   "knowledge_summary": "Anenji 11kW unit with a model-specific profile and register schema, backed by donor captures, user-confirmed controls, and the Protocol No. 3-10 register documentation.",
   "source_keys": [
     "corpus_anenji_anj_11kw",
     "private_message_anenji_anj_11kw_validation",
-    "documentation_anenji_protocol_3_10"
+    "documentation_anenji_protocol_3_10",
+    "support_archive_anenji_anj_11kw_secondary_controls_20260707"
   ]
 }
