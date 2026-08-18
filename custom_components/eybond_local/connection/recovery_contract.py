@@ -34,7 +34,7 @@ What can NEVER become a proof here (fail-closed by construction):
   backfill -- and deliberately no "legacy" proof method to backfill into);
 * a WEAKLY identified collector: the contract and every proof carry their own
   ``identity_source`` and exist only when
-  ``session_registry.identity_source_is_strong`` says the PN was read
+  ``collector_identity.identity_source_is_strong`` says the PN was read
   authoritatively (FC=2 parameter 2 / AT DTUPN) -- a short heartbeat PN can
   never bind a contract;
 * peer IP, endpoint hostname, collector kind, cloud family, driver/model, or
@@ -50,7 +50,7 @@ Purity rules: immutable dataclasses; parsers never raise on malformed persisted
 data (they drop exactly the untrusted part); no ``now()`` anywhere -- every
 timestamp is supplied by the caller; no Home Assistant, transport, coordinator,
 config-flow, driver or provider imports. Identity reconciliation delegates to
-the session registry's single implementation (pure).
+the package's single pure collector identity implementation.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
-from .session_registry import (
+from ..collector_identity import (
     identity_source_is_strong,
     normalize_pn,
     pn_is_same_identity,

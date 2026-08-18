@@ -17,12 +17,11 @@ from .collector.transport import _acquire_shared_listener, _release_shared_liste
 from .collector.transport_profile import collector_session_protocol_from_inventory_state
 from .connection.admission import ObservedCollectorSession
 from .connection.removal_finalization import CollectorRemovalSessionTicket
-from .connection.session_registry import (
-    CallbackSessionRegistry,
-    SESSION_STATE_CLOSED,
+from .collector_identity import (
     identity_source_is_strong,
     pn_is_same_identity,
 )
+from .connection.session_registry import CallbackSessionRegistry, SESSION_STATE_CLOSED
 from .collector_endpoint import (
     DEFAULT_COLLECTOR_SERVER_PORT,
     LEGACY_BINARY_COLLECTOR_SERVER_PORT,
@@ -138,9 +137,9 @@ class PassiveCallbackDiscovery:
         self._entry_retired_session_keys: dict[str, set[str]] = {}
         self._removal_quarantined_sessions: set[str] = set()
         self._entry_removal_tickets: dict[str, CollectorRemovalSessionTicket] = {}
-        # The single ownership + short/full PN reconciliation authority. Passive
-        # discovery reads coalesced, unclaimed candidates from it; the listener
-        # inventory is only its raw source.
+        # The single mutable ownership authority. It consumes the adjacent pure
+        # short/full PN identity rules and projects coalesced, unclaimed
+        # candidates; the listener inventory is only its raw source.
         self._registry = CallbackSessionRegistry(
             sessions_source=self.iter_observed_sessions,
         )

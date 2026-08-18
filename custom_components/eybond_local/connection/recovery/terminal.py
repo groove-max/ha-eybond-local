@@ -48,7 +48,7 @@ from ..recovery_contract import (
     RECOVERY_CONTRACT_KEY,
     RecoveryContract,
 )
-from ..session_registry import pn_is_same_identity, prefer_full_pn
+from ...collector_identity import pn_is_same_identity, prefer_full_pn
 from ...const import CONF_COLLECTOR_PN
 
 logger = logging.getLogger(__name__)

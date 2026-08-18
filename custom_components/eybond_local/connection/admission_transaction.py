@@ -51,7 +51,7 @@ from .recovery.verification import (
     async_run_callback_recovery_transaction,
     registry_sessions_projection,
 )
-from .session_registry import identity_source_is_strong, pn_is_same_identity
+from ..collector_identity import identity_source_is_strong, pn_is_same_identity
 from ..const import CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
 from ..timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY, OnboardingTimeoutPolicy
 

@@ -225,7 +225,7 @@ async def test_cold_degraded_repair_through_real_ha(
     from custom_components.eybond_local.onboarding.timeouts import (
         DEFAULT_ONBOARDING_TIMEOUT_POLICY,
     )
-    from custom_components.eybond_local.connection.session_registry import (
+    from custom_components.eybond_local.collector_identity import (
         pn_is_same_identity,
     )
     from custom_components.eybond_local.passive_discovery import (

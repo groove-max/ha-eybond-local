@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from .session_registry import normalize_pn
+from ..collector_identity import normalize_pn
 
 # The one recovery kind this batch models: an inbound -> callback_on_demand
 # transition whose callback strategy was never proven. Named for the TRANSITION,

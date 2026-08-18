@@ -221,7 +221,7 @@ class SilentSessionIdentityProbeChannel:
         all fail closed to ``""``.
         """
 
-        from ..connection.session_registry import (
+        from ..collector_identity import (
             identity_source_is_strong,
             pn_is_same_identity,
         )

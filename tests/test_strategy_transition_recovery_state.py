@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from custom_components.eybond_local.connection.session_registry import (  # noqa: E402
+from custom_components.eybond_local.collector_identity import (  # noqa: E402
     normalize_pn,
 )
 from custom_components.eybond_local.connection.strategy_transition_recovery import (  # noqa: E402

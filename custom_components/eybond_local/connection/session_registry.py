@@ -18,7 +18,9 @@ Identity rules (the whole point of the facade):
   ownership or dedup key.
 - A session is either unclaimed or owned by exactly one config entry.
 
-Short/full PN reconciliation lives here and only here.
+Short/full PN reconciliation lives in the adjacent pure
+``collector_identity`` module; this registry consumes that one rule
+while owning all mutable session claims and handoffs.
 """
 
 from __future__ import annotations
@@ -28,12 +30,13 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Callable
 
+from ..collector_identity import (
+    identity_source_is_strong as _identity_source_is_strong,
+    normalize_pn as _normalize_pn,
+    pn_is_same_identity as _pn_is_same_identity,
+    prefer_full_pn as _prefer_full_pn,
+)
 from .session_handle import SessionHandle, negotiate_session_adapters
-
-# One canonical prefix-match length for short/full PN reconciliation. A weak
-# short PN (e.g. the heartbeat prefix) can be a prefix of the full AT+DTUPN PN;
-# below this length a prefix is too ambiguous to treat as the same collector.
-CALLBACK_PN_PREFIX_MATCH_MIN_LEN = 10
 
 # Normalized session lifecycle states.
 SESSION_STATE_ACCEPTED = "accepted"
@@ -43,31 +46,6 @@ SESSION_STATE_CLAIMED = "claimed"
 SESSION_STATE_ACTIVE = "active"
 SESSION_STATE_CLOSED = "closed"
 
-# Identity sources considered strong (a full, authoritative PN).
-_STRONG_IDENTITY_SOURCES = frozenset({"at_dtupn", "fc2_parameter_2"})
-
-
-def identity_source_is_strong(source: object) -> bool:
-    """Return whether one observation is authoritative collector identity."""
-
-    return str(source or "").strip() in _STRONG_IDENTITY_SOURCES
-
-
-def prefer_identity_source(current: object, candidate: object) -> str:
-    """Keep the strongest identity evidence observed for one live session.
-
-    Heartbeats may arrive after an authoritative AT/FC2 identity query. They
-    must not downgrade that already-established evidence merely because they
-    are newer.
-    """
-
-    current_value = str(current or "").strip()
-    candidate_value = str(candidate or "").strip()
-    if identity_source_is_strong(current_value):
-        return current_value
-    if identity_source_is_strong(candidate_value):
-        return candidate_value
-    return candidate_value or current_value
 
 # Listener inventory states that mean the socket is routed/live.
 _ACTIVE_INVENTORY_STATES = frozenset({"routed_at_text", "routed_framed"})
@@ -84,75 +62,8 @@ _UNDISCOVERABLE_INVENTORY_STATES = frozenset(
 )
 
 
-def normalize_pn(value: object) -> str:
-    """Return a trimmed collector PN string."""
-
-    return str(value or "").strip()
-
-
-def pn_is_same_identity(
-    left: object,
-    right: object,
-    *,
-    min_prefix_len: int = CALLBACK_PN_PREFIX_MATCH_MIN_LEN,
-) -> bool:
-    """Return whether two PNs denote the same durable collector identity.
-
-    Exact match, or one is a prefix of the other and both are at least
-    ``min_prefix_len`` characters. This is the *only* place short/full PN
-    reconciliation is defined for ownership purposes.
-    """
-
-    a = normalize_pn(left)
-    b = normalize_pn(right)
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    if min(len(a), len(b)) < min_prefix_len:
-        return False
-    return a.startswith(b) or b.startswith(a)
-
-
-def prefer_full_pn(left: object, right: object) -> str:
-    """Return the more complete PN of two same-identity PNs (the longer one)."""
-
-    a = normalize_pn(left)
-    b = normalize_pn(right)
-    if not a:
-        return b
-    if not b:
-        return a
-    return a if len(a) >= len(b) else b
-
-
-def reconcile_pn(current: object, candidate: object) -> str:
-    """Merge two PN observations into the more complete durable identity.
-
-    Short PN enriches to the full PN when one is a prefix of the other; a genuine
-    identity conflict (neither is a prefix of the other) keeps ``current`` rather
-    than silently switching identity. This is the single home for connection- and
-    runtime-level short/full PN reconciliation -- the transport, hub, and link
-    all defer here instead of re-implementing the same prefix logic.
-    """
-
-    a = normalize_pn(current)
-    b = normalize_pn(candidate)
-    if not b:
-        return a
-    if not a:
-        return b
-    if a == b:
-        return a
-    if b.startswith(a):
-        return b
-    if a.startswith(b):
-        return a
-    return a
-
-
 def _identity_is_strong(source: object) -> bool:
-    return identity_source_is_strong(source)
+    return _identity_source_is_strong(source)
 
 
 def _state_from_inventory(inventory_state: str, identity_source: str) -> str:
@@ -298,7 +209,7 @@ class CallbackSessionRegistry:
             listener_port=int(raw.get("listener_port") or 0),
             protocol_shape=str(raw.get("protocol_shape") or "").strip(),
             session_protocol=str(raw.get("session_protocol") or "").strip(),
-            collector_pn=normalize_pn(raw.get("collector_pn")),
+            collector_pn=_normalize_pn(raw.get("collector_pn")),
             identity_source=identity_source,
             state=_state_from_inventory(inventory_state, identity_source),
             raw=MappingProxyType(dict(raw)),
@@ -323,7 +234,7 @@ class CallbackSessionRegistry:
             for index, existing in enumerate(coalesced):
                 if not existing.collector_pn:
                     continue
-                if not pn_is_same_identity(existing.collector_pn, session.collector_pn):
+                if not _pn_is_same_identity(existing.collector_pn, session.collector_pn):
                     continue
                 # Same collector observed twice (short + full / weak + strong):
                 # keep the strongest, most complete identity.
@@ -336,7 +247,7 @@ class CallbackSessionRegistry:
                 ):
                     keep_new = True
                 if keep_new:
-                    merged_pn = prefer_full_pn(existing.collector_pn, session.collector_pn)
+                    merged_pn = _prefer_full_pn(existing.collector_pn, session.collector_pn)
                     coalesced[index] = replace(session, collector_pn=merged_pn)
                 break
             else:
@@ -406,7 +317,7 @@ class CallbackSessionRegistry:
         deliberately absent from both matching and ranking.
         """
 
-        pn = normalize_pn(collector_pn)
+        pn = _normalize_pn(collector_pn)
         if not pn:
             return None
         best: CallbackSession | None = None
@@ -417,7 +328,7 @@ class CallbackSessionRegistry:
             if require_exact:
                 if session.collector_pn != pn:
                     continue
-            elif not pn_is_same_identity(session.collector_pn, pn):
+            elif not _pn_is_same_identity(session.collector_pn, pn):
                 continue
             raw_state = str(session.raw.get("state") or "").strip().lower()
             rank = (
@@ -439,7 +350,7 @@ class CallbackSessionRegistry:
         for entry_id, claim in self._claims.items():
             if claim.session_id and claim.session_id == session.session_id:
                 return entry_id
-            if claim.collector_pn and pn_is_same_identity(
+            if claim.collector_pn and _pn_is_same_identity(
                 claim.collector_pn, session.collector_pn
             ):
                 return entry_id
@@ -448,11 +359,11 @@ class CallbackSessionRegistry:
     def owner_for_pn(self, collector_pn: object) -> str:
         """Return the entry id that owns a durable PN identity, if any."""
 
-        pn = normalize_pn(collector_pn)
+        pn = _normalize_pn(collector_pn)
         if not pn:
             return ""
         for entry_id, claim in self._claims.items():
-            if claim.collector_pn and pn_is_same_identity(claim.collector_pn, pn):
+            if claim.collector_pn and _pn_is_same_identity(claim.collector_pn, pn):
                 return entry_id
         return ""
 
@@ -488,7 +399,7 @@ class CallbackSessionRegistry:
         entry_id = str(entry_id or "").strip()
         if not entry_id:
             raise ValueError("entry_id_required")
-        pn = normalize_pn(collector_pn)
+        pn = _normalize_pn(collector_pn)
         sid = str(session_id or "").strip()
 
         if pn:
@@ -502,7 +413,7 @@ class CallbackSessionRegistry:
         # the claim now points where it asked.
         existing = self._claims.get(entry_id)
         if existing is not None:
-            if pn and existing.collector_pn and not pn_is_same_identity(
+            if pn and existing.collector_pn and not _pn_is_same_identity(
                 existing.collector_pn, pn
             ):
                 raise ValueError(f"claim_identity_mismatch:{existing.collector_pn}:{pn}")
@@ -515,7 +426,7 @@ class CallbackSessionRegistry:
             if sid and session.session_id == sid:
                 matched = session
                 break
-            if pn and pn_is_same_identity(pn, session.collector_pn):
+            if pn and _pn_is_same_identity(pn, session.collector_pn):
                 if matched is None or (
                     session.has_strong_identity and not matched.has_strong_identity
                 ):
@@ -534,7 +445,7 @@ class CallbackSessionRegistry:
         # A_full and a divergent A_other.
         if matched is not None and matched.collector_pn:
             for known in (pn, existing.collector_pn if existing is not None else ""):
-                if known and not pn_is_same_identity(known, matched.collector_pn):
+                if known and not _pn_is_same_identity(known, matched.collector_pn):
                     raise ValueError(
                         f"claim_session_identity_mismatch:{known}:{matched.collector_pn}"
                     )
@@ -543,7 +454,7 @@ class CallbackSessionRegistry:
                 # Same identity is PROVEN immediately above, so this is a pure
                 # short->full enrichment of ONE collector -- prefer_full_pn's
                 # actual contract -- never a choice between two candidates.
-                pn = prefer_full_pn(pn, matched.collector_pn)
+                pn = _prefer_full_pn(pn, matched.collector_pn)
             if not sid:
                 sid = matched.session_id
         protocol = str(session_protocol or "").strip() or (
@@ -562,7 +473,7 @@ class CallbackSessionRegistry:
             # this claim's identity, and the trust-boundary guard proved any
             # socket-DERIVED enrichment is too, so this cannot fire today -- it
             # stays as a last gate on the write itself.
-            if pn and existing.collector_pn and not pn_is_same_identity(
+            if pn and existing.collector_pn and not _pn_is_same_identity(
                 existing.collector_pn, pn
             ):
                 raise ValueError(f"claim_identity_mismatch:{existing.collector_pn}:{pn}")
@@ -572,7 +483,7 @@ class CallbackSessionRegistry:
             # handoff that setup is about to complete. Same identity is proven by
             # both guards above, so prefer_full_pn only ever picks the more
             # complete spelling of the one collector.
-            existing.collector_pn = prefer_full_pn(existing.collector_pn, pn)
+            existing.collector_pn = _prefer_full_pn(existing.collector_pn, pn)
             if not existing.session_id:
                 existing.session_id = sid
             if not existing.session_protocol:
@@ -622,7 +533,7 @@ class CallbackSessionRegistry:
         entry_id = str(entry_id or "").strip()
         if not entry_id:
             raise ValueError("entry_id_required")
-        pn = normalize_pn(collector_pn)
+        pn = _normalize_pn(collector_pn)
         if not pn:
             raise ValueError("collector_pn_required")
         # Single-owner guard FIRST, before any mutation.
@@ -636,11 +547,11 @@ class CallbackSessionRegistry:
         if existing.collector_pn:
             # PN-bearing claim: same-identity short->full enrichment, or foreign
             # refusal. session_id / session_protocol / handoff_pending untouched.
-            if not pn_is_same_identity(existing.collector_pn, pn):
+            if not _pn_is_same_identity(existing.collector_pn, pn):
                 raise ValueError(
                     f"claim_identity_mismatch:{existing.collector_pn}:{pn}"
                 )
-            existing.collector_pn = prefer_full_pn(existing.collector_pn, pn)
+            existing.collector_pn = _prefer_full_pn(existing.collector_pn, pn)
             return None
         # PN-less claim: only a COMPLETELY empty, unbound claim may take a PN. A
         # transient session/protocol/handoff claim is NOT silently promoted to a
@@ -713,7 +624,7 @@ class CallbackSessionRegistry:
             if (
                 existing.collector_pn
                 and observed_pn
-                and not pn_is_same_identity(existing.collector_pn, observed_pn)
+                and not _pn_is_same_identity(existing.collector_pn, observed_pn)
             ):
                 # Same session id, but it is no longer the same collector: the
                 # socket this owner proved for A now reports B. Re-claiming it is
@@ -769,17 +680,17 @@ class CallbackSessionRegistry:
         claim = self._claims.get(entry_id)
         if claim is None:
             return False
-        pn = normalize_pn(full_pn)
+        pn = _normalize_pn(full_pn)
         if not pn:
             return False
         other = self.owner_for_pn(pn)
         if other and other != entry_id:
             raise ValueError(f"session_already_claimed:{pn}:{other}")
         current = claim.collector_pn
-        if current and not pn_is_same_identity(current, pn):
+        if current and not _pn_is_same_identity(current, pn):
             raise ValueError(f"promote_identity_mismatch:{current}:{pn}")
         # Empty -> adopt; short -> full enriches; full -> short keeps the full PN.
-        claim.collector_pn = prefer_full_pn(current, pn)
+        claim.collector_pn = _prefer_full_pn(current, pn)
         return True
 
     def claimed_session_id(self, entry_id: str) -> str:
@@ -796,7 +707,7 @@ class CallbackSessionRegistry:
         claim = self._claims.get(owner)
         if claim is None or claim.session_id != sid:
             return ""
-        claim_pn = normalize_pn(claim.collector_pn)
+        claim_pn = _normalize_pn(claim.collector_pn)
         if not claim_pn:
             return ""
         for session in self._normalized_sessions():
@@ -806,12 +717,12 @@ class CallbackSessionRegistry:
                 return ""
             if not session.has_strong_identity:
                 return ""
-            if not pn_is_same_identity(session.collector_pn, claim_pn):
+            if not _pn_is_same_identity(session.collector_pn, claim_pn):
                 return ""
             session_owner = self._owner_for_session(session)
             if session_owner and session_owner != owner:
                 return ""
-            return prefer_full_pn(claim_pn, session.collector_pn)
+            return _prefer_full_pn(claim_pn, session.collector_pn)
         return ""
 
     def certify_owner_reconnected_session(
@@ -875,7 +786,7 @@ class CallbackSessionRegistry:
         )
         if not certified_pn:
             return False
-        return pn_is_same_identity(certified_pn, certification.collector_pn)
+        return _pn_is_same_identity(certified_pn, certification.collector_pn)
 
     def pin_owner_claim_to_session(
         self,
@@ -902,7 +813,7 @@ class CallbackSessionRegistry:
             return False
         if claim.session_id == sid:
             return True
-        claim_pn = normalize_pn(claim.collector_pn)
+        claim_pn = _normalize_pn(claim.collector_pn)
         if not claim_pn:
             return False
         for session in self._normalized_sessions():
@@ -910,7 +821,7 @@ class CallbackSessionRegistry:
                 continue
             if session.state == SESSION_STATE_CLOSED:
                 return False
-            if not pn_is_same_identity(session.collector_pn, claim_pn):
+            if not _pn_is_same_identity(session.collector_pn, claim_pn):
                 return False
             session_owner = self._owner_for_session(session)
             if session_owner and session_owner != owner:
@@ -980,7 +891,7 @@ class CallbackSessionRegistry:
         if (
             target is None
             or target.state == SESSION_STATE_CLOSED
-            or not pn_is_same_identity(claim.collector_pn, target.collector_pn)
+            or not _pn_is_same_identity(claim.collector_pn, target.collector_pn)
         ):
             return False
         target_owner = self._owner_for_session(target)
@@ -997,13 +908,13 @@ class CallbackSessionRegistry:
         """
 
         sid = str(session_id or "").strip()
-        full = normalize_pn(full_pn)
+        full = _normalize_pn(full_pn)
         if not sid or not full:
             return False
         for claim in self._claims.values():
-            if claim.session_id == sid and pn_is_same_identity(claim.collector_pn, full):
+            if claim.session_id == sid and _pn_is_same_identity(claim.collector_pn, full):
                 if full != claim.collector_pn:
-                    claim.collector_pn = prefer_full_pn(claim.collector_pn, full)
+                    claim.collector_pn = _prefer_full_pn(claim.collector_pn, full)
                     return True
         return False
 
@@ -1024,20 +935,20 @@ class CallbackSessionRegistry:
         claim = self._claims.get(owner)
         if claim is None:
             return False
-        pn = normalize_pn(full_pn)
+        pn = _normalize_pn(full_pn)
         if not pn:
             raise ValueError("full_pn_required")
         other = self.owner_for_pn(pn)
         if other and other != owner:
             raise ValueError(f"session_already_claimed:{pn}:{other}")
-        if claim.collector_pn and not pn_is_same_identity(claim.collector_pn, pn):
+        if claim.collector_pn and not _pn_is_same_identity(claim.collector_pn, pn):
             # The claim already stands for a DIFFERENT collector. Preparing it for
             # another identity would silently re-point a live claim (A -> B) and
             # hand the wrong collector to the entry. prefer_full_pn must never be
             # applied across identities -- it only ever enriches short -> full of
             # the SAME one. Refuse without mutating the claim.
             raise ValueError(f"handoff_identity_mismatch:{claim.collector_pn}:{pn}")
-        claim.collector_pn = prefer_full_pn(claim.collector_pn, pn)
+        claim.collector_pn = _prefer_full_pn(claim.collector_pn, pn)
         claim.handoff_pending = True
         return True
 
@@ -1065,7 +976,7 @@ class CallbackSessionRegistry:
         """
 
         owner = str(attempt_owner or "").strip()
-        pn = normalize_pn(candidate_pn)
+        pn = _normalize_pn(candidate_pn)
         if not owner or not pn:
             return ""
         claim = self._claims.get(owner)
@@ -1074,9 +985,9 @@ class CallbackSessionRegistry:
         if not claim.session_id:
             # Never certified: nothing was observed on the wire under this owner.
             return ""
-        if not claim.collector_pn or not pn_is_same_identity(claim.collector_pn, pn):
+        if not claim.collector_pn or not _pn_is_same_identity(claim.collector_pn, pn):
             return ""
-        return prefer_full_pn(claim.collector_pn, pn)
+        return _prefer_full_pn(claim.collector_pn, pn)
 
     def complete_handoff(self, full_pn: object, entry_id: str) -> bool:
         """Transfer a COMMITTED handoff for one PN to its permanent entry.
@@ -1091,7 +1002,7 @@ class CallbackSessionRegistry:
         Peer IP is never consulted here.
         """
 
-        pn = normalize_pn(full_pn)
+        pn = _normalize_pn(full_pn)
         to_id = str(entry_id or "").strip()
         if not pn or not to_id:
             raise ValueError("handoff_args_required")
@@ -1101,7 +1012,7 @@ class CallbackSessionRegistry:
                 claim.handoff_pending
                 and owner != to_id
                 and claim.collector_pn
-                and pn_is_same_identity(claim.collector_pn, pn)
+                and _pn_is_same_identity(claim.collector_pn, pn)
             ):
                 source_owner = owner
                 break
@@ -1112,14 +1023,14 @@ class CallbackSessionRegistry:
         if (
             existing is not None
             and existing.collector_pn
-            and not pn_is_same_identity(existing.collector_pn, source.collector_pn)
+            and not _pn_is_same_identity(existing.collector_pn, source.collector_pn)
         ):
             raise ValueError(f"session_already_claimed:{source.collector_pn}:{to_id}")
         # The destination is a SETTLED permanent claim (handoff_pending=False), so
         # it can never be re-completed out from under the entry.
         self._claims[to_id] = _Claim(
             entry_id=to_id,
-            collector_pn=prefer_full_pn(
+            collector_pn=_prefer_full_pn(
                 source.collector_pn, existing.collector_pn if existing else ""
             ),
             session_id=source.session_id,
@@ -1154,7 +1065,7 @@ class CallbackSessionRegistry:
         ``None`` when no live session is observed for this identity yet.
         """
 
-        pn = normalize_pn(collector_pn)
+        pn = _normalize_pn(collector_pn)
         if not pn:
             return None
         # Rank over per-socket sessions (not the coalesced view) so a routed,
@@ -1165,7 +1076,7 @@ class CallbackSessionRegistry:
         best_handle: SessionHandle | None = None
         best_rank: tuple[int, int, int, int] | None = None
         for session in self._normalized_sessions():
-            if not pn_is_same_identity(session.collector_pn, pn):
+            if not _pn_is_same_identity(session.collector_pn, pn):
                 continue
             handle = negotiate_session_adapters(session.raw)
             raw_state = str(session.raw.get("state") or "").strip().lower()
@@ -1236,7 +1147,7 @@ class CallbackSessionRegistry:
         best: CallbackSession | None = None
         best_rank: tuple[int, int, int] | None = None
         for session in self._normalized_sessions():
-            if not pn_is_same_identity(session.collector_pn, pn):
+            if not _pn_is_same_identity(session.collector_pn, pn):
                 continue
             raw_state = str(session.raw.get("state") or "").strip().lower()
             if (

@@ -76,7 +76,7 @@ class ObservedCollectorSession:
         heartbeat PN is never silently promoted to a durable identity.
         """
 
-        from .session_registry import identity_source_is_strong
+        from ..collector_identity import identity_source_is_strong
 
         return identity_source_is_strong(self.identity_source)
 

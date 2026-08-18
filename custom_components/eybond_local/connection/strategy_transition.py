@@ -71,7 +71,7 @@ from ..timeout_policy import (
     DEFAULT_ONBOARDING_TIMEOUT_POLICY,
     OnboardingTimeoutPolicy,
 )
-from .session_registry import normalize_pn
+from ..collector_identity import normalize_pn
 from .strategy_transition_recovery import (
     RECOVERY_PHASE_PENDING,
     RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,

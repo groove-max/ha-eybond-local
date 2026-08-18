@@ -814,7 +814,7 @@ class RecoveryContractArchitectureGuardTests(unittest.TestCase):
             "annotations", "__future__", "collections", "abc", "Mapping",
             "dataclasses", "dataclass", "datetime",
             # package-pure identity helpers (single reconciliation authority)
-            "session_registry",
+            "collector_identity",
             "identity_source_is_strong",
             "normalize_pn", "pn_is_same_identity", "prefer_full_pn",
         }

@@ -25,11 +25,11 @@ from .recovery.verification import (
     ObservedSessionRestartChannel,
     SessionUnavailableError,
 )
-from .session_registry import (
-    CallbackSessionRegistry,
+from ..collector_identity import (
     identity_source_is_strong,
     pn_is_same_identity,
 )
+from .session_registry import CallbackSessionRegistry
 
 
 REMOVAL_RESTART_CONFIRMED: Final = "removal_restart_confirmed"

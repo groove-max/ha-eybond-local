@@ -28,7 +28,7 @@ from ..const import (
     CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_PN,
     CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE,
 )
-from .session_registry import pn_is_same_identity, reconcile_pn
+from ..collector_identity import pn_is_same_identity, reconcile_pn
 
 _CONFIRMED_WIRE_PROTOCOLS = frozenset({"eybond_framed", "at_text"})
 

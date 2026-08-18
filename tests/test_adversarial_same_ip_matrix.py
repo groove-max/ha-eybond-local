@@ -38,10 +38,8 @@ if str(REPO_ROOT) not in sys.path:
 from custom_components.eybond_local.connection.callback_ledger import (
     CallbackTriggerLedger,
 )
-from custom_components.eybond_local.connection.session_registry import (
-    CallbackSessionRegistry,
-    pn_is_same_identity,
-)
+from custom_components.eybond_local.collector_identity import pn_is_same_identity
+from custom_components.eybond_local.connection.session_registry import CallbackSessionRegistry
 from custom_components.eybond_local.connection.strategy_transition_recovery import (
     StrategyTransitionRecoveryState,
 )

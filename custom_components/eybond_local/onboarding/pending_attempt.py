@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 import logging
 from typing import Any
 
-from ..connection.session_registry import pn_is_same_identity
+from ..collector_identity import pn_is_same_identity
 from ..const import (
     CONF_COLLECTOR_IP,
     CONF_PENDING_ADDRESS_HINT,

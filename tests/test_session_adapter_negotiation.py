@@ -30,10 +30,10 @@ from custom_components.eybond_local.connection.session_handle import (
 )
 from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
 from custom_components.eybond_local.link_transport import select_payload_route
+from custom_components.eybond_local.collector_identity import reconcile_pn
 from custom_components.eybond_local.connection.session_registry import (
     CallbackSessionRegistry,
     SESSION_STATE_CLOSED,
-    reconcile_pn,
 )
 from custom_components.eybond_local.connection.confirmed_session_protocol import (
     ConfirmedSessionProtocolEvidence,
@@ -478,7 +478,7 @@ class RegistryPnReconciliationTests(unittest.TestCase):
 
     def test_transport_and_link_helpers_delegate_to_registry(self) -> None:
         # The transport/link connection-level helpers must resolve identically to
-        # the registry's single reconciliation function.
+        # the package's single pure reconciliation function.
         from custom_components.eybond_local.collector.transport import (
             _prefer_more_complete_identity,
         )

@@ -17,10 +17,8 @@ import unittest
 from custom_components.eybond_local import _ENTRY_SCHEMA_VERSION
 from custom_components.eybond_local import const as C
 from custom_components.eybond_local.connection import connection_policy as cp
-from custom_components.eybond_local.connection.session_registry import (
-    CallbackSessionRegistry,
-    pn_is_same_identity,
-)
+from custom_components.eybond_local.collector_identity import pn_is_same_identity
+from custom_components.eybond_local.connection.session_registry import CallbackSessionRegistry
 
 
 def _session(session_id, pn, *, peer_ip="203.0.113.10", source="at_dtupn", state="identified"):

@@ -238,7 +238,7 @@ from .onboarding.presentation import (
     scan_result_status_code,
 )
 from .drivers.registry import poll_policy_for_driver_key
-from .connection.session_registry import (
+from .collector_identity import (
     identity_source_is_strong,
     pn_is_same_identity,
     reconcile_pn,

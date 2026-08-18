@@ -46,7 +46,7 @@ from ..collector.metadata_result import (
     OUTCOME_TRANSPORT_ERROR,
     CollectorMetadataChannelReadResult,
 )
-from ..connection.session_registry import pn_is_same_identity, reconcile_pn
+from ..collector_identity import pn_is_same_identity, reconcile_pn
 from .metadata_health import CollectorMetadataHealth
 
 # Channel status codes surfaced in diagnostics (safe, typed -- never payloads).

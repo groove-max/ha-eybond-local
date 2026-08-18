@@ -29,11 +29,11 @@ from ..connection.session_handle import (
     ConfirmedWireBinding,
     SessionHandle,
 )
-from ..connection.session_registry import (
-    CallbackSessionRegistry,
+from ..collector_identity import (
     pn_is_same_identity,
     reconcile_pn,
 )
+from ..connection.session_registry import CallbackSessionRegistry
 from ..collector.transport import (
     CollectorAtTransport,
     CollectorListenerBindError,
@@ -1414,7 +1414,7 @@ class EybondRuntimeLinkManager:
     def _observed_foreign_session_exists(self, collector_pn: str) -> bool:
         """Return whether an inbound session with a NON-matching PN is observed."""
 
-        from ..connection.session_registry import pn_is_same_identity
+        from ..collector_identity import pn_is_same_identity
 
         for session in self._session_registry.observed_sessions():
             observed_pn = str(session.collector_pn or "").strip()
@@ -1453,7 +1453,7 @@ class EybondRuntimeLinkManager:
         listeners), else this runtime's own listener-scoped view.
         """
 
-        from ..connection.session_registry import pn_is_same_identity
+        from ..collector_identity import pn_is_same_identity
 
         registry = getattr(self, "_callback_ownership_registry", None)
         if registry is not None:

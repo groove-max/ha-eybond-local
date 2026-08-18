@@ -70,7 +70,7 @@ from ..recovery_contract import (
     RecoveryContract,
 )
 from ..session_handle import negotiate_session_adapters
-from ..session_registry import (
+from ...collector_identity import (
     identity_source_is_strong,
     pn_is_same_identity,
 )

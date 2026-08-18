@@ -26,7 +26,7 @@ from custom_components.eybond_local.collector.protocol import (  # noqa: E402
     build_collector_request,
     decode_header,
 )
-from custom_components.eybond_local.connection.session_registry import (  # noqa: E402
+from custom_components.eybond_local.collector_identity import (  # noqa: E402
     pn_is_same_identity,
 )
 from custom_components.eybond_local.collector.discovery import DiscoveryAnnouncer  # noqa: E402

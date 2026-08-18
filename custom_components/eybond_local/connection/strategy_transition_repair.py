@@ -57,7 +57,7 @@ from ..timeout_policy import (
     OnboardingTimeoutPolicy,
 )
 from .callback_ledger import CallbackCausalityBusyError
-from .session_registry import pn_is_same_identity
+from ..collector_identity import pn_is_same_identity
 from .strategy_transition import STRATEGY_REPAIR_LEASES, TRANSITION_ALREADY_RUNNING
 from .strategy_transition_recovery import StrategyTransitionRecoveryState
 

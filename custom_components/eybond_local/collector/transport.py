@@ -16,7 +16,7 @@ from .cloud_family import (
     apply_collector_cloud_family_observation,
     collector_cloud_family_observation_from_endpoint,
 )
-from ..connection.session_registry import (
+from ..collector_identity import (
     identity_source_is_strong,
     prefer_identity_source,
     reconcile_pn as _reconcile_pn,

@@ -40,7 +40,7 @@ from .connection.connection_policy import (
     is_pending_collector_entry,
     resolve_connection_strategy,
 )
-from .connection.session_registry import normalize_pn, pn_is_same_identity
+from .collector_identity import normalize_pn, pn_is_same_identity
 from .const import (
     CONF_COLLECTOR_PN,
     CONF_CONNECTION_STRATEGY,

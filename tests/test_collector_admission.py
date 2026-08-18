@@ -74,7 +74,7 @@ class ObservedCollectorSessionModelTests(unittest.TestCase):
         self.assertFalse(_observed(identity_source="").has_strong_identity)
 
     def test_strong_weak_decided_only_by_centralized_rule(self) -> None:
-        from custom_components.eybond_local.connection.session_registry import (
+        from custom_components.eybond_local.collector_identity import (
             identity_source_is_strong,
         )
 

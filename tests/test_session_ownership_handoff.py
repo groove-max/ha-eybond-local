@@ -17,10 +17,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from custom_components.eybond_local.connection.session_registry import (
-    CallbackSessionRegistry,
-    pn_is_same_identity,
-)
+from custom_components.eybond_local.collector_identity import pn_is_same_identity
+from custom_components.eybond_local.connection.session_registry import CallbackSessionRegistry
 
 FULL_PN = "PNALPHA-FULL-0001"
 SHORT_PN = "PNALPHA-FU"  # 10-char prefix of FULL_PN

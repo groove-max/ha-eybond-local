@@ -87,7 +87,7 @@ class SilentIdentityResolution:
     def identified(self) -> bool:
         """Whether this outcome carries a normalized strong exact-session fact."""
 
-        from ..connection.session_registry import identity_source_is_strong
+        from ..collector_identity import identity_source_is_strong
 
         return bool(
             type(self.session_id) is str
@@ -193,7 +193,7 @@ async def async_resolve_silent_session_identity(
     eligible; nothing is ever selected by peer IP, order or prefix.
     """
 
-    from ..connection.session_registry import identity_source_is_strong
+    from ..collector_identity import identity_source_is_strong
 
     if probe_channel is None or not getattr(probe_channel, "available", False):
         return SilentIdentityResolution()

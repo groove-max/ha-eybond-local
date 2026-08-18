@@ -1009,7 +1009,7 @@ class OnboardingDetector:
                 # Reconcile the exact-session FC=2 identity with whatever the
                 # activated connection reports, through the ONE centralized short/
                 # full-PN authority -- never a peer-IP or prefix decision here.
-                from ..connection.session_registry import (
+                from ..collector_identity import (
                     pn_is_same_identity,
                     prefer_full_pn,
                 )

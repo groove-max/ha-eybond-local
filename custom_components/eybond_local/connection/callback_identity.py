@@ -63,7 +63,8 @@ from .session_handle import (
     WIRE_FRAMED,
     negotiate_session_adapters,
 )
-from .session_registry import SESSION_STATE_CLOSED, prefer_full_pn
+from ..collector_identity import prefer_full_pn
+from .session_registry import SESSION_STATE_CLOSED
 from ..const import (
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,

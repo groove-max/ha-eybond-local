@@ -534,7 +534,7 @@ def resolve_confirmed_ha_endpoint(
     """
 
     from .recovery_contract import RecoveryContract
-    from .session_registry import pn_is_same_identity
+    from ..collector_identity import pn_is_same_identity
 
     if type(recovery_contract) is not RecoveryContract:
         return TransitionEndpointCandidate.none()
@@ -670,7 +670,7 @@ def resolve_cloud_rollback_endpoint(
         endpoint = _valid_writable_cloud_endpoint(registry_endpoint)
         # Lazy import keeps this module's top-level imports minimal; the PN
         # identity rule is the ONE short/full reconciliation authority.
-        from .session_registry import pn_is_same_identity
+        from ..collector_identity import pn_is_same_identity
 
         if endpoint is not None and pn_is_same_identity(entry_pn, registry_pn):
             return CloudRollbackEndpoint(

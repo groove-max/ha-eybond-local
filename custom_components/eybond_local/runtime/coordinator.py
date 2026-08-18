@@ -2636,7 +2636,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
             return
         if not protocol or not pn:
             return
-        from ..connection.session_registry import pn_is_same_identity, reconcile_pn
+        from ..collector_identity import pn_is_same_identity, reconcile_pn
 
         entry_pn = str(self.config_entry.data.get(CONF_COLLECTOR_PN, "") or "").strip()
         if not entry_pn or not pn_is_same_identity(entry_pn, pn):
@@ -6279,7 +6279,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         """
 
         from ..connection.recovery_contract import RecoveryContract
-        from ..connection.session_registry import pn_is_same_identity
+        from ..collector_identity import pn_is_same_identity
 
         raw_pn = self.config_entry.data.get(CONF_COLLECTOR_PN)
         if (
@@ -6301,10 +6301,8 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if identity_registry is None or type(owner_id) is not str or not owner_id:
             return ""
         from ..connection.session_handle import SessionHandle
-        from ..connection.session_registry import (
-            CallbackSessionRegistry,
-            identity_source_is_strong,
-        )
+        from ..collector_identity import identity_source_is_strong
+        from ..connection.session_registry import CallbackSessionRegistry
 
         if type(identity_registry) is not CallbackSessionRegistry:
             return ""
