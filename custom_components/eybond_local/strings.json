@@ -214,7 +214,8 @@
           "manual_probe_again": "Probe again",
           "manual_edit_settings": "Edit settings",
           "manual_smartess_cloud_assist": "Refine via SmartESS cloud",
-          "manual_create_pending": "Save Pending Device",
+          "manual_save": "Add device",
+          "manual_enable_background_discovery": "Enable background discovery",
           "manual_bootstrap_framed": "Silent collector: query with EyeBond framed protocol",
           "manual_bootstrap_at": "Silent collector: query with AT command protocol"
         }
@@ -285,8 +286,7 @@
         "menu_options": {
           "manual_recovery_verify": "Verify recovery (restarts the collector)",
           "manual_probe_again": "Probe again",
-          "manual_edit_settings": "Edit settings",
-          "manual_create_pending": "Save as Pending Device (no verification)"
+          "manual_edit_settings": "Edit settings"
         }
       },
       "manual_recovery_inbound_confirm": {
@@ -302,8 +302,7 @@
         "description": "Collector **{collector_pn}**: {failure_explanation}\n\nNo entry was created. Use one of the available actions below to retry or change the address/settings.",
         "menu_options": {
           "manual_probe_again": "Try again (new attempt)",
-          "manual_edit_settings": "Edit settings",
-          "manual_create_pending": "Save as Pending Device"
+          "manual_edit_settings": "Edit settings"
         }
       }
     },
@@ -637,36 +636,6 @@
         "title": "Diagnostics Result",
         "description": "**{action_title}**\n\n{status}\n\n**Path:** `{path}`\n**Download:** {download_markdown}\n\n**Next step:** {next_step}"
       },
-      "pending": {
-        "title": "Waiting collector",
-        "description": "Status: {status}\nConnection: {strategy}\n\nThis collector has not been identified yet, so it is not running.",
-        "menu_options": {
-          "pending_confirm_candidate": "Link a detected collector",
-          "pending_settings": "Edit settings",
-          "pending_retry": "Retry now"
-        }
-      },
-      "pending_settings": {
-        "title": "Edit waiting collector",
-        "description": "Change how this collector connects, or the address Home Assistant should ask.",
-        "data": {
-          "connection_strategy": "How the collector connects",
-          "collector_ip": "Collector address"
-        },
-        "data_description": {
-          "connection_strategy": "Choose “Collector connects to Home Assistant on its own” if the collector already points at Home Assistant. Choose “Ask the collector to connect when needed” to have Home Assistant send a single request to the address above each time it needs data."
-        }
-      },
-      "pending_confirm_candidate": {
-        "title": "Link a detected collector",
-        "description": "These collectors connected to Home Assistant but are not linked to any entry yet. Pick the one this entry should become. The address is shown only as a hint.",
-        "data": {
-          "candidate": "Collector"
-        }
-      },
-      "pending_retry": {
-        "title": "Retry connection"
-      },
       "strategy_transition": {
         "title": "Change connection mode",
         "description": "Home Assistant will switch the collector to **{target_strategy}** and verify that it reconnects.\n\n{connection_strategy_risk}\n\n{connection_strategy_rollback}\n\nCheck the addresses and confirm to continue.",
@@ -713,7 +682,6 @@
       "strategy_transition_running": "Verifying the connection switch with a controlled collector restart…"
     },
     "abort": {
-      "no_pending_candidates": "No unlinked collector has connected to Home Assistant yet.",
       "already_configured": "That collector is already set up in another entry."
     }
   },

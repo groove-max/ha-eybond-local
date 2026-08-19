@@ -129,7 +129,6 @@ def _install_coordinator_stubs() -> None:
     const.CONF_CONNECTION_MODE = "connection_mode"
     const.CONF_ENTRY_ROLE = "entry_role"
     const.ENTRY_ROLE_LISTENER = "listener"
-    const.ENTRY_ROLE_PENDING_COLLECTOR = "pending_collector"
     const.CONF_CONTROL_MODE = "control_mode"
     const.CONF_DETECTED_MODEL = "detected_model"
     const.CONF_DETECTED_DRIVER = "detected_driver"

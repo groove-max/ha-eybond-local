@@ -234,6 +234,90 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(registry.claimed_session_id(outcome.handoff_owner), "s-new")
 
+    async def test_strong_same_pn_session_rejected_by_foreign_route_still_identifies(
+        self,
+    ) -> None:
+        """A foreign route's rejection must not globally poison our socket.
+
+        This reproduces the live E500 failure: another entry polling the shared
+        listener first rejects the fresh socket for its own PN, while FC=2 on
+        that exact socket records our expected full PN.  The callback attempt
+        owns the exact session and therefore may use its observed framed wire;
+        the raw inventory state itself remains unchanged.
+        """
+
+        sessions = [
+            _observed(
+                "s-new",
+                FULL_PN,
+                state="route_identity_mismatch",
+                shape="eybond_framed",
+            )
+        ]
+        reader = _Reader(pn=FULL_PN)
+        outcome, registry = await self._run(
+            sessions,
+            reader=reader,
+            request=_request(expected_pn=FULL_PN),
+        )
+
+        self.assertTrue(outcome.identity_certified, outcome.result)
+        self.assertEqual(reader.calls[0]["session_id"], "s-new")
+        self.assertEqual(reader.calls[0]["session_protocol"], "eybond_framed")
+        observed = registry.observed_sessions_per_socket()[0]
+        self.assertEqual(observed.raw["state"], "route_identity_mismatch")
+
+    async def test_route_mismatch_override_requires_strong_matching_identity(
+        self,
+    ) -> None:
+        for pn, source in (
+            (OTHER_FULL_PN, "fc2_parameter_2"),
+            (FULL_PN, "framed_heartbeat"),
+        ):
+            session = _observed(
+                "s-new",
+                pn,
+                state="route_identity_mismatch",
+                shape="eybond_framed",
+            )
+            session["collector_identity_source"] = source
+            live = _Live((session,))
+            registry = CallbackSessionRegistry(sessions_source=live)
+            registry.claim_session("owner", session_id="s-new")
+
+            handle = registry.session_handle_for_claimed_session(
+                "owner",
+                expected_pn=FULL_PN,
+            )
+
+            self.assertIsNotNone(handle)
+            self.assertFalse(handle.observed)
+
+    async def test_durable_claim_recovers_its_strong_session_without_hint(self) -> None:
+        """Post-reset recovery uses the claim's already-promoted PN authority."""
+
+        session = _observed(
+            "s-new",
+            FULL_PN,
+            state="route_identity_mismatch",
+            shape="eybond_framed",
+        )
+        live = _Live((session,))
+        registry = CallbackSessionRegistry(sessions_source=live)
+        registry.claim_session("recovery-owner", session_id="s-new")
+        registry.promote_claim_to_full_pn("recovery-owner", FULL_PN)
+
+        handle = registry.session_handle_for_claimed_session("recovery-owner")
+
+        self.assertIsNotNone(handle)
+        self.assertTrue(handle.observed)
+        self.assertTrue(handle.uses_framed_wire)
+        self.assertEqual(handle.state, "claimed")
+        self.assertEqual(
+            registry.observed_sessions_per_socket()[0].raw["state"],
+            "route_identity_mismatch",
+        )
+
     # 2 -----------------------------------------------------------------
     async def test_short_pn_is_enriched_to_full(self) -> None:
         # The socket only ever advertised a SHORT pn; the authoritative read

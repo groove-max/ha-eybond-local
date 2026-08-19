@@ -3410,7 +3410,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 collector=CollectorInfo(collector_pn="ESP32COLLECTOR"),
             ),
             connection_mode="known_ip",
-            next_action="create_pending_entry",
+            next_action="create_entry",
         )
 
         result = await flow.async_step_detection_summary()
@@ -3631,7 +3631,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             connection_mode="known_ip",
-            next_action="create_pending_entry",
+            next_action="create_entry",
         )
 
     async def test_confirm_step_hides_operation_mode_selector_for_detected_bridge(self) -> None:
@@ -3693,7 +3693,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 collector=CollectorInfo(collector_pn="ESP32COLLECTOR"),
             ),
             connection_mode="known_ip",
-            next_action="create_pending_entry",
+            next_action="create_entry",
         )
         flow._auto_config = {
             "server_ip": "192.168.1.50",
@@ -3763,7 +3763,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 collector=CollectorInfo(collector_pn="ESP32COLLECTOR"),
             ),
             connection_mode="known_ip",
-            next_action="create_pending_entry",
+            next_action="create_entry",
         )
         selected_result = OnboardingResult(
             collector=CollectorCandidate(
@@ -3774,7 +3774,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 collector=CollectorInfo(collector_pn="ESP32COLLECTOR"),
             ),
             connection_mode="known_ip",
-            next_action="create_pending_entry",
+            next_action="create_entry",
         )
         flow._auto_config = {
             "server_ip": "192.168.1.50",
@@ -4206,6 +4206,128 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = next(iter(flow._autodetect_results.values()))
         self.assertEqual(result.connection_mode, "callback_listener")
         self.assertEqual(result.collector.collector.collector_pn, "V000405SYN94677058")
+
+    async def test_do_scan_includes_strong_session_arriving_during_active_scan(self) -> None:
+        from custom_components.eybond_local.passive_discovery import (
+            PassiveCallbackDiscovery,
+        )
+
+        flow = self._make_flow()
+        discovery = PassiveCallbackDiscovery(flow.hass)
+        sessions: list[dict[str, object]] = []
+
+        class _Listener:
+            def discovered_collector_sessions(self):
+                return tuple(sessions)
+
+        discovery._listeners[18899] = _Listener()
+        flow.hass.data[DOMAIN] = {"passive_callback_discovery": discovery}
+
+        class _FakeDetector:
+            async def async_scan(self, **_kwargs):
+                sessions.append(
+                    _wire_session(
+                        "listener-18899-during-scan",
+                        "V001020SYN62344022",
+                        peer_ip="198.51.100.17",
+                    )
+                )
+                return ()
+
+        with patch(
+            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            return_value=_FakeDetector(),
+        ):
+            await flow._async_do_scan()
+
+        self.assertEqual(len(flow._autodetect_results), 1)
+        result = next(iter(flow._autodetect_results.values()))
+        self.assertEqual(
+            result.observed_session.session_id,
+            "listener-18899-during-scan",
+        )
+        self.assertEqual(
+            result.collector.collector.collector_pn,
+            "V001020SYN62344022",
+        )
+
+    async def test_scan_results_adds_session_arriving_before_first_render(self) -> None:
+        from custom_components.eybond_local.passive_discovery import (
+            PassiveCallbackDiscovery,
+        )
+
+        flow = self._make_flow()
+        discovery = PassiveCallbackDiscovery(flow.hass)
+        sessions: list[dict[str, object]] = []
+
+        class _Listener:
+            def discovered_collector_sessions(self):
+                return tuple(sessions)
+
+        discovery._listeners[18899] = _Listener()
+        flow.hass.data[DOMAIN] = {"passive_callback_discovery": discovery}
+        sessions.append(
+            _wire_session(
+                "listener-18899-after-scan",
+                "V000405SYN94677058",
+                peer_ip="203.0.113.25",
+            )
+        )
+
+        rendered = await flow.async_step_scan_results()
+
+        options = _schema_select_options(rendered["data_schema"], CONF_RESULT_KEY)
+        self.assertIn("0", options)
+        self.assertEqual(
+            flow._autodetect_results["0"].observed_session.session_id,
+            "listener-18899-after-scan",
+        )
+
+    def test_active_typed_route_wins_same_pn_inventory_projection(self) -> None:
+        pn = "E50000200000000001"
+        observed = ObservedCollectorSession(
+            collector_pn=pn,
+            identity_source="fc2_parameter_2",
+            session_id="listener-8899-exact",
+            listener_port=8899,
+            protocol_shape="eybond_framed",
+            peer_hint="192.168.1.1",
+        )
+        route = CallbackRecoveryRoute(
+            bind_ip="192.168.1.50",
+            trigger_target_ip="192.168.1.55",
+            trigger_udp_port=58899,
+            advertised_ha_host="192.168.1.50",
+            advertised_ha_port=8899,
+            listener_port=8899,
+        )
+        inventory = OnboardingResult(
+            collector=CollectorCandidate(
+                target_ip="192.168.1.50",
+                source="callback_listener",
+                ip="192.168.1.1",
+                connected=True,
+                collector=CollectorInfo(collector_pn=pn),
+            ),
+            connection_mode="callback_listener",
+            observed_session=observed,
+        )
+        active = replace(
+            inventory,
+            collector=replace(
+                inventory.collector,
+                target_ip="192.168.1.55",
+                source="subnet_unicast",
+            ),
+            callback_route=route,
+        )
+
+        (collapsed,) = self._make_flow()._collapse_scan_results(
+            [inventory, active]
+        )
+
+        self.assertIs(collapsed.callback_route, route)
+        self.assertEqual(collapsed.collector.target_ip, "192.168.1.55")
 
     async def test_do_scan_does_not_bypass_removed_entry_session_quarantine(self) -> None:
         from custom_components.eybond_local.passive_discovery import (
@@ -4642,34 +4764,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 connected=True,
             ),
             connection_mode="manual",
-            next_action="create_pending_entry",
+            next_action="create_entry",
         )
 
         self.assertIsNone(flow._existing_entry_for_result(result))
 
-    async def test_existing_pending_entry_claims_unknown_candidate_on_same_nat_ip(self) -> None:
-        existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
-        existing.data.update(
-            {
-                "collector_ip": "195.138.86.175",
-                "collector_pn": "",
-                "detected_serial": "",
-            }
-        )
-        existing.unique_id = "manual_pending:192.168.1.50:18899:195.138.86.175"
-        flow = self._make_flow(entries=[existing])
-        result = OnboardingResult(
-            collector=CollectorCandidate(
-                target_ip="195.138.86.175",
-                source="manual",
-                ip="195.138.86.175",
-                connected=True,
-            ),
-            connection_mode="manual",
-            next_action="create_pending_entry",
-        )
-
-        self.assertIs(flow._existing_entry_for_result(result), existing)
 
     async def test_existing_entry_matches_prefix_and_full_collector_pn(self) -> None:
         existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=8899)
@@ -4854,7 +4953,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registry.owner_for_pn("V000405SYN94677058"), "")
         self.assertEqual(registry.owner_for_pn("V000405SYN94677059"), "")
 
-    async def test_manual_callback_timeout_routes_to_pending_menu(self) -> None:
+    async def test_manual_callback_timeout_keeps_flow_open_without_entry(self) -> None:
         flow = self._make_flow()
         _install_domain_registry(flow, [])
 
@@ -4863,11 +4962,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "manual_confirm")
-        self.assertIn("manual_create_pending", result["menu_options"])
+        self.assertEqual(
+            result["menu_options"],
+            ["manual_probe_again", "manual_edit_settings"],
+        )
         self.assertEqual(flow._manual_result.last_error, "callback_timeout")
-        self.assertEqual(flow._manual_result.next_action, "create_pending_entry")
+        self.assertEqual(flow._manual_result.next_action, "retry_verification")
+        self.assertFalse(hasattr(flow, "async_step_manual_create_pending"))
 
-    async def test_manual_confirm_step_exposes_retry_edit_and_create_actions(self) -> None:
+    async def test_unverified_manual_confirm_exposes_only_retry_and_edit(self) -> None:
         flow = self._make_flow()
         flow._manual_config = {
             "server_ip": "192.168.1.50",
@@ -4882,8 +4985,39 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["step_id"], "manual_confirm")
         self.assertEqual(
             result["menu_options"],
-            ["manual_probe_again", "manual_edit_settings", "manual_create_pending"],
+            ["manual_probe_again", "manual_edit_settings"],
         )
+
+    async def test_inbound_wait_can_enable_background_discovery_without_entry(self) -> None:
+        flow = self._make_flow()
+        flow._manual_config = {
+            "server_ip": "192.168.1.50",
+            "collector_ip": "",
+            "tcp_port": 8899,
+        }
+        flow._manual_chosen_strategy = CONNECTION_STRATEGY_INBOUND
+        flow._manual_result = OnboardingResult(
+            connection_mode="manual",
+            next_action="await_inbound_session",
+            last_error="inbound_awaiting_session",
+        )
+        discovery = types.SimpleNamespace(
+            async_show_discovered_devices_again=AsyncMock()
+        )
+        with patch(
+            "custom_components.eybond_local.passive_discovery."
+            "get_passive_callback_discovery",
+            return_value=discovery,
+        ):
+            menu = await flow.async_step_manual_confirm()
+            result = await flow.async_step_manual_enable_background_discovery()
+
+        self.assertIn("manual_enable_background_discovery", menu["menu_options"])
+        self.assertNotIn("manual_save", menu["menu_options"])
+        discovery.async_show_discovered_devices_again.assert_awaited_once_with()
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"], {"entry_role": "listener"})
+        self.assertEqual(flow._test_unique_id, "eybond_local:listener")
 
     async def test_manual_confirm_skips_smartess_cloud_assist_for_collector_only_result(self) -> None:
         flow = self._make_flow()
@@ -4963,7 +5097,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         placeholders = result["description_placeholders"]
 
         self.assertIn("SmartESS metadata", placeholders["probe_summary"])
-        self.assertIn("cloud identity", placeholders["control_summary"])
+        self.assertIn("identity is confirmed", placeholders["control_summary"])
 
     async def test_manual_edit_settings_returns_to_manual_form_with_previous_values(self) -> None:
         flow = self._make_flow()
@@ -5064,7 +5198,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "manual_confirm")
 
-    async def test_manual_create_pending_uses_stored_manual_config(self) -> None:
+    async def test_manual_save_refuses_unidentified_entry(self) -> None:
         flow = self._make_flow()
         flow._manual_config = {
             "server_ip": "192.168.1.50",
@@ -5076,28 +5210,24 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "discovery_interval": 3,
             "heartbeat_interval": 60,
         }
-        flow._manual_result = OnboardingResult(connection_mode="manual", next_action="create_pending_entry")
+        flow._manual_result = OnboardingResult(connection_mode="manual")
 
-        result = await flow.async_step_manual_create_pending()
+        result = await flow.async_step_manual_save()
 
-        # Part 2: no NORMAL collector entry is created without a durable PN --
-        # the user gets an explicit PENDING entry instead, identified by a
-        # synthetic pending:<ULID> (never by an address).
-        self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"]["entry_role"], "pending_collector")
-        self.assertEqual(result["data"]["collector_pn"], "")
-        self.assertTrue(flow._test_unique_id.startswith("pending:"))
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "manual_confirm")
+        self.assertEqual(
+            result["menu_options"],
+            ["manual_probe_again", "manual_edit_settings"],
+        )
+        self.assertFalse(hasattr(flow, "_test_unique_id"))
 
-    async def test_manual_callback_identity_alone_saves_pending_not_normal(self) -> None:
+    async def test_manual_callback_identity_alone_requires_recovery_proof(self) -> None:
         # Batch 6 (the pcap regression gate): a certified callback identity
         # WITHOUT a proven recovery route must never mint a normal
         # callback_on_demand entry -- such an entry deadlocks on its next
-        # silent socket. The explicit save is a PENDING entry instead; the
-        # normal entry is created only via the recovery verification path.
-        from custom_components.eybond_local.const import (
-            CONF_ENTRY_ROLE,
-            ENTRY_ROLE_PENDING_COLLECTOR,
-        )
+        # silent socket. The normal entry is created only via the recovery
+        # verification path; identity alone remains inside this flow.
 
         flow = self._make_flow()
         flow._manual_config = {
@@ -5113,7 +5243,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         # A callback-only collector: the manual probe to the IP returns no
         # collector object, so collector_pn would otherwise be dropped.
         flow._manual_result = OnboardingResult(
-            connection_mode="known_ip", next_action="create_pending_entry"
+            connection_mode="known_ip", next_action="verify_recovery"
         )
         # Post-attempt flow state: the user CHOSE callback_on_demand, the
         # transaction certified the PN, and no evidence was produced.
@@ -5123,19 +5253,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._verified_strategy_evidence = ""
 
         self.assertFalse(flow._callback_continuation._callback_terminal_input.has_proof)
-        result = await flow.async_step_manual_create_pending()
+        result = await flow.async_step_manual_save()
 
-        # The honest save: an explicit PENDING entry -- never a normal entry
-        # wearing a PN whose recovery route was never proven.
-        self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"][CONF_ENTRY_ROLE], ENTRY_ROLE_PENDING_COLLECTOR)
-        self.assertEqual(result["data"]["collector_pn"], "")
-        self.assertEqual(
-            result["data"][CONF_CONNECTION_STRATEGY],
-            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
-        )
-        # A certified callback identity NEVER mints a RecoveryContract.
-        self.assertNotIn("recovery_contract", result["data"])
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "manual_confirm")
+        self.assertNotIn("manual_save", result["menu_options"])
         self.assertNotEqual(
             getattr(flow, "_test_unique_id", ""), "collector:V001020SYN62344022"
         )
@@ -5162,7 +5284,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "heartbeat_interval": 60,
         }
         flow._manual_result = OnboardingResult(
-            connection_mode="manual", next_action="create_pending_entry"
+            connection_mode="manual", next_action="create_entry"
         )
         flow._manual_chosen_strategy = CONNECTION_STRATEGY_INBOUND
         flow._callback_continuation._certified_pn = "V001020SYN62344022"
@@ -5171,7 +5293,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION
         )
 
-        result = await flow.async_step_manual_create_pending()
+        with patch.object(
+            flow,
+            "_async_enrich_manual_collector_profile",
+            new=AsyncMock(return_value=flow._manual_result),
+        ):
+            result = await flow.async_step_manual_save()
 
         self.assertEqual(result["type"], "create_entry")
         # The legacy user-binding evidence remains (its own honest provenance)...
@@ -5200,67 +5327,22 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "heartbeat_interval": 60,
         }
         flow._manual_result = OnboardingResult(
-            connection_mode="known_ip", next_action="create_pending_entry"
+            connection_mode="known_ip", next_action="retry_verification"
         )
         # Verification context present, but no verified full PN was ever bound.
         flow._callback_continuation._expected_pn = "V001020SYN62344022"
         flow._callback_continuation._certified_pn = ""
 
-        result = await flow.async_step_manual_create_pending()
+        result = await flow.async_step_manual_save()
 
-        # No NORMAL collector entry is created: it is saved as an explicit
-        # PENDING entry instead, so nothing runs a doomed PN-less runtime.
-        self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"]["entry_role"], "pending_collector")
-        self.assertEqual(result["data"]["collector_pn"], "")
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "manual_confirm")
+        self.assertNotIn("manual_save", result["menu_options"])
         # The unverified/expected PN never became a durable collector identity.
         self.assertNotEqual(
             getattr(flow, "_test_unique_id", None), "collector:V001020SYN62344022"
         )
-        self.assertTrue(flow._test_unique_id.startswith("pending:"))
 
-    async def test_manual_create_pending_resolves_bridge_profile_before_entry_creation(self) -> None:
-        flow = self._make_flow()
-        flow._manual_config = {
-            "server_ip": "192.168.1.50",
-            "collector_ip": "195.138.86.175",
-            "driver_hint": "auto",
-            "tcp_port": 18899,
-            "udp_port": 58899,
-            "discovery_target": "",
-            "discovery_interval": 3,
-            "heartbeat_interval": 60,
-        }
-        flow._manual_result = OnboardingResult(
-            connection_mode="manual",
-            next_action="create_pending_entry",
-            last_error="manual_probe_timeout",
-        )
-
-        class _BridgeProfileTransport:
-            def __init__(self, **kwargs) -> None:
-                self.kwargs = kwargs
-
-            async def start(self) -> None:
-                return None
-
-            async def stop(self) -> None:
-                return None
-
-            async def async_query_bridge_hardware_version(self):
-                return (None, b"\x00\x06esp-collector/0.1.8/ESP8266")
-
-        with patch(
-            "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
-            _BridgeProfileTransport,
-        ):
-            result = await flow.async_step_manual_create_pending()
-
-        # Item 1 + Part 2: virtual-bridge metadata is NOT a session identity, so
-        # no NORMAL entry is created; it is saved as an explicit PENDING entry.
-        self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"]["entry_role"], "pending_collector")
-        self.assertEqual(result["data"]["collector_pn"], "")
 
     async def test_detected_inverter_without_collector_pn_is_not_created(self) -> None:
         # Item 1: a detected model + serial does NOT substitute for the collector
@@ -5297,17 +5379,16 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(
             flow,
-            "_async_enrich_manual_pending_collector_profile",
+            "_async_enrich_manual_collector_profile",
             side_effect=_passthrough_enrich,
         ):
-            result = await flow.async_step_manual_create_pending()
+            result = await flow.async_step_manual_save()
 
-        # A detected model/serial is NOT a session identity: no NORMAL entry.
-        # It is saved as an explicit PENDING entry instead.
-        self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"]["entry_role"], "pending_collector")
-        self.assertEqual(result["data"]["collector_pn"], "")
-        self.assertTrue(flow._test_unique_id.startswith("pending:"))
+        # A detected model/serial is NOT a session identity: no entry is made.
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "manual_confirm")
+        self.assertNotIn("manual_save", result["menu_options"])
+        self.assertFalse(hasattr(flow, "_test_unique_id"))
 
     async def test_full_pn_with_model_serial_is_created(self) -> None:
         # Item 1: a full PN alongside model/serial DOES create a normal entry.
@@ -5346,10 +5427,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(
             flow,
-            "_async_enrich_manual_pending_collector_profile",
+            "_async_enrich_manual_collector_profile",
             side_effect=_passthrough_enrich,
         ):
-            result = await flow.async_step_manual_create_pending()
+            result = await flow.async_step_manual_save()
 
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(result["data"]["collector_pn"], "V001020SYN62344022")
@@ -5363,109 +5444,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(result["data"].get("entry_role"), "listener")
 
-    async def test_manual_create_pending_allows_same_nat_ip_when_existing_entry_has_pn(self) -> None:
-        existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=18899)
-        existing.data.update(
-            {
-                "collector_ip": "195.138.86.175",
-                "collector_pn": "V000405SYN94677058",
-                "detected_serial": "",
-            }
-        )
-        existing.unique_id = "manual:195.138.86.175"
-        flow = self._make_flow(entries=[existing])
-        flow._manual_config = {
-            "server_ip": "192.168.1.50",
-            "collector_ip": "195.138.86.175",
-            "driver_hint": "auto",
-            "tcp_port": 18899,
-            "udp_port": 58899,
-            "discovery_target": "",
-            "discovery_interval": 3,
-            "heartbeat_interval": 60,
-        }
-        flow._manual_result = OnboardingResult(
-            connection_mode="manual",
-            next_action="create_pending_entry",
-            last_error="manual_probe_timeout",
-        )
 
-        with patch.object(
-            flow,
-            "_async_enrich_manual_pending_collector_profile",
-            new=AsyncMock(return_value=flow._manual_result),
-        ):
-            result = await flow.async_step_manual_create_pending()
-
-        # Part 2: saved as an explicit PENDING entry. Its identity is a synthetic
-        # pending:<ULID>, so it never aliases with the same-NAT-IP collector entry.
-        self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"]["entry_role"], "pending_collector")
-        self.assertTrue(flow._test_unique_id.startswith("pending:"))
-
-    async def test_manual_create_pending_allows_same_nat_ip_as_another_pending(self) -> None:
-        existing = _FakeEntry("existing", server_ip="192.168.1.50", tcp_port=18899)
-        existing.data.update(
-            {
-                "collector_ip": "195.138.86.175",
-                "collector_pn": "",
-                "detected_serial": "",
-            }
-        )
-        existing.unique_id = "manual_pending:192.168.1.50:18899:195.138.86.175"
-        flow = self._make_flow(entries=[existing])
-        flow._manual_config = {
-            "server_ip": "192.168.1.50",
-            "collector_ip": "195.138.86.175",
-            "driver_hint": "auto",
-            "tcp_port": 18899,
-            "udp_port": 58899,
-            "discovery_target": "",
-            "discovery_interval": 3,
-            "heartbeat_interval": 60,
-        }
-        flow._manual_result = OnboardingResult(
-            connection_mode="manual",
-            next_action="create_pending_entry",
-            last_error="manual_probe_timeout",
-        )
-
-        with patch.object(
-            flow,
-            "_async_enrich_manual_pending_collector_profile",
-            new=AsyncMock(return_value=flow._manual_result),
-        ):
-            result = await flow.async_step_manual_create_pending()
-
-        # An address is NOT an identity: a second collector behind the same NAT
-        # must still be addable. It gets its own synthetic pending:<ULID>.
-        self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"]["entry_role"], "pending_collector")
-        self.assertTrue(flow._test_unique_id.startswith("pending:"))
-
-    async def test_manual_create_pending_drops_default_broadcast_collector_ip(self) -> None:
-        flow = self._make_flow()
-        flow._manual_config = {
-            "server_ip": "192.168.1.50",
-            "collector_ip": "192.168.1.255",
-            "driver_hint": "auto",
-            "tcp_port": 8899,
-            "udp_port": 58899,
-            "discovery_target": "192.168.1.255",
-            "discovery_interval": 3,
-            "heartbeat_interval": 60,
-        }
-        flow._manual_result = OnboardingResult(connection_mode="broadcast", next_action="create_pending_entry")
-
-        result = await flow.async_step_manual_create_pending()
-
-        # Part 2: saved as an explicit PENDING entry (inbound by default, so the
-        # broadcast address is only a hint and is sanitized away).
-        self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"]["entry_role"], "pending_collector")
-        self.assertEqual(result["data"]["collector_ip"], "")
-        # Pending identity is synthetic, never derived from an address.
-        self.assertTrue(flow._test_unique_id.startswith("pending:"))
 
     async def test_manual_entry_defers_inverter_identity_and_controls_to_runtime(self) -> None:
         flow = self._make_flow()
@@ -5498,7 +5477,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             connection_mode="manual",
         )
 
-        result = await flow.async_step_manual_create_pending()
+        result = await flow.async_step_manual_save()
 
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(result["data"]["control_mode"], "read_only")
@@ -9670,7 +9649,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["step_id"], "manual_confirm")
         self.assertIn("manual_probe_again", result["menu_options"])
         self.assertIn("manual_edit_settings", result["menu_options"])
-        self.assertIn("manual_create_pending", result["menu_options"])
+        self.assertNotIn("manual_save", result["menu_options"])
         self.assertIsNotNone(flow._manual_result)
         self.assertEqual(flow._manual_result.last_error, reason)
 
@@ -10383,7 +10362,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("responded", options["192.168.1.51"])
         self.assertIn("may be a router", options["192.168.1.1"])
 
-    async def test_route_only_scan_never_offers_or_creates_pending(self) -> None:
+    async def test_route_only_scan_never_offers_or_creates_unidentified_entry(self) -> None:
         flow = self._make_flow()
         route_only = OnboardingResult(
             collector=CollectorCandidate(
@@ -10398,7 +10377,6 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         manual = await flow.async_step_scan_results({CONF_RESULT_KEY: "route"})
         self.assertEqual(manual["step_id"], "manual")
         self.assertEqual(flow._manual_defaults["collector_ip"], "192.168.1.51")
-        self.assertFalse(flow._manual_pending_allowed())
         stage_note = manual["description_placeholders"]["verification_note"]
         self.assertIn("Step 1 of 2", stage_note)
         self.assertIn("192.168.1.51", stage_note)
@@ -10406,14 +10384,14 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._manual_config = self._manual_input("192.168.1.51")
         flow._manual_result = OnboardingResult(
             connection_mode="manual",
-            next_action="create_pending_entry",
+            next_action="retry_verification",
             last_error="callback_timeout",
         )
         menu = await flow.async_step_manual_confirm()
-        self.assertNotIn("manual_create_pending", menu["menu_options"])
-        blocked = await flow.async_step_manual_create_pending()
+        self.assertNotIn("manual_save", menu["menu_options"])
+        blocked = await flow.async_step_manual_save()
         self.assertEqual(blocked["step_id"], "manual_confirm")
-        self.assertNotIn("manual_create_pending", blocked["menu_options"])
+        self.assertNotIn("manual_save", blocked["menu_options"])
 
     async def test_identified_collector_only_selector_label_includes_pn_and_route(self) -> None:
         flow = self._make_flow()
@@ -11286,11 +11264,11 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             self._manual_input(self.PEER_IP, connection_strategy="inbound")
         )
 
-        self.assertEqual(created["type"], "create_entry")
-        self.assertEqual(created["data"]["entry_role"], "pending_collector")
-        self.assertEqual(created["data"]["collector_pn"], "")
+        self.assertEqual(created["type"], "menu")
+        self.assertEqual(created["step_id"], "manual_confirm")
+        self.assertIn("manual_enable_background_discovery", created["menu_options"])
+        self.assertNotIn("manual_save", created["menu_options"])
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
-        self.assertNotIn("connection_strategy_evidence", created["data"])
         self.assertEqual(
             flow._callback_continuation.identity_context.expected_pn, self.FULL_PN
         )
@@ -11910,16 +11888,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow._manual_config.get("collector_ip"), "192.168.1.60")
         self.assertIn("manual_edit_settings", result["menu_options"])
 
-    async def test_manual_callback_timeout_offers_pending_entry(self) -> None:
-        from custom_components.eybond_local.const import (
-            CONF_CONNECTION_STRATEGY,
-            CONF_ENTRY_ROLE,
-            CONF_PENDING_LAST_ATTEMPT_RESULT,
-            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
-            ENTRY_ROLE_PENDING_COLLECTOR,
-            PENDING_ATTEMPT_CALLBACK_TIMEOUT,
-        )
-
+    async def test_manual_callback_timeout_creates_no_entry(self) -> None:
         flow = self._make_flow()
         flow._callback_continuation._expected_pn = self.FULL_PN
         flow._callback_continuation._old_session_id = self.OLD_SESSION
@@ -11932,28 +11901,12 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self._assert_callback_failure_menu(flow, result, "callback_timeout")
         self.assertEqual(flow._verified_connection_strategy, "")
 
-        async def _passthrough_enrich(_user_input, pending_result):
-            return pending_result
+        created = await flow.async_step_manual_save()
 
-        with patch.object(
-            flow,
-            "_async_enrich_manual_pending_collector_profile",
-            side_effect=_passthrough_enrich,
-        ):
-            created = await flow.async_step_manual_create_pending()
-
-        self.assertEqual(created["type"], "create_entry")
-        self.assertEqual(created["data"][CONF_ENTRY_ROLE], ENTRY_ROLE_PENDING_COLLECTOR)
-        self.assertEqual(
-            created["data"][CONF_CONNECTION_STRATEGY],
-            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
-        )
-        self.assertEqual(created["data"]["collector_ip"], "192.168.1.60")
-        self.assertEqual(created["data"]["collector_pn"], "")
-        self.assertEqual(
-            created["data"][CONF_PENDING_LAST_ATTEMPT_RESULT],
-            PENDING_ATTEMPT_CALLBACK_TIMEOUT,
-        )
+        self.assertEqual(created["type"], "menu")
+        self.assertEqual(created["step_id"], "manual_confirm")
+        self.assertNotIn("manual_save", created["menu_options"])
+        self.assertFalse(hasattr(flow, "_test_unique_id"))
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
 
     # 10. Two collectors behind one peer IP cannot confirm each other: the
@@ -12163,7 +12116,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             read_pn=self.FULL_PN,
         ), patch.object(
             flow,
-            "_async_enrich_manual_pending_collector_profile",
+            "_async_enrich_manual_collector_profile",
             side_effect=_passthrough_enrich,
         ):
             result = await flow.async_step_manual(self._manual_input("192.168.1.60"))
@@ -12331,7 +12284,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             flow_b._manual_result.last_error, "callback_identity_conflict"
         )
-        self.assertIn("manual_create_pending", result_b["menu_options"])
+        self.assertNotIn("manual_save", result_b["menu_options"])
         # Flow A still owns it; flow B never became an owner.
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), owner_a)
         self.assertEqual(registry.claimed_session_id(owner_a), self.NEW_SESSION)
@@ -12422,18 +12375,19 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
                 self._manual_input("", connection_strategy="inbound")
             )
 
-        # A PENDING entry, never a normal entry wearing the stranger's PN.
-        self.assertEqual(created["type"], "create_entry")
-        self.assertEqual(created["data"]["entry_role"], "pending_collector")
-        self.assertEqual(created["data"]["collector_pn"], "")
+        # The flow remains open; it never creates an entry wearing the
+        # stranger's PN.
+        self.assertEqual(created["type"], "menu")
+        self.assertEqual(created["step_id"], "manual_confirm")
+        self.assertIn("manual_enable_background_discovery", created["menu_options"])
+        self.assertNotIn("manual_save", created["menu_options"])
         self.assertNotEqual(
             getattr(flow, "_test_unique_id", ""), f"collector:{self.FULL_PN}"
         )
         # The stranger's session was never claimed by this flow.
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         # And no user_confirmed_session evidence was invented.
-        self.assertNotIn("connection_strategy_evidence", created["data"])
-        self.assertEqual(created["data"][CONF_CONNECTION_STRATEGY], "inbound")
+        self.assertEqual(flow._manual_result.last_error, "inbound_awaiting_session")
 
     # ---- generic manual callback_on_demand: active attempt + shared matcher ----
 
@@ -12789,7 +12743,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = self._make_flow()
         flow._manual_config = self._manual_input("192.168.1.60")
         flow._manual_result = OnboardingResult(
-            connection_mode="known_ip", next_action="create_pending_entry"
+            connection_mode="known_ip", next_action="retry_verification"
         )
         flow._callback_continuation._expected_pn = self.FULL_PN
         flow._callback_continuation._certified_pn = ""
@@ -12799,15 +12753,14 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(
             flow,
-            "_async_enrich_manual_pending_collector_profile",
+            "_async_enrich_manual_collector_profile",
             side_effect=_passthrough_enrich,
         ):
-            result = await flow.async_step_manual_create_pending()
+            result = await flow.async_step_manual_save()
 
-        # Saved as a PENDING entry; the expected/short PN never became durable.
-        self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"]["entry_role"], "pending_collector")
-        self.assertEqual(result["data"]["collector_pn"], "")
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "manual_confirm")
+        self.assertNotIn("manual_save", result["menu_options"])
         self.assertNotEqual(
             getattr(flow, "_test_unique_id", None), f"collector:{self.FULL_PN}"
         )
@@ -13116,7 +13069,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             read_pn=self.FULL_PN,
         ), patch.object(
             flow,
-            "_async_enrich_manual_pending_collector_profile",
+            "_async_enrich_manual_collector_profile",
             side_effect=_passthrough_enrich,
         ):
             routed = await flow.async_step_manual(self._manual_input("192.168.1.60"))
@@ -13131,7 +13084,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             side_effect=tx,
         ), patch.object(
             flow,
-            "_async_enrich_manual_pending_collector_profile",
+            "_async_enrich_manual_collector_profile",
             side_effect=_passthrough_enrich,
         ):
             progress = await flow.async_step_manual_recovery_verify()
@@ -13262,7 +13215,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             side_effect=tx,
         ), patch.object(
             flow,
-            "_async_enrich_manual_pending_collector_profile",
+            "_async_enrich_manual_collector_profile",
             side_effect=_passthrough_enrich,
         ):
             progress = await flow.async_step_manual_recovery_verify()
@@ -13364,10 +13317,10 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(
             flow,
-            "_async_enrich_manual_pending_collector_profile",
+            "_async_enrich_manual_collector_profile",
             side_effect=_passthrough_enrich,
         ):
-            created = await flow.async_step_manual_create_pending()
+            created = await flow.async_step_manual_save()
         self.assertNotEqual(created.get("data", {}).get("collector_pn", ""), self.FULL_PN)
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
 
@@ -13410,10 +13363,10 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(
             flow,
-            "_async_enrich_manual_pending_collector_profile",
+            "_async_enrich_manual_collector_profile",
             side_effect=_passthrough_enrich,
         ):
-            created = await flow.async_step_manual_create_pending()
+            created = await flow.async_step_manual_save()
         self.assertNotEqual(created.get("data", {}).get("collector_pn", ""), self.FULL_PN)
 
     async def test_probe_again_is_a_whole_new_attempt_with_its_own_baseline(self) -> None:
@@ -13910,33 +13863,27 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(routed["step_id"], "manual_recovery_confirm")
         return routed
 
-    async def test_user_decline_sends_no_reboot_and_no_udp(self) -> None:
-        # The consent menu ran; the user picks "save pending" instead of
-        # verifying. The recovery transaction (reboot + trigger) never runs.
+    async def test_edit_from_recovery_consent_sends_no_reboot_or_udp(self) -> None:
+        # The consent menu ran; the user edits instead of verifying. The recovery
+        # transaction (reboot + trigger) never runs and no entry is created.
         flow = self._make_flow()
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
-        self._install_registry(flow, inventory)
+        registry = self._install_registry(flow, inventory)
         await self._identity_success(flow, inventory)
-
-        async def _passthrough_enrich(_user_input, result):
-            return result
 
         with patch(
             "custom_components.eybond_local.connection.admission_transaction."
             "async_run_callback_recovery_transaction",
             side_effect=AssertionError("declined recovery must not reboot/trigger"),
-        ), patch.object(
-            flow,
-            "_async_enrich_manual_pending_collector_profile",
-            side_effect=_passthrough_enrich,
         ):
             consent = await flow.async_step_manual_recovery_confirm()
             self.assertEqual(consent["type"], "menu")
             self.assertIn("manual_recovery_verify", consent["menu_options"])
-            created = await flow.async_step_manual_create_pending()
+            edited = await flow.async_step_manual_edit_settings()
 
-        self.assertEqual(created["type"], "create_entry")
-        self.assertEqual(created["data"]["entry_role"], "pending_collector")
+        self.assertEqual(edited["type"], "form")
+        self.assertEqual(edited["step_id"], "manual")
+        self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
 
     async def test_recovery_route_is_form_values_never_peer_ip(self) -> None:
         # The answering socket has a DIFFERENT peer IP (NAT); the route must
@@ -14065,7 +14012,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(
             flow,
-            "_async_enrich_manual_pending_collector_profile",
+            "_async_enrich_manual_collector_profile",
             side_effect=_passthrough_enrich,
         ):
             created = await flow.async_step_manual_recovery_accept_inbound()
@@ -14105,7 +14052,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
         self.assertIsNone(flow._callback_continuation._recovery_outcome)
 
-    async def test_recovery_timeout_keeps_pending_available(self) -> None:
+    async def test_recovery_timeout_keeps_only_retry_and_edit_available(self) -> None:
         flow = self._make_flow()
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
         registry = self._install_registry(flow, inventory)
@@ -14118,20 +14065,13 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "manual_recovery_failed")
-        self.assertIn("manual_create_pending", result["menu_options"])
+        self.assertEqual(
+            result["menu_options"],
+            ["manual_probe_again", "manual_edit_settings"],
+        )
         # The typed failure is surfaced, not flattened to callback_timeout.
         self.assertEqual(flow._manual_recovery_error, "inbound_not_verified")
 
-        async def _passthrough_enrich(_user_input, r):
-            return r
-
-        with patch.object(
-            flow,
-            "_async_enrich_manual_pending_collector_profile",
-            side_effect=_passthrough_enrich,
-        ):
-            created = await flow.async_step_manual_create_pending()
-        self.assertEqual(created["data"]["entry_role"], "pending_collector")
 
     async def test_typed_restart_not_supported_reaches_the_user(self) -> None:
         # An AT-wire collector honestly cannot reboot: the typed failure
@@ -14406,7 +14346,7 @@ class ManualSilentBootstrapFlowTests(unittest.IsolatedAsyncioTestCase):
         options = result["menu_options"]
         self.assertIn("manual_bootstrap_framed", options)
         self.assertIn("manual_bootstrap_at", options)
-        self.assertIn("manual_create_pending", options)
+        self.assertNotIn("manual_save", options)
         # The summary is honest: the session ARRIVED (never "did not call back").
         summary = result["description_placeholders"]["probe_summary"]
         self.assertIn("collector connected", summary.lower())
@@ -14521,7 +14461,8 @@ class ManualRecoveryFailureExplanationTests(unittest.IsolatedAsyncioTestCase):
             sentences[code] = explanation
             # The explicit next actions are preserved.
             self.assertIn("manual_probe_again", result["menu_options"])
-            self.assertIn("manual_create_pending", result["menu_options"])
+            self.assertIn("manual_edit_settings", result["menu_options"])
+            self.assertNotIn("manual_save", result["menu_options"])
         # The observable causes are DISTINGUISHABLE to the user.
         self.assertEqual(len(set(sentences.values())), len(codes))
 

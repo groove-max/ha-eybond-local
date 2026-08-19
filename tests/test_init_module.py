@@ -6,7 +6,7 @@ import sys
 import tempfile
 import types
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, sentinel
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -84,11 +84,13 @@ _install_homeassistant_entity_registry_stub()
 
 
 from custom_components.eybond_local import (
+    ConfigEntryError,
     ConfigEntryNotReady,
     _async_cleanup_obsolete_entities,
     _async_finalize_expert_entity_migration,
     _async_initial_refresh_for_setup,
     _async_ensure_listener_entry,
+    _async_remove_obsolete_pending_entries,
     _async_remove_legacy_runtime_select_entities,
     _async_self_heal_collector_cloud_family,
     _async_self_heal_entry_title,
@@ -99,6 +101,7 @@ from custom_components.eybond_local import (
     _default_enabled_unique_ids,
     _default_enabled_unique_ids_for_current_runtime,
     _is_integration_disabled,
+    _is_obsolete_pending_entry,
     _prime_metadata_caches,
     _register_entry_stop_shutdown,
     async_setup_entry,
@@ -224,6 +227,75 @@ class ListenerBootstrapEntryTests(unittest.IsolatedAsyncioTestCase):
         await _async_ensure_listener_entry(hass)
 
         flow.async_init.assert_not_awaited()
+
+
+class ObsoletePendingEntryCleanupTests(unittest.IsolatedAsyncioTestCase):
+    def test_tombstone_predicate_rejects_coercible_roles(self) -> None:
+        class _DuckRole:
+            def __str__(self) -> str:
+                return "pending_collector"
+
+        self.assertTrue(
+            _is_obsolete_pending_entry(
+                types.SimpleNamespace(data={"entry_role": "pending_collector"})
+            )
+        )
+        for role in (_DuckRole(), b"pending_collector", None, 1):
+            with self.subTest(role=role):
+                self.assertFalse(
+                    _is_obsolete_pending_entry(
+                        types.SimpleNamespace(data={"entry_role": role})
+                    )
+                )
+
+    async def test_cleanup_removes_only_exact_pending_role_without_network_setup(self) -> None:
+        pending = types.SimpleNamespace(
+            entry_id="pending-beta2",
+            data={"entry_role": "pending_collector"},
+        )
+        normal = types.SimpleNamespace(
+            entry_id="collector-live",
+            data={"entry_role": "collector", "collector_pn": "V001020SYN62344022"},
+        )
+        listener = types.SimpleNamespace(
+            entry_id="listener",
+            data={"entry_role": "listener"},
+        )
+
+        class _DuckRole:
+            def __str__(self) -> str:
+                return "pending_collector"
+
+        malformed = types.SimpleNamespace(
+            entry_id="malformed",
+            data={"entry_role": _DuckRole()},
+        )
+        async_remove = AsyncMock()
+        hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(
+                async_entries=lambda domain: [pending, normal, listener, malformed],
+                async_remove=async_remove,
+            )
+        )
+
+        await _async_remove_obsolete_pending_entries(hass)
+
+        async_remove.assert_awaited_once_with("pending-beta2")
+
+    async def test_surviving_pending_tombstone_never_starts_runtime(self) -> None:
+        entry = types.SimpleNamespace(
+            entry_id="pending-race",
+            data={"entry_role": "pending_collector"},
+            runtime_data=sentinel.runtime,
+        )
+
+        with self.assertRaisesRegex(
+            ConfigEntryError,
+            "obsolete_pending_entry_not_removed",
+        ):
+            await async_setup_entry(types.SimpleNamespace(), entry)
+
+        self.assertIs(entry.runtime_data, sentinel.runtime)
 
 
 class InitModuleTests(unittest.TestCase):

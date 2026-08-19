@@ -2,8 +2,8 @@
 
 This is the single place where "make the collector dial in and prove which
 collector it is" happens. Every active callback path -- manual onboarding, the
-manual retry, reconfigure repair, and the pending entry's bounded attempt --
-runs exactly this transaction, so none of them re-assembles the proof.
+manual retry, reconfigure repair, and recovery bootstrap -- runs exactly this
+transaction, so none of them re-assembles the proof.
 
 Why it exists
 -------------
@@ -32,7 +32,7 @@ The flow, in order:
    (``inbound`` -- Home Assistant never dials out);
 4. wait, bounded, for a NEW session that is not in the baseline;
 5. transient-claim exactly that ``session_id``;
-6. decide the live wire from the OBSERVED session alone;
+6. resolve the live wire for that exact claimed session through the registry;
 7. read the full PN authoritatively -- framed: FC=2 parameter 2; AT: DTUPN;
 8. reconcile the identity through the shared matcher's rules;
 9. promote the claim to the full PN;
@@ -772,8 +772,23 @@ async def _async_run_attempt(
             logger.info("Callback session %s already claimed: %s", session_id, exc)
             return CallbackIdentityOutcome(result=IDENTITY_CONFLICT)
 
-        # --- 6. live wire, from the observation alone ------------------------
-        wire = _live_wire(session)
+        # --- 6. live wire, from the exact owner-scoped observation -----------
+        # A shared listener may have marked this socket route_identity_mismatch
+        # after a DIFFERENT entry rejected its strong PN.  The registry is the
+        # only authority that can distinguish that stale, foreign-route verdict
+        # from an actual conflict for this claim.  It permits the observed wire
+        # only when this exact claimed session's strong PN matches our expected
+        # identity; weak/foreign/unbound sockets remain untrusted.
+        handle = registry.session_handle_for_claimed_session(
+            owner,
+            expected_pn=request.expected_pn,
+        )
+        wire = ""
+        if handle is not None and handle.observed and not handle.conflict:
+            if handle.uses_framed_wire:
+                wire = WIRE_FRAMED
+            elif handle.uses_at_text_wire:
+                wire = WIRE_AT_TEXT
         if not wire:
             return CallbackIdentityOutcome(result=IDENTITY_UNVERIFIED)
 

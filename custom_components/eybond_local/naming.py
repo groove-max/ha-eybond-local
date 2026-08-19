@@ -55,7 +55,7 @@ def legacy_installation_titles(
     normalized_collector_ip = str(collector_ip or "").strip()
     normalized_server_ip = str(server_ip or "").strip()
 
-    titles = {"EyeBond Setup Pending"}
+    titles: set[str] = set()
     if normalized_model and normalized_serial:
         titles.add(f"{normalized_model} ({normalized_serial})")
     if normalized_model:

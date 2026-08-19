@@ -278,7 +278,7 @@ Use these issue templates:
 |---|---|
 | Auto-scan finds nothing | Retry the scan or choose a different Home Assistant network interface. If needed, use advanced setup with the collector IP from your router. |
 | Bluetooth Wi-Fi setup is unavailable | Make sure Home Assistant has Bluetooth access near the collector. An ESPHome Bluetooth Proxy near the collector can help. |
-| A manually saved fallback stays on **EyeBond Setup Pending** | Retry setup with the collector reachable. If it still stays pending, create a Support Archive. |
+| Manual setup cannot verify the collector | Keep the setup flow open and retry with the collector reachable. For an inbound collector, enable background discovery and continue when its identified session appears. |
 | Only the collector device appears | Runtime detection has not identified the inverter yet. Wait for one detection cycle, then create a Support Archive if it remains unidentified. |
 | Sensors stay unavailable | Check that the collector and Home Assistant are on the same network and that the collector has stable Wi-Fi. |
 | Vendor app stopped showing live data | If you pointed the collector at Home Assistant only, that disconnects it from its cloud by design. Use **Restore previous collector endpoint** to bring the vendor app back. |

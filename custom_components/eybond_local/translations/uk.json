@@ -214,7 +214,8 @@
           "manual_probe_again": "Перевірити ще раз",
           "manual_edit_settings": "Змінити параметри",
           "manual_smartess_cloud_assist": "Уточнити через SmartESS cloud",
-          "manual_create_pending": "Зберегти очікувальний пристрій",
+          "manual_save": "Додати пристрій",
+          "manual_enable_background_discovery": "Увімкнути фонове виявлення",
           "manual_bootstrap_framed": "Тихий колектор: запитати за EyeBond framed протоколом",
           "manual_bootstrap_at": "Тихий колектор: запитати за AT-протоколом"
         }
@@ -285,8 +286,7 @@
         "menu_options": {
           "manual_recovery_verify": "Перевірити відновлення (перезапустить колектор)",
           "manual_probe_again": "Перевірити ще раз",
-          "manual_edit_settings": "Змінити налаштування",
-          "manual_create_pending": "Зберегти як Pending-пристрій (без перевірки)"
+          "manual_edit_settings": "Змінити налаштування"
         }
       },
       "manual_recovery_inbound_confirm": {
@@ -302,8 +302,7 @@
         "description": "Колектор **{collector_pn}**: {failure_explanation}\n\nЗапис не створено. Виберіть доступну дію нижче, щоб повторити спробу або змінити адресу/налаштування.",
         "menu_options": {
           "manual_probe_again": "Спробувати знову (нова спроба)",
-          "manual_edit_settings": "Змінити налаштування",
-          "manual_create_pending": "Зберегти як Pending-пристрій"
+          "manual_edit_settings": "Змінити налаштування"
         }
       }
     },
@@ -637,36 +636,6 @@
         "title": "Результат діагностики",
         "description": "**{action_title}**\n\n{status}\n\n**Шлях:** `{path}`\n**Завантажити:** {download_markdown}\n\n**Наступний крок:** {next_step}"
       },
-      "pending": {
-        "title": "Колектор в очікуванні",
-        "description": "Статус: {status}\nПідключення: {strategy}\n\nЦей колектор ще не визначено, тому він не працює.",
-        "menu_options": {
-          "pending_confirm_candidate": "Прив'язати знайдений колектор",
-          "pending_settings": "Змінити налаштування",
-          "pending_retry": "Повторити зараз"
-        }
-      },
-      "pending_settings": {
-        "title": "Змінити колектор в очікуванні",
-        "description": "Змініть спосіб підключення або адресу, до якої звертається Home Assistant.",
-        "data": {
-          "connection_strategy": "Як підключається колектор",
-          "collector_ip": "Адреса колектора"
-        },
-        "data_description": {
-          "connection_strategy": "Виберіть «Колектор сам підключається до Home Assistant», якщо колектор уже налаштований на Home Assistant. Виберіть «Запитувати підключення колектора за потреби», щоб Home Assistant надсилав один запит на вказану адресу, коли потрібні дані."
-        }
-      },
-      "pending_confirm_candidate": {
-        "title": "Прив'язати знайдений колектор",
-        "description": "Ці колектори підключилися до Home Assistant, але ще не прив'язані. Виберіть той, яким має стати цей запис. Адресу показано лише як підказку.",
-        "data": {
-          "candidate": "Колектор"
-        }
-      },
-      "pending_retry": {
-        "title": "Повторити підключення"
-      },
       "strategy_transition": {
         "title": "Змінити режим підключення",
         "description": "Home Assistant перемкне колектор у режим **{target_strategy}** і перевірить повторне підключення.\n\n{connection_strategy_risk}\n\n{connection_strategy_rollback}\n\nПеревірте адреси та підтвердьте продовження.",
@@ -713,7 +682,6 @@
       "strategy_transition_running": "Перевірка перемикання контрольованим перезапуском колектора…"
     },
     "abort": {
-      "no_pending_candidates": "Жоден неприв'язаний колектор ще не підключився до Home Assistant.",
       "already_configured": "Цей колектор уже налаштовано в іншому записі."
     }
   },

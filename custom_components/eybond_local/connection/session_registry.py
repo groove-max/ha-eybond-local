@@ -1103,7 +1103,12 @@ class CallbackSessionRegistry:
             return None
         return self.session_handle_for_pn(pn)
 
-    def session_handle_for_claimed_session(self, entry_id: str) -> SessionHandle | None:
+    def session_handle_for_claimed_session(
+        self,
+        entry_id: str,
+        *,
+        expected_pn: object = "",
+    ) -> SessionHandle | None:
         """Negotiated handle for EXACTLY the socket this entry's claim holds.
 
         Unlike :meth:`session_handle_for_entry` (PN-ranked across live sessions
@@ -1111,10 +1116,15 @@ class CallbackSessionRegistry:
         transient verification claim that has not been promoted to a durable PN
         yet, and for management operations that must land on the one socket the
         claim owns -- never a same-PN sibling. Returns ``None`` when the claim
-        holds no socket or the socket is no longer observed.
+        holds no socket or the socket is no longer observed. ``expected_pn`` is
+        used only to re-evaluate a route mismatch produced by another claimant;
+        it never selects a session and only a strong same-PN observation can
+        authorize that owner-scoped handle.
         """
 
-        sid = self.claimed_session_id(entry_id)
+        owner = str(entry_id or "").strip()
+        claim = self._claims.get(owner)
+        sid = claim.session_id if claim is not None else ""
         if not sid:
             return None
         for session in self._normalized_sessions():
@@ -1125,7 +1135,49 @@ class CallbackSessionRegistry:
                 # protocol_shape must never resurrect a management adapter for
                 # a connection that no longer exists.
                 return None
-            return negotiate_session_adapters(session.raw)
+            handle = negotiate_session_adapters(session.raw)
+            raw_state = str(session.raw.get("state") or "").strip().lower()
+            if raw_state != "route_identity_mismatch" or handle.observed:
+                return handle
+
+            # ``route_identity_mismatch`` is relative to a PREVIOUS route
+            # claimant, not an intrinsic statement that this strongly
+            # identified socket belongs to nobody.  On a shared listener an
+            # offline entry may inspect collector B's fresh socket while
+            # waiting for collector A and reject it for A.  If B's own
+            # transaction then claims that EXACT session, the stale raw state
+            # must not make B unreadable forever.
+            #
+            # The override is deliberately owner-scoped and read-only.  It is
+            # available only when the exact registry claim, a strong identity
+            # observed on this same socket, and either the claim's durable PN
+            # or the caller's strict expected PN all agree.  A PN-less claim
+            # without an expected identity, a weak observation, or a foreign
+            # PN keeps the ordinary fail-closed handle.  The listener inventory
+            # is not mutated; the session-pinned transport will claim the
+            # physical socket before doing I/O.
+            supplied = (
+                expected_pn
+                if type(expected_pn) is str and expected_pn == expected_pn.strip()
+                else ""
+            )
+            claimed_pn = _normalize_pn(claim.collector_pn)
+            anchor = claimed_pn or _normalize_pn(supplied)
+            if (
+                not anchor
+                or not session.has_strong_identity
+                or not session.collector_pn
+                or not _pn_is_same_identity(anchor, session.collector_pn)
+                or (
+                    claimed_pn
+                    and supplied
+                    and not _pn_is_same_identity(claimed_pn, supplied)
+                )
+            ):
+                return handle
+            owned_observation = dict(session.raw)
+            owned_observation["state"] = "claimed"
+            return negotiate_session_adapters(owned_observation)
         return None
 
     def owned_session_location(self, entry_id: str) -> CallbackSession | None:

@@ -52,9 +52,9 @@ TOCTOU problem rather than remove one.
 Production mutation is concentrated in the connection transactions/recovery
 authorities, config-entry setup/removal, and the explicit runtime pinning path.
 Passive discovery supplies observations and consumes unclaimed projections; it
-does not own a second claim table.  The remaining config-flow calls are adapters
-for the legacy manual continuation and pending-entry compatibility path, while
-admission-origin flows use `CollectorAdmissionTransaction`.
+does not own a second claim table.  Config-flow callback continuation and
+admission-origin flows both delegate into the neutral connection transactions;
+incomplete onboarding remains flow state and never creates a PN-less entry.
 
 Decision: **keep one registry state owner**.  Narrow read-only or ownership
 facades may be introduced later to make call-site permissions clearer, but only

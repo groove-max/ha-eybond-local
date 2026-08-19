@@ -9,7 +9,7 @@ It creates one ZIP file with the information needed to understand the problem wi
 Create a Support Archive when:
 
 - setup fails;
-- a manually saved fallback stays in **EyeBond Setup Pending**;
+- setup repeatedly cannot verify the collector identity or recovery path;
 - the collector was added but runtime detection did not identify the inverter;
 - sensors are missing or unavailable;
 - controls are missing;

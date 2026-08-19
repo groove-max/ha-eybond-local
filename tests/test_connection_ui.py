@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import fields
 from pathlib import Path
 import sys
 import unittest
@@ -39,7 +40,10 @@ class ConnectionUiTests(unittest.TestCase):
             "ipv4",
         )
         self.assertEqual(EYBOND_CONNECTION_DISPLAY_METADATA.integration_name, "EyeBond Local")
-        self.assertEqual(EYBOND_CONNECTION_DISPLAY_METADATA.pending_entry_title, "EyeBond Setup Pending")
+        self.assertNotIn(
+            "pending_entry_title",
+            {field.name for field in fields(EYBOND_CONNECTION_DISPLAY_METADATA)},
+        )
 
     def test_build_eybond_auto_values_uses_branch_defaults(self) -> None:
         values = build_eybond_auto_values(

@@ -84,17 +84,6 @@ from .connection.strategy_transition_context import (
 )
 from .connection.ui import ConnectionFormField
 from .const import (
-    CONF_PENDING_ADDRESS_HINT,
-    CONF_PENDING_ID,
-    CONF_PENDING_LAST_ATTEMPT_RESULT,
-    ENTRY_ROLE_PENDING_COLLECTOR,
-    PENDING_ATTEMPT_CALLBACK_TIMEOUT,
-    PENDING_ATTEMPT_IDENTITY_AMBIGUOUS,
-    PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED,
-    PENDING_ATTEMPT_TRIGGER_INTERFERENCE,
-    PENDING_ATTEMPT_WAITING_CALLBACK,
-    PENDING_ATTEMPT_WAITING_INBOUND,
-    PENDING_UNIQUE_ID_PREFIX,
     CONF_ADVERTISED_SERVER_IP,
     CONF_STRATEGY_TRANSITION_STATE,
     CONF_ADVERTISED_TCP_PORT,
@@ -328,7 +317,8 @@ COLLECTOR_NETWORK_ALREADY_CONNECTED = "already_connected"
 COLLECTOR_NETWORK_NEEDS_BLUETOOTH = "needs_bluetooth"
 MANUAL_CONFIRM_ACTION_PROBE_AGAIN = "manual_probe_again"
 MANUAL_CONFIRM_ACTION_EDIT_SETTINGS = "manual_edit_settings"
-MANUAL_CONFIRM_ACTION_CREATE_PENDING = "manual_create_pending"
+MANUAL_CONFIRM_ACTION_SAVE = "manual_save"
+MANUAL_CONFIRM_ACTION_ENABLE_DISCOVERY = "manual_enable_background_discovery"
 PROXY_CAPTURE_ACTION_RESET_TIMER = "reset_timer"
 SHADOW_LEARNING_ACTION_REFRESH = "refresh"
 SHADOW_LEARNING_ACTION_PREFLIGHT = "preflight"
@@ -1486,7 +1476,7 @@ def _compute_broadcast_24(ip: str) -> str:
     return f"{parts[0]}.{parts[1]}.{parts[2]}.255"
 
 
-def _sanitize_pending_collector_ip(
+def _sanitize_collector_route_hint(
     collector_ip: str,
     *,
     server_ip: str = "",
@@ -1592,12 +1582,12 @@ _RECOVERY_FAILURE_EXPLANATIONS = {
     "inbound_reconnect_timeout": (
         "common.dynamic.recovery_fail_inbound_timeout",
         "The collector did not reconnect on its own after the restart. "
-        "Try again, or save a Pending Device that waits for it.",
+        "Try again after the collector reconnects, or enable background discovery.",
     ),
     "restart_not_supported": (
         "common.dynamic.recovery_fail_restart_unsupported",
         "This collector cannot be restarted for verification over its "
-        "connection. Save a Pending Device instead.",
+        "connection. Change the connection settings and try again.",
     ),
     "recovery_ownership_unavailable": (
         "common.dynamic.recovery_fail_ownership_unavailable",
@@ -1776,8 +1766,8 @@ def _shared_recovery_failure_explanation(tr, code: str) -> str:
         code,
         (
             "common.dynamic.recovery_fail_generic",
-            "The recovery verification did not succeed. You can try again, "
-            "change the settings, or save a Pending Device.",
+            "The recovery verification did not succeed. You can try again or "
+            "change the settings.",
         ),
     )
     return tr(key, fallback)
@@ -1863,10 +1853,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # is only a form DEFAULT -- the user still confirms it, and it is never
         # inferred from discovery/peer IP/cloud family.
         self._manual_preselected_strategy = ""
-        # A route selected from scan results is an identification attempt, not
-        # an explicit request to create a Pending collector.  Keep the
-        # chosen address in one place so every manual/recovery menu applies the
-        # same fail-closed policy and the ordinary manual flow stays unchanged.
+        # A route selected from scan results is an identification attempt. Keep
+        # the chosen address in one place so every manual/recovery menu applies
+        # the same fail-closed policy and the ordinary manual flow stays unchanged.
         self._manual_scan_route_address = ""
         # Callback-trigger ledger generation sampled immediately BEFORE this
         # flow's own active callback attempt, so the shared matcher can prove the
@@ -1892,7 +1881,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._manual_declared_expected_pn: str | None = None
         # A one-shot error surfaced on the next manual form render when a callback
         # verification reached entry creation without a durable strong PN.
-        self._manual_pending_verification_error = ""
+        self._manual_verification_error = ""
         # Manual, route-only and reconfigure paths start directly in the SAME
         # neutral callback transaction lifecycle used after observed-session
         # admission.  No callback owner/proof/session state lives on the flow.
@@ -1973,11 +1962,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         role = str(config_entry.data.get(CONF_ENTRY_ROLE) or "")
         if role == ENTRY_ROLE_LISTENER:
             return ListenerOptionsFlow(config_entry)
-        if role == ENTRY_ROLE_PENDING_COLLECTOR:
-            # A pending entry has no collector runtime, so the normal options flow
-            # (which assumes a live coordinator/capabilities) must never serve it.
-            # After promotion the role is cleared and the normal flow takes over.
-            return PendingCollectorOptionsFlow(config_entry)
         return EybondLocalOptionsFlow(config_entry)
 
     # ---- step: user (welcome) ----
@@ -2467,9 +2451,9 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     observed=observed,
                     address=raw_address,
                 )
-                # Preserve the explicit choice for the failure/edit path.  It
-                # remains a scan-origin attempt, so even the manual fallback is
-                # barred from creating a Pending Device.
+                # Preserve the explicit choice for the failure/edit path. It
+                # remains a scan-origin attempt and must identify a collector
+                # before any entry can be created.
                 self._manual_scan_route_address = raw_address
                 self._manual_defaults[CONF_COLLECTOR_IP] = raw_address
                 admission = await self._async_admit_selected_scan_result(
@@ -3291,15 +3275,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 dict(self._auto_connection_defaults(), **effective_input),
             ),
         )
-        shared_passive_results = self._shared_registry_scan_results()
         listener_passive_results = await self._async_passive_scan_results(
             detector,
             discovery_targets=discovery_targets,
         )
-        passive_results = self._collapse_scan_results(
-            (*shared_passive_results, *listener_passive_results)
-        )
-
         skip_probe_ips = self._configured_collector_probe_skip_ips()
         # Passive discovery shares this scan's callback listener. Mark sockets
         # accepted while the active UDP probe runs as results of this flow so
@@ -3352,9 +3331,19 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 and _is_ipv4(address)
             ):
                 self._scan_responded_addresses.add(address)
+        # Read the shared registry at the result boundary, after the active scan.
+        # A collector may dial in at any point while the scan is running; taking
+        # this snapshot only before ``async_scan`` made that live strong-PN
+        # session invisible until the next search. Background discovery and the
+        # interactive result now converge on the same current inventory.
+        shared_registry_results = self._shared_registry_scan_results()
         visible_results = self._collapse_scan_results(
             result
-            for result in (*passive_results, *results)
+            for result in (
+                *results,
+                *listener_passive_results,
+                *shared_registry_results,
+            )
             if self._is_visible_scan_result(result)
         )
 
@@ -3473,6 +3462,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """One screen: pick a found device directly, or pick a follow-up action."""
 
+        # Refresh only while rendering. Selector values are positional keys;
+        # rebuilding the result map after the user submits could make a key
+        # point at a different collector if a session arrived in between.
+        if user_input is None:
+            self._refresh_live_registry_scan_results()
         selectable_results = self._selectable_autodetect_results()
 
         errors: dict[str, str] = {}
@@ -3513,6 +3507,24 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders=self._scan_results_placeholders(),
         )
+
+    def _refresh_live_registry_scan_results(self) -> None:
+        """Merge late live sessions into this scan's immutable observations.
+
+        A scan result is a record of evidence observed during this user action,
+        not a mirror that discards an active result when the socket later closes.
+        Admission still re-verifies the selected exact session.  The merge adds
+        sessions that arrived after the detector's final snapshot while keeping
+        active route evidence and stable selector semantics.
+        """
+
+        refreshed = self._collapse_scan_results(
+            (*self._autodetect_results.values(), *self._shared_registry_scan_results())
+        )
+        self._autodetect_results = {
+            str(index): result
+            for index, result in enumerate(self._sort_scan_results(refreshed))
+        }
 
     # ---- step: advanced_setup (power-user fallbacks) ----
 
@@ -3780,11 +3792,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "selected driver/catalog path. This can mean the inverter is not "
                 "connected, is powered off, uses an unsupported protocol, or only "
                 "the collector is present.\n\n"
-                "You can still add a Pending Device to keep diagnostics available. "
+                "No entry is created until the collector has a confirmed identity. "
                 "Device learning is useful only after an inverter has actually "
                 "been detected.\n\n"
-                "Next step: check the inverter connection, then create a Support "
-                "Archive if the device still cannot be identified.",
+                "Next step: check the inverter connection, retry detection, then "
+                "create a Support Archive if the device still cannot be identified.",
             )
 
         model = ""
@@ -4018,11 +4030,11 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         await self._async_ensure_network_defaults()
         errors: dict[str, str] = {}
-        if self._manual_pending_verification_error:
-            # Fail-closed retry from _async_create_manual_entry: the callback
-            # verification produced no durable strong PN, so no entry was created.
-            errors["base"] = self._manual_pending_verification_error
-            self._manual_pending_verification_error = ""
+        if self._manual_verification_error:
+            # Fail-closed retry from _async_create_manual_entry: verification
+            # produced no durable strong PN, so no entry was created.
+            errors["base"] = self._manual_verification_error
+            self._manual_verification_error = ""
 
         if user_input is not None:
             flat_input = _flatten_sections(user_input)
@@ -4073,10 +4085,8 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 )
                 if verification_error:
                     # A callback attempt is an observation, not form validation.
-                    # Failure must not make a deliberately PENDING collector
-                    # impossible to create: route to the existing result menu so
-                    # the user can retry, edit the address, or explicitly save a
-                    # pending entry. No PN/session/claim is carried into it.
+                    # Keep the flow open so the user can retry or edit the
+                    # address. No PN/session/claim is carried into the next try.
                     return await self._async_route_after_manual_callback_failure(
                         verification_error
                     )
@@ -4262,18 +4272,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self,
         verification_error: str,
     ) -> ConfigFlowResult:
-        """Show callback failure as a result with an explicit pending action.
+        """Show callback failure without creating an incomplete config entry.
 
         A failed one-shot proves only that the collector was not confirmed during
-        THIS attempt. It is not a schema error and must not block the user's
-        original intent to save an expected device. The result is deliberately
-        identity-free: the callback matcher already released this attempt's claim
-        and the transaction cleared its certified identity; stale successful-attempt strategy
-        evidence is cleared here as an additional terminal-path guard.
+        THIS attempt. The result is deliberately identity-free: the callback
+        matcher already released this attempt's claim and the transaction cleared
+        its certified identity; stale successful-attempt strategy evidence is
+        cleared here as an additional terminal-path guard. The flow remains open
+        with retry/edit actions; no PN-less entry is persisted.
 
-        Reconfigure does not call this helper: an existing normal entry cannot be
-        converted into a pending entry and therefore remains fail-closed on its
-        own form.
+        Reconfigure does not call this helper and remains fail-closed on its own
+        form.
         """
 
         reason = str(verification_error or "callback_timeout").strip()
@@ -4290,7 +4299,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             collector=None,
             match=None,
             alternative_matches=(),
-            next_action="create_pending_entry",
+            next_action="retry_verification",
             last_error=reason,
         )
         # The certified PN/session were already cleared by async_run_identity's
@@ -4377,62 +4386,57 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 
         * a strong, unclaimed session whose durable full PN is already known ->
           create the NORMAL collector entry through the existing path;
-        * otherwise -> save a PENDING entry that waits for the collector.
+        * otherwise -> keep this flow open and direct the user to retry or enable
+          background discovery. No incomplete config entry is created.
 
         The collector address is optional here and is kept only as a hint.
         """
 
-        from .pending_collector import list_inbound_candidates
-
-        candidates = list_inbound_candidates(self.hass)
+        candidates = self._strong_unclaimed_session_observations()
         expected = self._callback_continuation.identity_context.expected_pn
-        chosen_pn = ""
-        chosen_session_id = ""
+        chosen: ObservedCollectorSession | None = None
         if expected:
             # ONLY a passive-discovery context knows WHICH collector this flow is
             # for. Bind that identity and nothing else.
             #
             # A generic manual inbound flow deliberately has NO such link: a live
             # unclaimed collector -- even the only one on the network right now --
-            # may belong to another pending flow or to a user who has not chosen
-            # it. "It is currently the only one" is not consent, so this flow
-            # never adopts it. It saves a pending entry, and the user binds a
-            # candidate explicitly in the pending options flow -- which is the
-            # only thing allowed to record user_confirmed_session.
+            # is not user consent to bind that identity. It is shown by the same
+            # shared inventory in background discovery and every network scan.
             for candidate in candidates:
-                if pn_is_same_identity(expected, candidate["collector_pn"]):
-                    chosen_pn = candidate["collector_pn"]
-                    chosen_session_id = candidate["session_id"]
+                if pn_is_same_identity(expected, candidate.collector_pn):
+                    chosen = candidate
                     break
 
-        if not chosen_pn:
-            # Nothing (or nothing unambiguous) is observable yet. Save a pending
-            # entry; the user confirms a candidate later in its options flow.
+        if chosen is None:
             self._manual_result = OnboardingResult(
                 connection_type=self._current_connection_type(),
                 connection_mode="manual",
-                next_action="create_pending_entry",
+                next_action="await_inbound_session",
                 last_error="inbound_awaiting_session",
             )
-            return await self._async_create_pending_collector_entry()
+            return await self.async_step_manual_confirm()
 
         # A durable identity this flow is explicitly FOR is already observable.
         # Own that exact session first: claim_session -> promote to the full PN
         # (prepare_handoff then happens at entry creation).
         if not self._callback_continuation.adopt_passive_inbound_identity(
-            chosen_pn, chosen_session_id
+            chosen.collector_pn, chosen.session_id
         ):
-            # Owned by another entry/flow: fail closed and save a pending entry.
+            # Owned by another entry/flow: fail closed and wait for discovery to
+            # expose an unclaimed session. Never bind by peer address.
             self._manual_result = OnboardingResult(
                 connection_type=self._current_connection_type(),
                 connection_mode="manual",
-                next_action="create_pending_entry",
+                next_action="await_inbound_session",
                 last_error="inbound_awaiting_session",
             )
-            return await self._async_create_pending_collector_entry()
-        previous_pn = self._callback_continuation.adopt_certified_pn(chosen_pn)
+            return await self.async_step_manual_confirm()
+        previous_pn = self._callback_continuation.adopt_certified_pn(
+            chosen.collector_pn
+        )
         abort = await self._async_propagate_enriched_pn(
-            chosen_pn, previous=previous_pn
+            chosen.collector_pn, previous=previous_pn
         )
         if abort is not None:
             return abort
@@ -4446,13 +4450,37 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 source="inbound_observed",
                 ip=str(flat_input.get(CONF_COLLECTOR_IP, "") or ""),
                 connected=True,
-                collector=CollectorInfo(collector_pn=chosen_pn),
+                collector=CollectorInfo(collector_pn=chosen.collector_pn),
             ),
+            observed_session=chosen,
             connection_type=self._current_connection_type(),
             connection_mode="manual",
-            next_action="create_pending_entry",
+            next_action="create_entry",
         )
         return await self.async_step_manual_confirm()
+
+    def _strong_unclaimed_session_observations(
+        self,
+    ) -> tuple[ObservedCollectorSession, ...]:
+        """Return the shared live strong-PN inventory, fail-closed."""
+
+        from .passive_discovery import get_passive_callback_discovery
+
+        discovery = get_passive_callback_discovery(self.hass)
+        snapshot = getattr(discovery, "snapshot_unclaimed_collector_sessions", None)
+        if not callable(snapshot):
+            return ()
+        try:
+            observations = tuple(snapshot())
+        except Exception:
+            logger.debug("Shared inbound candidate snapshot failed", exc_info=True)
+            return ()
+        return tuple(
+            observed
+            for observed in observations
+            if type(observed) is ObservedCollectorSession
+            and observed.has_strong_identity
+        )
 
     def _manual_verification_note(self) -> str:
         """Honest labeling for the prefilled address in the verification context.
@@ -4513,8 +4541,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         )
         if self._can_offer_smartess_cloud_assist(self._manual_result):
             menu_options.append("manual_smartess_cloud_assist")
-        if self._manual_pending_allowed():
-            menu_options.append(MANUAL_CONFIRM_ACTION_CREATE_PENDING)
+        if self._manual_entry_ready_to_save():
+            menu_options.insert(0, MANUAL_CONFIRM_ACTION_SAVE)
+        if last_error == "inbound_awaiting_session":
+            menu_options.append(MANUAL_CONFIRM_ACTION_ENABLE_DISCOVERY)
 
         return self.async_show_menu(
             step_id="manual_confirm",
@@ -4548,13 +4578,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # the previous attempt's baseline, ledger generation, verified PN or
         # claim -- otherwise a second probe that reaches collector B could be
         # combined with the first attempt's proof/claim for collector A.
+        if self._manual_chosen_strategy == CONNECTION_STRATEGY_INBOUND:
+            return await self._async_manual_inbound_observe(self._manual_config)
         verification_error = await self._async_run_manual_callback_attempt(
             self._manual_config
         )
         if verification_error:
             # Failure leaves nothing behind: no verified PN and no claim. Keep it
-            # as an honest result and preserve all three explicit next actions,
-            # including saving a pending collector.
+            # as an honest result and preserve retry/edit actions.
             return await self._async_route_after_manual_callback_failure(
                 verification_error
             )
@@ -4611,49 +4642,51 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         if not self._manual_config:
             return await self.async_step_manual()
 
+        self._callback_continuation.release_unadopted_recovery()
+        self._callback_continuation.release_terminal_owner()
         self._manual_defaults = dict(self._manual_config)
         self._manual_result = None
         return await self.async_step_manual()
 
-    async def async_step_manual_create_pending(
+    async def async_step_manual_save(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Save the collector for later: a normal entry if the PN is already known.
-
-        If verification already proved a durable full PN, this is an ordinary
-        collector entry and takes the existing path. Otherwise the user gets an
-        explicit PENDING entry (its own role) that waits for the collector -- it
-        is never a normal PN-less collector entry.
-        """
+        """Create a normal collector entry only after durable identity proof."""
 
         del user_input
         if not self._manual_config:
             return await self.async_step_manual()
-        if not self._manual_pending_allowed():
-            # A scan result is evidence to identify NOW, not explicit intent to
-            # create a future collector.  Guard the handler as well as the menu
-            # so a stale/direct flow action cannot bypass the policy.
+        if not self._manual_entry_ready_to_save():
             return await self.async_step_manual_confirm()
-        if (
-            self._callback_continuation.certified_pn
-            and self._manual_chosen_strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
-            and not self._callback_continuation.terminal_input.has_proof
-        ):
-            # Identity alone must not mint a normal callback entry (the pcap
-            # regression: such an entry deadlocks on the next silent socket).
-            # Without a proven recovery route the honest save is the explicit
-            # PENDING entry; the normal entry is created via the recovery
-            # verification path.
-            return await self._async_create_pending_collector_entry()
-        result = await self._async_create_manual_entry(
+        return await self._async_create_manual_entry(
             self._manual_config, self._manual_result
         )
-        if result.get("type") == "form" and result.get("step_id") == "manual":
-            # The strict collector-PN invariant refused a normal entry (no durable
-            # identity yet). That is exactly the pending case: save it explicitly.
-            return await self._async_create_pending_collector_entry()
-        return result
+
+    async def async_step_manual_enable_background_discovery(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Continue through the one background-discovery entry path."""
+
+        del user_input
+        self._callback_continuation.release_unadopted_recovery()
+        self._callback_continuation.release_terminal_owner()
+        return await self.async_step_listener()
+
+    def _manual_entry_ready_to_save(self) -> bool:
+        """Whether this flow can create a fully identified normal entry."""
+
+        if not self._manual_config:
+            return False
+        collector_pn = self._callback_continuation.certified_pn
+        if not collector_pn and self._manual_result is not None:
+            collector_pn = self._collector_pn_for_result(self._manual_result)
+        if not collector_pn:
+            return False
+        if self._manual_chosen_strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND:
+            return self._callback_continuation.terminal_input.has_proof
+        return True
 
     # ---- steps: manual callback recovery verification ----
 
@@ -4680,8 +4713,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
             MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
         ]
-        if self._manual_pending_allowed():
-            menu_options.append(MANUAL_CONFIRM_ACTION_CREATE_PENDING)
         return self.async_show_menu(
             step_id="manual_recovery_confirm",
             menu_options=menu_options,
@@ -4905,8 +4936,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
             MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
         ]
-        if self._manual_pending_allowed():
-            menu_options.append(MANUAL_CONFIRM_ACTION_CREATE_PENDING)
         return self.async_show_menu(
             step_id="manual_recovery_failed",
             menu_options=menu_options,
@@ -4918,97 +4947,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 ),
             },
         )
-
-    async def _async_create_pending_collector_entry(self) -> ConfigFlowResult:
-        """Create an explicit pending-collector entry (no durable PN yet).
-
-        Identity is a synthetic ``pending:<ULID>`` -- never an address, so several
-        pending entries can share one NAT/peer IP. The user's canonical strategy
-        choice goes straight into ``entry.data``; nothing is ever written to
-        options. No endpoint is written and no session is claimed.
-        """
-
-        from homeassistant.util.ulid import ulid_now
-
-        config = dict(self._manual_config)
-        strategy = str(
-            config.get(CONF_CONNECTION_STRATEGY)
-            or self._verified_connection_strategy
-            or CONNECTION_STRATEGY_INBOUND
-        ).strip()
-        if strategy not in CONNECTION_STRATEGIES:
-            strategy = CONNECTION_STRATEGY_INBOUND
-
-        address_hint = _sanitize_pending_collector_ip(
-            str(config.get(CONF_COLLECTOR_IP, "") or ""),
-            server_ip=str(config.get(CONF_SERVER_IP, "")),
-            discovery_target=str(config.get(CONF_DISCOVERY_TARGET, "")),
-        )
-        if strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND and not address_hint:
-            # callback_on_demand has nowhere to send its single trigger.
-            self._manual_pending_verification_error = "callback_target_required"
-            return await self.async_step_manual()
-
-        pending_id = ulid_now()
-        await self.async_set_unique_id(f"{PENDING_UNIQUE_ID_PREFIX}{pending_id}")
-        abort = self._abort_if_unique_id_configured()
-        if abort is not None:
-            return abort
-
-        connection_type = self._current_connection_type()
-        data = with_driver_hint(
-            build_manual_entry_settings(connection_type, config),
-            driver_hint=config.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
-        )
-        data.setdefault(CONF_CONNECTION_TYPE, connection_type)
-        data[CONF_ENTRY_ROLE] = ENTRY_ROLE_PENDING_COLLECTOR
-        data[CONF_PENDING_ID] = pending_id
-        detection_strategy = config.get(
-            CONF_DRIVER_DETECTION_STRATEGY,
-            DEFAULT_DRIVER_DETECTION_STRATEGY,
-        )
-        data[CONF_DRIVER_DETECTION_STRATEGY] = (
-            detection_strategy
-            if type(detection_strategy) is str
-            and detection_strategy in DRIVER_DETECTION_STRATEGIES
-            else DEFAULT_DRIVER_DETECTION_STRATEGY
-        )
-        # CANONICAL owner: entry.data. Never entry.options.
-        data[CONF_CONNECTION_STRATEGY] = strategy
-        # For inbound this is only a diagnostic hint; it is NEVER an identity and
-        # never binds a session. For callback_on_demand it is the trigger target.
-        data[CONF_PENDING_ADDRESS_HINT] = address_hint
-        data[CONF_COLLECTOR_IP] = address_hint
-        data[CONF_COLLECTOR_PN] = ""
-        if strategy == CONNECTION_STRATEGY_INBOUND:
-            pending_status = PENDING_ATTEMPT_WAITING_INBOUND
-        else:
-            callback_error = str(
-                getattr(self._manual_result, "last_error", "") or ""
-            ).strip()
-            pending_status = {
-                "callback_timeout": PENDING_ATTEMPT_CALLBACK_TIMEOUT,
-                "callback_identity_mismatch": PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED,
-                "callback_identity_conflict": PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED,
-                "callback_identity_ambiguous": PENDING_ATTEMPT_IDENTITY_AMBIGUOUS,
-                "callback_trigger_interference": PENDING_ATTEMPT_TRIGGER_INTERFERENCE,
-            }.get(callback_error, PENDING_ATTEMPT_WAITING_CALLBACK)
-        data[CONF_PENDING_LAST_ATTEMPT_RESULT] = pending_status
-        # The endpoint is NEVER touched when saving a pending entry.
-        return self.async_create_entry(
-            title=self._pending_entry_title(strategy, address_hint),
-            data=data,
-            options={},
-        )
-
-    def _pending_entry_title(self, strategy: str, address_hint: str) -> str:
-        base = self._tr(
-            "common.dynamic.pending_entry_title",
-            "EyeBond collector (waiting)",
-        )
-        if strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND and address_hint:
-            return f"{base} {address_hint}"
-        return base
 
     # ---- step: reconfigure (repair an existing PN-less collector entry) ----
 
@@ -5132,12 +5070,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         deletes/re-adds the entry.
         """
 
-        verified_full_pn = str(self._callback_continuation.certified_pn or "").strip()
+        verified_full_pn = self._callback_continuation.certified_pn
         if not verified_full_pn:
             self._callback_continuation.release_terminal_owner()
             return None
 
-        collector_ip = _sanitize_pending_collector_ip(
+        collector_ip = _sanitize_collector_route_hint(
             str(self._manual_config.get(CONF_COLLECTOR_IP, "")),
             server_ip=str(self._manual_config.get(CONF_SERVER_IP, "")),
             discovery_target=str(self._manual_config.get(CONF_DISCOVERY_TARGET, "")),
@@ -5452,7 +5390,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         result: OnboardingResult | None = None,
     ) -> ConfigFlowResult:
         result = result or self._manual_result
-        result = await self._async_enrich_manual_pending_collector_profile(
+        result = await self._async_enrich_manual_collector_profile(
             user_input,
             result,
         )
@@ -5479,10 +5417,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # observed the collector's strong full PN must persist it. Without it the
         # created callback entry can never own the inbound session it triggers and
         # is doomed to collector_offline. Only a REGISTRY-CERTIFIED strong full PN
-        # (fc2_parameter_2 / at_dtupn, held under the pending-handoff owner) is
+        # (fc2_parameter_2 / at_dtupn, held under the handoff owner) is
         # durable evidence -- never the discovery-time short/expected PN alone,
         # which is transient and unproven.
-        verified_full_pn = str(self._callback_continuation.certified_pn or "").strip()
+        verified_full_pn = self._callback_continuation.certified_pn
         if self._manual_chosen_strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND:
             # On the callback path the VERIFIED identity is the ONLY identity the
             # entry may carry -- it fully REPLACES the probe's own result PN.
@@ -5493,49 +5431,39 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             # that FAILED verification (timeout, mismatch, interference) still
             # name the entry -- binding an identity this flow owns no claim for,
             # and in a retry it would resurrect the previous attempt's collector.
-            # Unverified -> no PN -> the strict invariant below refuses a normal
-            # entry and the caller saves an explicit pending one instead.
+            # Unverified -> no PN -> the strict invariant below keeps the flow
+            # open without creating an entry.
             collector_pn = verified_full_pn
         elif not collector_pn and verified_full_pn:
             # Inbound: the strong probe result already set ``collector_pn``; this
             # only fills in the observed/claimed-session case.
             collector_pn = verified_full_pn
 
-
-        collector_ip = _sanitize_pending_collector_ip(
+        collector_ip = _sanitize_collector_route_hint(
             collector_ip,
             server_ip=str(user_input.get(CONF_SERVER_IP, "")),
             discovery_target=str(user_input.get(CONF_DISCOVERY_TARGET, "")),
         )
-        # NOTE: there is deliberately NO address-based uniqueness gate here.
-        # A collector's identity is its durable full PN, never its address: two
-        # collectors can legitimately sit behind one NAT/peer IP, so blocking a
-        # second identity-less entry because it shares an address would make that
-        # site unconfigurable. Uniqueness is enforced where identity actually
-        # exists -- on collector:{pn} at promotion (by PN reconciliation), and by
-        # the synthetic pending:<ULID> for entries that have no identity yet.
+        # No address/serial fallback: a normal collector entry is keyed only by
+        # its durable PN. Two collectors behind one NAT therefore remain distinct,
+        # while an unidentified response remains inside this flow.
+        if not collector_pn:
+            self._callback_continuation.release_terminal_owner()
+            self._manual_verification_error = (
+                "callback_identity_unverified"
+                if self._callback_continuation.identity_context.expected_pn
+                else "collector_identity_required"
+            )
+            return await self.async_step_manual()
 
-        unique_id = (
-            f"collector:{collector_pn}"
-            if collector_pn
-            else f"inverter:{detected_serial}"
-            if detected_serial
-            else self._manual_pending_unique_id(user_input, collector_ip)
-            if collector_ip
-            else f"listener:{user_input[CONF_SERVER_IP]}:{user_input[CONF_TCP_PORT]}"
-        )
-        await self.async_set_unique_id(unique_id)
+        await self.async_set_unique_id(f"collector:{collector_pn}")
         self._abort_if_unique_id_configured()
 
-        title = (
-            "EyeBond Setup Pending"
-            if not (collector_pn or detected_model or detected_serial)
-            else installation_title(
-                collector_pn=collector_pn,
-                collector_ip=collector_ip,
-                detected_model=detected_model,
-                detected_serial=detected_serial,
-            )
+        title = installation_title(
+            collector_pn=collector_pn,
+            collector_ip=collector_ip,
+            detected_model=detected_model,
+            detected_serial=detected_serial,
         )
 
         connection_type = result.connection_type if result is not None else self._current_connection_type()
@@ -5577,7 +5505,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         _apply_collector_profile_metadata(options, result)
         # The user explicitly stated how this collector connects, so that value is
         # the canonical strategy for EVERY terminal path -- an immediately
-        # recognised NORMAL entry just as much as a pending one. It goes to
+        # recognised NORMAL entry. It goes to
         # entry.data (never options) and wins over any legacy
         # connection_mode / operation-mode derivation.
         if self._manual_chosen_strategy in CONNECTION_STRATEGIES:
@@ -5598,12 +5526,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         # created on its own path, not here.)
         if collector_identity_binding_required(data, options):
             self._callback_continuation.release_terminal_owner()
-            self._manual_pending_verification_error = (
-                "callback_identity_unverified"
-                if self._callback_continuation.identity_context.expected_pn
-                else "collector_identity_required"
-            )
-            return await self.async_step_manual()
+            return self.async_abort(reason="collector_identity_required")
 
         # The SAME terminal boundary as the passive path: today the manual
         # flow carries no recovery outcome (a certified callback identity is
@@ -5663,12 +5586,12 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         self._callback_continuation.commit_terminal()
         return result
 
-    async def _async_enrich_manual_pending_collector_profile(
+    async def _async_enrich_manual_collector_profile(
         self,
         user_input: dict[str, Any],
         result: OnboardingResult | None,
     ) -> OnboardingResult | None:
-        """Resolve collector profile before creating a manual/pending entry.
+        """Resolve collector profile before creating a manual collector entry.
 
         Manual probing may time out at inverter detection while the collector is
         still reachable.  Entity platforms are created immediately after entry
@@ -5683,7 +5606,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         collector_ip = str(user_input.get(CONF_COLLECTOR_IP, "") or "").strip()
         if result is not None and result.collector is not None:
             collector_ip = str(result.collector.ip or collector_ip).strip()
-        collector_ip = _sanitize_pending_collector_ip(
+        collector_ip = _sanitize_collector_route_hint(
             collector_ip,
             server_ip=str(user_input.get(CONF_SERVER_IP, "")),
             discovery_target=str(user_input.get(CONF_DISCOVERY_TARGET, "")),
@@ -5709,7 +5632,7 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             response = parse_query_collector_response(payload)
         except Exception as exc:
             logger.debug(
-                "Manual pending collector profile probe failed collector_ip=%s error=%s",
+                "Manual collector profile probe failed collector_ip=%s error=%s",
                 collector_ip,
                 exc,
             )
@@ -5753,14 +5676,14 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 collector=collector_candidate,
                 connection_type=self._current_connection_type(),
                 connection_mode="manual",
-                next_action="create_pending_entry",
+                next_action="create_entry",
                 last_error="manual_collector_profile_resolved",
             )
         elif result.collector is None:
             result = replace(result, collector=collector_candidate)
 
         logger.info(
-            "Resolved manual pending collector %s as ESP EyeBond bridge via hardware token %s",
+            "Resolved manual collector %s as ESP EyeBond bridge via hardware token %s",
             collector_ip,
             hardware_version,
         )
@@ -5967,11 +5890,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             defaults.update(flat)
         self._manual_defaults = defaults
         return defaults
-
-    def _manual_pending_allowed(self) -> bool:
-        """Whether this flow may explicitly save a Pending collector entry."""
-
-        return not bool(getattr(self, "_manual_scan_route_address", ""))
 
     def _normalize_current_server_ip(self, values: MutableMapping[str, Any]) -> None:
         if not self._local_ip:
@@ -7783,6 +7701,10 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 "common.dynamic.manual_probe_callback_silent_session_unavailable",
                 "The silent connection this attempt was bound to has closed. Run a new attempt to let the collector connect again.",
             ),
+            "inbound_awaiting_session": (
+                "common.dynamic.manual_inbound_awaiting_session",
+                "The collector has not connected to Home Assistant yet.",
+            ),
         }
 
         if callback_failure in callback_failure_summaries:
@@ -7818,24 +7740,19 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                 {"peer_label": self._peer_label()},
             )
 
-        if self._manual_pending_allowed():
+        if self._manual_entry_ready_to_save():
             control_summary = self._tr(
-                (
-                    "common.dynamic.manual_control_summary_smartess_hint"
-                    if smartess_hint_available
-                    else "common.dynamic.manual_control_summary"
-                ),
-                (
-                    "If you continue, a **read-only Pending Device** will be created. In Home Assistant it appears as **EyeBond Setup Pending**. Sensors may stay unavailable until a local driver match is confirmed. This local probe does not rule out SmartESS app support; the app may still use a separate cloud identity."
-                    if smartess_hint_available
-                    else "If you continue, a **read-only Pending Device** will be created. In Home Assistant it appears as **EyeBond Setup Pending**. Sensors may stay unavailable until the {peer_label} connects and detection completes."
-                ),
-                {"peer_label": self._peer_label()},
+                "common.dynamic.manual_ready_to_save_summary",
+                "The collector identity is confirmed. You can add it now; inverter detection continues in runtime.",
             )
             next_actions_hint = self._tr(
-                "common.dynamic.manual_probe_next_actions",
-                "Choose **{probe_again_action_label}** to test again, **{edit_settings_action_label}** to change the values, or **{create_pending_action_label}** to save the read-only Pending Device now.",
+                "common.dynamic.manual_ready_to_save_actions",
+                "Choose **{save_action_label}** to add the device, **{probe_again_action_label}** to verify again, or **{edit_settings_action_label}** to change the values.",
                 {
+                    "save_action_label": self._manual_confirm_action_label(
+                        MANUAL_CONFIRM_ACTION_SAVE,
+                        "Add device",
+                    ),
                     "probe_again_action_label": self._manual_confirm_action_label(
                         MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
                         "Probe again",
@@ -7844,20 +7761,39 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                         MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
                         "Edit settings",
                     ),
-                    "create_pending_action_label": self._manual_confirm_action_label(
-                        MANUAL_CONFIRM_ACTION_CREATE_PENDING,
-                        "Save Pending Device",
+                },
+            )
+        elif callback_failure == "inbound_awaiting_session":
+            control_summary = self._tr(
+                "common.dynamic.manual_inbound_waiting_summary",
+                "No device was added. Connect the collector to Home Assistant and try again, or enable background discovery so it appears automatically when its identity is available.",
+            )
+            next_actions_hint = self._tr(
+                "common.dynamic.manual_inbound_waiting_actions",
+                "Choose **{probe_again_action_label}** to check again, **{discovery_action_label}** to wait through discovery, or **{edit_settings_action_label}** to change the values.",
+                {
+                    "probe_again_action_label": self._manual_confirm_action_label(
+                        MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
+                        "Check again",
+                    ),
+                    "discovery_action_label": self._manual_confirm_action_label(
+                        MANUAL_CONFIRM_ACTION_ENABLE_DISCOVERY,
+                        "Enable background discovery",
+                    ),
+                    "edit_settings_action_label": self._manual_confirm_action_label(
+                        MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
+                        "Edit settings",
                     ),
                 },
             )
         else:
             control_summary = self._tr(
-                "common.dynamic.scan_route_no_pending_summary",
-                "This address came from the current scan. It must identify a collector now; it will never create a Pending Device.",
+                "common.dynamic.manual_verification_required_summary",
+                "No device was added because the collector identity or recovery path was not confirmed.",
             )
             next_actions_hint = self._tr(
-                "common.dynamic.scan_route_no_pending_actions",
-                "Choose **{probe_again_action_label}** to test this address again or **{edit_settings_action_label}** to choose another address.",
+                "common.dynamic.manual_verification_required_actions",
+                "Choose **{probe_again_action_label}** to try again or **{edit_settings_action_label}** to change the address or connection settings.",
                 {
                     "probe_again_action_label": self._manual_confirm_action_label(
                         MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
@@ -8094,36 +8030,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
             else f"listener:{server_ip}:{DEFAULT_TCP_PORT}"
         )
 
-    def _manual_pending_unique_id(
-        self,
-        user_input: dict[str, Any],
-        collector_ip: str,
-    ) -> str:
-        """Return a pending-entry unique id that does not alias NAT peers.
-
-        A manual/pending collector may not have PN/serial yet.  Using only the
-        collector IP as unique_id breaks valid topologies where several
-        collectors dial Home Assistant from behind the same NAT.  The first live
-        refresh persists the real PN when it becomes available; until then the
-        pending id is just an entry placeholder and must be unique per entry,
-        not per remote public IP.
-        """
-
-        server_ip = str(user_input.get(CONF_SERVER_IP, "") or "").strip()
-        tcp_port = str(user_input.get(CONF_TCP_PORT, DEFAULT_TCP_PORT) or DEFAULT_TCP_PORT).strip()
-        base = f"manual_pending:{server_ip}:{tcp_port}:{collector_ip}"
-        existing_ids = {
-            str(getattr(entry, "unique_id", "") or "").strip()
-            for entry in self.hass.config_entries.async_entries(DOMAIN)
-            if entry.entry_id != self.context.get("entry_id")
-        }
-        if base not in existing_ids:
-            return base
-        index = 2
-        while f"{base}:{index}" in existing_ids:
-            index += 1
-        return f"{base}:{index}"
-
     def _configured_collector_probe_skip_ips(self) -> frozenset[str]:
         """Collector IPs owned by existing entries: scans must not probe them.
 
@@ -8162,7 +8068,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
                     and (
                         candidate_unique_id.startswith("collector_ip:")
                         or candidate_unique_id.startswith("manual:")
-                        or candidate_unique_id.startswith("manual_pending:")
                     )
                 ):
                     continue
@@ -8286,10 +8191,17 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
         return "unknown"
 
     @staticmethod
-    def _scan_result_priority(result: OnboardingResult) -> tuple[int, int, int, int, int]:
+    def _scan_result_priority(
+        result: OnboardingResult,
+    ) -> tuple[int, int, int, int, int, int]:
         collector = result.collector
         collector_info = collector.collector if collector is not None else None
         return (
+            # A route actually exercised by this scan is stronger continuation
+            # evidence than a passive projection of the same PN.  Without this
+            # rank, collapse order could discard the typed route and force an
+            # unnecessary address-selection branch.
+            1 if type(result.callback_route) is CallbackRecoveryRoute else 0,
             1 if result.match is not None else 0,
             1 if collector is not None and collector.connected else 0,
             1 if collector is not None and collector.udp_reply else 0,
@@ -8495,241 +8407,6 @@ class EybondLocalConfigFlow(_TranslationBundleMixin, ConfigFlow, domain=DOMAIN):
 # ---------------------------------------------------------------------------
 # Options flow
 # ---------------------------------------------------------------------------
-
-class PendingCollectorOptionsFlow(_TranslationBundleMixin, OptionsFlow):
-    """Options for a pending collector -- an entry with no runtime yet.
-
-    The normal collector options flow assumes a live coordinator and collector
-    capabilities, so a pending entry must never be routed into it. This flow
-    exposes only what a waiting collector actually has:
-
-    * the canonical connection strategy (and switching it);
-    * the callback target (callback_on_demand only);
-    * "Retry now" -- a single ``async_reload``, i.e. exactly one more setup
-      attempt. Never a retry loop: Home Assistant owns the cadence;
-    * the list of unclaimed strong-PN candidates plus an EXPLICIT confirmation.
-      Identity confirmation is independent of the chosen connection strategy;
-      nothing is ever auto-bound.
-
-    Every settings change is written atomically to ``entry.data`` (the canonical
-    owner) followed by exactly one reload. Nothing is written to options.
-    """
-
-    def __init__(self, config_entry) -> None:
-        self._config_entry = config_entry
-        self._translation_bundle: dict[str, Any] = {}
-        self._translation_bundle_language = ""
-
-    def _strategy(self) -> str:
-        return resolve_connection_strategy(
-            dict(self._config_entry.data), dict(self._config_entry.options)
-        )
-
-    @_with_translation_bundle
-    async def async_step_init(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ) -> ConfigFlowResult:
-        return await self.async_step_pending(user_input)
-
-    @_with_translation_bundle
-    async def async_step_pending(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ) -> ConfigFlowResult:
-        del user_input
-        from .pending_collector import list_inbound_candidates, pending_attempt_status
-
-        menu_options = ["pending_settings", "pending_retry"]
-        if list_inbound_candidates(self.hass):
-            menu_options.insert(0, "pending_confirm_candidate")
-        status = pending_attempt_status(self._config_entry)
-        return self.async_show_menu(
-            step_id="pending",
-            menu_options=menu_options,
-            description_placeholders={
-                "status": self._tr(
-                    f"common.dynamic.pending_status_{status}",
-                    status.replace("_", " "),
-                ),
-                "strategy": self._tr(
-                    f"common.dynamic.connection_strategy_{self._strategy()}",
-                    self._strategy(),
-                ),
-            },
-        )
-
-    @_with_translation_bundle
-    async def async_step_pending_settings(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ) -> ConfigFlowResult:
-        """Change the canonical strategy / callback target, then reload once."""
-
-        errors: dict[str, str] = {}
-        current_strategy = self._strategy()
-        current_target = str(
-            self._config_entry.data.get(CONF_PENDING_ADDRESS_HINT) or ""
-        )
-        if user_input is not None:
-            flat = _flatten_sections(user_input)
-            strategy = str(flat.get(CONF_CONNECTION_STRATEGY) or "").strip()
-            target = str(flat.get(CONF_COLLECTOR_IP) or "").strip()
-            if strategy not in CONNECTION_STRATEGIES:
-                errors[CONF_CONNECTION_STRATEGY] = "invalid_selection"
-            elif strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND and not target:
-                # One trigger needs somewhere to go.
-                errors[CONF_COLLECTOR_IP] = "callback_target_required"
-            if not errors:
-                data = dict(self._config_entry.data)
-                # CANONICAL owner: entry.data. Never options.
-                data[CONF_CONNECTION_STRATEGY] = strategy
-                data[CONF_PENDING_ADDRESS_HINT] = target
-                data[CONF_COLLECTOR_IP] = target
-                data[CONF_PENDING_LAST_ATTEMPT_RESULT] = (
-                    PENDING_ATTEMPT_WAITING_INBOUND
-                    if strategy == CONNECTION_STRATEGY_INBOUND
-                    else PENDING_ATTEMPT_WAITING_CALLBACK
-                )
-                # One atomic data write, then exactly one reload.
-                self.hass.config_entries.async_update_entry(
-                    self._config_entry, data=data
-                )
-                self.hass.async_create_task(
-                    self.hass.config_entries.async_reload(self._config_entry.entry_id)
-                )
-                return self.async_create_entry(data=dict(self._config_entry.options))
-
-        return self.async_show_form(
-            step_id="pending_settings",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_CONNECTION_STRATEGY, default=current_strategy
-                    ): _connection_strategy_selector(
-                        self._tr(
-                            "common.dynamic.connection_strategy_inbound",
-                            "Collector connects to Home Assistant on its own",
-                        ),
-                        self._tr(
-                            "common.dynamic.connection_strategy_callback_on_demand",
-                            "Ask the collector to connect when needed",
-                        ),
-                    ),
-                    vol.Optional(CONF_COLLECTOR_IP, default=current_target): str,
-                }
-            ),
-            errors=errors,
-        )
-
-    async def async_step_pending_retry(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ) -> ConfigFlowResult:
-        """Retry now = ONE more setup attempt, via Home Assistant's own reload.
-
-        This deliberately does not implement a retry loop or a timer: for a
-        callback pending entry each setup performs exactly one bounded attempt,
-        and Home Assistant's ConfigEntryNotReady backoff owns the cadence.
-        """
-
-        del user_input
-        self.hass.async_create_task(
-            self.hass.config_entries.async_reload(self._config_entry.entry_id)
-        )
-        return self.async_create_entry(data=dict(self._config_entry.options))
-
-    @_with_translation_bundle
-    async def async_step_pending_confirm_candidate(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ) -> ConfigFlowResult:
-        """Bind an unclaimed strong-PN candidate to THIS pending entry.
-
-        Candidates are listed from the public session registry and are only ever
-        offered, never auto-selected: with several pending entries an unknown
-        session cannot be attributed to one of them. Peer IP is shown purely as a
-        hint and is never matched.
-        """
-
-        from .pending_collector import (
-            PendingPromotionError,
-            async_promote_pending_entry,
-            list_inbound_candidates,
-            release_pending_attempt_claim,
-        )
-
-        candidates = list_inbound_candidates(self.hass)
-        if not candidates:
-            return self.async_abort(reason="no_pending_candidates")
-
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            chosen_pn = str(user_input.get("candidate") or "").strip()
-            match = next(
-                (c for c in candidates if c["collector_pn"] == chosen_pn), None
-            )
-            if match is None:
-                errors["candidate"] = "invalid_selection"
-            else:
-                handoff_owner = f"pending_confirm:{uuid.uuid4().hex}"
-                registry = self._callback_session_registry()
-                try:
-                    if registry is not None:
-                        registry.claim_session(
-                            handoff_owner, session_id=match["session_id"]
-                        )
-                        registry.promote_claim_to_full_pn(handoff_owner, chosen_pn)
-                        registry.prepare_handoff(handoff_owner, chosen_pn)
-                    async_promote_pending_entry(
-                        self.hass,
-                        self._config_entry,
-                        collector_pn=chosen_pn,
-                        # Honest provenance: the user bound an OBSERVED session.
-                        # Nothing was restarted, so this is NOT reboot_reconnect.
-                        evidence=EVIDENCE_USER_CONFIRMED_SESSION,
-                        handoff_owner=handoff_owner,
-                    )
-                except (PendingPromotionError, ValueError) as exc:
-                    # Fail closed: roll the handoff back, stay pending, unmutated.
-                    release_pending_attempt_claim(self.hass, handoff_owner)
-                    reason = getattr(exc, "reason", "identity_not_confirmed")
-                    if reason == "already_configured":
-                        return self.async_abort(reason="already_configured")
-                    errors["candidate"] = "identity_not_confirmed"
-                else:
-                    self.hass.async_create_task(
-                        self.hass.config_entries.async_reload(
-                            self._config_entry.entry_id
-                        )
-                    )
-                    return self.async_create_entry(
-                        data=dict(self._config_entry.options)
-                    )
-
-        options = {
-            candidate["collector_pn"]: (
-                f"{candidate['collector_pn']}"
-                + (f"  ({candidate['peer_ip']})" if candidate["peer_ip"] else "")
-            )
-            for candidate in candidates
-        }
-        return self.async_show_form(
-            step_id="pending_confirm_candidate",
-            data_schema=vol.Schema(
-                {vol.Required("candidate"): _result_selector(options)}
-            ),
-            errors=errors,
-        )
-
-    def _callback_session_registry(self):
-        from .passive_discovery import get_callback_session_registry
-
-        try:
-            return get_callback_session_registry(self.hass)
-        except Exception:
-            return None
-
 
 class ListenerOptionsFlow(OptionsFlow):
     """Service tools for the passive-discovery entry."""

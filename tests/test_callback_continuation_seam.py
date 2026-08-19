@@ -20,8 +20,6 @@ if str(TESTS_DIR) not in sys.path:
 PKG = REPO_ROOT / "custom_components" / "eybond_local"
 CONFIG_FLOW = PKG / "config_flow.py"
 TRANSACTION = PKG / "connection" / "admission_transaction.py"
-PENDING = PKG / "pending_collector.py"
-PENDING_ATTEMPT = PKG / "onboarding" / "pending_attempt.py"
 
 # Install Home Assistant stubs before importing config_flow.
 import test_config_flow as flow_scaffold  # noqa: E402,F401
@@ -251,19 +249,24 @@ class CallbackContinuationArchitectureGuards(unittest.TestCase):
                     segments.update(alias.name.split("."))
         self.assertEqual(segments & {"config_flow", "onboarding", "runtime"}, set())
 
-    def test_pending_role_does_not_depend_on_config_flow_callback_state(self) -> None:
-        for path in (PENDING, PENDING_ATTEMPT):
-            source = path.read_text(encoding="utf-8")
-            for name in self.LEGACY_NAMES:
-                self.assertNotIn(name, source, msg=f"{path.name}: {name}")
-        self.assertIn(
-            "async_run_callback_identity_transaction",
-            PENDING_ATTEMPT.read_text(encoding="utf-8"),
+    def test_obsolete_pending_lifecycle_is_absent(self) -> None:
+        self.assertFalse((PKG / "pending_collector.py").exists())
+        self.assertFalse((PKG / "onboarding" / "pending_attempt.py").exists())
+        source = CONFIG_FLOW.read_text(encoding="utf-8")
+        self.assertNotIn("async_step_manual_create_pending", source)
+        self.assertNotIn("PendingCollectorOptionsFlow", source)
+        production = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(PKG.rglob("*.py"))
         )
-        self.assertIn(
-            "prepared_handoff_identity",
-            PENDING.read_text(encoding="utf-8"),
-        )
+        for removed in (
+            "CONF_PENDING_ID",
+            "CONF_PENDING_ADDRESS_HINT",
+            "CONF_PENDING_LAST_ATTEMPT_RESULT",
+            "PENDING_UNIQUE_ID_PREFIX",
+            "PENDING_ATTEMPT_CALLBACK_TIMEOUT",
+        ):
+            self.assertNotIn(removed, production)
 
     def test_every_contract_member_has_a_production_caller(self) -> None:
         source = CONFIG_FLOW.read_text(encoding="utf-8")

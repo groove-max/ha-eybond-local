@@ -6,11 +6,10 @@ nothing re-derives it:
 * the config flow's manual/known-IP verification (an EXPECTED identity is known
   from passive discovery);
 * the config flow's PN-less reconfigure repair (``bind_any``: no prior identity,
-  so the probe's own result PN is the evidence);
-* the pending entry's one bounded runtime attempt.
+  so the probe's own result PN is the evidence).
 
 Callers keep their own side-effects (claiming/releasing the session, flow error
-keys, typed pending statuses) but never their own matching. A second, laxer
+keys, typed outcomes) but never their own matching. A second, laxer
 matcher is exactly how a foreign collector gets bound. The rules, in order:
 
 1. **Trigger provenance.** EXACTLY the attempt's own triggers may have been

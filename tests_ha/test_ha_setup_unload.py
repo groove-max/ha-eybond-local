@@ -13,12 +13,14 @@ import asyncio
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.eybond_local.const import (
     CONF_ENTRY_ROLE,
     DOMAIN,
     ENTRY_ROLE_LISTENER,
+    ENTRY_ROLE_PENDING_COLLECTOR,
     PLATFORMS,
 )
 from synthetic import SYNTHETIC_COLLECTOR_IP, SYNTHETIC_COLLECTOR_PN, SYNTHETIC_SERVER_IP
@@ -49,6 +51,33 @@ def _collector_entry(hass: HomeAssistant) -> MockConfigEntry:
     )
     entry.add_to_hass(hass)
     return entry
+
+
+async def test_component_setup_removes_obsolete_pending_entry_without_runtime(
+    hass: HomeAssistant,
+    fake_runtime,
+) -> None:
+    """A beta2 incomplete draft is deleted, never loaded or promoted."""
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="EyeBond Setup Pending",
+        unique_id="pending:01TEST00000000000000000000",
+        version=5,
+        data={
+            CONF_ENTRY_ROLE: ENTRY_ROLE_PENDING_COLLECTOR,
+            "collector_pn": "",
+            "collector_ip": "203.0.113.10",
+        },
+        options={},
+    )
+    entry.add_to_hass(hass)
+
+    assert await async_setup_component(hass, DOMAIN, {})
+    await hass.async_block_till_done()
+
+    assert hass.config_entries.async_get_entry(entry.entry_id) is None
+    assert fake_runtime == []
 
 
 async def test_setup_forwards_platforms_then_unloads(

@@ -34,7 +34,6 @@ from ..const import (
     CONF_COLLECTOR_PN,
     CONF_ENTRY_ROLE,
     ENTRY_ROLE_LISTENER,
-    ENTRY_ROLE_PENDING_COLLECTOR,
     CONF_CONNECTION_STRATEGY_EVIDENCE,
     CONNECTION_STRATEGY_EVIDENCE_CALLBACK_TRIGGER,
     CONNECTION_STRATEGY_EVIDENCE_REBOOT_RECONNECT,
@@ -473,16 +472,10 @@ def is_collector_backed_callback_entry(
 
     True for every NORMAL collector entry -- both ``inbound`` and
     ``callback_on_demand`` claim/own via the :class:`CallbackSessionRegistry` by
-    durable PN. False only for the explicit non-collector roles (identified by
+    durable PN. False only for explicit non-collector roles (identified by
     ``entry_role`` -- an architectural role, never a hostname/IP):
 
     * ``listener`` -- the integration bootstrap entry; owns no collector at all.
-    * ``pending_collector`` -- a collector saved before its durable full PN is
-      known. It is NOT yet a collector-backed entry: it must never claim a
-      session (it has no durable identity to claim by), must never be reported as
-      ``identity_binding_required`` (it is not broken -- it is waiting), and must
-      never be routed into the reconfigure repair flow. It gains this role only
-      at promotion, once a durable full PN is proven.
 
     Direct transports, if any ever exist, must be excluded here by their own
     explicit role, never by address.
@@ -490,20 +483,9 @@ def is_collector_backed_callback_entry(
 
     options = options or {}
     role = str(_first_present(CONF_ENTRY_ROLE, data, options) or "").strip()
-    if role in (ENTRY_ROLE_LISTENER, ENTRY_ROLE_PENDING_COLLECTOR):
+    if role == ENTRY_ROLE_LISTENER:
         return False
     return True
-
-
-def is_pending_collector_entry(
-    data: Mapping[str, Any],
-    options: Mapping[str, Any] | None = None,
-) -> bool:
-    """Return whether an entry is a not-yet-promoted pending collector."""
-
-    options = options or {}
-    role = str(_first_present(CONF_ENTRY_ROLE, data, options) or "").strip()
-    return role == ENTRY_ROLE_PENDING_COLLECTOR
 
 
 def collector_identity_binding_required(

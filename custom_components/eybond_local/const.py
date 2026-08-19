@@ -65,67 +65,10 @@ CONF_ENTRY_ROLE = "entry_role"
 # coordinator, endpoint, or collector session.
 ENTRY_ROLE_LISTENER = "listener"
 
-# A collector the user saved BEFORE its durable full PN was known. It is not a
-# normal collector entry: it starts no coordinator/runtime, creates no devices or
-# entities, never writes an endpoint, and never claims a session by address. It
-# only carries the user's canonical connection_strategy choice plus (for
-# callback_on_demand) the target address to trigger. It is promoted to a normal
-# collector entry -- in place, same entry -- once a durable full PN is proven.
+# Unreleased-product tombstone used only to remove incomplete entries created by
+# v0.3.0-beta.2.  It is deliberately not a supported entry role: current code
+# never creates, sets up, retries, promotes, or exposes options for it.
 ENTRY_ROLE_PENDING_COLLECTOR = "pending_collector"
-
-# Pending-only entry.data fields. All of these are deleted at promotion; none of
-# them is ever an identity.
-#
-# The synthetic pending identity (`pending:<ULID>`) mirrored from unique_id, so a
-# pending entry has a stable id that is NOT derived from an address. Two pending
-# entries behind one NAT/peer IP are therefore distinct.
-CONF_PENDING_ID = "pending_id"
-# The address a callback_on_demand pending entry triggers. For an inbound pending
-# entry this is a user-entered HINT only (diagnostics/UI), never identity and
-# never a reason to bind a session.
-CONF_PENDING_ADDRESS_HINT = "pending_address_hint"
-# Typed outcome of the last pending attempt, surfaced in the options flow. Never
-# raw exception text.
-CONF_PENDING_LAST_ATTEMPT_RESULT = "pending_last_attempt_result"
-
-PENDING_UNIQUE_ID_PREFIX = "pending:"
-
-# Typed pending attempt outcomes (translation keys; never raw exception text).
-PENDING_ATTEMPT_WAITING_INBOUND = "waiting_inbound"
-PENDING_ATTEMPT_WAITING_CALLBACK = "waiting_callback"
-PENDING_ATTEMPT_CALLBACK_TIMEOUT = "callback_timeout"
-PENDING_ATTEMPT_TARGET_UNAVAILABLE = "callback_target_unavailable"
-PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED = "identity_not_confirmed"
-# More than one DISTINCT strong identity appeared after this attempt's trigger.
-# The attempt cannot prove which collector answered IT, so nothing is bound.
-PENDING_ATTEMPT_IDENTITY_AMBIGUOUS = "callback_identity_ambiguous"
-# Another callback trigger was recorded (any entry/flow) while this attempt was
-# in flight, so a new session is not attributable to THIS trigger.
-PENDING_ATTEMPT_TRIGGER_INTERFERENCE = "callback_trigger_interference"
-# OUR OWN failure to get the trigger sequence out (an inhibited window, a socket
-# error, a competing attempt holding the causality lease). Deliberately NOT
-# folded into interference: that told the user to hunt a phantom competing flow.
-PENDING_ATTEMPT_TRIGGER_NOT_SENT = "callback_trigger_not_sent"
-# The session opened but its identity could not be read authoritatively.
-PENDING_ATTEMPT_IDENTITY_UNVERIFIED = "callback_identity_unverified"
-# The identity is owned by another entry/flow.
-PENDING_ATTEMPT_IDENTITY_CLAIMED_BY_OTHER = "callback_identity_conflict"
-PENDING_ATTEMPT_CANDIDATE_READY = "candidate_ready"
-PENDING_ATTEMPT_PROMOTED = "promoted"
-PENDING_ATTEMPT_RESULTS = {
-    PENDING_ATTEMPT_WAITING_INBOUND,
-    PENDING_ATTEMPT_WAITING_CALLBACK,
-    PENDING_ATTEMPT_CALLBACK_TIMEOUT,
-    PENDING_ATTEMPT_TARGET_UNAVAILABLE,
-    PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED,
-    PENDING_ATTEMPT_IDENTITY_AMBIGUOUS,
-    PENDING_ATTEMPT_TRIGGER_INTERFERENCE,
-    PENDING_ATTEMPT_TRIGGER_NOT_SENT,
-    PENDING_ATTEMPT_IDENTITY_UNVERIFIED,
-    PENDING_ATTEMPT_IDENTITY_CLAIMED_BY_OTHER,
-    PENDING_ATTEMPT_CANDIDATE_READY,
-    PENDING_ATTEMPT_PROMOTED,
-}
 
 DEFAULT_TCP_PORT = 8899
 DEFAULT_UDP_PORT = 58899

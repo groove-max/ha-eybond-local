@@ -414,7 +414,7 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
 
             with patch.object(
                 flow,
-                "_async_enrich_manual_pending_collector_profile",
+                "_async_enrich_manual_collector_profile",
                 side_effect=_passthrough_enrich,
             ):
                 created = await flow.async_step_manual_recovery_result()

@@ -62,8 +62,6 @@ from .const import (
     DRIVER_HINT_AUTO,
     ENTRY_ROLE_LISTENER,
     ENTRY_ROLE_PENDING_COLLECTOR,
-    CONF_PENDING_LAST_ATTEMPT_RESULT,
-    PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     PLATFORMS,
 )
@@ -351,6 +349,7 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
     )
 
     try:
+        await _async_remove_obsolete_pending_entries(hass)
         _configure_local_metadata_roots(hass)
         await hass.async_add_executor_job(
             _prime_metadata_caches, _eybond_config_data_root(hass)
@@ -363,6 +362,44 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
         logger.exception("Failed to initialize EyeBond Local integration bootstrap")
         raise
     return True
+
+
+async def _async_remove_obsolete_pending_entries(hass: HomeAssistant) -> None:
+    """Delete incomplete beta2 drafts before any entry/network setup runs.
+
+    ``pending_collector`` was never a configured device: it had no durable PN,
+    runtime, entities, endpoint ownership, or permanent session claim. Current
+    onboarding keeps incomplete work inside its config flow instead. Removing
+    these exact-role tombstones is therefore a one-shot storage cleanup, not a
+    compatibility lifecycle, and deliberately performs no collector I/O.
+    """
+
+    config_entries = getattr(hass, "config_entries", None)
+    async_entries = getattr(config_entries, "async_entries", None)
+    async_remove = getattr(config_entries, "async_remove", None)
+    if not callable(async_entries) or not callable(async_remove):
+        return
+    obsolete: list[ConfigEntry] = []
+    for entry in async_entries(DOMAIN):
+        if _is_obsolete_pending_entry(entry):
+            obsolete.append(entry)
+    for entry in obsolete:
+        logger.info(
+            "Removing obsolete incomplete EyeBond setup entry %s",
+            entry.entry_id,
+        )
+        await async_remove(entry.entry_id)
+
+
+def _is_obsolete_pending_entry(entry: object) -> bool:
+    """Recognize only the exact persisted beta2 tombstone role."""
+
+    data = getattr(entry, "data", None)
+    get = getattr(data, "get", None)
+    if not callable(get):
+        return False
+    role = get(CONF_ENTRY_ROLE)
+    return type(role) is str and role == ENTRY_ROLE_PENDING_COLLECTOR
 
 
 async def _async_initial_refresh_for_setup(
@@ -1486,90 +1523,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def _async_setup_pending_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Run one pending-entry lifecycle step. Return True iff it promoted itself.
-
-    Dispatch is on the CANONICAL connection_strategy only (entry.data) -- never on
-    hostname, endpoint, collector/bridge kind or peer IP.
-
-    ``inbound``
-        Passive: send nothing, schedule nothing, claim nothing. The shared
-        listener keeps accepting sessions; an unclaimed strong-PN session is
-        offered to the user as a candidate in the pending options flow, and only
-        an explicit confirmation binds it. Returns False (stays pending).
-
-    ``callback_on_demand``
-        Exactly ONE bounded attempt: baseline -> one UDP trigger -> bounded wait
-        on the existing centralized attempt timeout. Promotes on a verified
-        durable full PN (returns True); otherwise raises ConfigEntryNotReady so
-        Home Assistant -- not this integration -- owns retry and backoff.
-    """
-
-    from .connection.connection_policy import resolve_connection_strategy
-    from .pending_collector import (
-        PendingPromotionError,
-        release_pending_attempt_claim,
-    )
-
-    strategy = resolve_connection_strategy(dict(entry.data), dict(entry.options))
-
-    if strategy != CONNECTION_STRATEGY_CALLBACK_ON_DEMAND:
-        # inbound (and any non-callback value): fully passive. ZERO UDP.
-        logger.debug(
-            "EyeBond pending entry %s is inbound: waiting passively for the "
-            "collector to dial in (no trigger, no scheduler)",
-            entry.entry_id,
-        )
-        return False
-
-    from .onboarding.pending_attempt import async_run_pending_callback_attempt
-
-    outcome = await async_run_pending_callback_attempt(hass, entry)
-    if not outcome.collector_pn:
-        release_pending_attempt_claim(hass, outcome.handoff_owner)
-        await _async_record_pending_attempt_result(hass, entry, outcome.result)
-        # Home Assistant owns the retry cadence from here (its own backoff).
-        raise ConfigEntryNotReady(
-            f"EyeBond collector has not answered the callback yet ({outcome.result})"
-        )
-
-    from .pending_collector import async_promote_pending_entry
-
-    try:
-        async_promote_pending_entry(
-            hass,
-            entry,
-            collector_pn=outcome.collector_pn,
-            handoff_owner=outcome.handoff_owner,
-        )
-    except PendingPromotionError as exc:
-        # Late collision / failure: roll the handoff back and stay pending,
-        # unmutated. Never a partial promotion.
-        release_pending_attempt_claim(hass, outcome.handoff_owner)
-        await _async_record_pending_attempt_result(hass, entry, exc.reason)
-        raise ConfigEntryNotReady(
-            f"EyeBond pending collector could not be promoted ({exc.reason})"
-        ) from exc
-    return True
-
-
-async def _async_record_pending_attempt_result(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    result: str,
-) -> None:
-    """Persist the TYPED outcome of the last pending attempt (never raw text)."""
-
-    from .const import PENDING_ATTEMPT_RESULTS
-
-    typed = result if result in PENDING_ATTEMPT_RESULTS else PENDING_ATTEMPT_IDENTITY_NOT_CONFIRMED
-    if str(entry.data.get(CONF_PENDING_LAST_ATTEMPT_RESULT) or "") == typed:
-        return
-    data = dict(entry.data)
-    data[CONF_PENDING_LAST_ATTEMPT_RESULT] = typed
-    hass.config_entries.async_update_entry(entry, data=data)
-
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up EyeBond Local from a config entry."""
 
@@ -1579,19 +1532,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.runtime_data = None
         return True
 
-    if str(entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_PENDING_COLLECTOR:
-        # A collector saved before its durable full PN is known. This is NOT a
-        # collector runtime: no coordinator, no platforms, no devices, no session
-        # claim, no endpoint write. It either stays passive (inbound) or performs
-        # exactly ONE bounded callback attempt (callback_on_demand) and, on a
-        # verified full PN, promotes itself in place and falls through to the
-        # normal runtime below.
-        promoted = await _async_setup_pending_entry(hass, entry)
-        if not promoted:
-            entry.runtime_data = None
-            return True
-        # Promoted in place: `entry` now carries the durable PN and the normal
-        # role, so continue into the normal setup path in this same call.
+    if _is_obsolete_pending_entry(entry):
+        # Domain setup removes these beta2 tombstones before entry setup. Refuse
+        # fail-closed if an external race/storage error made one survive; never
+        # reinterpret it as a normal PN-less collector or perform network I/O.
+        raise ConfigEntryError("obsolete_pending_entry_not_removed")
 
     from .runtime.coordinator import EybondLocalCoordinator
     from .services import async_setup_services
@@ -1695,11 +1640,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if str(entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_LISTENER:
         return True
 
-    if str(entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_PENDING_COLLECTOR:
-        # A pending entry started no coordinator and forwarded no platforms, so
-        # there is nothing to unload. Its only transient resource is the attempt
-        # claim, which the attempt itself already released on every non-promoting
-        # path. Never touch another entry's session, and never write an endpoint.
+    if _is_obsolete_pending_entry(entry):
+        # Obsolete beta2 tombstone: it never started a coordinator or platforms.
+        # Domain setup normally removes it before this hook can run.
         return True
 
     from .runtime.coordinator import EybondLocalCoordinator
@@ -1719,11 +1662,9 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         # integration completely. Never recreate it from its own removal.
         return
 
-    if str(entry.data.get(CONF_ENTRY_ROLE) or "") == ENTRY_ROLE_PENDING_COLLECTOR:
-        # A pending entry never reached a durable identity, so it owns no cloud
-        # evidence and no permanent registry claim. Removing it must leave NO
-        # discovery suppression behind: the same collector must be addable again
-        # immediately.
+    if _is_obsolete_pending_entry(entry):
+        # Obsolete beta2 tombstone: it never owned cloud evidence or a permanent
+        # registry claim, so removal deliberately has no network side effects.
         return
 
     from .connection.removal_finalization import (

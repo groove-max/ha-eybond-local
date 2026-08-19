@@ -426,12 +426,10 @@ class IdentityConsumersNeverMintRecoveryEvidenceTests(unittest.TestCase):
         return consumers
 
     def test_the_guard_sees_the_real_consumers(self) -> None:
-        # The guard must never silently go blind: the two known mappers (the
-        # config flow's manual/reconfigure paths and the pending attempt) have
-        # to be in its scope, or the ban below proves nothing.
+        # The guard must never silently go blind: the config flow's
+        # manual/reconfigure mapper has to remain in its scope.
         names = {path.name for path, _source in self._identity_consumers()}
         self.assertIn("config_flow.py", names)
-        self.assertIn("pending_attempt.py", names)
 
     def test_identity_consumers_never_name_callback_trigger_evidence(self) -> None:
         for path, source in self._identity_consumers():
@@ -459,35 +457,12 @@ class IdentityConsumersNeverMintRecoveryEvidenceTests(unittest.TestCase):
                 ),
             )
 
-    def test_pending_identity_mapper_never_touches_the_evidence_key(self) -> None:
-        # The pending mapper has no legitimate evidence business at all (the
-        # config flow, by contrast, still writes REAL inbound evidence from the
-        # behavioral restart/reconnect verification).
-        source = _read(_CC / "onboarding" / "pending_attempt.py")
-        code = (
-            _code_identifiers(source)
-            | _imported_modules(source)
-            | _code_string_literals(source)
-        )
-        for banned in (
-            "CONF_CONNECTION_STRATEGY_EVIDENCE",
-            "connection_strategy_evidence",
-        ):
-            self.assertNotIn(
-                banned,
-                code,
-                msg=f"pending_attempt must not touch {banned}",
-            )
-
-
 class StrategyTransitionAuthorityGuardTests(unittest.TestCase):
     """Batch 8: ONE authority writes connection_strategy on live entries.
 
     Allowed writer boundaries (each a different LIFECYCLE, not a different
     implementation): entry creation (config_flow), schema migration
-    (__init__ / connection_policy), the pending-collector intent editor
-    (config_flow pending steps; a pending entry has no live connection to
-    prove anything against), and the verified transition authority
+    (__init__ / connection_policy), and the verified transition authority
     (connection/strategy_transition.py). Every OTHER production module —
     the runtime coordinator, selects, buttons, services, discovery — must
     contain NO write of the key at all.

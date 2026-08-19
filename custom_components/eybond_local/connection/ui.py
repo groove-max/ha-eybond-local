@@ -67,7 +67,6 @@ class ConnectionDisplayMetadata:
     integration_name: str
     peer_label: str
     peer_label_plural: str
-    pending_entry_title: str
     unconfirmed_inverter_label: str
 
 
@@ -75,7 +74,6 @@ EYBOND_CONNECTION_DISPLAY_METADATA = ConnectionDisplayMetadata(
     integration_name="EyeBond Local",
     peer_label="collector",
     peer_label_plural="collectors",
-    pending_entry_title="EyeBond Setup Pending",
     unconfirmed_inverter_label="Unconfirmed inverter",
 )
 

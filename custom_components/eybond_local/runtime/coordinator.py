@@ -3013,7 +3013,7 @@ class EybondLocalCoordinator(DataUpdateCoordinator[RuntimeSnapshot]):
         if (
             updated_title
             and updated_title != current_title
-            and current_title in {"EyeBond Setup Pending", previous_preferred_title, *legacy_titles}
+            and current_title in {previous_preferred_title, *legacy_titles}
         ):
             update_kwargs["title"] = updated_title
 
