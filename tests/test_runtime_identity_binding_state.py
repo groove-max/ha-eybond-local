@@ -20,18 +20,43 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COORDINATOR = REPO_ROOT / "custom_components" / "eybond_local" / "runtime" / "coordinator.py"
+POLL_PROJECTION = (
+    REPO_ROOT
+    / "custom_components"
+    / "eybond_local"
+    / "runtime"
+    / "coordinator_poll_projection.py"
+)
+POLLING = (
+    REPO_ROOT
+    / "custom_components"
+    / "eybond_local"
+    / "runtime"
+    / "coordinator_polling.py"
+)
+STARTUP = (
+    REPO_ROOT
+    / "custom_components"
+    / "eybond_local"
+    / "runtime"
+    / "coordinator_startup.py"
+)
 
 
 class IdentityBindingRuntimeStateWiringTests(unittest.TestCase):
     def setUp(self) -> None:
         self.source = COORDINATOR.read_text(encoding="utf-8")
         self.tree = ast.parse(self.source)
+        self.polling_source = POLLING.read_text(encoding="utf-8")
+        self.polling_tree = ast.parse(self.polling_source)
+        self.startup_source = STARTUP.read_text(encoding="utf-8")
 
     def _func(self, name: str) -> ast.FunctionDef:
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.FunctionDef) and node.name == name:
-                return node
-        self.fail(f"{name} not defined in coordinator.py")
+        for tree in (self.tree, self.polling_tree):
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name == name:
+                    return node
+        self.fail(f"{name} not defined in the coordinator lifecycle")
 
     def test_flag_helper_uses_the_binding_required_predicate(self) -> None:
         func = self._func("_identity_binding_required_flag")
@@ -45,7 +70,7 @@ class IdentityBindingRuntimeStateWiringTests(unittest.TestCase):
     def test_snapshot_publishes_the_flag(self) -> None:
         # The diagnostic value is published into the snapshot values dict(s).
         self.assertGreaterEqual(
-            self.source.count(
+            (self.source + self.polling_source + self.startup_source).count(
                 '"collector_identity_binding_required": self._identity_binding_required_flag()'
             ),
             2,
@@ -55,9 +80,15 @@ class IdentityBindingRuntimeStateWiringTests(unittest.TestCase):
     def test_poll_context_mapping_ignores_binding_required(self) -> None:
         # Item 10: the poll-context mapping must NOT branch on a binding-required
         # state, so the diagnostic flag cannot change polling.
-        poll_fn = ast.get_source_segment(
-            self.source, self._func("_poll_context_for_runtime_driver_state")
+        source = POLL_PROJECTION.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        function = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "poll_context_for_runtime_driver_state"
         )
+        poll_fn = ast.get_source_segment(source, function)
         self.assertNotIn("identity_binding_required", poll_fn)
 
     def test_flag_helper_returns_the_predicate_value(self) -> None:

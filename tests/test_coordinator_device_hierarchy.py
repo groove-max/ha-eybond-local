@@ -856,6 +856,27 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator_spec.loader.exec_module(coordinator_module)
 
         cls.coordinator_module = coordinator_module
+        cls.coordinator_polling_module = importlib.import_module(
+            "custom_components.eybond_local.runtime.coordinator_polling"
+        )
+        cls.coordinator_inverter_profile_module = importlib.import_module(
+            "custom_components.eybond_local.runtime.coordinator_inverter_profile"
+        )
+        cls.coordinator_tooling_projection_module = importlib.import_module(
+            "custom_components.eybond_local.runtime.coordinator_tooling_projection"
+        )
+        cls.coordinator_snapshot_projection_module = importlib.import_module(
+            "custom_components.eybond_local.runtime.coordinator_snapshot_projection"
+        )
+        cls.coordinator_cloud_tools_module = importlib.import_module(
+            "custom_components.eybond_local.runtime.coordinator_cloud_tools"
+        )
+        cls.coordinator_diagnostics_module = importlib.import_module(
+            "custom_components.eybond_local.runtime.coordinator_diagnostics"
+        )
+        cls.coordinator_startup_module = importlib.import_module(
+            "custom_components.eybond_local.runtime.coordinator_startup"
+        )
         cls.platform_context_module = importlib.import_module(
             "custom_components.eybond_local.platform_context"
         )
@@ -1086,7 +1107,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             "eybond_local_proxy_capture_entry-1_session_trace",
         )
 
-    def test_smartess_cloud_export_available_requires_smartess_provider(self) -> None:
+    def test_cloud_evidence_export_available_supports_valuecloud_provider(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator.config_entry = types.SimpleNamespace(
             data={
@@ -1101,8 +1122,8 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         coordinator._remembered_collector_server_endpoint = ""
 
-        self.assertFalse(coordinator.smartess_cloud_export_available)
         self.assertEqual(coordinator.cloud_evidence_provider, "valuecloud")
+        self.assertTrue(coordinator.cloud_evidence_export_available)
 
     def test_init_discards_stale_unsupported_cache_without_reload_suppression(self) -> None:
         entry = types.SimpleNamespace(
@@ -1230,7 +1251,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator._maybe_persist_metadata_dead_channels()
         self.assertEqual(updates, [])
 
-    def test_smartess_cloud_export_available_keeps_smartess_profiles(self) -> None:
+    def test_cloud_evidence_export_available_supports_smartess_provider(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator.config_entry = types.SimpleNamespace(
             data={
@@ -1245,7 +1266,6 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         coordinator._remembered_collector_server_endpoint = ""
 
-        self.assertTrue(coordinator.smartess_cloud_export_available)
         self.assertEqual(coordinator.cloud_evidence_provider, "smartess")
         self.assertTrue(coordinator.cloud_evidence_export_available)
 
@@ -1433,11 +1453,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             poll_task = asyncio.create_task(coordinator._async_update_data())
             await poll_started.wait()
             with patch.object(
-                self.coordinator_module,
+                self.coordinator_diagnostics_module,
                 "run_scenario",
                 _fake_run_scenario,
             ), patch.object(
-                self.coordinator_module,
+                self.coordinator_diagnostics_module,
                 "export_diagnostic_run",
                 return_value=export,
             ):
@@ -1577,14 +1597,14 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 groups=(types.SimpleNamespace(key="config"),),
             ),
         )
-        original = self.coordinator_module.resolve_effective_metadata_selection
-        self.coordinator_module.resolve_effective_metadata_selection = (
+        original = self.coordinator_inverter_profile_module.resolve_effective_metadata_selection
+        self.coordinator_inverter_profile_module.resolve_effective_metadata_selection = (
             lambda **_kwargs: stub_metadata
         )
         try:
             result = coordinator.apply_device_overlay_to_inverter(inverter, None)
         finally:
-            self.coordinator_module.resolve_effective_metadata_selection = original
+            self.coordinator_inverter_profile_module.resolve_effective_metadata_selection = original
 
         self.assertIn("learned_x_304", {cap.key for cap in result.capabilities})
         self.assertIn("battery_float_voltage", {cap.key for cap in result.capabilities})
@@ -1624,14 +1644,14 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         inverter = _FakeInverter()
 
         stub_metadata = types.SimpleNamespace(device_scoped_overlay_active=False)
-        original = self.coordinator_module.resolve_effective_metadata_selection
-        self.coordinator_module.resolve_effective_metadata_selection = (
+        original = self.coordinator_inverter_profile_module.resolve_effective_metadata_selection
+        self.coordinator_inverter_profile_module.resolve_effective_metadata_selection = (
             lambda **_kwargs: stub_metadata
         )
         try:
             result = coordinator._apply_device_overlay_to_inverter(inverter, None)
         finally:
-            self.coordinator_module.resolve_effective_metadata_selection = original
+            self.coordinator_inverter_profile_module.resolve_effective_metadata_selection = original
 
         self.assertIs(result, inverter)
 
@@ -1655,7 +1675,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
 
         with patch.object(
-            self.coordinator_module,
+            self.coordinator_inverter_profile_module,
             "resolve_effective_metadata_selection",
             side_effect=AssertionError("sync resolver should not run after warm-up"),
         ):
@@ -1823,7 +1843,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator.data = self.RuntimeSnapshot(values={}, inverter=None, collector=None)
 
         with patch.object(
-            self.coordinator_module,
+            self.coordinator_inverter_profile_module,
             "resolve_effective_metadata_selection",
             return_value=fake_selection,
         ), patch.object(
@@ -1859,7 +1879,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator.data = self.RuntimeSnapshot(values={}, inverter=None, collector=None)
 
         with patch.object(
-            self.coordinator_module,
+            self.coordinator_inverter_profile_module,
             "resolve_effective_metadata_selection",
             side_effect=AssertionError("resolver must not run without valid snapshot"),
         ), patch.object(
@@ -1900,7 +1920,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             register_schema_name="modbus_smg/base.json",
         )
         with patch.object(
-            self.coordinator_module,
+            self.coordinator_inverter_profile_module,
             "resolve_effective_metadata_selection",
             return_value=family_selection,
         ):
@@ -1953,7 +1973,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator.data = self.RuntimeSnapshot(values={}, inverter=None, collector=None)
 
         with patch.object(
-            self.coordinator_module,
+            self.coordinator_inverter_profile_module,
             "resolve_effective_metadata_selection",
             side_effect=AssertionError("resolver must not run for invalid snapshot payload"),
         ), patch.object(
@@ -3837,7 +3857,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator._proxy_capture_runtime_values = lambda: {}
 
         captured: dict[str, object] = {}
-        original_builder = self.coordinator_module.build_proxy_capture_overview
+        original_builder = self.coordinator_cloud_tools_module.build_proxy_capture_overview
 
         def _fake_build_proxy_capture_overview(**kwargs):
             captured.update(kwargs)
@@ -3848,11 +3868,13 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 redirect_required=True,
             )
 
-        self.coordinator_module.build_proxy_capture_overview = _fake_build_proxy_capture_overview
+        self.coordinator_cloud_tools_module.build_proxy_capture_overview = (
+            _fake_build_proxy_capture_overview
+        )
         try:
             overview = coordinator.proxy_capture_overview
         finally:
-            self.coordinator_module.build_proxy_capture_overview = original_builder
+            self.coordinator_cloud_tools_module.build_proxy_capture_overview = original_builder
 
         self.assertEqual(captured["upstream_endpoint"], "47.91.67.66,18899,TCP")
         self.assertTrue(overview.can_start)
@@ -4018,7 +4040,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator._async_proxy_trace_manifest_download_details = _async_download_details
 
             captured: dict[str, object] = {}
-            original_builder = self.coordinator_module.build_proxy_capture_overview
+            original_builder = (
+                self.coordinator_snapshot_projection_module.build_proxy_capture_overview
+            )
 
             def _fake_build_proxy_capture_overview(**kwargs):
                 captured.update(kwargs)
@@ -4038,11 +4062,15 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                     latest_manifest_path=kwargs["latest_manifest_path"],
                 )
 
-            self.coordinator_module.build_proxy_capture_overview = _fake_build_proxy_capture_overview
+            self.coordinator_snapshot_projection_module.build_proxy_capture_overview = (
+                _fake_build_proxy_capture_overview
+            )
             try:
                 values = await coordinator._proxy_capture_values()
             finally:
-                self.coordinator_module.build_proxy_capture_overview = original_builder
+                self.coordinator_snapshot_projection_module.build_proxy_capture_overview = (
+                    original_builder
+                )
 
             self.assertEqual(captured["upstream_endpoint"], "47.91.67.66,18899,TCP")
             self.assertTrue(values["proxy_capture_can_start"])
@@ -4072,11 +4100,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                     "?authSig=signed"
                 )
                 with patch.object(
-                    self.coordinator_module,
+                    self.coordinator_cloud_tools_module,
                     "export_proxy_trace_bundle",
                     return_value=bundle_path,
                 ), patch.object(
-                    self.coordinator_module,
+                    self.coordinator_cloud_tools_module,
                     "sign_proxy_capture_download_url",
                     return_value=signed_url,
                 ):
@@ -5676,7 +5704,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value=True,
             ), patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "read_available_memory_mib",
                 return_value=128,
             ):
@@ -5723,11 +5751,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator._runtime = types.SimpleNamespace(async_refresh=_async_refresh)
 
             with patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "proxy_capture_session_is_active",
                 return_value=True,
             ), patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "proxy_capture_session_is_expired",
                 return_value=True,
             ), patch.object(
@@ -5782,11 +5810,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator._runtime = types.SimpleNamespace(async_refresh=_async_refresh)
 
             with patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "shadow_learning_session_is_active",
                 return_value=True,
             ), patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "shadow_learning_session_is_expired",
                 return_value=True,
             ):
@@ -5832,11 +5860,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                     )
                 )
                 with patch.object(
-                    self.coordinator_module,
+                    self.coordinator_cloud_tools_module,
                     "proxy_capture_session_is_active",
                     return_value=True,
                 ), patch.object(
-                    self.coordinator_module,
+                    self.coordinator_cloud_tools_module,
                     "proxy_capture_session_is_expired",
                     return_value=False,
                 ):
@@ -5873,11 +5901,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                     )
                 )
                 with patch.object(
-                    self.coordinator_module,
+                    self.coordinator_cloud_tools_module,
                     "shadow_learning_session_is_active",
                     return_value=True,
                 ), patch.object(
-                    self.coordinator_module,
+                    self.coordinator_cloud_tools_module,
                     "shadow_learning_session_is_expired",
                     return_value=False,
                 ):
@@ -5909,11 +5937,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator.async_stop_shadow_learning = _async_stop_shadow_learning
 
             with patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "shadow_learning_session_is_active",
                 return_value=False,
             ), patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "shadow_learning_session_is_expired",
                 return_value=False,
             ):
@@ -6479,12 +6507,12 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             prop("collector_cloud_family", "smartess_at"),
             prop("_effective_callback_server_host", "192.168.1.50"),
             patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "build_shadow_learning_seed",
                 return_value=(types.SimpleNamespace(write_response_mode="exception"), []),
             ),
             patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "build_shadow_learning_preflight",
                 return_value=types.SimpleNamespace(can_start=True, blockers=[]),
             ),
@@ -6966,23 +6994,23 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value="E5000020000000",
             ), patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "build_proxy_capture_session_state",
                 lambda *a, **k: types.SimpleNamespace(**k),
             ), patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "summarize_proxy_capture_trace",
                 return_value={},
             ), patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "export_proxy_trace_manifest",
                 return_value=Path(tmp_dir) / "manifest.json",
             ), patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "export_proxy_trace_bundle",
                 return_value=Path(tmp_dir) / "bundle.zip",
             ), patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "sign_proxy_capture_download_url",
                 return_value=(
                     "/api/eybond_local/proxy_capture/entry-id/bundle.zip"
@@ -7121,24 +7149,24 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             # The stub harness returns None for these path builders; give the real
             # method usable paths (nothing is written -- the route seam is stubbed).
             patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "build_proxy_capture_trace_path",
                 lambda *a, **k: Path(tmp_dir) / "proxy-trace.jsonl",
             ),
             patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "build_proxy_capture_restore_trigger_path",
                 lambda trace_path, *a, **k: Path(str(trace_path) + ".restore"),
             ),
             patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "resolve_collector_cloud_session_protocol",
                 lambda _family: "at_text",
             ),
             # The stub harness returns None for the session-state builder; give the
             # real method a namespace that carries route_owner_id/status/etc.
             patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "build_proxy_capture_session_state",
                 lambda *a, **k: types.SimpleNamespace(**k),
             ),
@@ -7563,7 +7591,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
 
             with patch.object(
-                self.coordinator_module,
+                self.coordinator_cloud_tools_module,
                 "proxy_capture_restore_guard_reason",
                 return_value="current_endpoint_unavailable",
             ):
@@ -7827,9 +7855,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
 
         with (
-            patch.object(self.coordinator_module, "get_driver", return_value=driver),
+            patch.object(self.coordinator_startup_module, "get_driver", return_value=driver),
             patch.object(
-                self.coordinator_module,
+                self.coordinator_startup_module,
                 "load_driver_profile",
                 return_value=profile,
             ),
@@ -7901,18 +7929,18 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         with (
             patch.object(
-                self.coordinator_module,
+                self.coordinator_startup_module,
                 "resolve_unique_full_model_surface",
                 return_value=(types.SimpleNamespace(), surface),
             ),
-            patch.object(self.coordinator_module, "get_driver", return_value=driver),
+            patch.object(self.coordinator_startup_module, "get_driver", return_value=driver),
             patch.object(
-                self.coordinator_module,
+                self.coordinator_startup_module,
                 "load_driver_profile",
                 return_value=profile,
             ),
             patch.object(
-                self.coordinator_module,
+                self.coordinator_startup_module,
                 "load_register_schema",
                 return_value=register_schema,
             ),
@@ -7959,7 +7987,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
 
         with patch.object(
-            self.coordinator_module, "resolve_unique_full_model_surface"
+            self.coordinator_startup_module, "resolve_unique_full_model_surface"
         ) as resolver:
             inverter = coordinator._prime_startup_inverter_from_persisted_metadata()
 
@@ -8022,9 +8050,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
 
         with (
-            patch.object(self.coordinator_module, "get_driver", return_value=driver),
+            patch.object(self.coordinator_startup_module, "get_driver", return_value=driver),
             patch.object(
-                self.coordinator_module,
+                self.coordinator_startup_module,
                 "load_driver_profile",
                 return_value=profile,
             ),
@@ -8363,10 +8391,6 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 "collector_cloud_profile_confidence",
                 new_callable=PropertyMock,
                 return_value="",
-            ), patch(
-                "custom_components.eybond_local._async_self_heal_sensor_display_precision",
-                new_callable=AsyncMock,
-                create=True,
             ):
                 snapshot = await coordinator._async_update_data_with_runtime_lock()
 
@@ -8463,7 +8487,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
 
             with patch.object(
-                self.coordinator_module,
+                self.coordinator_tooling_projection_module,
                 "_package_dir",
                 return_value=package_dir,
             ):
@@ -9646,8 +9670,8 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 return PollPolicy(min_auto_interval=10.0, max_auto_interval=120.0)
             return fast if getattr(inverter, "variant_key", "") == "fast" else slow
 
-        original = self.coordinator_module.poll_policy_for_driver_key
-        self.coordinator_module.poll_policy_for_driver_key = _model_aware_resolver
+        original = self.coordinator_polling_module.poll_policy_for_driver_key
+        self.coordinator_polling_module.poll_policy_for_driver_key = _model_aware_resolver
         try:
             coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
             coordinator.config_entry = types.SimpleNamespace(
@@ -9684,7 +9708,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             self.assertEqual(coordinator._poll_scheduler.policy.min_auto_interval, 2)
             self.assertEqual(coordinator._poll_scheduler._durations[-1], samples_before)
         finally:
-            self.coordinator_module.poll_policy_for_driver_key = original
+            self.coordinator_polling_module.poll_policy_for_driver_key = original
 
     def test_persist_confirmed_session_protocol_is_pn_validated_and_live_sourced(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)

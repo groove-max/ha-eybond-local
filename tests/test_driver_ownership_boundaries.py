@@ -54,8 +54,16 @@ from custom_components.eybond_local.support.workflow import build_support_workfl
 
 _CC = REPO_ROOT / "custom_components" / "eybond_local"
 _HUB = _CC / "runtime" / "hub.py"
+_HUB_SUPPORT = _CC / "runtime" / "hub_support.py"
 _BUNDLE = _CC / "support" / "bundle.py"
 _WORKFLOW = _CC / "support" / "workflow.py"
+
+
+def _hub_family_source() -> str:
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((_CC / "runtime").glob("hub*.py"))
+    )
 
 
 def _module_names(source: str) -> set[str]:
@@ -108,7 +116,7 @@ class _NeutralDriver(InverterDriver):
 
 class HubHoldsNoProtocolPolicyGuard(unittest.TestCase):
     def test_hub_has_no_modbus_error_or_exception_code_parser(self) -> None:
-        source = _HUB.read_text(encoding="utf-8")
+        source = _hub_family_source()
         names = _module_names(source)
         self.assertNotIn("ModbusError", names)
         # No exception-code PARSER: the removed parser matched this prefix.
@@ -120,7 +128,7 @@ class HubHoldsNoProtocolPolicyGuard(unittest.TestCase):
             )
 
     def test_hub_has_no_probe_command_literals_or_builders(self) -> None:
-        source = _HUB.read_text(encoding="utf-8")
+        source = _hub_family_source()
         names = _module_names(source)
         self.assertNotIn("build_pi30_request", names)
         self.assertNotIn("build_ascii_line_request", names)
@@ -383,7 +391,7 @@ class ProbeDescriptorHasNoOwnerIdentityGuard(unittest.TestCase):
     def test_hub_records_registry_driver_key_as_probe_provenance(self) -> None:
         # The hub's evidence dict must stamp each attempt with driver.key from the
         # registry iteration -- the authoritative owner -- not a descriptor field.
-        source = _HUB.read_text(encoding="utf-8")
+        source = _HUB_SUPPORT.read_text(encoding="utf-8")
         tree = ast.parse(source)
         func = next(
             n

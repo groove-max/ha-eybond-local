@@ -446,12 +446,12 @@ class TypedTelemetryArchitectureTests(unittest.TestCase):
         self.assertEqual(len(runtime_view_calls), 1)
 
     def test_hub_write_authority_uses_typed_first_snapshot_values(self) -> None:
-        path = REPO_ROOT / "custom_components/eybond_local/runtime/hub.py"
+        path = REPO_ROOT / "custom_components/eybond_local/runtime/hub_management.py"
         tree = ast.parse(path.read_text(encoding="utf-8"))
         hub_class = next(
             node
             for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "EybondHub"
+            if isinstance(node, ast.ClassDef) and node.name == "HubManagementMixin"
         )
         for method_name in ("async_write_capability", "async_apply_preset"):
             with self.subTest(method_name=method_name):
@@ -502,8 +502,11 @@ class TypedTelemetryArchitectureTests(unittest.TestCase):
         self.assertEqual(broad_reads, [])
         self.assertTrue(typed_calls)
 
-        init_path = REPO_ROOT / "custom_components/eybond_local/__init__.py"
-        init_tree = ast.parse(init_path.read_text(encoding="utf-8"))
+        precision_path = (
+            REPO_ROOT
+            / "custom_components/eybond_local/integration_sensor_precision.py"
+        )
+        init_tree = ast.parse(precision_path.read_text(encoding="utf-8"))
         precision_repair = next(
             node
             for node in init_tree.body

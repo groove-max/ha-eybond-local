@@ -101,7 +101,7 @@ _util.dt = _dt_util
 from custom_components.eybond_local import (  # noqa: E402
     _register_entry_callback_session_claim,
 )
-from custom_components.eybond_local import config_flow as config_flow_module  # noqa: E402
+import custom_components.eybond_local.config_base as config_base_module  # noqa: E402
 from custom_components.eybond_local.collector.transport import (  # noqa: E402
     _acquire_shared_listener,
     _release_shared_listener,
@@ -295,7 +295,7 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
             callback_causality_lease_wait=3.0,
         )
         with patch.object(
-            config_flow_module, "_ONBOARDING_TIMEOUT_POLICY", fast_policy
+            config_base_module, "_ONBOARDING_TIMEOUT_POLICY", fast_policy
         ), patch(
             "custom_components.eybond_local.connection.callback_identity."
             "DEFAULT_ONBOARDING_TIMEOUT_POLICY",
@@ -401,7 +401,7 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
             callback_causality_lease_wait=3.0,
         )
         with patch.object(
-            config_flow_module, "_ONBOARDING_TIMEOUT_POLICY", fast_policy
+            config_base_module, "_ONBOARDING_TIMEOUT_POLICY", fast_policy
         ):
             progress = await flow.async_step_manual_recovery_verify()
             self.assertEqual(progress["type"], "progress")

@@ -28,6 +28,32 @@ from custom_components.eybond_local.const import (  # noqa: E402
 )
 
 
+PRODUCTION_ROOT = REPO_ROOT / "custom_components" / "eybond_local"
+
+
+def _lifecycle_method_source(pattern: str, name: str) -> str:
+    for path in sorted(PRODUCTION_ROOT.glob(pattern)):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+                return ast.get_source_segment(source, node) or ""
+    raise AssertionError(f"method not found: {name}")
+
+
+def _coordinator_method_source(name: str) -> str:
+    runtime_root = PRODUCTION_ROOT / "runtime"
+    for path in sorted(runtime_root.glob("coordinator*.py")):
+        source = path.read_text(encoding="utf-8")
+        for node in ast.walk(ast.parse(source)):
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == name
+            ):
+                return ast.get_source_segment(source, node) or ""
+    raise AssertionError(f"coordinator method not found: {name}")
+
+
 class CollectorOperatingProfileTests(unittest.TestCase):
     def test_callback_external_is_cloud_and_ha(self) -> None:
         profile = resolve_collector_operating_profile(
@@ -209,32 +235,8 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         self.assertNotIn("CONF_PROXY_ENABLED", source)
 
     def test_polling_step_cannot_start_a_profile_transition(self) -> None:
-        path = (
-            REPO_ROOT
-            / "custom_components"
-            / "eybond_local"
-            / "config_flow.py"
-        )
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        options_class = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.ClassDef)
-            and node.name == "EybondLocalOptionsFlow"
-        )
-
-        def _method(name: str) -> ast.AsyncFunctionDef:
-            return next(
-                node
-                for node in options_class.body
-                if isinstance(node, ast.AsyncFunctionDef) and node.name == name
-            )
-
-        runtime_source = ast.get_source_segment(source, _method("async_step_runtime"))
-        connection_source = ast.get_source_segment(
-            source, _method("async_step_connection")
-        )
+        runtime_source = _lifecycle_method_source("options_*.py", "async_step_runtime")
+        connection_source = _lifecycle_method_source("options_*.py", "async_step_connection")
 
         self.assertNotIn("async_step_strategy_transition", runtime_source or "")
         self.assertNotIn("_stage_connection_strategy_transition", runtime_source or "")
@@ -242,29 +244,8 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         self.assertIn("async_step_strategy_transition", connection_source or "")
 
     def test_cloud_tools_use_one_shared_menu_path(self) -> None:
-        path = (
-            REPO_ROOT
-            / "custom_components"
-            / "eybond_local"
-            / "config_flow.py"
-        )
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        options_class = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.ClassDef)
-            and node.name == "EybondLocalOptionsFlow"
-        )
-
         def _method_source(name: str) -> str:
-            method = next(
-                node
-                for node in options_class.body
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name == name
-            )
-            return ast.get_source_segment(source, method) or ""
+            return _lifecycle_method_source("options_*.py", name)
 
         proxy_availability = _method_source("_proxy_capture_available")
         cloud_tools_availability = _method_source("_cloud_tools_menu_available")
@@ -291,34 +272,11 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         self.assertNotIn('"proxy_capture"', diagnostics_menu)
 
     def test_runtime_route_never_re_reads_legacy_operation_mode(self) -> None:
-        path = (
-            REPO_ROOT
-            / "custom_components"
-            / "eybond_local"
-            / "runtime"
-            / "coordinator.py"
+        route = _coordinator_method_source("collector_uses_home_assistant_route")
+        reconcile = _coordinator_method_source(
+            "_async_reconcile_managed_collector_endpoint"
         )
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        coordinator_class = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.ClassDef)
-            and node.name == "EybondLocalCoordinator"
-        )
-
-        def _method_source(name: str) -> str:
-            method = next(
-                node
-                for node in coordinator_class.body
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name == name
-            )
-            return ast.get_source_segment(source, method) or ""
-
-        route = _method_source("collector_uses_home_assistant_route")
-        reconcile = _method_source("_async_reconcile_managed_collector_endpoint")
-        pruning = _method_source("_prune_collector_values_for_connection")
+        pruning = _coordinator_method_source("_prune_collector_values_for_connection")
 
         self.assertIn("self.connection_strategy", route)
         for decision in (route, reconcile, pruning):
@@ -327,13 +285,10 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
             self.assertNotIn("collector_operation_mode ==", decision)
 
     def test_config_flow_has_no_hidden_operation_mode_state(self) -> None:
-        path = (
-            REPO_ROOT
-            / "custom_components"
-            / "eybond_local"
-            / "config_flow.py"
+        source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(PRODUCTION_ROOT.glob("config_*.py"))
         )
-        source = path.read_text(encoding="utf-8")
 
         self.assertNotIn("self._collector_operation_mode", source)
         self.assertNotIn("COLLECTOR_OPERATION_HA_ONLY", source)
@@ -342,35 +297,17 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         self.assertIn("self._collector_endpoint_bind_applied", source)
 
     def test_cloud_tools_share_one_profile_gate_without_blocking_cleanup(self) -> None:
-        coordinator_path = (
-            REPO_ROOT
-            / "custom_components"
-            / "eybond_local"
-            / "runtime"
-            / "coordinator.py"
-        )
-        source = coordinator_path.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        coordinator_class = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.ClassDef)
-            and node.name == "EybondLocalCoordinator"
-        )
-
-        def _async_method_source(name: str) -> str:
-            method = next(
-                node
-                for node in coordinator_class.body
-                if isinstance(node, ast.AsyncFunctionDef) and node.name == name
+        source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(
+                (PRODUCTION_ROOT / "runtime").glob("coordinator*.py")
             )
-            return ast.get_source_segment(source, method) or ""
-
-        shadow_start = _async_method_source("async_start_shadow_learning")
-        shadow_stop = _async_method_source("async_stop_shadow_learning")
-        proxy_start = _async_method_source("async_start_proxy_capture")
-        proxy_stop = _async_method_source("async_stop_proxy_capture")
-        endpoint_context = _async_method_source(
+        )
+        shadow_start = _coordinator_method_source("async_start_shadow_learning")
+        shadow_stop = _coordinator_method_source("async_stop_shadow_learning")
+        proxy_start = _coordinator_method_source("async_start_proxy_capture")
+        proxy_stop = _coordinator_method_source("async_stop_proxy_capture")
+        endpoint_context = _coordinator_method_source(
             "_async_prepare_cloud_tool_endpoint_context"
         )
 

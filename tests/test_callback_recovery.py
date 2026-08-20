@@ -1631,19 +1631,22 @@ class CallbackRecoveryTransactionWrapperTests(unittest.IsolatedAsyncioTestCase):
 class CallbackRecoveryArchitectureGuardTests(unittest.TestCase):
     """One sender, one reader, one claim path -- and no proof coercion."""
 
-    _MODULE = (
+    _MODULE_DIR = (
         REPO_ROOT
         / "custom_components"
         / "eybond_local"
         / "connection"
         / "recovery"
-        / "verification.py"
     )
+    _MODULES = tuple(sorted(_MODULE_DIR.glob("verification*.py")))
+
+    def _source(self) -> str:
+        return "\n".join(path.read_text(encoding="utf-8") for path in self._MODULES)
 
     def _names(self) -> set[str]:
         import ast
 
-        source = self._MODULE.read_text(encoding="utf-8")
+        source = self._source()
         names: set[str] = set()
         for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Name):
@@ -1680,7 +1683,7 @@ class CallbackRecoveryArchitectureGuardTests(unittest.TestCase):
             self.assertNotIn(banned, names, msg=f"banned: {banned}")
 
     def test_no_module_level_magic_timeouts(self) -> None:
-        source = self._MODULE.read_text(encoding="utf-8")
+        source = self._source()
         for gone in (
             "CALLBACK_RECOVERY_WAIT_SECONDS",
             "INBOUND_RECONNECT_TIMEOUT_SECONDS",
@@ -1693,7 +1696,7 @@ class CallbackRecoveryArchitectureGuardTests(unittest.TestCase):
         # A foreign-PN inbound session proves nothing about OUR trigger; the
         # honest terminal outcome is a callback timeout. The once-declared
         # never-emitted failure constant must not come back.
-        source = self._MODULE.read_text(encoding="utf-8")
+        source = self._source()
         self.assertNotIn("FAILURE_IDENTITY_MISMATCH", source)
 
     def test_identity_outcome_cannot_become_a_recovery_proof(self) -> None:
@@ -1735,10 +1738,10 @@ class CallbackRecoveryArchitectureGuardTests(unittest.TestCase):
                 continue
             self.assertIn(
                 path.name,
-                ("verification.py", "terminal.py"),
+                ("verification_engine.py", "verification_models.py", "terminal.py"),
                 msg=f"unexpected callback-proof producer: {path.name}",
             )
-            if path.name != "verification.py":
+            if path.name not in {"verification_engine.py", "verification_models.py"}:
                 continue
             tree = ast.parse(source)
             for node in ast.walk(tree):

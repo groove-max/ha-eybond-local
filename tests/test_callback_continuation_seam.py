@@ -269,7 +269,10 @@ class CallbackContinuationArchitectureGuards(unittest.TestCase):
             self.assertNotIn(removed, production)
 
     def test_every_contract_member_has_a_production_caller(self) -> None:
-        source = CONFIG_FLOW.read_text(encoding="utf-8")
+        source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(PKG.glob("config_*.py"))
+        )
         for member in CallbackContinuation.__abstractmethods__:
             self.assertIn(f"_callback_continuation.{member}", source)
 

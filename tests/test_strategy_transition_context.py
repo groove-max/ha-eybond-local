@@ -1082,6 +1082,8 @@ class Cp1bArchitectureGuards(unittest.TestCase):
 
     PKG = REPO_ROOT / "custom_components" / "eybond_local"
     CONFIG_FLOW = PKG / "config_flow.py"
+    OPTIONS_RUNTIME = PKG / "options_runtime.py"
+    OPTIONS_STRATEGY = PKG / "options_strategy.py"
     COORDINATOR = PKG / "runtime" / "coordinator.py"
 
     def _method(self, path, cls_name, method_name):
@@ -1108,7 +1110,9 @@ class Cp1bArchitectureGuards(unittest.TestCase):
 
     def test_prefill_uses_resolver_and_contract_from_entry_data(self) -> None:
         prefill = self._method(
-            self.CONFIG_FLOW, "EybondLocalOptionsFlow", "_transition_prefill"
+            self.OPTIONS_STRATEGY,
+            "StrategyTransitionOptionsMixin",
+            "_transition_prefill",
         )
         self.assertIn("resolve_default_ha_endpoint", self._calls(prefill))
         # The callback proof is read ONLY through RecoveryContract.from_entry_data.
@@ -1117,8 +1121,8 @@ class Cp1bArchitectureGuards(unittest.TestCase):
 
     def test_result_step_does_no_route_persistence(self) -> None:
         result = self._method(
-            self.CONFIG_FLOW,
-            "EybondLocalOptionsFlow",
+            self.OPTIONS_STRATEGY,
+            "StrategyTransitionOptionsMixin",
             "async_step_strategy_transition_result",
         )
         names = {
@@ -1131,21 +1135,33 @@ class Cp1bArchitectureGuards(unittest.TestCase):
 
     def test_staged_option_payload_excludes_advertised_keys(self) -> None:
         commit = self._method(
-            self.CONFIG_FLOW, "EybondLocalOptionsFlow", "_async_commit_runtime_options"
+            self.OPTIONS_RUNTIME,
+            "RuntimeOptionsMixin",
+            "_async_commit_runtime_options",
         )
         # The generic option payload staged for the transition is poll/control
         # only -- topology/advertised keys are never carried through it.
         names = {s.id for s in ast.walk(commit) if isinstance(s, ast.Name)}
         # (advertised keys may be read elsewhere, but not staged here)
         payload_src = ast.get_source_segment(
-            self.CONFIG_FLOW.read_text(encoding="utf-8"), commit
+            self.OPTIONS_RUNTIME.read_text(encoding="utf-8"), commit
         )
         self.assertNotIn("CONF_ADVERTISED_SERVER_IP", payload_src or "")
         self.assertNotIn("CONF_ADVERTISED_TCP_PORT", payload_src or "")
 
     def test_durable_route_write_is_in_coordinator_commit_only(self) -> None:
-        coord_src = self.COORDINATOR.read_text(encoding="utf-8")
-        flow_src = self.CONFIG_FLOW.read_text(encoding="utf-8")
+        coord_src = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((self.PKG / "runtime").glob("coordinator*.py"))
+        )
+        flow_src = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                self.CONFIG_FLOW,
+                self.OPTIONS_RUNTIME,
+                self.OPTIONS_STRATEGY,
+            )
+        )
         # The ONE durable advertised-route write lives in the coordinator commit,
         # via the neutral earned_advertised_route helper.
         self.assertIn("earned_advertised_route", coord_src)

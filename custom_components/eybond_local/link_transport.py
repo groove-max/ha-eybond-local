@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from typing import Any, Protocol
 
-from .link_models import EybondLinkRoute, LinkRoute
+from .link_models import LinkRoute
 
 
 class LinkTransport(Protocol):
@@ -39,7 +39,7 @@ async def async_send_payload(
     route: LinkRoute,
     request_timeout: float | None = None,
 ) -> bytes:
-    """Send one routed payload via the new or legacy transport contract."""
+    """Send one payload through the typed-route transport contract."""
 
     sender = getattr(transport, "async_send_payload", None)
     if callable(sender):
@@ -55,15 +55,6 @@ async def async_send_payload(
                     request_timeout=float(request_timeout),
                 )
         return await sender(payload, route=route)
-
-    if isinstance(route, EybondLinkRoute):
-        legacy_sender = getattr(transport, "async_send_forward", None)
-        if callable(legacy_sender):
-            return await legacy_sender(
-                payload,
-                devcode=route.devcode,
-                collector_addr=route.collector_addr,
-            )
 
     raise TypeError(f"unsupported_link_transport:{type(transport).__name__}:{route.family}")
 

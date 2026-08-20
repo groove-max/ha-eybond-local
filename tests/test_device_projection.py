@@ -112,16 +112,19 @@ class DeviceProjectionArchitectureTests(unittest.TestCase):
         self.assertNotIn("runtime.coordinator", source)
         self.assertNotIn("config_flow", source)
 
-    def test_coordinator_retains_registry_authority_but_not_payload_algorithms(self) -> None:
-        source = (
-            REPO_ROOT / "custom_components/eybond_local/runtime/coordinator.py"
-        ).read_text(encoding="utf-8")
+    def test_device_registry_mixin_retains_registry_authority_but_not_payload_algorithms(
+        self,
+    ) -> None:
+        runtime_dir = REPO_ROOT / "custom_components/eybond_local/runtime"
+        source = (runtime_dir / "coordinator_device_registry.py").read_text(
+            encoding="utf-8"
+        )
         tree = ast.parse(source)
         coordinator = next(
             node
             for node in tree.body
             if isinstance(node, ast.ClassDef)
-            and node.name == "EybondLocalCoordinator"
+            and node.name == "CoordinatorDeviceRegistryMixin"
         )
         methods = {
             node.name for node in coordinator.body if isinstance(node, ast.FunctionDef)
@@ -134,6 +137,11 @@ class DeviceProjectionArchitectureTests(unittest.TestCase):
         self.assertIn("dr.async_get", source)
         self.assertIn("build_inverter_device_info_payload", source)
         self.assertIn("build_collector_device_info_payload", source)
+
+        composition_source = (runtime_dir / "coordinator.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("CoordinatorDeviceRegistryMixin", composition_source)
 
 
 if __name__ == "__main__":

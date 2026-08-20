@@ -10,7 +10,7 @@ from ..const import (
     POLL_MODE_AUTO,
     POLL_MODE_MANUAL,
 )
-from .poll_policy import DEFAULT_POLL_POLICY, PollPolicy
+from ..poll_policy import DEFAULT_POLL_POLICY, PollPolicy
 
 
 @dataclass(frozen=True)

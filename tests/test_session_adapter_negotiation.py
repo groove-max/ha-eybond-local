@@ -14,19 +14,17 @@ import unittest
 import types
 
 from custom_components.eybond_local.connection.session_handle import (
-    ADAPTER_AT_COMMANDS,
+    ADAPTER_COLLECTOR_AT_COMMANDS,
+    ADAPTER_COLLECTOR_FRAMED_COMMANDS,
     ADAPTER_INVERTER_FRAMED_FC4,
     ADAPTER_INVERTER_RAW_PASSTHROUGH,
-    ADAPTER_FRAMED_COLLECTOR_COMMANDS,
-    ADAPTER_FRAMED_FORWARD,
     ADAPTER_NONE,
-    ADAPTER_RAW_PASSTHROUGH,
     ConfirmedWireBinding,
     WIRE_AT_TEXT,
     WIRE_FRAMED,
     WIRE_UNKNOWN,
     negotiate_session_adapters,
-    negotiate_wire,
+    negotiate_wire_result,
 )
 from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
 from custom_components.eybond_local.link_transport import select_payload_route
@@ -45,8 +43,8 @@ from custom_components.eybond_local.const import (
     CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE,
     COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE,
 )
-from custom_components.eybond_local.runtime.link import (
-    EybondRuntimeLinkManager,
+from custom_components.eybond_local.runtime.link import EybondRuntimeLinkManager
+from custom_components.eybond_local.runtime.link_common import (
     _UnavailablePayloadTransport,
     _callback_identity_status_values,
 )
@@ -145,16 +143,16 @@ class SessionHandleNegotiationTests(unittest.TestCase):
         handle = negotiate_session_adapters(
             _observed("s1", FULL_PN, shape="eybond_framed_or_binary", source="framed_heartbeat")
         )
-        self.assertEqual(handle.wire, WIRE_FRAMED)
-        self.assertTrue(handle.supports(ADAPTER_FRAMED_FORWARD))
-        self.assertTrue(handle.supports(ADAPTER_FRAMED_COLLECTOR_COMMANDS))
-        self.assertFalse(handle.supports(ADAPTER_AT_COMMANDS))
+        self.assertEqual(handle.wire_framing, WIRE_FRAMED)
+        self.assertTrue(handle.supports(ADAPTER_INVERTER_FRAMED_FC4))
+        self.assertTrue(handle.supports(ADAPTER_COLLECTOR_FRAMED_COMMANDS))
+        self.assertFalse(handle.supports(ADAPTER_COLLECTOR_AT_COMMANDS))
 
     def test_routed_state_takes_precedence_only_when_not_contradicted(self) -> None:
         # Even if a stale shape hints AT, the routed framed state is authoritative
         # only when the observation is not an impossible framed-vs-AT conflict.
         self.assertEqual(
-            negotiate_wire(state="routed_framed", protocol_shape="unknown"),
+            negotiate_wire_result(state="routed_framed", protocol_shape="unknown")[0],
             WIRE_FRAMED,
         )
         handle = negotiate_session_adapters(
@@ -166,9 +164,9 @@ class SessionHandleNegotiationTests(unittest.TestCase):
                 source="at_dtupn",
             )
         )
-        self.assertEqual(handle.wire, WIRE_UNKNOWN)
+        self.assertEqual(handle.wire_framing, WIRE_UNKNOWN)
         self.assertIn("wire_conflict", handle.conflict)
-        self.assertFalse(handle.supports(ADAPTER_RAW_PASSTHROUGH))
+        self.assertFalse(handle.supports(ADAPTER_INVERTER_RAW_PASSTHROUGH))
 
     def test_framed_shape_with_at_identity_source_stays_framed(self) -> None:
         handle = negotiate_session_adapters(
@@ -183,10 +181,10 @@ class SessionHandleNegotiationTests(unittest.TestCase):
         handle = negotiate_session_adapters(
             _observed("s2", FULL_PN, state="routed_at_text", shape="at_text", source="at_dtupn")
         )
-        self.assertEqual(handle.wire, WIRE_AT_TEXT)
-        self.assertTrue(handle.supports(ADAPTER_AT_COMMANDS))
-        self.assertTrue(handle.supports(ADAPTER_RAW_PASSTHROUGH))
-        self.assertFalse(handle.supports(ADAPTER_FRAMED_FORWARD))
+        self.assertEqual(handle.wire_framing, WIRE_AT_TEXT)
+        self.assertTrue(handle.supports(ADAPTER_COLLECTOR_AT_COMMANDS))
+        self.assertTrue(handle.supports(ADAPTER_INVERTER_RAW_PASSTHROUGH))
+        self.assertFalse(handle.supports(ADAPTER_INVERTER_FRAMED_FC4))
         self.assertEqual(
             handle.inverter_forward_adapter,
             ADAPTER_INVERTER_RAW_PASSTHROUGH,
@@ -213,7 +211,7 @@ class SessionHandleNegotiationTests(unittest.TestCase):
 
     def test_unknown_shape_is_unobserved(self) -> None:
         handle = negotiate_session_adapters(_observed("s3", FULL_PN))
-        self.assertEqual(handle.wire, WIRE_UNKNOWN)
+        self.assertEqual(handle.wire_framing, WIRE_UNKNOWN)
         self.assertFalse(handle.observed)
         self.assertEqual(negotiate_session_adapters(None).available_adapters, frozenset())
 
@@ -226,7 +224,7 @@ class RegistrySessionHandleTests(unittest.TestCase):
         registry = CallbackSessionRegistry(sessions_source=lambda: sessions)
         handle = registry.session_handle_for_pn(FULL_PN)
         self.assertIsNotNone(handle)
-        self.assertEqual(handle.wire, WIRE_FRAMED)
+        self.assertEqual(handle.wire_framing, WIRE_FRAMED)
 
     def test_handle_for_entry_after_claim(self) -> None:
         sessions = [_observed("s1", FULL_PN, state="routed_framed", source="at_dtupn")]
@@ -235,7 +233,7 @@ class RegistrySessionHandleTests(unittest.TestCase):
         handle = registry.session_handle_for_entry("entryA")
         self.assertIsNotNone(handle)
         self.assertEqual(handle.collector_pn, FULL_PN)
-        self.assertEqual(handle.wire, WIRE_FRAMED)
+        self.assertEqual(handle.wire_framing, WIRE_FRAMED)
 
     def test_two_collectors_one_ip_have_distinct_handles_by_pn(self) -> None:
         # Same NAT/public IP, two collectors, different wires -- resolved by PN.
@@ -244,8 +242,8 @@ class RegistrySessionHandleTests(unittest.TestCase):
             _observed("s2", OTHER_FULL_PN, peer_ip="198.51.100.7", state="routed_at_text", shape="at_text"),
         ]
         registry = CallbackSessionRegistry(sessions_source=lambda: sessions)
-        self.assertEqual(registry.session_handle_for_pn(FULL_PN).wire, WIRE_FRAMED)
-        self.assertEqual(registry.session_handle_for_pn(OTHER_FULL_PN).wire, WIRE_AT_TEXT)
+        self.assertEqual(registry.session_handle_for_pn(FULL_PN).wire_framing, WIRE_FRAMED)
+        self.assertEqual(registry.session_handle_for_pn(OTHER_FULL_PN).wire_framing, WIRE_AT_TEXT)
 
 
 class LinkLiveWireSelectionTests(unittest.TestCase):
@@ -263,7 +261,9 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
         )
         self.assertIsInstance(link._session_registry, CallbackSessionRegistry)
         # After negotiation the registry owns this entry's durable identity.
-        self.assertFalse(link._uses_at_text_payload())
+        self.assertNotEqual(
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+        )
         self.assertEqual(
             link._session_registry.owner_for_pn(FULL_PN), "runtime"
         )
@@ -281,10 +281,12 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
                 )
             ],
         )
-        self.assertFalse(link._uses_at_text_payload())
+        self.assertNotEqual(
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+        )
         handle = link.session_handle
-        self.assertEqual(handle.wire, WIRE_FRAMED)
-        self.assertTrue(handle.supports(ADAPTER_FRAMED_FORWARD))
+        self.assertEqual(handle.wire_framing, WIRE_FRAMED)
+        self.assertTrue(handle.supports(ADAPTER_INVERTER_FRAMED_FC4))
         self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
         route = select_payload_route(
             link.transport,
@@ -302,7 +304,9 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
                 _observed("s2", FULL_PN, state="routed_at_text", shape="at_text", source="at_dtupn")
             ],
         )
-        self.assertTrue(link._uses_at_text_payload())
+        self.assertEqual(
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+        )
         self.assertEqual(
             link._inverter_forward_adapter(),
             ADAPTER_INVERTER_RAW_PASSTHROUGH,
@@ -354,7 +358,9 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
             self.assertEqual(
                 link._inverter_forward_adapter(), ADAPTER_NONE, f"hint={hint!r}"
             )
-            self.assertFalse(link._uses_at_text_payload())
+            self.assertNotEqual(
+                link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+            )
 
     def test_peer_ip_does_not_leak_another_collectors_wire(self) -> None:
         # Two collectors on the same peer IP: the link for FULL_PN must negotiate
@@ -368,7 +374,9 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
         link = _bare_link(
             collector_pn=FULL_PN, collector_ip="", persisted_protocol="at_text", sessions=sessions
         )
-        self.assertFalse(link._uses_at_text_payload())
+        self.assertNotEqual(
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+        )
         self.assertEqual(link.session_handle.collector_pn, FULL_PN)
 
     def test_short_pn_heartbeat_matches_full_pn_entry(self) -> None:
@@ -383,7 +391,9 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
                           shape="eybond_framed_or_binary", source="framed_heartbeat")
             ],
         )
-        self.assertFalse(link._uses_at_text_payload())
+        self.assertNotEqual(
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+        )
 
     def test_mismatch_same_prefix_session_cannot_override_claimed_routed_session(self) -> None:
         # The claimed session is a live, routed FRAMED session (full PN). A
@@ -399,8 +409,10 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
         link = _bare_link(
             collector_pn=FULL_PN, collector_ip="", persisted_protocol="at_text", sessions=sessions
         )
-        self.assertFalse(link._uses_at_text_payload())
-        self.assertEqual(link.session_handle.wire, WIRE_FRAMED)
+        self.assertNotEqual(
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+        )
+        self.assertEqual(link.session_handle.wire_framing, WIRE_FRAMED)
 
     def test_pending_identity_session_does_not_override_claimed_routed_session(self) -> None:
         # A not-yet-routed (waiting_for_route_identity) same-prefix session must
@@ -414,8 +426,10 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
         link = _bare_link(
             collector_pn=FULL_PN, collector_ip="", persisted_protocol="eybond_framed", sessions=sessions
         )
-        self.assertTrue(link._uses_at_text_payload())
-        self.assertEqual(link.session_handle.wire, WIRE_AT_TEXT)
+        self.assertEqual(
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+        )
+        self.assertEqual(link.session_handle.wire_framing, WIRE_AT_TEXT)
 
     def test_claim_conflict_does_not_cache_failed_runtime_claim(self) -> None:
         # Defensive hardening: if the runtime-scoped registry ever rejects the
@@ -434,7 +448,7 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
 
         handle = link.session_handle
 
-        self.assertEqual(handle.wire, WIRE_UNKNOWN)
+        self.assertEqual(handle.wire_framing, WIRE_UNKNOWN)
         self.assertNotEqual(link._runtime_claim_pn, FULL_PN)
 
 
@@ -511,7 +525,9 @@ class SessionHandoverLifecycleTests(unittest.TestCase):
         # (the real handover window). The confirmed wire must survive.
         _set_sessions(link, [_observed("s2", FULL_PN, state="waiting_for_route_identity")])
         _observe(link)  # observation during the gap must not change the binding
-        self.assertFalse(link._uses_at_text_payload())
+        self.assertNotEqual(
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+        )
         self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
         self.assertEqual(link._owned_observed_session_protocol(), "eybond_framed")
 
@@ -688,7 +704,9 @@ class SessionHandoverLifecycleTests(unittest.TestCase):
             ],
         )
         _observe(link)  # must not adopt the neighbour's at_text
-        self.assertFalse(link._uses_at_text_payload())
+        self.assertNotEqual(
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+        )
         self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_FRAMED_FC4)
         self.assertEqual(link._owned_observed_session_protocol(), "eybond_framed")
         self.assertTrue(link.confirmed_wire_binding.uses_framed_wire)
@@ -1449,7 +1467,7 @@ class CollectorManagementAdapterSelectionTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            link.collector_management_adapter_id(), ADAPTER_FRAMED_COLLECTOR_COMMANDS
+            link.collector_management_adapter_id(), ADAPTER_COLLECTOR_FRAMED_COMMANDS
         )
 
     def test_live_at_selects_at_management(self) -> None:
@@ -1461,7 +1479,9 @@ class CollectorManagementAdapterSelectionTests(unittest.TestCase):
                 _observed("s1", FULL_PN, state="routed_at_text", shape="at_text", source="at_dtupn")
             ],
         )
-        self.assertEqual(link.collector_management_adapter_id(), ADAPTER_AT_COMMANDS)
+        self.assertEqual(
+            link.collector_management_adapter_id(), ADAPTER_COLLECTOR_AT_COMMANDS
+        )
 
     def test_conflict_selects_none(self) -> None:
         link = _bare_link(
@@ -1558,7 +1578,7 @@ class CollectorManagementAdapterSelectionTests(unittest.TestCase):
         )
         self.assertIsNotNone(link.confirmed_wire_binding)
         self.assertEqual(
-            link.collector_management_adapter_id(), ADAPTER_FRAMED_COLLECTOR_COMMANDS
+            link.collector_management_adapter_id(), ADAPTER_COLLECTOR_FRAMED_COMMANDS
         )
 
     def test_live_wire_overrides_confirmed_binding_management(self) -> None:
@@ -1574,7 +1594,9 @@ class CollectorManagementAdapterSelectionTests(unittest.TestCase):
             confirmed_pn=FULL_PN,
         )
         self.assertTrue(link.session_handle.observed)
-        self.assertEqual(link.collector_management_adapter_id(), ADAPTER_AT_COMMANDS)
+        self.assertEqual(
+            link.collector_management_adapter_id(), ADAPTER_COLLECTOR_AT_COMMANDS
+        )
 
     def test_two_collectors_one_peer_ip_do_not_mix_management_adapter(self) -> None:
         # Two entries (two links) behind ONE peer IP, each with its own durable PN
@@ -1611,10 +1633,10 @@ class CollectorManagementAdapterSelectionTests(unittest.TestCase):
         )
         self.assertEqual(
             framed_link.collector_management_adapter_id(),
-            ADAPTER_FRAMED_COLLECTOR_COMMANDS,
+            ADAPTER_COLLECTOR_FRAMED_COMMANDS,
         )
         self.assertEqual(
-            at_link.collector_management_adapter_id(), ADAPTER_AT_COMMANDS
+            at_link.collector_management_adapter_id(), ADAPTER_COLLECTOR_AT_COMMANDS
         )
 
 

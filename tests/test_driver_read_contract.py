@@ -516,10 +516,10 @@ class _FakeTransport:
             low += 1
         return body + bytes((high, low)) + b"\r"
 
-    async def async_send_forward(self, payload, *, devcode, collector_addr):
+    async def async_send_payload(self, payload, *, route):
         command = payload[:-3].decode("ascii")
         self.commands.append(command)
-        key = (devcode, collector_addr, command)
+        key = (route.devcode, route.collector_addr, command)
         if key not in self._responses:
             raise asyncio.TimeoutError()
         return self._frame(self._responses[key])
@@ -1236,7 +1236,8 @@ class NeutralLayerHasNoPi30KeyMappingTests(unittest.TestCase):
         cc = REPO_ROOT / "custom_components" / "eybond_local"
         paths = (
             cc / "runtime" / "hub.py",
-            cc / "runtime" / "coordinator.py",
+            *sorted((cc / "runtime").glob("hub_*.py")),
+            *sorted((cc / "runtime").glob("coordinator*.py")),
             cc / "runtime" / "poll_scheduler.py",
             cc / "poll_policy.py",
         )

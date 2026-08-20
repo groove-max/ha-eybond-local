@@ -64,6 +64,7 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
     from fake_collector_lib import CollectorProfile, resolve_scenario
 
     import custom_components.eybond_local as integration
+    from custom_components.eybond_local import config_admission
     from custom_components.eybond_local import config_flow as config_flow_module
     from custom_components.eybond_local.connection.recovery_contract import (
         RecoveryContract,
@@ -168,18 +169,18 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
             self._autodetect_results = {"0": detected}
 
         with patch.object(integration, "PLATFORMS", ()), patch(
-            "custom_components.eybond_local.runtime.link._default_local_ip",
+            "custom_components.eybond_local.runtime.link_common._default_local_ip",
             return_value="127.0.0.1",
         ), patch(
-            "custom_components.eybond_local.config_flow._get_ipv4_interfaces",
+            "custom_components.eybond_local.network_interfaces.get_ipv4_interfaces",
             return_value=loopback_interfaces,
         ), patch(
-            "custom_components.eybond_local.config_flow._get_local_ip",
+            "custom_components.eybond_local.network_interfaces.get_local_ip",
             return_value="127.0.0.1",
         ), patch.object(
             config_flow_module.EybondLocalConfigFlow, "_async_do_scan", _active_scan
         ), patch.object(
-            config_flow_module, "_ONBOARDING_TIMEOUT_POLICY", fast_policy
+                config_admission, "_ONBOARDING_TIMEOUT_POLICY", fast_policy
         ), patch(
             "custom_components.eybond_local.connection.callback_identity."
             "DEFAULT_ONBOARDING_TIMEOUT_POLICY",

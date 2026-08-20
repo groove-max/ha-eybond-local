@@ -23,7 +23,7 @@ class _TimeoutTransport:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def async_send_forward(self, payload: bytes, *, devcode: int, collector_addr: int) -> bytes:
+    async def async_send_payload(self, payload: bytes, *, route) -> bytes:
         self.calls += 1
         raise asyncio.TimeoutError()
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 import ast
 import inspect
 import sys
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -37,6 +38,9 @@ from custom_components.eybond_local.collector import transport_profile  # noqa: 
 
 _CC = REPO_ROOT / "custom_components" / "eybond_local"
 _COORDINATOR = _CC / "runtime" / "coordinator.py"
+_COORDINATOR_MODULES = tuple(
+    sorted((_CC / "runtime").glob("coordinator*.py"))
+)
 _TRANSPORT_PROFILE = _CC / "collector" / "transport_profile.py"
 
 
@@ -102,6 +106,30 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _coordinator_family_source() -> str:
+    """All coordinator implementation modules as searchable source text."""
+
+    return "\n".join(_read(path) for path in _COORDINATOR_MODULES)
+
+
+def _coordinator_method_source(method_name: str) -> str:
+    """Return one coordinator-family method body without importing runtime code."""
+
+    for path in _COORDINATOR_MODULES:
+        source = _read(path)
+        tree = ast.parse(source)
+        lines = source.splitlines()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+                and node.name == method_name
+            ):
+                return textwrap.dedent(
+                    "\n".join(lines[node.lineno - 1 : node.end_lineno])
+                )
+    raise AssertionError(f"coordinator method not found: {method_name}")
+
+
 class ProviderAuthorityDriftGuardTests(unittest.TestCase):
     def test_provenance_set_matches_provider_registry(self) -> None:
         # The provenance-inference known set (cloud_evidence, a lower layer) and
@@ -139,7 +167,7 @@ class ProviderControlDiscoveryIsolationGuardTests(unittest.TestCase):
 
 class TransportProfileAuthorityGuardTests(unittest.TestCase):
     def test_coordinator_holds_no_protocol_transport_policy_map(self) -> None:
-        source = _read(_COORDINATOR)
+        source = _coordinator_family_source()
         identifiers = _code_identifiers(source)
         # The coordinator delegates the observed-protocol -> profile map; it must
         # not construct the profile nor hold the protocol-policy literals.
@@ -429,7 +457,10 @@ class IdentityConsumersNeverMintRecoveryEvidenceTests(unittest.TestCase):
         # The guard must never silently go blind: the config flow's
         # manual/reconfigure mapper has to remain in its scope.
         names = {path.name for path, _source in self._identity_consumers()}
-        self.assertIn("config_flow.py", names)
+        self.assertTrue(
+            {"config_manual.py", "config_admission.py"}.issubset(names),
+            msg=f"identity consumer guard lost the flow lifecycle: {names}",
+        )
 
     def test_identity_consumers_never_name_callback_trigger_evidence(self) -> None:
         for path, source in self._identity_consumers():
@@ -470,7 +501,10 @@ class StrategyTransitionAuthorityGuardTests(unittest.TestCase):
 
     ALLOWED_WRITER_FILES = {
         "config_flow.py",
-        "__init__.py",
+        "config_entry.py",
+        "options_runtime.py",
+        "options_strategy.py",
+        "integration_migration.py",
         "connection_policy.py",
         "strategy_transition.py",
         # The coordinator-independent degraded-repair orchestrator is part of
@@ -541,7 +575,7 @@ class StrategyTransitionAuthorityGuardTests(unittest.TestCase):
         raise AssertionError(f"method not found: {method_name}")
 
     def test_coordinator_has_no_strategy_write_and_no_writable_mode_setter(self) -> None:
-        source = _read(_CC / "runtime" / "coordinator.py")
+        source = _coordinator_family_source()
         self.assertEqual(self._strategy_key_writes(source), 0)
         # CP2A: the writable collector operation-mode setter was removed. The
         # only user way to change the connection method is the options-flow
@@ -590,7 +624,7 @@ class StrategyTransitionAuthorityGuardTests(unittest.TestCase):
         self.assertEqual(offenders, {})
 
         init_source = _read(_CC / "__init__.py")
-        coordinator_source = _read(_CC / "runtime" / "coordinator.py")
+        coordinator_source = _coordinator_family_source()
         self.assertNotIn("_async_self_heal_collector_operation_mode", init_source)
         self.assertNotIn("_sync_forced_collector_operation_mode", coordinator_source)
         self.assertNotIn("collector_operation_mode_change_reason", coordinator_source)
@@ -603,12 +637,11 @@ class StrategyTransitionAuthorityGuardTests(unittest.TestCase):
     def test_full_control_endpoint_edit_never_touches_axes(self) -> None:
         # G: a raw endpoint edit is a low-level write, never a strategy switch
         # and never an axis writer of any kind.
-        source = _read(_CC / "runtime" / "coordinator.py")
         for method_name in (
             "async_set_raw_collector_server_endpoint",
             "async_set_collector_server_endpoint",
         ):
-            method_source = self._method_source(source, method_name)
+            method_source = _coordinator_method_source(method_name)
             for banned in (
                 "CONF_CONNECTION_STRATEGY",
                 "connection_strategy",
@@ -621,12 +654,11 @@ class StrategyTransitionAuthorityGuardTests(unittest.TestCase):
                 )
 
     def test_bind_and_rollback_record_facts_never_strategy(self) -> None:
-        source = _read(_CC / "runtime" / "coordinator.py")
         for method_name in (
             "async_bind_collector_to_home_assistant",
             "async_rollback_collector_server_endpoint",
         ):
-            method_source = self._method_source(source, method_name)
+            method_source = _coordinator_method_source(method_name)
             self.assertNotIn(
                 "CONF_CONNECTION_STRATEGY",
                 method_source,
@@ -698,7 +730,12 @@ class DegradedRepairBoundaryGuards(unittest.TestCase):
         )
 
     def test_config_flow_touches_no_listener_internals(self) -> None:
-        seen = _code_identifiers(_read(self._CONFIG_FLOW))
+        seen = set().union(
+            *(
+                _code_identifiers(_read(path))
+                for path in sorted(_CC.glob("config_*.py"))
+            )
+        )
         for internal in (
             "_acquire_shared_listener",
             "_release_shared_listener",
@@ -761,7 +798,15 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
     access), and the activation retry re-runs ONLY the load -- never the repair or
     the proof state."""
 
-    _CONFIG_FLOW = _CC / "config_flow.py"
+    _OPTIONS_STRATEGY = _CC / "options_strategy.py"
+    _OPTIONS_BASE = _CC / "options_base.py"
+    _FLOW_PRESENTATION = _CC / "flow_presentation.py"
+
+    @classmethod
+    def _options_source(cls) -> str:
+        return "\n".join(
+            _read(path) for path in sorted(_CC.glob("options_*.py"))
+        )
 
     @staticmethod
     def _method_source(module_source: str, method_name: str) -> str:
@@ -779,7 +824,7 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
         # The dead-end LOADED refusal is gone from the flow AND every locale: a
         # LOADED entry is repaired, never refused.
         self.assertNotIn(
-            "transition_repair_requires_unloaded_entry", _read(self._CONFIG_FLOW)
+            "transition_repair_requires_unloaded_entry", self._options_source()
         )
         for locale in ("en", "ru", "uk"):
             self.assertNotIn(
@@ -791,12 +836,12 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
         # The flow reaches the runtime only through public boundaries; it never
         # calls the coordinator's private without-reload persist helper.
         self.assertNotIn(
-            "_async_update_entry_without_reload", _read(self._CONFIG_FLOW)
+            "_async_update_entry_without_reload", self._options_source()
         )
 
     def test_loaded_repair_reuses_one_orchestrator_and_suspends_runtime(self) -> None:
         task = self._method_source(
-            _read(self._CONFIG_FLOW), "_async_run_degraded_repair_task"
+            _read(self._OPTIONS_STRATEGY), "_async_run_degraded_repair_task"
         )
         # The ONE orchestrator -- never a second matcher/bootstrap/proof pipeline
         # inlined for the LOADED path.
@@ -812,7 +857,7 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
             self.assertNotIn(banned, task, f"repair task must not use {banned}")
 
     def test_suspend_is_fail_closed_before_ensure(self) -> None:
-        source = _read(self._CONFIG_FLOW)
+        source = _read(self._OPTIONS_STRATEGY)
         task = self._method_source(source, "_async_run_degraded_repair_task")
         suspend = self._method_source(source, "_suspend_runtime_for_repair")
         # The suspend runs BEFORE the listener ensure, and a refusal returns early
@@ -830,7 +875,7 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
         self.assertIn("transition_suspend_failed", suspend)
 
     def test_lifecycle_finalization_is_awaited_not_fire_and_forget(self) -> None:
-        source = _read(self._CONFIG_FLOW)
+        source = _read(self._OPTIONS_STRATEGY)
         task = self._method_source(source, "_async_run_degraded_repair_task")
         fin = self._method_source(source, "_finalize_repair_lifecycle")
         # ONE finalization boundary, AWAITED through the cancellation-safe helper.
@@ -845,7 +890,7 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
         self.assertIn("transition_restore_failed", fin)
 
     def test_no_suppress_around_restore_or_activation(self) -> None:
-        source = _read(self._CONFIG_FLOW)
+        source = _read(self._OPTIONS_STRATEGY)
         for method in (
             "_async_run_degraded_repair_task",
             "_finalize_repair_lifecycle",
@@ -858,7 +903,7 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
             )
 
     def test_typed_suspend_and_restore_reasons_are_localized(self) -> None:
-        flow = _read(self._CONFIG_FLOW)
+        flow = _read(self._FLOW_PRESENTATION)
         for code in ("transition_suspend_failed", "transition_restore_failed"):
             self.assertIn(code, flow)  # typed reasons in the explanations table
         for locale in ("en", "ru", "uk"):
@@ -873,7 +918,7 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
         # The suspend must run INSIDE the try whose finally awaits the ONE
         # finalization -- a cancel mid-suspend restores through that boundary.
         task = self._method_source(
-            _read(self._CONFIG_FLOW), "_async_run_degraded_repair_task"
+            _read(self._OPTIONS_STRATEGY), "_async_run_degraded_repair_task"
         )
         i_try = task.index("\n        try:")
         i_suspend = task.index("_suspend_runtime_for_repair")
@@ -885,7 +930,7 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
 
     def test_suspend_marks_attempt_before_unload(self) -> None:
         suspend = self._method_source(
-            _read(self._CONFIG_FLOW), "_suspend_runtime_for_repair"
+            _read(self._OPTIONS_STRATEGY), "_suspend_runtime_for_repair"
         )
         i_mark = suspend.index('"suspend_attempted"')
         i_unload = suspend.index("config_entries.async_unload")  # the CALL, not docs
@@ -894,7 +939,7 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
         )
 
     def test_await_critical_reraises_cancellation_after_completion(self) -> None:
-        helper = self._method_source(_read(self._CONFIG_FLOW), "_await_critical")
+        helper = self._method_source(_read(self._OPTIONS_STRATEGY), "_await_critical")
         # Tracks a cancel and re-raises it AFTER the shielded work completes -- a
         # successful result never turns a cancelled task into a normal completion.
         self.assertIn("cancelled = True", helper)
@@ -904,7 +949,7 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
     def test_init_menu_recovery_beats_capability_filtering(self) -> None:
         # Several classes define async_step_init; anchor on the unique options-flow
         # menu logic in the whole file rather than a mis-picked method.
-        flow = _read(self._CONFIG_FLOW)
+        flow = _read(self._OPTIONS_BASE)
         i_proven = flow.index("not marker_present and self._callback_proven_but_not_loaded()")
         i_bridge = flow.index("if capabilities.virtual_bridge:")
         i_repair = flow.index('menu_options.insert(0, "strategy_transition_repair")')
@@ -916,13 +961,13 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
         self.assertLess(i_bridge, i_repair, "bridge branch must not drop the repair")
 
     def test_listener_acquire_is_cancellation_safe(self) -> None:
-        transport = _read(_CC / "collector" / "transport.py")
+        listener_source = _read(_CC / "collector" / "transport_listener.py")
         # The bind decrements the reserved refcount on ANY failure incl. cancel.
-        acquire = self._method_source(transport, "acquire")
+        acquire = self._method_source(listener_source, "acquire")
         self.assertIn("except BaseException", acquire)
         self.assertIn("_ref_count", acquire)
         # The locked get-or-create drops a never-bound listener on cancel too.
-        locked = self._method_source(transport, "_acquire_listener_locked")
+        locked = self._method_source(listener_source, "_acquire_listener_locked")
         self.assertIn("except BaseException", locked)
         # The public ensure releases the refcount if it never hands out a token.
         ensure = self._method_source(
@@ -933,7 +978,7 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
 
     def test_activation_retry_reloads_only_never_repairs_or_touches_proof(self) -> None:
         retry = self._method_source(
-            _read(self._CONFIG_FLOW),
+            _read(self._OPTIONS_STRATEGY),
             "async_step_strategy_transition_activation_retry",
         )
         # It re-runs ONLY the load...
@@ -1009,7 +1054,8 @@ class CloudRollbackConvergenceGuardTests(unittest.TestCase):
         # never writes an endpoint/reboot/UDP, never persists an entry/registry,
         # and never mints a proof / RecoveryContract / recovery state.
         boundary = self._method_source(
-            _read(_COORDINATOR), "collector_cloud_rollback_context"
+            _coordinator_method_source("collector_cloud_rollback_context"),
+            "collector_cloud_rollback_context",
         )
         for banned in (
             "write_endpoint",
@@ -1045,7 +1091,7 @@ class CloudRollbackSelectionAuthorityGuardTests(unittest.TestCase):
 
     @staticmethod
     def _facade_ast():
-        tree = ast.parse(_read(_COORDINATOR))
+        tree = ast.parse(_coordinator_method_source("async_run_connection_strategy_transition"))
         for node in ast.walk(tree):
             if (
                 isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
@@ -1166,20 +1212,35 @@ class CollectorEndpointOperationAuthorityGuardTests(unittest.TestCase):
     )
 
     @staticmethod
-    def _coordinator_class(tree: ast.AST) -> ast.ClassDef:
-        for node in tree.body:
-            if isinstance(node, ast.ClassDef) and node.name == "EybondLocalCoordinator":
-                return node
-        raise AssertionError("EybondLocalCoordinator class not found")
+    def _coordinator_methods() -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]:
+        methods: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+        for path in _COORDINATOR_MODULES:
+            tree = ast.parse(_read(path))
+            for node in tree.body:
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                if not (
+                    node.name == "EybondLocalCoordinator"
+                    or node.name.startswith("Coordinator")
+                ):
+                    continue
+                methods.extend(
+                    method
+                    for method in node.body
+                    if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+                )
+        if not methods:
+            raise AssertionError("coordinator-family methods not found")
+        return tuple(methods)
 
     @classmethod
-    def _direct_endpoint_writers(cls, class_node: ast.ClassDef) -> set[str]:
+    def _direct_endpoint_writers(
+        cls, methods: tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]
+    ) -> set[str]:
         """Every coordinator method whose body calls a raw ``self._runtime`` writer."""
 
         writers: set[str] = set()
-        for method in class_node.body:
-            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
+        for method in methods:
             for call in ast.walk(method):
                 if (
                     isinstance(call, ast.Attribute)
@@ -1192,25 +1253,21 @@ class CollectorEndpointOperationAuthorityGuardTests(unittest.TestCase):
         return writers
 
     @staticmethod
-    def _self_call_graph(class_node: ast.ClassDef) -> dict[str, set[str]]:
+    def _self_call_graph(
+        methods: tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]
+    ) -> dict[str, set[str]]:
         """method -> set of sibling methods it calls via ``self.<name>(...)``."""
 
-        methods = {
-            m.name
-            for m in class_node.body
-            if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
+        method_names = {method.name for method in methods}
         graph: dict[str, set[str]] = {}
-        for method in class_node.body:
-            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
+        for method in methods:
             callees: set[str] = set()
             for call in ast.walk(method):
                 if (
                     isinstance(call, ast.Attribute)
                     and isinstance(call.value, ast.Name)
                     and call.value.id == "self"
-                    and call.attr in methods
+                    and call.attr in method_names
                 ):
                     callees.add(call.attr)
             graph[method.name] = callees
@@ -1222,18 +1279,16 @@ class CollectorEndpointOperationAuthorityGuardTests(unittest.TestCase):
         # skip self-acquisition ONLY if every path that reaches it passes through a
         # guarded owner (proven by the recursive closure below). A NEW unguarded
         # writer -- public or private -- fails here.
-        src = _read(_COORDINATOR)
-        tree = ast.parse(src)
-        class_node = self._coordinator_class(tree)
-        writers = self._direct_endpoint_writers(class_node)
-        graph = self._self_call_graph(class_node)
+        methods = self._coordinator_methods()
+        writers = self._direct_endpoint_writers(methods)
+        graph = self._self_call_graph(methods)
         callers: dict[str, set[str]] = {name: set() for name in graph}
         for caller, callees in graph.items():
             for callee in callees:
                 callers.setdefault(callee, set()).add(caller)
 
         def self_guards(method_name: str) -> bool:
-            body = self._method_source(src, method_name)
+            body = _coordinator_method_source(method_name)
             return any(marker in body for marker in self._OWNERSHIP_MARKERS)
 
         # A method is owned if it self-guards, OR it is a private helper whose
@@ -1279,7 +1334,7 @@ class CollectorEndpointOperationAuthorityGuardTests(unittest.TestCase):
         self.assertIn("async_trigger_collector_rediscovery", writers)
         self.assertIn("_async_reconcile_managed_collector_endpoint", writers)
         # The transition facade maps a busy authority to the typed reason.
-        facade = self._method_source(src, "async_run_connection_strategy_transition")
+        facade = _coordinator_method_source("async_run_connection_strategy_transition")
         self.assertIn("COLLECTOR_ENDPOINT_OPERATION_BUSY", facade)
 
     def test_no_dead_operation_kinds(self) -> None:
@@ -1300,6 +1355,7 @@ class CollectorEndpointOperationAuthorityGuardTests(unittest.TestCase):
             _read(path)
             for path in (
                 _COORDINATOR,
+                *_COORDINATOR_MODULES,
                 self._STRATEGY,
                 _CC / "connection" / "strategy_transition_repair.py",
             )

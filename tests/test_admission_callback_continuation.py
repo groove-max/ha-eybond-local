@@ -755,17 +755,18 @@ class AdmissionConvergenceArchitectureGuards(unittest.TestCase):
     BRIDGE = "async_step_verify_connection_manual_callback"
 
     def _flow_methods(self):
-        tree = ast.parse(CONFIG_FLOW.read_text(encoding="utf-8"))
-        flow = next(
-            n
-            for n in tree.body
-            if isinstance(n, ast.ClassDef) and n.name == "EybondLocalConfigFlow"
-        )
-        return {
-            m.name: m
-            for m in flow.body
-            if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
+        methods = {}
+        for path in sorted(PKG.glob("config_*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for flow in (node for node in tree.body if isinstance(node, ast.ClassDef)):
+                methods.update(
+                    {
+                        method.name: method
+                        for method in flow.body
+                        if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    }
+                )
+        return methods
 
     def test_shared_methods_never_branch_on_admission_transaction(self) -> None:
         methods = self._flow_methods()

@@ -728,7 +728,7 @@ class InitModuleTests(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "custom_components.eybond_local._default_enabled_unique_ids_for_current_runtime",
+                    "custom_components.eybond_local.integration_entities._default_enabled_unique_ids_for_current_runtime",
                     return_value={"entry123_tool_apply_collector_changes"},
                 ),
             ):
@@ -1545,7 +1545,7 @@ class InitModuleTests(unittest.TestCase):
             )
             coordinator = types.SimpleNamespace(async_refresh=async_refresh)
 
-            with patch("custom_components.eybond_local._SETUP_INITIAL_REFRESH_TIMEOUT", 0.01):
+            with patch("custom_components.eybond_local.integration_metadata._SETUP_INITIAL_REFRESH_TIMEOUT", 0.01):
                 await _async_initial_refresh_for_setup(hass, entry, coordinator)
 
             await refresh_started.wait()
@@ -1585,7 +1585,7 @@ class InitModuleTests(unittest.TestCase):
                 async_on_unload=unload_callbacks.append,
             )
 
-            with patch("custom_components.eybond_local._SETUP_INITIAL_REFRESH_TIMEOUT", 60.0):
+            with patch("custom_components.eybond_local.integration_metadata._SETUP_INITIAL_REFRESH_TIMEOUT", 60.0):
                 await asyncio.wait_for(
                     _async_initial_refresh_for_setup(hass, entry, _Coordinator()),
                     timeout=0.5,
@@ -1611,17 +1611,17 @@ class InitModuleTests(unittest.TestCase):
             entry = types.SimpleNamespace(entry_id="entry123", runtime_data=object())
 
             with (
-                patch("custom_components.eybond_local._EXPERT_ENTITY_MIGRATION_SETTLE_TIMEOUT", 0.01),
+                patch("custom_components.eybond_local.integration_entities._EXPERT_ENTITY_MIGRATION_SETTLE_TIMEOUT", 0.01),
                 patch(
-                    "custom_components.eybond_local._async_self_heal_expert_defaults",
+                    "custom_components.eybond_local.integration_entities._async_self_heal_expert_defaults",
                     new=AsyncMock(),
                 ) as self_heal,
                 patch(
-                    "custom_components.eybond_local._async_remove_legacy_runtime_select_entities",
+                    "custom_components.eybond_local.integration_entities._async_remove_legacy_runtime_select_entities",
                     new=AsyncMock(),
                 ) as legacy_cleanup,
                 patch(
-                    "custom_components.eybond_local._async_self_heal_sensor_display_precision",
+                    "custom_components.eybond_local.integration_entities._async_self_heal_sensor_display_precision",
                     new=AsyncMock(),
                 ) as sensor_precision,
             ):
@@ -1819,7 +1819,7 @@ class InitModuleTests(unittest.TestCase):
                 patch("custom_components.eybond_local._async_self_heal_enabled_defaults", new=AsyncMock()),
                 patch("custom_components.eybond_local._async_cleanup_obsolete_entities", new=AsyncMock()),
                 patch("custom_components.eybond_local._async_finalize_expert_entity_migration", new=AsyncMock()),
-                patch("custom_components.eybond_local._SETUP_INITIAL_REFRESH_TIMEOUT", 0.01),
+                patch("custom_components.eybond_local.integration_metadata._SETUP_INITIAL_REFRESH_TIMEOUT", 0.01),
                 patch.dict(
                     sys.modules,
                     {
@@ -2170,7 +2170,7 @@ class StopShutdownHookTests(unittest.TestCase):
 
         async def _run() -> None:
             hook = self._registered_hook(coordinator)
-            with patch("custom_components.eybond_local._STOP_SHUTDOWN_TIMEOUT", 0.05):
+            with patch("custom_components.eybond_local.integration_registration._STOP_SHUTDOWN_TIMEOUT", 0.05):
                 with self.assertLogs(
                     "custom_components.eybond_local", level="WARNING"
                 ) as logs:

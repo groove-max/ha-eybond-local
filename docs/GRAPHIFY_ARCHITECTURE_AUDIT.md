@@ -1,139 +1,192 @@
 # Graphify architecture audit
 
-This audit records how Graphify's structural metrics should be interpreted for
-this repository.  It is intentionally a decision record, not a request to split
-large classes merely because they have a high raw degree.
+This decision record explains how Graphify metrics are interpreted in this
+repository and where the decomposition boundary currently ends. It deliberately
+does not equate file length or raw graph degree with an architecture defect.
 
-Baseline: `c8b577f` (`Publish driver telemetry outside broad runtime values`).
-The incremental code graph contained 9,412 nodes and 22,179 edges; reclustering
-produced 359 communities.
+Current WIP graph (2026-08-20): 9,501 nodes, 22,879 edges and 321 communities.
+The graph was rebuilt after the config/options/runtime/transport/integration/
+recovery decomposition described below.
 
-## Why raw God Node degree is misleading here
+## Interpreting God Nodes
 
-Graphify represents a class and each of its methods as adjacent nodes.  It also
-includes invariant and lifecycle tests in the same graph.  Consequently, raw
-degree combines three different things:
+Graphify represents a class and each method as adjacent nodes, and also includes
+tests in the graph. Raw degree therefore combines:
 
 1. methods contained by the class;
-2. test references to the class;
-3. actual consumers in another production module.
+2. test references;
+3. real cross-module production consumers.
 
-Only the third category is evidence of cross-module coupling.  Recounting the
-four most prominent orchestration/authority classes after excluding same-file
-and test edges gives:
+Only the third category is evidence of production coupling. High degree is a
+reason to inspect ownership, not an instruction to split a class. Shared typed
+vocabulary such as `WriteCapability`, `OnboardingResult`, `RuntimeSnapshot` and
+`RecoveryContract` is expected to have broad fan-in. Stateful authorities such
+as `CallbackSessionRegistry` and `_SharedEybondListener` must stay singular even
+when their degree is high.
 
-| Node | Raw degree | Same-file edges | Test edges | External production edges | External production files |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `CallbackSessionRegistry` | 159 | 36 | 112 | 9 | 2 |
-| `EybondLocalCoordinator` | 309 | 280 | 0 | 27 | 8 |
-| `EybondLocalConfigFlow` | 224 | 218 | 2 | 0 | 0 |
-| `EybondLocalOptionsFlow` | 177 | 172 | 0 | 0 | 0 |
+## Completed composition-root decomposition
 
-The counts do not always sum to raw degree because generated/container edges
-without a production source file are deliberately left unclassified.
+The former large orchestration roots are now small composition modules. Each
+split has a load-bearing architecture guard that preserves the original method
+or definition multiset exactly once and rejects backward imports or duplicate
+state owners.
 
-The adjusted class ranking is led by shared contracts and extension points such
-as `WriteCapability` and `InverterDriver`, not by the session registry.  Their
-high external degree is expected: they are the vocabulary shared by drivers,
-runtime orchestration, and Home Assistant entities.
+| Former root | Current root | Concrete ownership modules |
+| --- | ---: | --- |
+| `config_flow.py` | 41 lines | journey-specific `config_*.py` mixins and neutral form/presentation helpers |
+| `options_flow.py` | 28 lines | `options_*.py` lifecycle/journey mixins |
+| `runtime/coordinator.py` | 335 lines | 19 cohesive coordinator responsibility mixins |
+| `runtime/hub.py` | 165 lines | lifecycle, refresh, management, support, detection and snapshot mixins |
+| `runtime/link.py` | 175 lines | session projection, callback, cloud routes, connection, transport lifecycle and one wire-authority mixin |
+| `collector/transport.py` | 39 lines | common framing, socket connections, one shared listener, proxy route and framed/AT facades |
+| package `__init__.py` | 379 lines | HA lifecycle root plus registration, metadata, entity, precision and migration modules |
+| `connection/recovery/verification.py` | 102 lines | immutable models, one reset engine, one observed-session channel and one production transaction assembly |
 
-## CallbackSessionRegistry decision
+The split is structural, not semantic:
 
-The registry has two logical surfaces:
+- config and options still expose one Home Assistant flow-manager lifecycle;
+- `EybondLocalCoordinator`, `EybondHub` and `EybondRuntimeLinkManager` still
+  each have one object identity and one constructor-owned state set;
+- `_SharedEybondListener`, `_LISTENERS` and its session inventory exist in one
+  module only;
+- `_ControlledResetRecoveryEngine` remains the only recovery state machine;
+- all public facade exports are the exact concrete types, never wrappers or
+  parallel models.
 
-- a read-only projection of listener observations;
-- mutable collector identity, session claim, certification, and handoff state.
+The corresponding guards are:
 
-They intentionally share one state owner.  Claim and handoff decisions must be
-checked against the current exact-session observation under the same authority.
-Splitting them into independent registries would create a synchronization and
-TOCTOU problem rather than remove one.
+- `test_flow_module_boundaries.py`
+- `test_coordinator_module_boundaries.py`
+- `test_hub_module_boundaries.py`
+- `test_link_module_boundaries.py`
+- `test_transport_module_boundaries.py`
+- `test_integration_module_boundaries.py`
+- `test_recovery_verification_module_boundaries.py`
 
-Production mutation is concentrated in the connection transactions/recovery
-authorities, config-entry setup/removal, and the explicit runtime pinning path.
-Passive discovery supplies observations and consumes unclaimed projections; it
-does not own a second claim table.  Config-flow callback continuation and
-admission-origin flows both delegate into the neutral connection transactions;
-incomplete onboarding remains flow state and never creates a PN-less entry.
+## Post-decomposition compatibility cleanup
 
-Decision: **keep one registry state owner**.  Narrow read-only or ownership
-facades may be introduced later to make call-site permissions clearer, but only
-as views over the same object and only when they remove a demonstrated unwanted
-dependency.  They must never duplicate claims, observations, or reconciliation.
+After the structural split, a second audit distinguished persisted compatibility
+from internal Python shims. Persisted entry migration, legacy endpoint formats,
+cloud protocol families and typed-telemetry fallback views remain supported.
+The following internal-only surfaces were removed because production no longer
+called them:
 
-## Coordinator decision
+- `runtime.poll_policy` now has no re-export shim; the scheduler imports the
+  neutral top-level polling contract directly;
+- negotiated session consumers use `wire_framing`, role-specific adapter ids and
+  `negotiate_wire_result`; the old `wire` property, primary-source projection,
+  generic adapter aliases and `negotiate_wire` wrapper are gone;
+- runtime link tests use the authoritative inverter-adapter selection directly,
+  so `_uses_at_text_payload` is no longer a parallel boolean projection;
+- payload exchange requires `async_send_payload(..., route=...)`; it no longer
+  silently adapts a legacy `async_send_forward`-only object;
+- cloud-evidence availability and export use the provider-neutral coordinator
+  surface, without SmartESS-named availability/export wrappers;
+- the unused coordinator `device_info` alias is gone; entity code names the
+  collector/inverter owner explicitly;
+- test-only connection-policy simulation and declaration helpers live in tests,
+  not in the production policy module.
 
-The coordinator is a large Home Assistant orchestration root, but its external
-production consumers are the integration setup and entity platforms.  Most of
-its raw degree is its own methods.  It already delegates important authority to
-the runtime link manager, endpoint-operation authority, transition/recovery
-modules, telemetry frame, and support tooling.
+Static inspection of all 282 production modules reports zero top-level runtime
+import cycles and zero implementation-to-facade back-edges across the decomposed
+families. Boundary and behavior tests make these removals load-bearing.
 
-The remaining risk is lifecycle density inside the class, not external fan-in.
-Safe future extraction candidates are cohesive state machines with an already
-typed boundary and load-bearing tests, for example one complete proxy-capture or
-shadow-learning lifecycle.  Pure helper extraction that leaves the same mutable
-state spread across two owners is not an improvement.
+## Authorities intentionally kept whole
 
-Decision: do not perform a broad coordinator split.  Extract only a complete
-lifecycle authority when its state, cancellation boundary, persistence, and
-terminal outcomes can move together.
+### CallbackSessionRegistry
 
-## Config-flow decision
+The registry owns two views over one state:
 
-The config and options flow classes are large, but Graphify found no external
-production class consumers.  Their degree is almost entirely the flow steps and
-helpers contained in `config_flow.py`.  This is a maintainability concern, not a
-cross-layer authority defect.
+- read-only listener observations;
+- mutable identity/session claims, certification and handoff.
 
-Safe extraction must follow a complete user journey rather than move isolated
-formatters.  Candidate journeys include shadow-learning review or strategy
-transition repair, but only after defining the flow state passed across the
-boundary.  The admission and callback-continuation transactions are examples of
-the desired pattern: typed lifecycle ownership first, UI adapter second.
+Claim and handoff decisions must be checked against the exact current session
+under the same authority. Splitting these into independent registries would add
+a synchronization/TOCTOU defect. Read-only facades are acceptable only as views
+over the same object; claims, observations and reconciliation must never be
+duplicated.
 
-Decision: no file-size-driven rewrite.  Preserve one flow-manager lifecycle and
-extract only a journey with a typed state/terminal contract.
+### Shared listener/session inventory
 
-## How to use Graphify findings
+`collector/transport_listener.py` is still large because it owns one TCP
+listener, pending sockets, exact-session indexes, inventory state, route
+reservations and activation. These fields participate in the same atomic
+selection decisions. The surrounding framing connections, proxy route and
+client facades were extracted, but the listener itself remains one class and
+one registry.
 
-- Treat `EXTRACTED` call/import edges as navigation hints, then verify callers in
-  source.
-- Exclude same-file method/container edges and tests before calling something a
-  production bridge.
-- Do not use an `INFERRED` documentation edge as evidence for a code change.
-- Prefer directed call/import analysis for authority questions; the aggregated
-  undirected visualization cannot establish ownership direction.
-- A high degree is a reason to inspect a node, not a refactoring requirement.
+### Proxy and shadow-learning lifecycle
 
-## Concrete back-edge removed
+`CoordinatorCloudToolsMixin` remains cohesive. Proxy capture and shadow
+learning share one endpoint-operation authority, cancellation-safe persistence,
+restore and terminalization rules. Extracting isolated helpers while leaving
+their mutable state on the coordinator would obscure rather than improve the
+state machine. A future extraction is justified only if the entire lifecycle —
+state, token, persistence, restore and typed outcomes — moves as one authority.
 
-The adjusted audit found one real dependency-placement defect that raw God Node
-ranking did not highlight: `connection/branch_registry.py` imported both
-`runtime.hub.EybondHub` and `onboarding.eybond.OnboardingDetector`.  A neutral
-connection registry therefore acted as the composition root for two upper
-layers.
+### Admission and discovery
 
-The registry now contains only connection metadata and typed spec/value
-builders.  `runtime/factory.py` owns construction of the runtime implementation,
-and `onboarding/factory.py` owns construction of the onboarding implementation.
-The branch validation stays shared; no connection or detection algorithm was
-duplicated.  An architecture test prevents the upper-layer imports from
-returning.
+`CollectorAdmissionTransaction` is one callback/inbound admission lifecycle;
+`PassiveCallbackDiscovery` is one domain singleton over the shared listener and
+registry. Both already delegate wire and recovery work to lower authorities.
+Their size is internal state-machine density, not duplicated ownership.
 
-The same pass removed the adjacent `models ↔ branch_registry` import cycle.
-Immutable connection models now contain no factory imports; the three
-branch-aware builders live in `connection/spec_factory.py`, which is the single
-composition point over models and branch metadata.
+### Protocol drivers and BLE backend
 
-A second small cycle, `collector_endpoint ↔ collector.cloud_family`, came from
-one high-level callback formatter living in the neutral endpoint parser.  That
-formatter now lives in `collector/callback_endpoint.py`; the parser no longer
-imports cloud classification, while the callback composition module may depend
-on both facts explicitly.
+The large SMG and EyeBond-G ASCII modules contain protocol-specific reads,
+decoders and derived states. `smartess_ble.py` contains the BLE parser plus its
+scanner/link/session/provisioner backend. They do not act as cross-layer
+composition roots and do not own registry, recovery or endpoint-operation
+state. They may be split later for protocol-maintenance ergonomics, but only
+around a typed protocol contract and with no second driver or BLE session
+authority. File length alone is not a reason.
 
-## Current priority
+## Real back-edges removed
 
-No runtime trust-boundary defect was found by the God Node audit.  After the
-composition-root back-edge above, further extraction should wait for either a
-specific lifecycle defect or a measurable unwanted production dependency.
+The original audit found `connection/branch_registry.py` importing upper-layer
+runtime and onboarding implementations. Construction now lives in
+`runtime/factory.py` and `onboarding/factory.py`; the neutral branch registry
+keeps only metadata/spec validation. The adjacent `models ↔ branch_registry`
+cycle was removed by moving branch-aware builders into
+`connection/spec_factory.py`.
+
+The `collector_endpoint ↔ collector.cloud_family` cycle was removed by moving
+the high-level callback formatter into `collector/callback_endpoint.py`.
+
+The newer decompositions also removed implicit root dependencies:
+
+- runtime polling imports the exact sensor-precision reconciliation module,
+  not the package root;
+- recovery implementation modules import their lower-level model/channel
+  owners, never the recovery facade back;
+- transport implementation modules import the shared-listener owner directly,
+  never `collector.transport` back;
+- integration helpers import no package-root implementation.
+
+## Validation state
+
+At this checkpoint:
+
+- quality gate: 5/5 (full unit discovery included);
+- HA 2026.7 / Python 3.14 lane: 57/57;
+- HA 2026.2 / Python 3.13 lane: 57/57;
+- `py_compile` and `git diff --check`: clean.
+
+The HA lanes must run sequentially: both exercise a real shared listener and can
+otherwise compete for the fixed test port.
+
+## Completion criterion and future work
+
+The architecture decomposition is complete at the ownership boundary: no large
+composition root still combines unrelated authorities. Further splitting is
+appropriate only when at least one of these is true:
+
+1. Graphify plus source inspection shows an unwanted production dependency;
+2. two independently changing lifecycles share a module but not state;
+3. a complete state machine can move behind an existing typed contract;
+4. a concrete defect demonstrates that the current boundary hides ownership.
+
+Do not split singular registries/listeners/transactions merely to reduce line
+count or raw degree. Treat `EXTRACTED` graph edges as navigation hints, exclude
+test and same-file containment edges before judging coupling, and never use an
+`INFERRED` documentation edge as evidence for a code change.

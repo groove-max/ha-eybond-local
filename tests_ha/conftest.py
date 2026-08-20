@@ -63,11 +63,11 @@ def no_host_network_scan():
     ]
     with (
         patch(
-            "custom_components.eybond_local.config_flow._get_ipv4_interfaces",
+            "custom_components.eybond_local.network_interfaces.get_ipv4_interfaces",
             return_value=interfaces,
         ),
         patch(
-            "custom_components.eybond_local.config_flow._get_local_ip",
+            "custom_components.eybond_local.network_interfaces.get_local_ip",
             return_value=SYNTHETIC_SERVER_IP,
         ),
     ):

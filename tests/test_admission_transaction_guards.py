@@ -13,6 +13,7 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PKG = REPO_ROOT / "custom_components" / "eybond_local"
 CONFIG_FLOW = PKG / "config_flow.py"
+CONFIG_LIFECYCLE = tuple(sorted(PKG.glob("config_*.py")))
 TRANSACTION = PKG / "connection" / "admission_transaction.py"
 
 
@@ -42,7 +43,9 @@ def _attr_accesses(tree: ast.AST) -> set[str]:
 
 def _class_method(tree: ast.AST, class_name: str, method: str):
     for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name == class_name:
+        if isinstance(node, ast.ClassDef) and (
+            node.name == class_name or class_name == "EybondLocalConfigFlow"
+        ):
             for item in node.body:
                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == method:
                     return item
@@ -50,29 +53,41 @@ def _class_method(tree: ast.AST, class_name: str, method: str):
 
 
 def _init_assigned_attrs(tree: ast.AST, class_name: str) -> set[str]:
-    init = _class_method(tree, class_name, "__init__")
     attrs: set[str] = set()
-    if init is None:
-        return attrs
-    for node in ast.walk(init):
-        if isinstance(node, ast.Assign):
-            for tgt in node.targets:
-                if (
-                    isinstance(tgt, ast.Attribute)
-                    and isinstance(tgt.value, ast.Name)
-                    and tgt.value.id == "self"
-                ):
-                    attrs.add(tgt.attr)
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Attribute):
-            if isinstance(node.target.value, ast.Name) and node.target.value.id == "self":
-                attrs.add(node.target.attr)
+    for owner in ast.walk(tree):
+        if not isinstance(owner, ast.ClassDef):
+            continue
+        if owner.name != class_name and class_name != "EybondLocalConfigFlow":
+            continue
+        for init in owner.body:
+            if not isinstance(init, (ast.FunctionDef, ast.AsyncFunctionDef)) or init.name != "__init__":
+                continue
+            for node in ast.walk(init):
+                if isinstance(node, ast.Assign):
+                    for tgt in node.targets:
+                        if (
+                            isinstance(tgt, ast.Attribute)
+                            and isinstance(tgt.value, ast.Name)
+                            and tgt.value.id == "self"
+                        ):
+                            attrs.add(tgt.attr)
+                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Attribute):
+                    if isinstance(node.target.value, ast.Name) and node.target.value.id == "self":
+                        attrs.add(node.target.attr)
     return attrs
 
 
 class AdmissionTransactionGuards(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.cf = _tree(CONFIG_FLOW)
+        cls.cf = ast.Module(
+            body=[
+                node
+                for path in CONFIG_LIFECYCLE
+                for node in _tree(path).body
+            ],
+            type_ignores=[],
+        )
         cls.txn = _tree(TRANSACTION)
 
     def test_config_flow_constructs_no_verifier_channel_or_probe(self):

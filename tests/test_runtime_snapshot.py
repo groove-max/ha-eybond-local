@@ -19,6 +19,25 @@ from custom_components.eybond_local.models import (
 
 
 class RuntimeSnapshotCollectorMetadataTests(unittest.TestCase):
+    @staticmethod
+    def _coordinator_sources() -> tuple[str, ...]:
+        runtime_dir = REPO_ROOT / "custom_components/eybond_local/runtime"
+        return tuple(
+            path.read_text(encoding="utf-8")
+            for path in sorted(runtime_dir.glob("coordinator*.py"))
+        )
+
+    @classmethod
+    def _coordinator_method(cls, method_name: str) -> ast.AST:
+        for source in cls._coordinator_sources():
+            for node in ast.walk(ast.parse(source)):
+                if (
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == method_name
+                ):
+                    return node
+        raise AssertionError(f"coordinator method not found: {method_name}")
+
     def test_cloud_profile_constructor_is_strict_and_key_owns_metadata(self) -> None:
         profile = CollectorCloudProfile(
             key="valuecloud_at",
@@ -140,11 +159,7 @@ class RuntimeSnapshotCollectorMetadataTests(unittest.TestCase):
         )
 
     def test_runtime_endpoint_writers_use_the_snapshot_boundary(self) -> None:
-        coordinator_path = (
-            REPO_ROOT
-            / "custom_components/eybond_local/runtime/coordinator.py"
-        )
-        coordinator_source = coordinator_path.read_text(encoding="utf-8")
+        coordinator_source = "\n".join(self._coordinator_sources())
         self.assertNotIn(
             'snapshot.values["collector_server_endpoint"] =',
             coordinator_source,
@@ -158,19 +173,7 @@ class RuntimeSnapshotCollectorMetadataTests(unittest.TestCase):
             coordinator_source,
         )
 
-        coordinator_tree = ast.parse(coordinator_source)
-        coordinator_class = next(
-            node
-            for node in coordinator_tree.body
-            if isinstance(node, ast.ClassDef)
-            and node.name == "EybondLocalCoordinator"
-        )
-        publisher = next(
-            node
-            for node in coordinator_class.body
-            if isinstance(node, ast.FunctionDef)
-            and node.name == "_publish_snapshot_values"
-        )
+        publisher = self._coordinator_method("_publish_snapshot_values")
         publisher_calls = {
             node.func.attr
             for node in ast.walk(publisher)
@@ -179,12 +182,12 @@ class RuntimeSnapshotCollectorMetadataTests(unittest.TestCase):
         }
         self.assertIn("set_collector_server_endpoint", publisher_calls)
 
-        hub_path = REPO_ROOT / "custom_components/eybond_local/runtime/hub.py"
+        hub_path = REPO_ROOT / "custom_components/eybond_local/runtime/hub_snapshot.py"
         hub_tree = ast.parse(hub_path.read_text(encoding="utf-8"))
         hub_class = next(
             node
             for node in hub_tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "EybondHub"
+            if isinstance(node, ast.ClassDef) and node.name == "HubSnapshotMixin"
         )
         snapshot_builder = next(
             node
@@ -200,9 +203,7 @@ class RuntimeSnapshotCollectorMetadataTests(unittest.TestCase):
         self.assertIn("set_collector_server_endpoint", builder_calls)
 
     def test_cloud_profile_projection_never_splits_fields_in_coordinator(self) -> None:
-        coordinator_source = (
-            REPO_ROOT / "custom_components/eybond_local/runtime/coordinator.py"
-        ).read_text(encoding="utf-8")
+        coordinator_source = "\n".join(self._coordinator_sources())
         for key in (
             "collector_cloud_profile_key",
             "collector_cloud_profile_label",

@@ -1168,7 +1168,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         key = ("127.0.0.1", port)
 
         with patch(
-            "custom_components.eybond_local.collector.transport.asyncio.start_server",
+            "custom_components.eybond_local.collector.transport_listener.asyncio.start_server",
             new=AsyncMock(side_effect=OSError("could not bind on any address")),
         ):
             with self.assertRaises(CollectorListenerBindError):
@@ -3738,7 +3738,7 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await connection.wait_until_connected(1.0))
 
         with patch(
-            "custom_components.eybond_local.collector.transport._WRITER_CLOSE_TIMEOUT",
+            "custom_components.eybond_local.collector.transport_common._WRITER_CLOSE_TIMEOUT",
             0.05,
         ):
             reader.feed_eof()

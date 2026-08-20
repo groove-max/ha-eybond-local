@@ -33,6 +33,27 @@ def _session(session_id, pn, *, peer_ip="203.0.113.10", source="at_dtupn", state
     }
 
 
+def _simulate_migration(
+    data: dict[str, object],
+    options: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Compose the production migration decisions without adding a runtime API."""
+
+    options = options or {}
+    correction = cp.correct_migrated_connection_strategy(data, options)
+    strategy = correction or cp.resolve_connection_strategy(data, options)
+    policy = cp.resolve_endpoint_control_policy(data, options)
+    result: dict[str, object] = {
+        C.CONF_CONNECTION_STRATEGY: strategy,
+        C.CONF_ENDPOINT_CONTROL_POLICY: policy,
+        C.CONF_PROXY_ENABLED: cp.resolve_proxy_enabled(data, options),
+        "may_send_callback_trigger": cp.may_send_callback_trigger(strategy),
+        "may_auto_manage_endpoint": cp.may_auto_manage_endpoint(policy),
+    }
+    result.update(cp.migration_diagnostics(data, options))
+    return result
+
+
 class ConnectionPolicyInvariantTests(unittest.TestCase):
     def test_empty_entry_defaults_to_inbound_external_proxy_off(self) -> None:
         self.assertEqual(cp.resolve_connection_strategy({}, {}), C.CONNECTION_STRATEGY_INBOUND)
@@ -652,6 +673,10 @@ class CanonicalConnectionStrategyOwnerTests(unittest.TestCase):
     shadowed a successful HA-only / Cloud+HA action.
     """
 
+    def test_policy_module_has_no_test_only_simulation_surface(self) -> None:
+        self.assertFalse(hasattr(cp, "entry_declares_connection_strategy"))
+        self.assertFalse(hasattr(cp, "simulate_migration"))
+
     def test_data_is_authoritative_over_stale_options(self) -> None:
         # The exact old bug: a Cloud+HA action wrote callback_on_demand into data
         # while a stale options copy still said inbound. data must win.
@@ -669,71 +694,6 @@ class CanonicalConnectionStrategyOwnerTests(unittest.TestCase):
                 {}, {C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND}
             ),
             C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
-        )
-
-    def test_entry_declares_connection_strategy_truth_table(self) -> None:
-        # CP2A: the operation-mode projection asks whether an entry carries an
-        # EXPLICIT canonical strategy. This helper never falls back to
-        # derivation, so a stale legacy operation mode can never masquerade as a
-        # declared strategy.
-        self.assertTrue(
-            cp.entry_declares_connection_strategy(
-                {C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_INBOUND}, {}
-            )
-        )
-        # Declared only in options (pre-migration fallback) still counts.
-        self.assertTrue(
-            cp.entry_declares_connection_strategy(
-                {}, {C.CONF_CONNECTION_STRATEGY: C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND}
-            )
-        )
-        # No strategy anywhere -> a legacy entry, not a declaration.
-        self.assertFalse(cp.entry_declares_connection_strategy({}, {}))
-        # An invalid strategy value is NOT a declaration (no derivation fallback).
-        self.assertFalse(
-            cp.entry_declares_connection_strategy(
-                {C.CONF_CONNECTION_STRATEGY: "nonsense"}, {}
-            )
-        )
-        # A legacy operation mode alone is NOT a declared strategy.
-        self.assertFalse(
-            cp.entry_declares_connection_strategy(
-                {C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY}, {}
-            )
-        )
-
-    def test_entry_declares_strategy_is_strict_and_data_fail_closed(self) -> None:
-        class StrategyDuck:
-            def __str__(self) -> str:
-                return C.CONNECTION_STRATEGY_INBOUND
-
-        class StrategyString(str):
-            pass
-
-        for value in (
-            StrategyDuck(),
-            StrategyString(C.CONNECTION_STRATEGY_INBOUND),
-            f" {C.CONNECTION_STRATEGY_INBOUND}",
-            f"{C.CONNECTION_STRATEGY_INBOUND} ",
-            "unknown",
-            1,
-        ):
-            self.assertFalse(
-                cp.entry_declares_connection_strategy(
-                    {C.CONF_CONNECTION_STRATEGY: value}, {}
-                ),
-                msg=repr(value),
-            )
-
-        # A present malformed canonical field blocks a stale options fallback.
-        self.assertFalse(
-            cp.entry_declares_connection_strategy(
-                {C.CONF_CONNECTION_STRATEGY: "unknown"},
-                {
-                    C.CONF_CONNECTION_STRATEGY:
-                    C.CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
-                },
-            )
         )
 
     def test_legacy_resolver_reproduces_old_options_first_semantics(self) -> None:
@@ -890,7 +850,7 @@ class MigrationMatrixTests(unittest.TestCase):
 
     # A. Factory EyeBond, cloud endpoint -> callback_on_demand + external.
     def test_A_factory_cloud_ha_maps_to_callback_on_demand_external(self) -> None:
-        result = cp.simulate_migration(
+        result = _simulate_migration(
             {
                 C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_CLOUD_AND_HA,
                 # A stale callback_listener onboarding artifact must NOT force inbound.
@@ -909,7 +869,7 @@ class MigrationMatrixTests(unittest.TestCase):
 
     # B. Factory HA-only with a real integration write -> inbound + integration_managed.
     def test_B_ha_only_written_endpoint_maps_to_inbound_integration_managed(self) -> None:
-        result = cp.simulate_migration(
+        result = _simulate_migration(
             {
                 C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY,
                 C.CONF_ENDPOINT_WRITTEN_VALUE: "192.168.1.50,18899,TCP",
@@ -927,7 +887,7 @@ class MigrationMatrixTests(unittest.TestCase):
 
     # B'. Factory HA-only without write provenance -> inbound + external.
     def test_B_ha_only_without_write_provenance_stays_external(self) -> None:
-        result = cp.simulate_migration(
+        result = _simulate_migration(
             {C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY}, {}
         )
         self.assertEqual(
@@ -939,7 +899,7 @@ class MigrationMatrixTests(unittest.TestCase):
 
     # C. ESP/BK community collector with HA endpoint -> inbound + external, no trigger.
     def test_C_esp_collector_ha_endpoint_maps_to_inbound_external_no_trigger(self) -> None:
-        result = cp.simulate_migration(
+        result = _simulate_migration(
             {
                 # ESP/ha_only_required collectors persist operation_mode=HA_ONLY.
                 C.CONF_COLLECTOR_OPERATION_MODE: C.COLLECTOR_OPERATION_HA_ONLY,
@@ -1000,7 +960,7 @@ class MigrationMatrixTests(unittest.TestCase):
     # Observed endpoint provenance does NOT imply integration_managed.
     def test_observed_endpoint_source_does_not_set_integration_managed(self) -> None:
         for observed_source in ("runtime_observed", "collector_registry", "smartess_cloud_diagnostics"):
-            result = cp.simulate_migration(
+            result = _simulate_migration(
                 {
                     C.CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT: "some.cloud.example,18899,TCP",
                     C.CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE: observed_source,
@@ -1196,7 +1156,7 @@ class OfflinePnLessCallbackMigrationTests(unittest.TestCase):
         self.assertIsNone(cp.correct_migrated_connection_strategy(data, {}))
         # The explicit strategy is preserved end-to-end.
         self.assertEqual(
-            cp.simulate_migration(data, {})[C.CONF_CONNECTION_STRATEGY],
+            _simulate_migration(data, {})[C.CONF_CONNECTION_STRATEGY],
             C.CONNECTION_STRATEGY_INBOUND,
         )
 

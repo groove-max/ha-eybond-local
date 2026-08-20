@@ -364,13 +364,24 @@ class ShadowLearningRuntimeArchitectureTests(unittest.TestCase):
         self.assertEqual(violations, [])
 
     def test_shadow_handler_is_not_exposed_to_config_flow(self) -> None:
-        source = (PRODUCTION_ROOT / "config_flow.py").read_text(encoding="utf-8")
+        onboarding_source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(PRODUCTION_ROOT.glob("config_*.py"))
+        )
+        options_source = (PRODUCTION_ROOT / "options_shadow_runtime.py").read_text(
+            encoding="utf-8"
+        )
+        lifecycle_source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(PRODUCTION_ROOT.glob("options_*.py"))
+        )
+        source = onboarding_source + "\n" + lifecycle_source
 
         self.assertNotIn("_shadow_learning_observation_source", source)
         self.assertNotIn("_shadow_learning_handler", source)
         self.assertNotIn("._link_manager", source)
-        self.assertIn("ShadowLearningRuntimeFacade", source)
-        self.assertIn("_shadow_learning_runtime", source)
+        self.assertIn("ShadowLearningRuntimeFacade", options_source)
+        self.assertIn("_shadow_learning_runtime", options_source)
 
     def test_public_observation_port_exists_at_each_runtime_layer(self) -> None:
         required_methods = {
@@ -382,8 +393,14 @@ class ShadowLearningRuntimeArchitectureTests(unittest.TestCase):
         }
         files_and_classes = (
             (PRODUCTION_ROOT / "runtime" / "manager.py", "RuntimeManager"),
-            (PRODUCTION_ROOT / "runtime" / "link.py", "EybondRuntimeLinkManager"),
-            (PRODUCTION_ROOT / "runtime" / "hub.py", "EybondHub"),
+            (
+                PRODUCTION_ROOT / "runtime" / "link_cloud_routes.py",
+                "LinkCloudRoutesMixin",
+            ),
+            (
+                PRODUCTION_ROOT / "runtime" / "hub_lifecycle.py",
+                "HubLifecycleMixin",
+            ),
         )
 
         for path, class_name in files_and_classes:
@@ -403,9 +420,10 @@ class ShadowLearningRuntimeArchitectureTests(unittest.TestCase):
                 f"{class_name} missing {sorted(required_methods - defined)}",
             )
 
-        coordinator_source = (
-            PRODUCTION_ROOT / "runtime" / "coordinator.py"
-        ).read_text(encoding="utf-8")
+        coordinator_source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((PRODUCTION_ROOT / "runtime").glob("coordinator*.py"))
+        )
         self.assertIn("def shadow_learning_runtime(", coordinator_source)
         for method_name in required_methods:
             self.assertNotIn(f"def {method_name}(", coordinator_source)

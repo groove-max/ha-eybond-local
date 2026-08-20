@@ -112,25 +112,27 @@ class DiagnosticProjectionArchitectureTests(unittest.TestCase):
         self.assertNotIn("runtime.coordinator", projection_source)
         self.assertNotIn("config_flow", projection_source)
 
-        coordinator_path = (
-            REPO_ROOT / "custom_components/eybond_local/runtime/coordinator.py"
-        )
-        coordinator_source = coordinator_path.read_text(encoding="utf-8")
-        coordinator_tree = ast.parse(coordinator_source)
-        coordinator = next(
-            node
-            for node in coordinator_tree.body
-            if isinstance(node, ast.ClassDef)
-            and node.name == "EybondLocalCoordinator"
-        )
-        method_names = {
-            node.name
-            for node in coordinator.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
+        runtime_dir = REPO_ROOT / "custom_components/eybond_local/runtime"
+        coordinator_sources = [
+            path.read_text(encoding="utf-8")
+            for path in sorted(runtime_dir.glob("coordinator*.py"))
+        ]
+        method_names: set[str] = set()
+        for source in coordinator_sources:
+            for node in ast.parse(source).body:
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                method_names.update(
+                    method.name
+                    for method in node.body
+                    if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+                )
         self.assertNotIn("_diagnostic_runtime_debug", method_names)
         self.assertGreaterEqual(
-            coordinator_source.count("build_runtime_transport_debug("),
+            sum(
+                source.count("build_runtime_transport_debug(")
+                for source in coordinator_sources
+            ),
             2,
         )
 

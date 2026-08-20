@@ -704,7 +704,7 @@ def test_repair_flow_decision_path_has_no_framed_only_branch() -> None:
     import ast
     import inspect
 
-    from custom_components.eybond_local import config_flow
+    from custom_components.eybond_local import options_strategy
     from custom_components.eybond_local.connection import strategy_transition_repair
     from custom_components.eybond_local.connection import callback_matching
 
@@ -799,7 +799,7 @@ def test_repair_flow_decision_path_has_no_framed_only_branch() -> None:
             },
         ),
         (
-            config_flow,
+                options_strategy,
             {
                 "async_step_strategy_transition_repair",
                 "async_step_strategy_transition_repair_progress",

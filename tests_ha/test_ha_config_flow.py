@@ -371,7 +371,7 @@ async def test_terminal_create_hands_prepared_claim_to_real_entry_setup(
     )
     entry.add_to_hass(hass)
     with patch(
-        "custom_components.eybond_local.runtime.link._default_local_ip",
+        "custom_components.eybond_local.runtime.link_common._default_local_ip",
         return_value=SYNTHETIC_SERVER_IP,
     ):
         assert await hass.config_entries.async_setup(entry.entry_id)

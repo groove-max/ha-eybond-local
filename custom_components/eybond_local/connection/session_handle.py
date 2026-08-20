@@ -47,13 +47,6 @@ ADAPTER_PROXY_FRAMED_CLOUD = "framed_cloud_proxy"
 ADAPTER_PROXY_RAW_TCP = "raw_tcp_proxy"
 ADAPTER_NONE = "none"
 
-# Backwards-compatible aliases used by older tests/callers. Keep them as aliases
-# of the new explicit adapter roles, not as separate concepts.
-ADAPTER_FRAMED_FORWARD = ADAPTER_INVERTER_FRAMED_FC4
-ADAPTER_FRAMED_COLLECTOR_COMMANDS = ADAPTER_COLLECTOR_FRAMED_COMMANDS
-ADAPTER_AT_COMMANDS = ADAPTER_COLLECTOR_AT_COMMANDS
-ADAPTER_RAW_PASSTHROUGH = ADAPTER_INVERTER_RAW_PASSTHROUGH
-
 # Negotiated live wire values.
 WIRE_FRAMED = "eybond_framed"
 WIRE_AT_TEXT = "at_text"
@@ -113,12 +106,6 @@ class SessionHandle:
     state: str = ""
 
     @property
-    def wire(self) -> str:
-        """Backward-compatible negotiated wire value."""
-
-        return self.wire_framing
-
-    @property
     def payload_wire(self) -> str:
         """Return the live wire the payload must ride."""
 
@@ -134,12 +121,6 @@ class SessionHandle:
         """
 
         return _TRANSPORT_WIRE_BY_WIRE_FRAMING.get(self.wire_framing, "")
-
-    @property
-    def identity_source(self) -> str:
-        """Backward-compatible primary identity source."""
-
-        return next(iter(sorted(self.identity_sources)), "")
 
     @property
     def available_adapters(self) -> frozenset[str]:
@@ -384,22 +365,6 @@ def negotiate_wire_result(
         return protocol_wire, ""
 
     return shape_wire, ""
-
-
-def negotiate_wire(
-    *,
-    state: object = "",
-    protocol_shape: object = "",
-    session_protocol: object = "",
-) -> str:
-    """Backward-compatible wire negotiation helper."""
-
-    wire, _conflict = negotiate_wire_result(
-        state=state,
-        protocol_shape=protocol_shape,
-        session_protocol=session_protocol,
-    )
-    return wire
 
 
 def negotiate_session_adapters(observed: Mapping[str, object] | None) -> SessionHandle:

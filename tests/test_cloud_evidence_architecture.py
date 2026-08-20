@@ -51,19 +51,37 @@ from custom_components.eybond_local.support.cloud_evidence_providers import (  #
 
 _CC = REPO_ROOT / "custom_components" / "eybond_local"
 _COORDINATOR = _CC / "runtime" / "coordinator.py"
+_COORDINATOR_LIFECYCLE = (
+    _COORDINATOR,
+    *sorted((_CC / "runtime").glob("coordinator_*.py")),
+)
+_COORDINATOR_SUPPORT = _CC / "runtime" / "coordinator_support.py"
 _PROVIDERS = _CC / "support" / "cloud_evidence_providers.py"
 _CONST = _CC / "const.py"
-_LINK = _CC / "runtime" / "link.py"
 _CONFIG_FLOW = _CC / "config_flow.py"
+_CONFIG_LIFECYCLE = tuple(sorted(_CC.glob("config_*.py")))
+_OPTIONS_SHADOW_RUN = _CC / "options_shadow_run.py"
+_OPTIONS_SHADOW_RUNTIME = _CC / "options_shadow_runtime.py"
+_OPTIONS_LIFECYCLE = tuple(sorted(_CC.glob("options_*.py")))
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _coordinator_source() -> str:
+    return "\n".join(_read(path) for path in _COORDINATOR_LIFECYCLE)
+
+
+def _coordinator_identifiers() -> set[str]:
+    return set().union(
+        *(_code_identifiers(_read(path)) for path in _COORDINATOR_LIFECYCLE)
+    )
+
+
 class CoordinatorOwnershipGuardTests(unittest.TestCase):
     def test_coordinator_imports_no_provider_http_clients(self) -> None:
-        source = _read(_COORDINATOR)
+        source = _coordinator_source()
         for token in ("smartess_cloud", "valuecloud_cloud"):
             self.assertNotIn(
                 f"import {token}", source, msg=f"coordinator must not import {token}"
@@ -71,7 +89,7 @@ class CoordinatorOwnershipGuardTests(unittest.TestCase):
             self.assertNotIn(f".{token} import", source)
 
     def test_coordinator_builds_no_provider_requests_or_endpoints(self) -> None:
-        identifiers = _code_identifiers(_read(_COORDINATOR))
+        identifiers = _coordinator_identifiers()
         for token in (
             "login_with_password",
             "fetch_device_bundle_for_collector",
@@ -88,7 +106,7 @@ class CoordinatorOwnershipGuardTests(unittest.TestCase):
             )
 
     def test_coordinator_resolves_no_provider_or_smg_draft_policy(self) -> None:
-        identifiers = _code_identifiers(_read(_COORDINATOR))
+        identifiers = _coordinator_identifiers()
         for token in (
             "resolve_smartess_known_family_draft_plan",
             "create_smartess_known_family_draft",
@@ -100,15 +118,15 @@ class CoordinatorOwnershipGuardTests(unittest.TestCase):
             )
         # The model-family serial rule moved to the driver layer: the coordinator
         # consumes the neutral driver-dispatched answer, never the literal.
-        self.assertNotIn('"smartess_0925"', _read(_COORDINATOR))
+        self.assertNotIn('"smartess_0925"', _coordinator_source())
         self.assertIn("serial_is_stable", identifiers)
 
     def test_coordinator_hardcodes_no_provider_allow_list(self) -> None:
-        source = _read(_COORDINATOR)
+        source = _coordinator_source()
         # The duplicated ``{"smartess", "valuecloud"}`` allow-list is gone; the
         # registry answers "is this provider supported".
         self.assertNotIn('"smartess",\n            "valuecloud"', source)
-        self.assertIn("cloud_evidence_provider_supported", _code_identifiers(source))
+        self.assertIn("cloud_evidence_provider_supported", _coordinator_identifiers())
 
 
 class ConfigFlowProviderBoundaryGuardTests(unittest.TestCase):
@@ -121,7 +139,9 @@ class ConfigFlowProviderBoundaryGuardTests(unittest.TestCase):
     """
 
     def test_config_flow_imports_no_provider_http_client(self) -> None:
-        source = _read(_CONFIG_FLOW)
+        source = "\n".join(
+            _read(path) for path in (*_CONFIG_LIFECYCLE, *_OPTIONS_LIFECYCLE)
+        )
         for token in (
             "from .smartess_cloud import",
             "import smartess_cloud",
@@ -131,7 +151,12 @@ class ConfigFlowProviderBoundaryGuardTests(unittest.TestCase):
             self.assertNotIn(token, source, msg=f"config_flow must not import {token!r}")
 
     def test_config_flow_constructs_no_provider_requests(self) -> None:
-        identifiers = _code_identifiers(_read(_CONFIG_FLOW))
+        identifiers = set().union(
+            *(
+                _code_identifiers(_read(path))
+                for path in (*_CONFIG_LIFECYCLE, *_OPTIONS_LIFECYCLE)
+            )
+        )
         for token in (
             "login_with_password",
             "fetch_device_bundle_for_collector",
@@ -152,7 +177,9 @@ class ConfigFlowProviderBoundaryGuardTests(unittest.TestCase):
             )
 
     def test_config_flow_parses_no_raw_provider_payload(self) -> None:
-        source = _read(_CONFIG_FLOW)
+        source = "\n".join(
+            _read(path) for path in (*_CONFIG_LIFECYCLE, *_OPTIONS_LIFECYCLE)
+        )
         for helper in (
             "_smartess_cloud_bundle_payload",
             "_smartess_cloud_device_preview",
@@ -164,13 +191,16 @@ class ConfigFlowProviderBoundaryGuardTests(unittest.TestCase):
             self.assertNotIn(helper, source, msg=f"config_flow must not parse payloads via {helper}")
 
     def test_config_flow_uses_the_neutral_contracts(self) -> None:
-        identifiers = _code_identifiers(_read(_CONFIG_FLOW))
-        self.assertIn("resolve_cloud_evidence_provider", identifiers)
-        self.assertIn("build_onboarding_assist", identifiers)
-        self.assertIn("control_discovery_runner", identifiers)
+        config_identifiers = set().union(
+            *(_code_identifiers(_read(path)) for path in _CONFIG_LIFECYCLE)
+        )
+        options_identifiers = _code_identifiers(_read(_OPTIONS_SHADOW_RUN))
+        self.assertIn("resolve_cloud_evidence_provider", config_identifiers)
+        self.assertIn("build_onboarding_assist", config_identifiers)
+        self.assertIn("control_discovery_runner", options_identifiers)
 
     def test_control_discovery_provider_has_no_family_heuristic_or_default(self) -> None:
-        tree = ast.parse(_read(_CONFIG_FLOW))
+        tree = ast.parse(_read(_OPTIONS_SHADOW_RUNTIME))
         method = next(
             node
             for node in ast.walk(tree)
@@ -226,7 +256,7 @@ class NoUnscopedEvidenceReadGuardTests(unittest.TestCase):
     def test_disk_loader_is_reachable_only_through_executor_cache_warm(self) -> None:
         """No synchronous UI/property path may reach provider.load_latest()."""
 
-        source = _read(_COORDINATOR)
+        source = _read(_COORDINATOR_SUPPORT)
         tree = ast.parse(source)
         callers: list[str] = []
 

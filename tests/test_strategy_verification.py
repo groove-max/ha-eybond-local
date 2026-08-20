@@ -1105,17 +1105,17 @@ class ObservedSessionRestartChannelTests(unittest.TestCase):
 class VerifierArchitectureGuardTests(unittest.TestCase):
     """The verifier stays inside its transport/management boundary."""
 
-    _MODULE = (
+    _MODULE_DIR = (
         REPO_ROOT
         / "custom_components"
         / "eybond_local"
         / "connection"
         / "recovery"
-        / "verification.py"
     )
+    _MODULES = tuple(sorted(_MODULE_DIR.glob("verification*.py")))
 
     def _source(self) -> str:
-        return self._MODULE.read_text(encoding="utf-8")
+        return "\n".join(path.read_text(encoding="utf-8") for path in self._MODULES)
 
     def _names(self) -> set[str]:
         import ast

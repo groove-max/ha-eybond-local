@@ -69,19 +69,12 @@ def _sample_raw_capture() -> dict[str, object]:
 
 class ShadowLearningBackendTests(unittest.TestCase):
     def test_coordinator_exposes_shadow_learning_lifecycle_methods(self) -> None:
-        coordinator_path = REPO_ROOT / "custom_components/eybond_local/runtime/coordinator.py"
-        tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
-
-        class_node = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "EybondLocalCoordinator"
-        )
-        method_names = {
-            node.name
-            for node in class_node.body
-            if isinstance(node, ast.AsyncFunctionDef)
-        }
+        runtime_dir = REPO_ROOT / "custom_components/eybond_local/runtime"
+        method_names: set[str] = set()
+        for path in sorted(runtime_dir.glob("coordinator*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.AsyncFunctionDef):
+                    method_names.add(node.name)
 
         self.assertIn("async_start_shadow_learning", method_names)
         self.assertIn("async_stop_shadow_learning", method_names)
@@ -756,8 +749,8 @@ class ShadowLearningBackendTests(unittest.TestCase):
         self.assertFalse(blockers)
 
         async def _run() -> None:
-            with patch("custom_components.eybond_local.runtime.link.InProcessFailClosedShadowProxyHandler", _Handler), patch(
-                "custom_components.eybond_local.runtime.link.SharedProxyCaptureRoute",
+            with patch("custom_components.eybond_local.runtime.link_cloud_routes.InProcessFailClosedShadowProxyHandler", _Handler), patch(
+                "custom_components.eybond_local.runtime.link_cloud_routes.SharedProxyCaptureRoute",
                 _Route,
             ):
                 await manager.async_start_shadow_learning_route(

@@ -538,7 +538,7 @@ class TerminalArchitectureGuardTests(unittest.TestCase):
             msg="only the model and the terminal boundary may write the contract",
         )
 
-    def test_callback_proof_builders_have_exactly_two_callers(self) -> None:
+    def test_callback_proof_builders_have_only_validation_and_terminal_callers(self) -> None:
         callers = []
         for path in sorted(self._PACKAGE.rglob("*.py")):
             if path.name == "recovery_contract.py":
@@ -547,8 +547,8 @@ class TerminalArchitectureGuardTests(unittest.TestCase):
                 callers.append(path.name)
         self.assertEqual(
             sorted(set(callers)),
-            ["terminal.py", "verification.py"],
-            msg="terminal merge + verifier pre-validation only",
+            ["terminal.py", "verification_engine.py", "verification_models.py"],
+            msg="terminal merge + outcome/engine pre-validation only",
         )
 
     def test_terminal_module_forbidden_vocabulary(self) -> None:
@@ -576,7 +576,7 @@ class TerminalArchitectureGuardTests(unittest.TestCase):
         )
 
     def test_flow_terminal_coordinator_never_looks_owners_up_by_pn(self) -> None:
-        config_flow = (self._PACKAGE / "config_flow.py").read_text(encoding="utf-8")
+        config_flow = (self._PACKAGE / "config_entry.py").read_text(encoding="utf-8")
         # The coordinator region: from the coordinator def to the next method.
         start = config_flow.index("def _create_entry_with_handoff")
         end = config_flow.index("def ", start + 10)
@@ -601,7 +601,11 @@ class TerminalArchitectureGuardTests(unittest.TestCase):
         self.assertNotIn("owner_for_pn", transaction)
         self.assertIn("verify_prepared_handoff", transaction)
         self.assertIn("prepared_handoff_identity", transaction)
-        self.assertNotIn("_LegacyCallbackContinuation", config_flow)
+        lifecycle = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(self._PACKAGE.glob("config_*.py"))
+        )
+        self.assertNotIn("_LegacyCallbackContinuation", lifecycle)
 
     def test_no_identity_outcome_to_contract_conversion_exists(self) -> None:
         # The only constructors accepting outcomes are the two classmethods,

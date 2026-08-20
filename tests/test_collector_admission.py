@@ -251,24 +251,28 @@ class CollectorAdmissionArchitectureGuards(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        path = (
+        package = (
             REPO_ROOT
             / "custom_components"
             / "eybond_local"
-            / "config_flow.py"
         )
-        cls.module_source = path.read_text(encoding="utf-8")
-        tree = ast.parse(cls.module_source)
+        sources = {
+            path: path.read_text(encoding="utf-8")
+            for path in sorted(package.glob("config_*.py"))
+        }
+        cls.module_source = "\n".join(sources.values())
         cls.method_source: dict[str, str] = {}
         cls.method_names: set = set()
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ClassDef) or node.name != "EybondLocalConfigFlow":
-                continue
-            for item in node.body:
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    cls.method_names.add(item.name)
-                    segment = ast.get_source_segment(cls.module_source, item)
-                    cls.method_source[item.name] = segment or ""
+        for source in sources.values():
+            tree = ast.parse(source)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        cls.method_names.add(item.name)
+                        segment = ast.get_source_segment(source, item)
+                        cls.method_source[item.name] = segment or ""
 
     def _method_source(self, name: str) -> str:
         return self.method_source[name]

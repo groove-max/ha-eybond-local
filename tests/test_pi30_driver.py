@@ -62,16 +62,15 @@ class _FakeTransport:
     async def wait_until_heartbeat(self, timeout: float) -> bool:
         return True
 
-    async def async_send_forward(
+    async def async_send_payload(
         self,
         payload: bytes,
         *,
-        devcode: int,
-        collector_addr: int,
+        route,
     ) -> bytes:
         command = payload[:-3].decode("ascii")
         self.commands.append(command)
-        key = (devcode, collector_addr, command)
+        key = (route.devcode, route.collector_addr, command)
         if key not in self._responses:
             delay = self._missing_delays.get(command, 0)
             if delay > 0:

@@ -54,6 +54,7 @@ from custom_components.eybond_local.collector.metadata import (  # noqa: E402
 
 _CC = REPO_ROOT / "custom_components" / "eybond_local"
 _HUB = _CC / "runtime" / "hub.py"
+_HUB_FAMILY = (_HUB, *sorted((_CC / "runtime").glob("hub_*.py")))
 _MANAGEMENT = _CC / "collector" / "management.py"
 _SERVICE = _CC / "runtime" / "collector_metadata.py"
 _READERS = _CC / "collector" / "metadata.py"
@@ -96,7 +97,7 @@ _FORBIDDEN_ROUTE_TOKENS = (
 
 class HubMetadataWireGuardTests(unittest.TestCase):
     def test_hub_holds_no_metadata_wire_tokens(self) -> None:
-        source = _read(_HUB)
+        source = "\n".join(_read(path) for path in _HUB_FAMILY)
         for token in _HUB_FORBIDDEN_METADATA_WIRE_TOKENS:
             self.assertNotIn(
                 token, source, msg=f"hub.py must not name metadata wire token {token!r}"

@@ -72,18 +72,18 @@ def _loopback_patches(integration, repair_mod=None, sv_mod=None, fast_policy=Non
     patches = [
         patch.object(integration, "PLATFORMS", ()),
         patch(
-            "custom_components.eybond_local.runtime.link._default_local_ip",
+            "custom_components.eybond_local.runtime.link_common._default_local_ip",
             return_value="127.0.0.1",
         ),
         patch(
-            "custom_components.eybond_local.config_flow._get_ipv4_interfaces",
+            "custom_components.eybond_local.network_interfaces.get_ipv4_interfaces",
             return_value=[{
                 "name": "lo", "ip": "127.0.0.1", "label": "lo",
                 "network": "127.0.0.0/8", "broadcast": "127.255.255.255",
             }],
         ),
         patch(
-            "custom_components.eybond_local.config_flow._get_local_ip",
+            "custom_components.eybond_local.network_interfaces.get_local_ip",
             return_value="127.0.0.1",
         ),
     ]
@@ -92,8 +92,24 @@ def _loopback_patches(integration, repair_mod=None, sv_mod=None, fast_policy=Non
             patch.object(repair_mod, "DEFAULT_ONBOARDING_TIMEOUT_POLICY", fast_policy)
         )
     if sv_mod is not None and fast_policy is not None:
-        patches.append(
-            patch.object(sv_mod, "DEFAULT_ONBOARDING_TIMEOUT_POLICY", fast_policy)
+        from custom_components.eybond_local.connection.recovery import (
+            verification_engine,
+            verification_transaction,
+        )
+
+        patches.extend(
+            (
+                patch.object(
+                    verification_engine,
+                    "DEFAULT_ONBOARDING_TIMEOUT_POLICY",
+                    fast_policy,
+                ),
+                patch.object(
+                    verification_transaction,
+                    "DEFAULT_ONBOARDING_TIMEOUT_POLICY",
+                    fast_policy,
+                ),
+            )
         )
     return patches
 

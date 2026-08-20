@@ -47,10 +47,10 @@ class _FakeTransport:
     async def wait_until_heartbeat(self, timeout: float) -> bool:
         return True
 
-    async def async_send_forward(self, payload: bytes, *, devcode: int, collector_addr: int) -> bytes:
+    async def async_send_payload(self, payload: bytes, *, route) -> bytes:
         command = payload[:-3].decode("ascii")
         self.commands.append(command)
-        key = (devcode, collector_addr, command)
+        key = (route.devcode, route.collector_addr, command)
         if key not in self._responses:
             raise asyncio.TimeoutError()
         return _frame(self._responses[key])

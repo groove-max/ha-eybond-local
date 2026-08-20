@@ -60,10 +60,13 @@ from custom_components.eybond_local.connection.session_handle import (
 
 _CC = REPO_ROOT / "custom_components" / "eybond_local"
 _HUB = _CC / "runtime" / "hub.py"
+_HUB_FAMILY = (_HUB, *sorted((_CC / "runtime").glob("hub_*.py")))
 _COORDINATOR = _CC / "runtime" / "coordinator.py"
+_COORDINATOR_FAMILY = (
+    _COORDINATOR,
+    *sorted((_CC / "runtime").glob("coordinator_*.py")),
+)
 _MANAGEMENT = _CC / "collector" / "management.py"
-_LINK = _CC / "runtime" / "link.py"
-
 # Collector-management ACTION wire knowledge that must live only in the adapter.
 _FORBIDDEN_WIRE_TOKENS = (
     "SmartEssLocalSession",
@@ -93,12 +96,12 @@ def _read(path: Path) -> str:
 
 class WireEncodingGuardTests(unittest.TestCase):
     def test_hub_holds_no_management_wire_tokens(self) -> None:
-        source = _read(_HUB)
+        source = "\n".join(_read(path) for path in _HUB_FAMILY)
         for token in _FORBIDDEN_WIRE_TOKENS:
             self.assertNotIn(token, source, msg=f"hub.py must not name wire token {token!r}")
 
     def test_coordinator_holds_no_management_wire_tokens(self) -> None:
-        source = _read(_COORDINATOR)
+        source = "\n".join(_read(path) for path in _COORDINATOR_FAMILY)
         for token in _FORBIDDEN_WIRE_TOKENS:
             self.assertNotIn(
                 token, source, msg=f"coordinator.py must not name wire token {token!r}"

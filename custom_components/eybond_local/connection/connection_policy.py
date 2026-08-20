@@ -193,44 +193,6 @@ def resolve_connection_strategy(
     return _derive_connection_strategy(data, options)
 
 
-def entry_declares_connection_strategy(
-    data: Mapping[str, Any],
-    options: Mapping[str, Any] | None = None,
-) -> bool:
-    """Return whether the entry carries an EXPLICIT canonical connection strategy.
-
-    True only when a valid ``CONF_CONNECTION_STRATEGY`` is present in ``data``
-    (the schema-v4 canonical owner) or, as a pre-migration fallback, in
-    ``options``. When False the entry predates the explicit strategy axis and
-    its transport must still be derived from the legacy operation-mode /
-    connection-mode heuristics (``_derive_connection_strategy``).
-
-    Callers use this to decide whether the operation mode is a READ-ONLY
-    projection of the strategy (True) or a legacy persisted value (False). It
-    never falls back to derivation, so a stale persisted operation mode can
-    never masquerade as a declared strategy.
-    """
-
-    options = options or {}
-
-    def _is_declared(value: object) -> bool:
-        return (
-            type(value) is str
-            and value == value.strip()
-            and value in CONNECTION_STRATEGIES
-        )
-
-    # A present canonical data field is authoritative even when malformed: it
-    # fails closed instead of allowing a stale options copy to masquerade as the
-    # declaration. Options are consulted only when the data field is genuinely
-    # absent (the pre-schema-v4 shape).
-    if CONF_CONNECTION_STRATEGY in data:
-        return _is_declared(data.get(CONF_CONNECTION_STRATEGY))
-    if CONF_CONNECTION_STRATEGY in options:
-        return _is_declared(options.get(CONF_CONNECTION_STRATEGY))
-    return False
-
-
 def legacy_effective_connection_strategy(
     data: Mapping[str, Any],
     options: Mapping[str, Any] | None = None,
@@ -623,32 +585,6 @@ def migration_diagnostics(
         "connection_strategy_source": strategy_source,
         "endpoint_control_policy_source": policy_source,
     }
-
-
-def simulate_migration(
-    data: Mapping[str, Any],
-    options: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Run derivation/correction on a (data, options) pair and return the decision.
-
-    A pure inspection helper for reviewing how a legacy entry maps to the explicit
-    axes. It never mutates state and never writes an endpoint -- use it to audit a
-    dumped config entry, and it backs the migration-matrix regression tests.
-    """
-
-    options = options or {}
-    correction = correct_migrated_connection_strategy(data, options)
-    strategy = correction if correction is not None else resolve_connection_strategy(data, options)
-    policy = resolve_endpoint_control_policy(data, options)
-    result: dict[str, Any] = {
-        CONF_CONNECTION_STRATEGY: strategy,
-        CONF_ENDPOINT_CONTROL_POLICY: policy,
-        CONF_PROXY_ENABLED: resolve_proxy_enabled(data, options),
-        "may_send_callback_trigger": may_send_callback_trigger(strategy),
-        "may_auto_manage_endpoint": may_auto_manage_endpoint(policy),
-    }
-    result.update(migration_diagnostics(data, options))
-    return result
 
 
 def entry_axis_diagnostics(

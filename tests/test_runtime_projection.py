@@ -162,18 +162,22 @@ class RuntimeSupportProjectionTests(unittest.TestCase):
 
 class RuntimeProjectionArchitectureTests(unittest.TestCase):
     def test_coordinator_delegates_and_does_not_redefine_projection_helpers(self) -> None:
-        path = REPO_ROOT / "custom_components/eybond_local/runtime/coordinator.py"
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        coordinator = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.ClassDef)
-            and node.name == "EybondLocalCoordinator"
-        )
-        method_names = {
-            node.name for node in coordinator.body if isinstance(node, ast.FunctionDef)
-        }
+        runtime_dir = REPO_ROOT / "custom_components/eybond_local/runtime"
+        sources = [
+            path.read_text(encoding="utf-8")
+            for path in sorted(runtime_dir.glob("coordinator*.py"))
+        ]
+        source = "\n".join(sources)
+        method_names: set[str] = set()
+        for module_source in sources:
+            for node in ast.parse(module_source).body:
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                method_names.update(
+                    method.name
+                    for method in node.body
+                    if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+                )
 
         self.assertTrue(
             all(

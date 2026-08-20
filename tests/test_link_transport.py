@@ -70,14 +70,14 @@ class LinkTransportTests(unittest.TestCase):
             EybondLinkRoute(devcode=0x0994, collector_addr=0x01),
         )
 
-    def test_async_send_payload_falls_back_to_legacy_forward_transport(self) -> None:
+    def test_async_send_payload_rejects_legacy_forward_only_transport(self) -> None:
         transport = _LegacyForwardTransport()
         route = EybondLinkRoute(devcode=0x0994, collector_addr=0x01)
 
-        response = asyncio.run(async_send_payload(transport, b"ping", route=route))
+        with self.assertRaisesRegex(TypeError, "unsupported_link_transport"):
+            asyncio.run(async_send_payload(transport, b"ping", route=route))
 
-        self.assertEqual(response, b"ok")
-        self.assertEqual(transport.calls, [(b"ping", 0x0994, 0x01)])
+        self.assertEqual(transport.calls, [])
 
     def test_async_send_payload_prefers_native_route_transport(self) -> None:
         transport = _NativeRouteTransport()

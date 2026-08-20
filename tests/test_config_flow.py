@@ -260,45 +260,54 @@ def _install_homeassistant_stubs() -> None:
 _install_homeassistant_stubs()
 
 
-import custom_components.eybond_local.config_flow as config_flow_module
+import custom_components.eybond_local.config_admission as config_admission_module
+import custom_components.eybond_local.config_ble as config_ble_module
+import custom_components.eybond_local.config_collector as config_collector_module
+import custom_components.eybond_local.config_common as config_common_module
+import custom_components.eybond_local.config_network as config_network_module
+import custom_components.eybond_local.config_scan as config_scan_module
 import custom_components.eybond_local.connection.admission_transaction as admission_transaction_module
+import custom_components.eybond_local.const as const_module
+import custom_components.eybond_local.options_flow as options_flow_module
+import custom_components.eybond_local.options_proxy as options_proxy_module
+import custom_components.eybond_local.options_shadow_review as options_shadow_review_module
+import custom_components.eybond_local.options_shadow_run as options_shadow_run_module
+import custom_components.eybond_local.options_shadow_runtime as options_shadow_runtime_module
+import custom_components.eybond_local.options_shared as options_shared_module
 import custom_components.eybond_local.support.cloud_control_discovery as cloud_control_discovery_module
-from custom_components.eybond_local.config_flow import (
+from custom_components.eybond_local.config_ble import (
     BLE_ACTION_APPLY,
     BLE_ACTION_RESCAN,
     BLE_ACTION_REFRESH_WIFI,
-    COLLECTOR_UART_ACTION_APPLY,
-    COLLECTOR_UART_ACTION_REFRESH,
-    COLLECTOR_WIFI_ACTION_APPLY,
-    COLLECTOR_WIFI_ACTION_REFRESH,
-    COLLECTOR_NETWORK_ALREADY_CONNECTED,
-    COLLECTOR_NETWORK_NEEDS_BLUETOOTH,
     CONF_BLE_ACTION,
-    CONF_COLLECTOR_UART_ACTION,
-    CONF_COLLECTOR_UART_BAUDRATE,
-    CONF_COLLECTOR_WIFI_ACTION,
-    CONF_COLLECTOR_NETWORK_STATUS,
-    CONF_CONFIRM_COLLECTOR_UART_APPLY,
-    CONF_CONFIRM_COLLECTOR_WIFI_APPLY,
-    CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE,
+)
+from custom_components.eybond_local.config_flow import EybondLocalConfigFlow
+from custom_components.eybond_local.config_scan import CONF_RESULT_KEY
+from custom_components.eybond_local.flow_presentation import (
     CONF_WIFI_PASSWORD,
     CONF_WIFI_SSID,
-    CONF_RESULT_KEY,
-    EybondLocalConfigFlow,
-    EybondLocalOptionsFlow,
-    SHADOW_LEARNING_ACTION_EXPORT_SUPPORT_ONLY,
-    SHADOW_LEARNING_ACTION_GENERATE_OVERLAY,
-    SHADOW_LEARNING_ACTION_REFRESH,
-    SHADOW_LEARNING_ACTION_RUN_LEARNING,
-    SHADOW_LEARNING_MODE_ENUM_SWEEP,
-    SHADOW_LEARNING_MODE_MANUAL,
-    SHADOW_LEARNING_MODE_SUPPORT_ONLY,
+    _flatten_sections,
+    _poll_interval_selector,
+)
+from custom_components.eybond_local.network_interfaces import (
+    get_ipv4_interfaces as _get_ipv4_interfaces,
+)
+from custom_components.eybond_local.options_diagnostics import (
+    CONF_SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE,
     SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_ARCHIVE_ONLY,
     SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_REFRESH,
     SUPPORT_ARCHIVE_SMARTESS_CLOUD_MODE_USE_SAVED,
-    _get_ipv4_interfaces,
-    _flatten_sections,
-    _poll_interval_selector,
+)
+from custom_components.eybond_local.options_flow import EybondLocalOptionsFlow
+from custom_components.eybond_local.options_runtime import (
+    COLLECTOR_UART_ACTION_APPLY,
+    COLLECTOR_WIFI_ACTION_APPLY,
+    COLLECTOR_WIFI_ACTION_REFRESH,
+    CONF_COLLECTOR_UART_ACTION,
+    CONF_COLLECTOR_UART_BAUDRATE,
+    CONF_COLLECTOR_WIFI_ACTION,
+    CONF_CONFIRM_COLLECTOR_UART_APPLY,
+    CONF_CONFIRM_COLLECTOR_WIFI_APPLY,
 )
 
 
@@ -789,7 +798,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._scan_progress_stage = "discovering"
 
         with patch(
-            "custom_components.eybond_local.config_flow.time.monotonic",
+            "custom_components.eybond_local.config_network.time.monotonic",
             return_value=112.0,
         ):
             result = await flow.async_step_scanning()
@@ -811,7 +820,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "custom_components.eybond_local.config_flow.subprocess.check_output",
+            "custom_components.eybond_local.network_interfaces.subprocess.check_output",
             side_effect=[subprocess.CalledProcessError(1, ["ip"]), output],
         ):
             interfaces = _get_ipv4_interfaces()
@@ -843,7 +852,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.2.50"}
 
         with patch(
-            "custom_components.eybond_local.config_flow._get_ipv4_interfaces",
+            "custom_components.eybond_local.network_interfaces.get_ipv4_interfaces",
             return_value=[
                 {
                     "name": "eth0",
@@ -854,7 +863,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 },
             ],
         ), patch(
-            "custom_components.eybond_local.config_flow._get_local_ip",
+            "custom_components.eybond_local.network_interfaces.get_local_ip",
             return_value="192.168.1.50",
         ):
             await flow._async_ensure_network_defaults()
@@ -878,7 +887,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         await flow.async_step_user()
 
         self.assertIn(
-            "_load_translation_bundle",
+            "load_translation_bundle",
             [getattr(func, "__name__", "") for func, _args in flow.hass.executor_job_calls],
         )
 
@@ -1022,7 +1031,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         menu_result = await flow.async_step_collector_network()
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(flow, "_async_discover_smartess_ble_candidates", new=AsyncMock(return_value=())):
             result = await flow.async_step_bluetooth_setup()
@@ -1038,7 +1047,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         menu_result = await flow.async_step_collector_network()
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(
                 return_value=types.SimpleNamespace(
                     available=False,
@@ -1071,7 +1080,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "homeassistant.components.bluetooth": bluetooth_module,
             },
         ), patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(
                 return_value=types.SimpleNamespace(
                     available=False,
@@ -1161,7 +1170,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = self._make_flow()
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=False)),
         ):
             result = await flow.async_step_bluetooth_setup(
@@ -1188,7 +1197,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -1239,10 +1248,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "homeassistant.components.bluetooth": bluetooth_module,
             },
         ), patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleScanner",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleScanner",
         ) as scanner_cls, patch.object(
             flow,
             "_async_scan_smartess_ble_wifi_networks",
@@ -1291,12 +1300,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "homeassistant.components.bluetooth": bluetooth_module,
             },
         ), patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleScanner",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleScanner",
         ) as scanner_cls, patch(
-            "custom_components.eybond_local.config_flow.asyncio.sleep",
+            "custom_components.eybond_local.config_ble.asyncio.sleep",
             new=AsyncMock(),
         ), patch.object(
             flow,
@@ -1338,10 +1347,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "homeassistant.components.bluetooth": bluetooth_module,
             },
         ), patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=False)),
         ), patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleScanner",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleScanner",
         ) as scanner_cls:
             result = await flow.async_step_bluetooth_setup()
 
@@ -1365,7 +1374,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -1411,7 +1420,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -1452,7 +1461,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -1500,7 +1509,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -1558,7 +1567,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -1591,7 +1600,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -1632,7 +1641,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -1660,13 +1669,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         session.disconnect = AsyncMock(return_value=None)
 
         with patch(
-            "custom_components.eybond_local.config_flow._BLE_CONNECT_TIMEOUT",
+            "custom_components.eybond_local.config_ble._BLE_CONNECT_TIMEOUT",
             0.001,
         ), patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
             return_value=sentinel.ble_link,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             return_value=session,
         ):
             with self.assertRaisesRegex(SmartEssBleError, "ble_wifi_scan_failed:timeout"):
@@ -1687,16 +1696,16 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         provisioner.scan_wifi_networks = AsyncMock(side_effect=wait_forever)
 
         with patch(
-            "custom_components.eybond_local.config_flow._BLE_WIFI_SCAN_TIMEOUT",
+            "custom_components.eybond_local.config_ble._BLE_WIFI_SCAN_TIMEOUT",
             0.001,
         ), patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
             return_value=sentinel.ble_link,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             return_value=session,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleProvisioner",
+            "custom_components.eybond_local.config_ble.SmartEssBleProvisioner",
             return_value=provisioner,
         ):
             with self.assertRaisesRegex(SmartEssBleError, "ble_wifi_scan_failed:timeout"):
@@ -1714,13 +1723,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         provisioner.scan_wifi_networks = AsyncMock(side_effect=SmartEssBleError("ble_notification_timeout"))
 
         with patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
             return_value=sentinel.ble_link,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             return_value=session,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleProvisioner",
+            "custom_components.eybond_local.config_ble.SmartEssBleProvisioner",
             return_value=provisioner,
         ), patch.object(
             flow,
@@ -1749,13 +1758,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
             return_value=sentinel.ble_link,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             return_value=session,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleProvisioner",
+            "custom_components.eybond_local.config_ble.SmartEssBleProvisioner",
             return_value=provisioner,
         ), patch.object(
             flow,
@@ -1798,13 +1807,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         discover = AsyncMock(return_value=(refreshed_candidate,))
 
         with patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
             side_effect=(sentinel.ble_link_first, sentinel.ble_link_second),
         ) as link_cls, patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             side_effect=(first_session, second_session),
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleProvisioner",
+            "custom_components.eybond_local.config_ble.SmartEssBleProvisioner",
             side_effect=(first_provisioner, second_provisioner),
         ), patch.object(
             flow,
@@ -1843,12 +1852,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "homeassistant.components.bluetooth": bluetooth_module,
             },
         ), patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
         ) as link_cls, patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             return_value=session,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleProvisioner",
+            "custom_components.eybond_local.config_ble.SmartEssBleProvisioner",
             return_value=provisioner,
         ):
             result = await flow._async_scan_smartess_ble_wifi_networks("AA:BB:CC:DD:EE:FF")
@@ -1879,12 +1888,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "homeassistant.components.bluetooth": bluetooth_module,
             },
         ), patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
         ) as link_cls, patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             return_value=session,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleProvisioner",
+            "custom_components.eybond_local.config_ble.SmartEssBleProvisioner",
             return_value=provisioner,
         ):
             await flow._async_scan_smartess_ble_wifi_networks(
@@ -1919,12 +1928,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "homeassistant.components.bluetooth": bluetooth_module,
             },
         ), patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
         ) as link_cls, patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             return_value=session,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleProvisioner",
+            "custom_components.eybond_local.config_ble.SmartEssBleProvisioner",
             return_value=provisioner,
         ):
             await flow._async_scan_smartess_ble_wifi_networks(
@@ -1956,12 +1965,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "homeassistant.components.bluetooth": bluetooth_module,
             },
         ), patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
         ) as link_cls, patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             return_value=session,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleProvisioner",
+            "custom_components.eybond_local.config_ble.SmartEssBleProvisioner",
             return_value=provisioner,
         ):
             await flow._async_scan_smartess_ble_wifi_networks(
@@ -1989,18 +1998,18 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch.object(
-            config_flow_module,
+            config_ble_module,
             "BleakSmartEssBleLink",
         ) as link_cls, patch.object(
-            config_flow_module.importlib,
+            config_ble_module.importlib,
             "import_module",
             side_effect=ImportError,
         ), patch.object(
-            config_flow_module,
+            config_ble_module,
             "SmartEssBleSession",
             return_value=session,
         ), patch.object(
-            config_flow_module,
+            config_ble_module,
             "SmartEssBleProvisioner",
             return_value=provisioner,
         ):
@@ -2024,16 +2033,16 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         provisioner.provision_wifi = AsyncMock(side_effect=wait_forever)
 
         with patch(
-            "custom_components.eybond_local.config_flow._BLE_PROVISION_TIMEOUT",
+            "custom_components.eybond_local.config_ble._BLE_PROVISION_TIMEOUT",
             0.001,
         ), patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
             return_value=sentinel.ble_link,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             return_value=session,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleProvisioner",
+            "custom_components.eybond_local.config_ble.SmartEssBleProvisioner",
             return_value=provisioner,
         ):
             with self.assertRaisesRegex(SmartEssBleError, "ble_provision_failed:timeout"):
@@ -2055,13 +2064,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         provisioner.provision_wifi = AsyncMock(side_effect=SmartEssBleError("ble_notification_timeout"))
 
         with patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
             return_value=sentinel.ble_link,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             return_value=session,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleProvisioner",
+            "custom_components.eybond_local.config_ble.SmartEssBleProvisioner",
             return_value=provisioner,
         ):
             with self.assertRaisesRegex(SmartEssBleError, "ble_provision_failed:notification_timeout"):
@@ -2086,13 +2095,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         provisioner.last_firmware_version = "8.50.8.18"
 
         with patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
             return_value=sentinel.ble_link,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             return_value=session,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleProvisioner",
+            "custom_components.eybond_local.config_ble.SmartEssBleProvisioner",
             return_value=provisioner,
         ):
             result = await flow._async_scan_smartess_ble_wifi_networks("AA:BB:CC:DD:EE:FF")
@@ -2127,13 +2136,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         provisioner.last_firmware_version = "8.50.8.18"
 
         with patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
             return_value=sentinel.ble_link,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             return_value=session,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleProvisioner",
+            "custom_components.eybond_local.config_ble.SmartEssBleProvisioner",
             return_value=provisioner,
         ):
             await flow._async_run_smartess_ble_bootstrap(
@@ -2188,13 +2197,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         provisioner.last_firmware_version = ""
 
         with patch(
-            "custom_components.eybond_local.config_flow.BleakSmartEssBleLink",
+            "custom_components.eybond_local.config_ble.BleakSmartEssBleLink",
             return_value=sentinel.ble_link,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleSession",
+            "custom_components.eybond_local.config_ble.SmartEssBleSession",
             return_value=session,
         ), patch(
-            "custom_components.eybond_local.config_flow.SmartEssBleProvisioner",
+            "custom_components.eybond_local.config_ble.SmartEssBleProvisioner",
             return_value=provisioner,
         ):
             await flow._async_run_smartess_ble_bootstrap(
@@ -2215,7 +2224,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = self._make_flow()
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -2234,7 +2243,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = self._make_flow()
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -2282,7 +2291,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = self._make_flow()
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -2338,7 +2347,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -2395,7 +2404,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -2433,7 +2442,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -2478,7 +2487,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -2535,7 +2544,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._auto_config = {"connection_type": "eybond", "server_ip": "192.168.1.50"}
 
         with patch(
-            "custom_components.eybond_local.config_flow.async_probe_ble_host_capability",
+            "custom_components.eybond_local.config_ble.async_probe_ble_host_capability",
             new=AsyncMock(return_value=types.SimpleNamespace(available=True)),
         ), patch.object(
             flow,
@@ -2975,21 +2984,21 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "custom_components.eybond_local.config_flow.SharedEybondTransport",
+                "custom_components.eybond_local.config_collector.SharedEybondTransport",
                 side_effect=AssertionError("passive confirm must not start payload transport"),
             ),
             patch(
-                "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
+                "custom_components.eybond_local.config_collector.SharedCollectorAtTransport",
                 side_effect=AssertionError("passive confirm must not start AT transport"),
             ),
             patch(
-                "custom_components.eybond_local.config_flow.query_runtime_collector_values",
+                "custom_components.eybond_local.config_collector.query_runtime_collector_values",
                 new=AsyncMock(
                     side_effect=AssertionError("passive confirm must not query FC values")
                 ),
             ),
             patch(
-                "custom_components.eybond_local.config_flow.query_runtime_collector_at_values",
+                "custom_components.eybond_local.config_collector.query_runtime_collector_at_values",
                 new=AsyncMock(
                     side_effect=AssertionError("passive confirm must not query AT values")
                 ),
@@ -3108,7 +3117,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._autodetect_results = {"0": selected_result}
         flow._selected_result = selected_result
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=object(),
         ) as create_manager:
             result = await flow.async_step_confirm()
@@ -3720,15 +3729,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "custom_components.eybond_local.config_flow.SharedEybondTransport",
+                "custom_components.eybond_local.config_collector.SharedEybondTransport",
                 _FakeTransport,
             ),
             patch(
-                "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
+                "custom_components.eybond_local.config_collector.SharedCollectorAtTransport",
                 _FakeTransport,
             ),
             patch(
-                "custom_components.eybond_local.config_flow.query_runtime_collector_values",
+                "custom_components.eybond_local.config_collector.query_runtime_collector_values",
                 new=AsyncMock(
                     return_value={
                         "collector_hardware_version": "esp-collector/0.1.2/ESP32",
@@ -3737,7 +3746,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch(
-                "custom_components.eybond_local.config_flow.query_runtime_collector_at_values",
+                "custom_components.eybond_local.config_collector.query_runtime_collector_at_values",
                 new=AsyncMock(
                     return_value={}
                 ),
@@ -3800,15 +3809,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "custom_components.eybond_local.config_flow.SharedEybondTransport",
+                "custom_components.eybond_local.config_collector.SharedEybondTransport",
                 _FakeTransport,
             ),
             patch(
-                "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
+                "custom_components.eybond_local.config_collector.SharedCollectorAtTransport",
                 _FakeTransport,
             ),
             patch(
-                "custom_components.eybond_local.config_flow.query_runtime_collector_values",
+                "custom_components.eybond_local.config_collector.query_runtime_collector_values",
                 new=AsyncMock(
                     return_value={
                         "collector_hardware_version": "esp-collector/0.1.2/ESP32",
@@ -3816,7 +3825,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch(
-                "custom_components.eybond_local.config_flow.query_runtime_collector_at_values",
+                "custom_components.eybond_local.config_collector.query_runtime_collector_at_values",
                 new=AsyncMock(return_value={}),
             ),
         ):
@@ -4089,7 +4098,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             async def async_scan(self, **kwargs):
                 return (OnboardingResult(),)
 
-        with patch("custom_components.eybond_local.config_flow.create_onboarding_manager", return_value=_FakeDetector()):
+        with patch("custom_components.eybond_local.config_scan.create_onboarding_manager", return_value=_FakeDetector()):
             await flow._async_do_scan()
 
         self.assertEqual(flow.hass.config_entries.unloaded, [])
@@ -4103,10 +4112,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 return ()
 
         with patch(
-            "custom_components.eybond_local.config_flow.build_connection_spec_from_values",
+            "custom_components.eybond_local.config_scan.build_connection_spec_from_values",
             return_value=sentinel.connection_spec,
         ) as build_spec, patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=_FakeDetector(),
         ) as create_manager:
             await flow._async_do_scan()
@@ -4124,7 +4133,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 return ()
 
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=_FakeDetector(),
         ):
             await flow._async_do_scan()
@@ -4158,7 +4167,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         passive = _FakePassiveDiscovery()
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=_FakeDetector(),
         ), patch(
             "custom_components.eybond_local.passive_discovery.get_passive_callback_discovery",
@@ -4196,7 +4205,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         detector = _FakeDetector()
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=detector,
         ):
             await flow._async_do_scan()
@@ -4235,7 +4244,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 return ()
 
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=_FakeDetector(),
         ):
             await flow._async_do_scan()
@@ -4381,7 +4390,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 return (active_result,)
 
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=_FakeDetector(),
         ):
             await flow._async_do_scan()
@@ -4422,7 +4431,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         progress_loop = AsyncMock(return_value=None)
 
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=_FakeDetector(),
         ), patch.object(
             flow,
@@ -4470,7 +4479,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 return (active_new,)
 
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=_FakeDetector(),
         ):
             await flow._async_do_scan()
@@ -4495,7 +4504,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_integration_discovery_selects_passive_callback_candidate(self) -> None:
         flow = self._make_flow()
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             side_effect=AssertionError(
                 "integration_discovery must use the concrete discovery_info session"
             ),
@@ -4534,7 +4543,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError("passive discovery preview must not create a detector")
 
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             side_effect=_fake_create_onboarding_manager,
         ):
             await flow.async_step_integration_discovery(
@@ -4565,7 +4574,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 return ()
 
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=_FakeDetector(),
         ):
             result = await flow.async_step_integration_discovery(
@@ -4625,7 +4634,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 return (matched_result, collector_only_result)
 
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=_FakeDetector(),
         ):
             await flow._async_do_scan()
@@ -4676,7 +4685,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 return (collector_only_result, matched_result)
 
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=_FakeDetector(),
         ):
             await flow._async_do_scan()
@@ -4809,7 +4818,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         with patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=_FakeDetector(),
         ):
             await flow._async_do_scan()
@@ -4828,6 +4837,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_do_scan_timeout_returns_without_hanging(self) -> None:
         flow = self._make_flow()
+        flow._scan_timeout_seconds = 0.001
 
         class _SlowDetector:
             async def async_scan(self, **kwargs):
@@ -4835,10 +4845,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 return ()
 
         with patch(
-            "custom_components.eybond_local.config_flow._AUTO_SCAN_TIMEOUT",
-            0.001,
-        ), patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=_SlowDetector(),
         ):
             await flow._async_do_scan()
@@ -5511,7 +5518,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             answers=[_wire_session("s-new", answered_pn)],
             read_pn=answered_pn,
         ), patch.object(
-            config_flow_module,
+            config_scan_module,
             "create_onboarding_manager",
             side_effect=AssertionError("no detection may run before the entry exists"),
         ):
@@ -6415,7 +6422,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         await options.async_step_runtime()
 
         self.assertIn(
-            "_load_translation_bundle",
+            "load_translation_bundle",
             [getattr(func, "__name__", "") for func, _args in options.hass.executor_job_calls],
         )
 
@@ -6632,7 +6639,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 effective_register_schema_name="modbus_smg/models/smg_6200.json",
                 effective_profile_metadata=None,
                 effective_register_schema_metadata=None,
-                smartess_cloud_export_available=True,
+                cloud_evidence_export_available=True,
                 smartess_known_family_draft_plan=None,
                 smartess_smg_bridge_plan=None,
                 data=types.SimpleNamespace(values=workflow),
@@ -6686,7 +6693,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 effective_register_schema_name="modbus_smg/models/smg_6200.json",
                 effective_profile_metadata=None,
                 effective_register_schema_metadata=None,
-                smartess_cloud_export_available=True,
+                cloud_evidence_export_available=True,
                 smartess_known_family_draft_plan=None,
                 smartess_smg_bridge_plan=None,
                 data=types.SimpleNamespace(values=workflow),
@@ -7386,7 +7393,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             )
 
             with patch.object(
-                config_flow_module,
+                options_proxy_module,
                 "sign_proxy_capture_download_url",
                 return_value=(
                     "http://203.0.113.7:8123/api/eybond_local/proxy_capture/"
@@ -7430,7 +7437,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "/api/eybond_local/proxy_capture/entry-options/session.zip?authSig=fresh-2",
         )
         with patch.object(
-            config_flow_module,
+            options_proxy_module,
             "sign_proxy_capture_download_url",
             side_effect=fresh_urls,
         ) as sign_mock:
@@ -7566,7 +7573,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         options._config_entry.runtime_data = types.SimpleNamespace(
             async_export_support_package_with_cloud_refresh=_export_support_package_with_cloud_refresh,
-            smartess_cloud_export_available=True,
+            cloud_evidence_export_available=True,
             smartess_collector_pn="E5000020000000",
             data=types.SimpleNamespace(
                 values={
@@ -7684,7 +7691,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                     source_scope="external",
                     source_path=str(schema_path),
                 ),
-                smartess_cloud_export_available=True,
+                cloud_evidence_export_available=True,
                 smartess_known_family_draft_plan=None,
                 smartess_smg_bridge_plan=None,
                 data=types.SimpleNamespace(values=workflow),
@@ -7752,7 +7759,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_support_package_shows_guided_form_with_saved_cloud_evidence(self) -> None:
         options = self._make_options_flow()
         options._config_entry.runtime_data = types.SimpleNamespace(
-            smartess_cloud_export_available=True,
+            cloud_evidence_export_available=True,
             smartess_cloud_evidence_path="/config/eybond_local/cloud_evidence/entry123.json",
             smartess_collector_pn="E5000020000000",
             data=types.SimpleNamespace(values={}),
@@ -7788,7 +7795,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options = self._make_options_flow()
         options._config_entry.runtime_data = types.SimpleNamespace(
             cloud_evidence_export_available=True,
-            smartess_cloud_export_available=False,
             smartess_cloud_evidence_path="",
             smartess_collector_pn="A0000000000001",
             data=types.SimpleNamespace(values={"collector_cloud_family": "valuecloud_at"}),
@@ -7814,7 +7820,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_support_package_refresh_requires_credentials(self) -> None:
         options = self._make_options_flow()
         options._config_entry.runtime_data = types.SimpleNamespace(
-            smartess_cloud_export_available=True,
+            cloud_evidence_export_available=True,
             smartess_collector_pn="E5000020000000",
             data=types.SimpleNamespace(values={}),
         )
@@ -7851,7 +7857,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         options._config_entry.runtime_data = types.SimpleNamespace(
             async_export_support_package_with_cloud_refresh=_export_support_package_with_cloud_refresh,
-            smartess_cloud_export_available=True,
+            cloud_evidence_export_available=True,
             smartess_collector_pn="E5000020000000",
             data=types.SimpleNamespace(
                 values={
@@ -7910,7 +7916,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         }
         options._config_entry.runtime_data = types.SimpleNamespace(
             async_export_support_package_with_cloud_refresh=_export_support_package_with_cloud_refresh,
-            smartess_cloud_export_available=True,
+            cloud_evidence_export_available=True,
             smartess_cloud_evidence_path="",
             smartess_collector_pn="ESP32COLLECTOR",
             data=types.SimpleNamespace(
@@ -8024,7 +8030,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         # (collector_protocol_ingress) plus residual route activity must NOT grant control --
         # after a mid-scan revert the collector is back on the real server and a ctrlDevice
         # would reach the inverter (it turned off the user's output).
-        options = object.__new__(config_flow_module.EybondLocalOptionsFlow)
+        options = object.__new__(options_flow_module.EybondLocalOptionsFlow)
 
         def _coordinator(collector_connected: bool) -> object:
             return types.SimpleNamespace(
@@ -9227,7 +9233,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=lambda **kwargs: captured.update(kwargs) or dict(orchestration),
             ),
             patch.object(
-                config_flow_module,
+                options_shadow_run_module,
                 "generate_shadow_learning_overlay_drafts",
                 return_value=types.SimpleNamespace(
                     profile_path=Path("/config/eybond_local/profiles/learned/p.json"),
@@ -9268,7 +9274,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             orchestrate_p as orchestrate_mock,
             overlay_p,
             patch.object(
-                config_flow_module,
+                options_shadow_runtime_module,
                 "_SHADOW_CONTROL_ROUTE_WINDOW_WAIT",
                 0.01,
             ),
@@ -9419,9 +9425,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(captured["all_choice_values"])
         self.assertEqual(
             captured["max_fields"],
-            config_flow_module.CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS,
+            options_shadow_run_module.CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS,
         )
-        self.assertGreater(config_flow_module.CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS, 0)
+        self.assertGreater(options_shadow_run_module.CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS, 0)
 
         self.assertEqual(options._shadow_learning_state["discovery"]["status"], "ok")
         self.assertEqual(
@@ -9501,7 +9507,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(options._shadow_learning_state["discovery"]["status"], "error")
         self.assertEqual(
             options._shadow_learning_state["discovery"]["reason"],
-            config_flow_module.CONTROL_DISCOVERY_FAILURE_GENERIC,
+            options_shadow_review_module.CONTROL_DISCOVERY_FAILURE_GENERIC,
         )
 
     async def test_control_discovery_runner_treats_leaked_write_as_failure(self) -> None:
@@ -9534,7 +9540,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(options._shadow_learning_state["discovery"]["status"], "error")
         self.assertEqual(
             options._shadow_learning_state["discovery"]["reason"],
-            config_flow_module.CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
+            options_shared_module.CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
         )
         self.assertNotIn("overlay", options._shadow_learning_state)
 
@@ -9573,7 +9579,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(options._shadow_learning_state["discovery"]["status"], "error")
         self.assertEqual(
             options._shadow_learning_state["discovery"]["reason"],
-            config_flow_module.CONTROL_DISCOVERY_FAILURE_GENERIC,
+            options_shadow_review_module.CONTROL_DISCOVERY_FAILURE_GENERIC,
         )
 
 
@@ -10454,7 +10460,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             request,
             registry_provider=flow._callback_session_registry,
             listener_host="0.0.0.0",
-            policy_provider=lambda: config_flow_module._ONBOARDING_TIMEOUT_POLICY,
+            policy_provider=lambda: config_common_module._ONBOARDING_TIMEOUT_POLICY,
         )
         proof = CallbackRecoveryProof(
             method=CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT,
@@ -10548,12 +10554,12 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(created["type"], "create_entry")
         data = created["data"]
         self.assertEqual(
-            data[config_flow_module.CONF_COLLECTOR_IP], route.trigger_target_ip
+            data[const_module.CONF_COLLECTOR_IP], route.trigger_target_ip
         )
-        self.assertNotEqual(data[config_flow_module.CONF_COLLECTOR_IP], self.PEER_IP)
-        self.assertEqual(data[config_flow_module.CONF_CONNECTION_MODE], "known_ip")
+        self.assertNotEqual(data[const_module.CONF_COLLECTOR_IP], self.PEER_IP)
+        self.assertEqual(data[const_module.CONF_CONNECTION_MODE], "known_ip")
         self.assertEqual(
-            data[config_flow_module.CONF_CONNECTION_STRATEGY],
+            data[const_module.CONF_CONNECTION_STRATEGY],
             CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
         )
         self.assertNotIn("collector_session_protocol", data)
@@ -10722,7 +10728,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             self._admission_request(origin),
             registry_provider=flow._callback_session_registry,
             listener_host="0.0.0.0",
-            policy_provider=lambda: config_flow_module._ONBOARDING_TIMEOUT_POLICY,
+            policy_provider=lambda: config_common_module._ONBOARDING_TIMEOUT_POLICY,
         )
 
     def _verified_inbound_terminal(self):
@@ -10901,7 +10907,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # The terminal guard is inert for a callback-strategy entry.
         self.assertFalse(
             flow._fresh_observed_session_entry_is_unverified(
-                {config_flow_module.CONF_CONNECTION_STRATEGY: "callback_on_demand"},
+                {const_module.CONF_CONNECTION_STRATEGY: "callback_on_demand"},
                 {},
             )
         )
@@ -10915,7 +10921,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         from dataclasses import replace
 
         return replace(
-            config_flow_module._ONBOARDING_TIMEOUT_POLICY,
+            config_common_module._ONBOARDING_TIMEOUT_POLICY,
             inbound_restart_disconnect_timeout=0.05,
             inbound_reconnect_timeout=0.05,
             inbound_strong_identity_timeout=0.05,
@@ -11001,7 +11007,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             "ObservedSessionRestartChannel",
             self._capturing_restart_channel(captured),
         ), patch.object(
-            config_flow_module, "_ONBOARDING_TIMEOUT_POLICY", self._fast_restart_policy()
+            config_admission_module, "_ONBOARDING_TIMEOUT_POLICY", self._fast_restart_policy()
         ):
             await flow.async_step_verify_connection_retry()
             await self._drive_verification(flow)
@@ -11057,7 +11063,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             "ObservedSessionRestartChannel",
             self._capturing_restart_channel(captured),
         ), patch.object(
-            config_flow_module, "_ONBOARDING_TIMEOUT_POLICY", self._fast_restart_policy()
+            config_admission_module, "_ONBOARDING_TIMEOUT_POLICY", self._fast_restart_policy()
         ):
             await self._drive_verification(flow)
 
@@ -11653,7 +11659,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         probe = AsyncMock(side_effect=AssertionError("UDP trigger sent during inbound verification"))
         with patch.object(admission_transaction_module, "ObservedSessionRestartChannel", _FakeChannel), patch.object(
-            config_flow_module, "async_send_callback_trigger", probe
+            config_collector_module, "async_send_callback_trigger", probe
         ):
             await flow.async_step_verify_connection({})
             await flow._admission_task
@@ -12021,11 +12027,11 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # data -- not just the strategy stamping helper.
         with (
             patch(
-                "custom_components.eybond_local.config_flow.SharedEybondTransport",
+                "custom_components.eybond_local.config_collector.SharedEybondTransport",
                 side_effect=AssertionError("passive confirm must not start payload transport"),
             ),
             patch(
-                "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
+                "custom_components.eybond_local.config_collector.SharedCollectorAtTransport",
                 side_effect=AssertionError("passive confirm must not start AT transport"),
             ),
         ):
@@ -12479,7 +12485,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def _drive_generic_callback(self, flow, detector, collector_ip="192.168.1.60"):
         with self._identity_wire_for(detector), patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=detector,
         ):
             return await flow.async_step_manual(
@@ -12543,7 +12549,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             answers=[self._inventory_session(self.NEW_SESSION, self.FULL_PN)],
             read_pn=self.FULL_PN,
         ), patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             side_effect=AssertionError("no detection may run before the entry exists"),
         ):
             routed = await flow.async_step_manual(
@@ -13022,11 +13028,11 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch(
-                "custom_components.eybond_local.config_flow.SharedEybondTransport",
+                "custom_components.eybond_local.config_collector.SharedEybondTransport",
                 side_effect=AssertionError("passive confirm must not start payload transport"),
             ),
             patch(
-                "custom_components.eybond_local.config_flow.SharedCollectorAtTransport",
+                "custom_components.eybond_local.config_collector.SharedCollectorAtTransport",
                 side_effect=AssertionError("passive confirm must not start AT transport"),
             ),
         ):
@@ -13232,7 +13238,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # new trigger sequence, new authoritative read) plus the detection that
         # follows it. Same seam as the first submit.
         with self._identity_wire_for(detector), patch(
-            "custom_components.eybond_local.config_flow.create_onboarding_manager",
+            "custom_components.eybond_local.config_scan.create_onboarding_manager",
             return_value=detector,
         ):
             return await flow.async_step_manual_probe_again()
@@ -15334,17 +15340,24 @@ class OptionsTransitionResolverPrefillTests(unittest.IsolatedAsyncioTestCase):
 
 class ConfigFlowDeadSurfaceGuards(unittest.TestCase):
     def test_removed_test_only_helpers_do_not_return(self) -> None:
-        path = REPO_ROOT / "custom_components/eybond_local/config_flow.py"
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        class_methods = {
-            node.name: {
-                item.name
-                for item in node.body
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
-            }
-            for node in tree.body
-            if isinstance(node, ast.ClassDef)
-        }
+        package = REPO_ROOT / "custom_components/eybond_local"
+
+        def _methods(pattern: str) -> set[str]:
+            methods: set[str] = set()
+            for path in sorted(package.glob(pattern)):
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                for node in tree.body:
+                    if not isinstance(node, ast.ClassDef):
+                        continue
+                    methods.update(
+                        item.name
+                        for item in node.body
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    )
+            return methods
+
+        config_methods = _methods("config_*.py")
+        options_methods = _methods("options_*.py")
 
         self.assertTrue(
             {
@@ -15356,12 +15369,12 @@ class ConfigFlowDeadSurfaceGuards(unittest.TestCase):
                 "_default_control_summary",
                 "_scan_result_status_code",
                 "_scan_result_sort_key",
-            }.isdisjoint(class_methods["EybondLocalConfigFlow"])
+            }.isdisjoint(config_methods)
         )
         self.assertTrue(
             {
                 "_shadow_learning_settings_dat",
                 "_shadow_learning_observed_writes",
                 "_smartess_cloud_exported_next_step",
-            }.isdisjoint(class_methods["EybondLocalOptionsFlow"])
+            }.isdisjoint(options_methods)
         )
