@@ -76,8 +76,18 @@ class ProxyCaptureOptionsMixin:
                 ),
             )
 
-        if not (self._proxy_capture_available(coordinator)):
-            return await self.async_step_connection()
+        if not (
+            (
+                self._cloud_tool_new_operations_allowed()
+                and self._collector_capabilities().proxy_capture
+            )
+            or self._proxy_capture_lifecycle_active(coordinator)
+            or (
+                self._collector_capabilities().proxy_capture
+                and self._proxy_capture_status_available(coordinator)
+            )
+        ):
+            return await self._async_cloud_tools_unavailable()
 
         errors: dict[str, str] = {}
         action = ""

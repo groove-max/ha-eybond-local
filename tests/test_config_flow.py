@@ -359,6 +359,7 @@ from custom_components.eybond_local.collector.smartess_local import (
     SET_TARGET_SSID,
 )
 from custom_components.eybond_local.collector.capabilities import (
+    COLLECTOR_KIND_ESP_EYBOND_BRIDGE,
     COLLECTOR_KIND_UNKNOWN,
 )
 from custom_components.eybond_local.const import (
@@ -5918,26 +5919,58 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["errors"]["driver_hint"], "invalid_selection")
         self.assertEqual(options.hass.config_entries.updates, [])
 
-    async def test_options_init_menu_hides_shadow_learning_for_virtual_bridge(self) -> None:
+    async def test_options_init_hides_cloud_tools_for_persisted_custom_collector(
+        self,
+    ) -> None:
         options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                "collector_kind": COLLECTOR_KIND_ESP_EYBOND_BRIDGE,
+                "collector_hardware_version": "esp-collector/0.1.10/ESP8266",
+                "collector_virtual_bridge": True,
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
+                "endpoint_control_policy": "external",
+            }
+        )
+        options._config_entry.options.update(
+            {
+                "collector_kind": COLLECTOR_KIND_ESP_EYBOND_BRIDGE,
+                "collector_hardware_version": "esp-collector/0.1.10/ESP8266",
+                "collector_virtual_bridge": True,
+            }
+        )
         options._config_entry.runtime_data = types.SimpleNamespace(
+            proxy_capture_overview=types.SimpleNamespace(
+                can_start=False,
+                can_stop=False,
+                critical_phase=False,
+                blocking_reason="operating_profile_requires_cloud_and_ha",
+            ),
+            latest_proxy_trace_path="",
+            latest_proxy_trace_manifest_path="",
             data=types.SimpleNamespace(
-                collector=types.SimpleNamespace(collector_virtual_bridge=True),
-                values={"collector_virtual_bridge": True},
+                collector=None,
+                values={},
             ),
         )
 
         result = await options.async_step_init()
+        cloud_deep_link = await options.async_step_cloud_tools()
+        proxy_deep_link = await options.async_step_proxy_capture()
+        shadow_deep_link = await options.async_step_shadow_learning()
 
         self.assertEqual(
             result["menu_options"],
             ["runtime", "collector_wifi", "collector_uart", "diagnostics"],
         )
-        self.assertNotIn("shadow_learning", result["menu_options"])
+        self.assertNotIn("cloud_tools", result["menu_options"])
         self.assertIn("collector_uart", result["menu_options"])
         self.assertTrue(
             result["description_placeholders"]["bridge_note"].strip()
         )
+        for deep_link in (cloud_deep_link, proxy_deep_link, shadow_deep_link):
+            self.assertEqual(deep_link["step_id"], "init")
+            self.assertNotIn("cloud_tools", deep_link["menu_options"])
 
     async def test_options_init_uses_one_cloud_tools_menu_for_factory_collector(self) -> None:
         options = self._make_options_flow()

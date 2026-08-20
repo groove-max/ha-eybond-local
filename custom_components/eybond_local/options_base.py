@@ -189,15 +189,32 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
             ha_only_required=self._collector_capabilities().ha_only_required,
         )
 
-    def _proxy_capture_available(self, coordinator=None) -> bool:
-        """Return whether the proxy workflow has useful state to present."""
+    def _cloud_tool_new_operations_allowed(self) -> bool:
+        """Return whether this collector may start a cloud-traffic operation."""
+
+        capabilities = self._collector_capabilities()
+        return bool(
+            capabilities.cloud_connection_supported
+            and self._collector_operating_profile().cloud_tools_allowed
+        )
+
+    def _proxy_capture_lifecycle_active(self, coordinator=None) -> bool:
+        """Return whether proxy cleanup/recovery must remain reachable."""
+
+        coordinator = coordinator or self._coordinator()
+        overview = getattr(coordinator, "proxy_capture_overview", None)
+        return bool(
+            getattr(overview, "can_stop", False)
+            or getattr(overview, "critical_phase", False)
+        )
+
+    def _proxy_capture_status_available(self, coordinator=None) -> bool:
+        """Return whether a supported collector has proxy status/history to show."""
 
         coordinator = coordinator or self._coordinator()
         overview = getattr(coordinator, "proxy_capture_overview", None)
         return bool(
             getattr(overview, "can_start", False)
-            or getattr(overview, "can_stop", False)
-            or getattr(overview, "critical_phase", False)
             or str(getattr(overview, "blocking_reason", "") or "").strip()
             or str(getattr(coordinator, "latest_proxy_trace_path", "") or "").strip()
             or str(
@@ -228,10 +245,17 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
 
         coordinator = coordinator or self._coordinator()
         return bool(
-            self._collector_operating_profile().cloud_tools_allowed
-            or self._proxy_capture_available(coordinator)
+            self._cloud_tool_new_operations_allowed()
+            or self._proxy_capture_lifecycle_active(coordinator)
             or self._shadow_learning_lifecycle_active(coordinator)
         )
+
+    async def _async_cloud_tools_unavailable(self) -> ConfigFlowResult:
+        """Route an unavailable deep link without proposing an impossible mode."""
+
+        if not self._collector_capabilities().cloud_connection_supported:
+            return await self.async_step_init()
+        return await self.async_step_connection()
 
     def _operating_profile_label(self, profile: str) -> str:
         """Return one localized product-level operating-profile label."""
@@ -355,15 +379,18 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
                 ),
             )
         if not self._cloud_tools_menu_available(coordinator):
-            return await self.async_step_connection()
+            return await self._async_cloud_tools_unavailable()
 
         capabilities = self._collector_capabilities()
+        new_operations_allowed = self._cloud_tool_new_operations_allowed()
         menu_options: list[str] = []
-        if capabilities.proxy_capture or self._proxy_capture_available(coordinator):
+        if (
+            new_operations_allowed and capabilities.proxy_capture
+        ) or self._proxy_capture_lifecycle_active(coordinator):
             menu_options.append("proxy_capture")
-        if capabilities.shadow_learning or self._shadow_learning_lifecycle_active(
-            coordinator
-        ):
+        if (
+            new_operations_allowed and capabilities.shadow_learning
+        ) or self._shadow_learning_lifecycle_active(coordinator):
             menu_options.append("shadow_learning")
         if not menu_options:
             return await self.async_step_init()

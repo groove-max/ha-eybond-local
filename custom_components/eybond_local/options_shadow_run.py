@@ -67,10 +67,13 @@ class ShadowLearningRunMixin:
             )
 
         if not (
-            self._collector_operating_profile().cloud_tools_allowed
+            (
+                self._cloud_tool_new_operations_allowed()
+                and self._collector_capabilities().shadow_learning
+            )
             or self._shadow_learning_lifecycle_active(coordinator)
         ):
-            return await self.async_step_connection()
+            return await self._async_cloud_tools_unavailable()
 
         errors: dict[str, str] = {}
         consent = bool(

@@ -147,6 +147,26 @@ class ProxyCapturePlannerTests(unittest.TestCase):
         self.assertEqual(overview.blocking_reason, "collector_proxy_capture_unavailable")
         self.assertFalse(overview.can_start)
 
+    def test_collector_capability_refusal_precedes_impossible_profile_advice(
+        self,
+    ) -> None:
+        overview = build_proxy_capture_overview(
+            control_mode="auto",
+            collector_proxy_capture_allowed=False,
+            collector_connected=True,
+            cloud_tools_allowed=False,
+            current_endpoint="192.168.1.50,18899,TCP",
+            upstream_endpoint="",
+            target_endpoint="",
+        )
+
+        self.assertEqual(overview.status, "blocked")
+        self.assertEqual(
+            overview.blocking_reason,
+            "collector_proxy_capture_unavailable",
+        )
+        self.assertNotIn("Cloud + Home Assistant", overview.summary)
+
     def test_ready_when_no_redirect_is_required(self) -> None:
         overview = build_proxy_capture_overview(
             control_mode="auto",
