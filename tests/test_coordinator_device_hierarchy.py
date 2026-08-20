@@ -4571,6 +4571,75 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         self.assertEqual(len(updated_entries), 1)
 
+    def test_remember_runtime_identity_does_not_replace_routed_ip_with_nat_peer(
+        self,
+    ) -> None:
+        """A live TCP peer is observation, not the configured collector route."""
+
+        updated_entries: list[dict[str, object]] = []
+
+        class _ConfigEntries:
+            def async_update_entry(
+                self,
+                entry,
+                *,
+                title=None,
+                data=None,
+                options=None,
+            ) -> None:
+                del options
+                if data is not None:
+                    entry.data = dict(data)
+                if title is not None:
+                    entry.title = title
+                updated_entries.append(dict(entry.data))
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(config_entries=_ConfigEntries())
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-routed",
+            data={
+                "connection_mode": "known_ip",
+                "collector_ip": "192.168.8.52",
+                "collector_pn": "V001020SYN62344022",
+                "detected_model": "",
+                "detected_serial": "",
+                "server_ip": "192.168.2.50",
+            },
+            options={},
+            title="Collector PN V001020SYN62344022",
+        )
+        coordinator.data = self.RuntimeSnapshot()
+
+        snapshot = self.RuntimeSnapshot(
+            values={},
+            inverter=types.SimpleNamespace(
+                model_name="PowMr 6.2kW",
+                serial_number="55355535553555",
+            ),
+            collector=types.SimpleNamespace(
+                remote_ip="192.168.2.1",
+                collector_pn="V001020SYN62344022",
+                profile_name="",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="",
+                smartess_protocol_profile_key="smartess_at",
+            ),
+        )
+
+        asyncio.run(coordinator._async_remember_runtime_identity(snapshot))
+
+        self.assertEqual(
+            coordinator.config_entry.data["collector_ip"],
+            "192.168.8.52",
+        )
+        self.assertNotEqual(
+            coordinator.config_entry.data["collector_ip"],
+            snapshot.collector.remote_ip,
+        )
+        self.assertEqual(updated_entries[-1]["collector_ip"], "192.168.8.52")
+
     def test_remember_runtime_identity_upgrades_collector_unique_id_to_full_pn(self) -> None:
         updated_entries: list[dict[str, object]] = []
 
