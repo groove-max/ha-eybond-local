@@ -88,6 +88,7 @@ from .const import (
     DRIVER_DETECTION_STRATEGIES,
     DRIVER_HINT_AUTO,
     ENDPOINT_CONTROL_EXTERNAL,
+    FLOW_CONTEXT_ENTRY_COMMIT_IN_PROGRESS,
     POLL_MODE_AUTO,
     POLL_MODE_MANUAL,
 )
@@ -765,14 +766,32 @@ class EntryCommitFlowMixin:
             return self.async_abort(reason=decision.abort_reason)
         if not decision.owns:
             # No claim to commit: the terminal runs with no ownership bookkeeping.
-            return terminal()
+            result = terminal()
+            self._mark_entry_commit_in_progress(collector_pn, result)
+            return result
         try:
             result = terminal()
         except Exception:
             self._callback_continuation.rollback_terminal()
             raise
         self._callback_continuation.commit_terminal()
+        self._mark_entry_commit_in_progress(collector_pn, result)
         return result
+
+    def _mark_entry_commit_in_progress(
+        self, collector_pn: str, result: ConfigFlowResult
+    ) -> None:
+        """Protect this CREATE_ENTRY flow until Home Assistant finishes it.
+
+        ``ConfigEntriesFlowManager.async_finish_flow`` adds and fully sets up the
+        entry before removing the flow from its progress registry. During that
+        await, passive discovery can already observe the entry and its live
+        session. The marker lets discovery distinguish this exact terminalizing
+        flow from stale sibling discovery cards without owning HA's lifecycle.
+        """
+
+        if result.get("type") == "create_entry":
+            self.context[FLOW_CONTEXT_ENTRY_COMMIT_IN_PROGRESS] = collector_pn
 
     async def _async_enrich_manual_collector_profile(
         self,

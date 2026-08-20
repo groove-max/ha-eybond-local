@@ -5,7 +5,10 @@ import types
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from custom_components.eybond_local.const import DOMAIN
+from custom_components.eybond_local.const import (
+    DOMAIN,
+    FLOW_CONTEXT_ENTRY_COMMIT_IN_PROGRESS,
+)
 from custom_components.eybond_local.passive_discovery import (
     PassiveCallbackDiscovery,
     active_callback_probe_scope,
@@ -1371,6 +1374,65 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(hass.config_entries.flow.flows, [])
         self.assertEqual(hass.config_entries.flow.aborted, ["flow-1"])
+
+    async def test_poll_preserves_terminalizing_flow_and_aborts_stale_sibling(
+        self,
+    ) -> None:
+        collector_pn = "E500002SYN84199645"
+        terminal_context = {
+            "source": "integration_discovery",
+            "flow_id": "flow-terminal",
+            FLOW_CONTEXT_ENTRY_COMMIT_IN_PROGRESS: collector_pn,
+            "eybond_discovery": {
+                "collector_pn": collector_pn,
+                "tcp_port": 8899,
+                "session_id": "listener-8899-1",
+                "collector_identity_source": "at_dtupn",
+            },
+        }
+        stale_context = {
+            "source": "integration_discovery",
+            "flow_id": "flow-stale",
+            "eybond_discovery": {
+                "collector_pn": collector_pn,
+                "tcp_port": 8899,
+                "session_id": "listener-8899-old",
+                "collector_identity_source": "at_dtupn",
+            },
+        }
+        entry = types.SimpleNamespace(
+            data={"collector_pn": collector_pn},
+            unique_id=f"collector:{collector_pn}",
+            title=f"Collector PN {collector_pn}",
+        )
+        hass = _FakeHass(entries=[entry])
+        hass.config_entries.flow.flows.extend(
+            (
+                (DOMAIN, terminal_context, {}),
+                (DOMAIN, stale_context, {}),
+            )
+        )
+        discovery = PassiveCallbackDiscovery(hass)
+        discovery._listeners[8899] = _FakeListener(
+            [
+                {
+                    "session_id": "listener-8899-1",
+                    "peer_ip": "192.168.1.55",
+                    "collector_pn": collector_pn,
+                    "collector_identity_source": "at_dtupn",
+                    "protocol_shape": "eybond_framed",
+                    "state": "routed_framed",
+                }
+            ]
+        )
+
+        await discovery._async_poll_once()
+
+        self.assertEqual(hass.config_entries.flow.aborted, ["flow-stale"])
+        self.assertEqual(
+            [context["flow_id"] for _domain, context, _data in hass.config_entries.flow.flows],
+            ["flow-terminal"],
+        )
 
     async def test_poll_upgrades_existing_callback_entry_from_short_to_full_pn(self) -> None:
         entry = types.SimpleNamespace(

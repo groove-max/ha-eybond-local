@@ -35,6 +35,7 @@ from .const import (
     CONNECTION_TYPE_EYBOND,
     DEFAULT_TCP_PORT,
     DOMAIN,
+    FLOW_CONTEXT_ENTRY_COMMIT_IN_PROGRESS,
 )
 
 if TYPE_CHECKING:
@@ -908,6 +909,23 @@ class PassiveCallbackDiscovery:
         for flow in tuple(flows or ()):
             flow_data = self._flow_discovery_data(flow)
             if flow_data is None:
+                continue
+            context = flow.get("context") if isinstance(flow, dict) else None
+            terminal_pn = (
+                context.get(FLOW_CONTEXT_ENTRY_COMMIT_IN_PROGRESS)
+                if isinstance(context, dict)
+                else None
+            )
+            if (
+                type(terminal_pn) is str
+                and terminal_pn
+                and terminal_pn == terminal_pn.strip()
+                and pn_is_same_identity(terminal_pn, collector_pn)
+            ):
+                # HA adds and awaits setup of the new entry before removing the
+                # flow that returned CREATE_ENTRY. Never abort that exact flow
+                # from a background poll; HA owns its terminalization. Sibling
+                # cards remain eligible for cleanup below.
                 continue
             flow_pn = str(flow_data.get(CONF_COLLECTOR_PN) or "").strip()
             flow_peer_ip = str(flow_data.get("peer_ip") or "").strip()

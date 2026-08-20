@@ -135,6 +135,7 @@ async def test_discovery_inbound_full_ha_lifecycle(
     )
     injected_listener = None
     entry = None
+    setup_patch = None
     try:
         loopback = [
             {
@@ -166,6 +167,35 @@ async def test_discovery_inbound_full_ha_lifecycle(
             discovery_service._listeners[tcp_port] = injected_listener
             registry = get_callback_session_registry(hass)
             assert registry is not None
+
+            original_async_setup = hass.config_entries.async_setup
+            terminal_poll_ran = False
+
+            async def _async_setup_with_terminal_discovery_poll(
+                entry_id: str, *args, **kwargs
+            ) -> bool:
+                """Force the production race while CREATE_ENTRY is finishing."""
+
+                nonlocal terminal_poll_ran
+                candidate = hass.config_entries.async_get_entry(entry_id)
+                if (
+                    not terminal_poll_ran
+                    and candidate is not None
+                    and candidate.unique_id == f"collector:{FULL_PN}"
+                ):
+                    terminal_poll_ran = True
+                    # HA has added the entry but has not removed the config flow
+                    # yet. A background poll must not abort that terminalizing
+                    # flow, even though it now sees a configured same-PN entry.
+                    await discovery_service._async_poll_once()
+                return await original_async_setup(entry_id, *args, **kwargs)
+
+            setup_patch = patch.object(
+                hass.config_entries,
+                "async_setup",
+                new=_async_setup_with_terminal_discovery_poll,
+            )
+            setup_patch.start()
 
             # The collector dials in (the passive-discovery topology) and
             # announces itself with ONE short-PN heartbeat.
@@ -290,6 +320,9 @@ async def test_discovery_inbound_full_ha_lifecycle(
                 break
 
             assert result["type"] is FlowResultType.CREATE_ENTRY, result
+            assert terminal_poll_ran
+            setup_patch.stop()
+            setup_patch = None
             # Short->full enrichment happened INSIDE the same flow: the flow
             # manager never issued a new flow_id for it.
             assert result["flow_id"] == discovery_flow_id
@@ -403,6 +436,8 @@ async def test_discovery_inbound_full_ha_lifecycle(
             # emits a set>server UDP trigger or matches the replacement by IP.
             assert service.discovery_rx_count == discovery_rx_before_removal
     finally:
+        if setup_patch is not None:
+            setup_patch.stop()
         if entry is not None and entry.state is ConfigEntryState.LOADED:
             await hass.config_entries.async_unload(entry.entry_id)
             await hass.async_block_till_done()

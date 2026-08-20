@@ -13856,6 +13856,9 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         result = flow._create_entry_with_handoff(self.FULL_PN, lambda: sentinel)
 
         self.assertIs(result, sentinel)
+        self.assertEqual(
+            flow.context["eybond_entry_commit_in_progress"], self.FULL_PN
+        )
 
     # ---- Batch 6: manual callback recovery wiring (targeted) ----
 

@@ -1,6 +1,12 @@
 """Constants for the EyeBond Local integration."""
 
 DOMAIN = "eybond_local"
+
+# Private config-flow lifecycle marker. Home Assistant adds and sets up a new
+# entry before it removes the flow that returned CREATE_ENTRY. Passive
+# discovery must not abort that exact flow while setup is still running; doing
+# so makes the manager raise UnknownFlow after the entry was already created.
+FLOW_CONTEXT_ENTRY_COMMIT_IN_PROGRESS = "eybond_entry_commit_in_progress"
 PLATFORMS: list[str] = ["sensor", "binary_sensor", "number", "select", "switch", "button", "text"]
 LOCAL_METADATA_DIR = "eybond_local"
 LOCAL_PROFILES_DIR = "profiles"
