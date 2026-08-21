@@ -18,7 +18,7 @@ from custom_components.eybond_local.smartess_cloud import (
     build_learn_settings_plan,
 )
 from custom_components.eybond_local.support.shadow_learning import ShadowWriteObservation
-from custom_components.eybond_local.support.shadow_learning_orchestrator import (
+from custom_components.eybond_local.support.shadow_learning.orchestrator import (
     _safe_read_map,
     async_orchestrate_shadow_learning_settings,
     correlate_cloud_attempts_with_shadow_writes,

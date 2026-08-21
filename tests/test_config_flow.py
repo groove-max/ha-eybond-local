@@ -352,7 +352,7 @@ from custom_components.eybond_local.support.package import (
     build_shadow_learning_runtime_values,
     export_support_package,
 )
-from custom_components.eybond_local.support.shadow_learning_review_model import (
+from custom_components.eybond_local.support.shadow_learning.review_model import (
     attach_learned_read_review_model,
     build_learned_control_review_model,
 )
@@ -428,7 +428,7 @@ from custom_components.eybond_local.support.cloud_evidence import CloudEvidenceR
 from custom_components.eybond_local.support.shadow_learning import (
     ShadowWriteObservation,
 )
-from custom_components.eybond_local.support.shadow_learning_runtime import (
+from custom_components.eybond_local.support.shadow_learning.runtime import (
     ShadowLearningRouteStatus,
     ShadowLearningRuntimeView,
 )

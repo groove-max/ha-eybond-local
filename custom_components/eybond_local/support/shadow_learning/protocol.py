@@ -8,12 +8,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..payload.modbus import (
+from ...payload.modbus import (
     crc16_modbus,
     decode_read_request,
     decode_write_request,
 )
-from .shadow_learning import (
+from . import (
     ShadowWriteObservation,
     utc_now_iso,
     write_observation_from_modbus_request,
@@ -56,7 +56,7 @@ _EYBOND_G_ASCII_FALLBACK_READ_COMMANDS: frozenset[str] = frozenset(
     }
 )
 _EYBOND_G_ASCII_COMMAND_SCHEMA_PATH = (
-    Path(__file__).resolve().parents[1]
+    Path(__file__).resolve().parents[2]
     / "protocol_catalogs"
     / "command_schemas"
     / "eybond_g_ascii"

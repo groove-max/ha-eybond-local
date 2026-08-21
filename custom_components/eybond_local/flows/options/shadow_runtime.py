@@ -12,12 +12,12 @@ from ...support.memory_guard import (
     read_available_memory_mib,
     shadow_learning_memory_blocker,
 )
-from ...support.shadow_learning_backend import (
+from ...support.shadow_learning.backend import (
     build_shadow_learning_preflight,
     build_shadow_learning_seed,
 )
-from ...support.shadow_learning_proxy import route_status_indicates_control_write_ready
-from ...support.shadow_learning_runtime import (
+from ...support.shadow_learning.proxy import route_status_indicates_control_write_ready
+from ...support.shadow_learning.runtime import (
     ShadowLearningRouteStatus,
     ShadowLearningRuntimeView,
 )

@@ -28,8 +28,8 @@ from ..smartess_cloud import (
     login_with_password,
 )
 from .read_learning_binder import bind_cloud_labels_to_registers
-from .shadow_learning_orchestrator import async_orchestrate_shadow_learning_settings
-from .valuecloud_shadow_learning_orchestrator import (
+from .shadow_learning.orchestrator import async_orchestrate_shadow_learning_settings
+from .shadow_learning.valuecloud_orchestrator import (
     async_orchestrate_valuecloud_shadow_learning,
 )
 

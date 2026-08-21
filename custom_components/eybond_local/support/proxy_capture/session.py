@@ -10,15 +10,15 @@ from pathlib import Path
 import sys
 from typing import Any, Awaitable, Callable, TextIO
 
-from ..collector.at import parse_at_command, parse_at_response
-from ..collector.protocol import HEADER_SIZE, decode_header
-from ..payload.modbus import crc16_modbus
-from .collector_cloud_proxy import (
+from ...collector.at import parse_at_command, parse_at_response
+from ...collector.protocol import HEADER_SIZE, decode_header
+from ...payload.modbus import crc16_modbus
+from ..collector_cloud_proxy import (
     JsonLineWriter,
     handle_proxy_client,
     parse_restore_target,
 )
-from .proxy_trace import proxy_trace_root
+from .trace import proxy_trace_root
 
 AsyncOutputCloser = Callable[[TextIO], Awaitable[None]]
 AsyncOutputOpener = Callable[[Path], Awaitable[TextIO]]
@@ -218,7 +218,7 @@ def build_proxy_capture_command(
     """Build the subprocess command that starts the TCP proxy capture tool."""
 
     executable = python_executable or sys.executable
-    script_path = Path(__file__).resolve().with_name("collector_cloud_proxy.py")
+    script_path = Path(__file__).resolve().parents[1] / "collector_cloud_proxy.py"
     command = [
         executable,
         "-u",

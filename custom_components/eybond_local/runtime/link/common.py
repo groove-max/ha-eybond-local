@@ -46,10 +46,10 @@ from ...const import DEFAULT_REQUEST_TIMEOUT
 from ...link_models import LinkRoute
 from ...link_transport import PayloadLinkTransport
 from ...models import CollectorInfo
-from ...support.proxy_session import InProcessProxyCaptureHandler
+from ...support.proxy_capture.session import InProcessProxyCaptureHandler
 from ...support.shadow_learning import ShadowWriteObservation
-from ...support.shadow_learning_backend import ShadowLearningSeed
-from ...support.shadow_learning_proxy import InProcessFailClosedShadowProxyHandler
+from ...support.shadow_learning.backend import ShadowLearningSeed
+from ...support.shadow_learning.proxy import InProcessFailClosedShadowProxyHandler
 
 logger = logging.getLogger(__name__)
 

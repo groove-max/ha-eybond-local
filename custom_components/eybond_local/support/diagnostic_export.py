@@ -29,7 +29,7 @@ from .masking import (
     mask_identifier_token as _mask_identifier_token,
     mask_numeric_identifiers as _mask_numeric_identifiers,
 )
-from .proxy_trace import anonymize_proxy_trace_line
+from .proxy_capture.trace import anonymize_proxy_trace_line
 
 
 _SMG_SERIAL_REGISTER_START = 186

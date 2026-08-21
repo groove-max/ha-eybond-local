@@ -9,7 +9,7 @@ import json
 import re
 from typing import Any
 
-from ..payload.modbus import decode_write_request
+from ...payload.modbus import decode_write_request
 
 
 DEFAULT_VOLATILE_KEYS = frozenset({"timestamp", "created_at", "observed_at", "updated_at"})

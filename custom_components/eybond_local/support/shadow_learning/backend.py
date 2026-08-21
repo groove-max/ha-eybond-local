@@ -7,24 +7,24 @@ import asyncio
 from pathlib import Path
 from typing import Any, TextIO
 
-from ..collector.at import build_at_response, parse_at_command
-from ..collector.protocol import (
+from ...collector.at import build_at_response, parse_at_command
+from ...collector.protocol import (
     FC_FORWARD_TO_DEVICE,
     HEADER_SIZE,
     build_collector_request,
     decode_header,
 )
-from ..const import LOCAL_METADATA_DIR
-from ..fixtures.utils import build_command_fixture_responses
-from ..payload.modbus import crc16_modbus
-from .collector_cloud_proxy import JsonLineWriter
-from .shadow_learning import (
+from ...const import LOCAL_METADATA_DIR
+from ...fixtures.utils import build_command_fixture_responses
+from ...payload.modbus import crc16_modbus
+from ..collector_cloud_proxy import JsonLineWriter
+from . import (
     ShadowWriteObservation,
     coerce_optional_int as _maybe_int,
     shadow_learning_slug as _slugify,
     utc_now_iso,
 )
-from .shadow_learning_protocol import resolve_shadow_learning_protocol_adapter
+from .protocol import resolve_shadow_learning_protocol_adapter
 
 
 _SHADOW_TRACE_DIR = "shadow_learning_traces"

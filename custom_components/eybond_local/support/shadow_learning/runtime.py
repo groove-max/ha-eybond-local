@@ -10,8 +10,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from .cloud_evidence import CloudEvidenceRecord
-from .shadow_learning import ShadowWriteObservation
+from ..cloud_evidence import CloudEvidenceRecord
+from . import ShadowWriteObservation
 
 
 @dataclass(frozen=True, slots=True)

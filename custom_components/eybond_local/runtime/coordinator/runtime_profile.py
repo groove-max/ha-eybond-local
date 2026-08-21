@@ -12,7 +12,7 @@ from ...const import CONF_DETECTION_CONFIDENCE
 from ...metadata.effective_metadata import resolve_effective_metadata_selection
 from ...metadata.effective_metadata_snapshot import build_effective_metadata_snapshot_from_runtime
 from ...models import RuntimeSnapshot
-from ...support.shadow_learning_session import shadow_learning_session_is_active
+from ...support.shadow_learning.session import shadow_learning_session_is_active
 from .endpoint_projection import (
     normalize_preserved_collector_server_endpoint as _normalize_preserved_collector_server_endpoint,
     resolve_collector_server_endpoint as _resolve_collector_server_endpoint,

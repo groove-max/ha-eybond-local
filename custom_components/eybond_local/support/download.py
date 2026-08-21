@@ -10,7 +10,7 @@ from aiohttp import hdrs
 
 from ..const import DOMAIN
 from .package import support_packages_root
-from .proxy_trace import proxy_trace_root
+from .proxy_capture.trace import proxy_trace_root
 
 _SUPPORT_PACKAGE_DOWNLOAD_VIEW_REGISTERED = "support_package_download_view_registered"
 

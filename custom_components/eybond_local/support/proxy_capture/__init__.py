@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .proxy_trace import ProxyCaptureSessionState
+from .trace import ProxyCaptureSessionState
 
 PROXY_WIRE_TRANSPARENT = "transparent"
 

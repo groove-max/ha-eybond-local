@@ -18,7 +18,7 @@ from ..const import (
     LOCAL_SUPPORT_PACKAGES_DIR,
 )
 from .masking import mask_numeric_identifiers
-from .shadow_learning_review_model import build_control_discovery_evidence
+from .shadow_learning.review_model import build_control_discovery_evidence
 
 
 _CLOUD_EVIDENCE_ARCHIVE_MEMBER = "evidence/cloud_evidence.json"

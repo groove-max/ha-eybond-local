@@ -39,7 +39,7 @@ from ...support.runtime_projection import (
     build_support_fixture,
     metadata_source_payload,
 )
-from ...support.shadow_learning_review_model import normalize_activation_selection
+from ...support.shadow_learning.review_model import normalize_activation_selection
 from .tooling_projection import (
     integration_build_runtime_values as _integration_build_runtime_values,
     localized_runtime_text as _localized_runtime_text,

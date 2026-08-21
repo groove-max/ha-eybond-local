@@ -64,7 +64,12 @@ _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         "custom_components/eybond_local/support/proxy",
-        ("test_proxy_capture.py", "test_proxy_session.py", "test_proxy_trace.py"),
+        (
+            "test_proxy_capture.py",
+            "test_proxy_session.py",
+            "test_proxy_trace.py",
+            "test_support_package_boundaries.py",
+        ),
     ),
     (
         "custom_components/eybond_local/support/shadow",
@@ -72,6 +77,7 @@ _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "test_shadow_learning_backend.py",
             "test_shadow_learning_runtime.py",
             "test_shadow_learning_runtime_boundary.py",
+            "test_support_package_boundaries.py",
         ),
     ),
 )

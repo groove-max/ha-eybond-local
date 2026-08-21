@@ -17,7 +17,7 @@ from custom_components.eybond_local.support.cloud_evidence import (
 from custom_components.eybond_local.support.shadow_learning import (
     ShadowWriteObservation,
 )
-from custom_components.eybond_local.support.shadow_learning_runtime import (
+from custom_components.eybond_local.support.shadow_learning.runtime import (
     ShadowLearningRouteStatus,
     ShadowLearningRuntimeView,
 )

@@ -7,7 +7,7 @@ from typing import Any
 
 from ..support.cloud_evidence import CloudEvidenceRecord
 from ..support.shadow_learning import ShadowWriteObservation
-from ..support.shadow_learning_runtime import (
+from ..support.shadow_learning.runtime import (
     ShadowLearningRouteStatus,
     ShadowLearningRuntimeView,
 )

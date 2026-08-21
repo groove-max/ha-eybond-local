@@ -8,7 +8,7 @@ import asyncio
 import time
 from typing import Any, Awaitable, Callable
 
-from ..smartess_cloud import (
+from ...smartess_cloud import (
     DEFAULT_APP_ID,
     DEFAULT_APP_VERSION,
     DEFAULT_BASE_URL,
@@ -21,7 +21,7 @@ from ..smartess_cloud import (
     build_learn_settings_plan,
     fetch_signed_action,
 )
-from .shadow_learning import ShadowWriteObservation, utc_now_iso
+from . import ShadowWriteObservation, utc_now_iso
 
 
 _CONTROL_STATUS_PLANNED = "planned"

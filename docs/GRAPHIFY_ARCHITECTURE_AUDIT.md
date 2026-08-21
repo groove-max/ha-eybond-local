@@ -108,7 +108,7 @@ duplicated.
 
 ### Shared listener/session inventory
 
-`collector/transport_listener.py` is still large because it owns one TCP
+`collector/transport/listener.py` is still large because it owns one TCP
 listener, pending sockets, exact-session indexes, inventory state, route
 reservations and activation. These fields participate in the same atomic
 selection decisions. The surrounding framing connections, proxy route and

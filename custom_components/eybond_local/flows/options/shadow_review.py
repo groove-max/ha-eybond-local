@@ -19,7 +19,7 @@ from .shared import (
     CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE,
     CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
 )
-from ...support.shadow_learning_review_model import (
+from ...support.shadow_learning.review_model import (
     build_activation_selection,
     default_learned_control_label,
 )

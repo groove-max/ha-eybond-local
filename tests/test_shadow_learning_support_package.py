@@ -18,10 +18,10 @@ from custom_components.eybond_local.support.package import (
     build_shadow_learning_runtime_values,
     export_support_package,
 )
-from custom_components.eybond_local.support.shadow_learning_overlay_generator import (
+from custom_components.eybond_local.support.shadow_learning.overlay_generator import (
     generate_shadow_learning_overlay_drafts,
 )
-from custom_components.eybond_local.support.shadow_learning_review_model import (
+from custom_components.eybond_local.support.shadow_learning.review_model import (
     build_activation_selection,
 )
 

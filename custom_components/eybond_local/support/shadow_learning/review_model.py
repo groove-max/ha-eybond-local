@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .shadow_learning import coerce_optional_int as _to_int
+from . import coerce_optional_int as _to_int
 
 
 RISK_NORMAL = "normal"

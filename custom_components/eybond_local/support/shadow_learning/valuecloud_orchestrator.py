@@ -7,8 +7,8 @@ import asyncio
 import re
 from typing import Any, Awaitable, Callable
 
-from ..eybond_g_ascii_settings import G_ASCII_SETTINGS_BY_VALUECLOUD_FIELD
-from ..valuecloud_cloud import (
+from ...eybond_g_ascii_settings import G_ASCII_SETTINGS_BY_VALUECLOUD_FIELD
+from ...valuecloud_cloud import (
     ctrl_device_value,
     DEFAULT_APP_VERSION,
     DEFAULT_BASE_URL,
@@ -19,8 +19,8 @@ from ..valuecloud_cloud import (
     ValueCloudSession,
     setup_batch_control_value,
 )
-from .shadow_learning import ShadowWriteObservation, utc_now_iso
-from .shadow_learning_orchestrator import summarize_shadow_learning_attempts
+from . import ShadowWriteObservation, utc_now_iso
+from .orchestrator import summarize_shadow_learning_attempts
 
 
 _CONTROL_STATUS_PLANNED = "planned"

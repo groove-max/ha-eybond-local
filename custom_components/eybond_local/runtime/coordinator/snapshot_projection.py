@@ -21,7 +21,7 @@ from ...schema import build_runtime_ui_schema
 from ...support.bundle import build_support_bundle_payload
 from ...support.collector_registry import get_collector_registry_record
 from ...support.proxy_capture import build_proxy_capture_overview
-from ...support.proxy_session import inspect_proxy_capture_trace
+from ...support.proxy_capture.session import inspect_proxy_capture_trace
 from ...support.runtime_projection import (
     build_collector_support_payload,
     build_inverter_support_payload,

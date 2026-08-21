@@ -15,7 +15,7 @@ from ...const import (
     MIN_PROXY_CAPTURE_DURATION_MINUTES,
 )
 from ...support.proxy_capture import PROXY_WIRE_TRANSPARENT
-from ...support.proxy_trace import parse_proxy_capture_session_timestamp
+from ...support.proxy_capture.trace import parse_proxy_capture_session_timestamp
 
 
 def proxy_capture_state_wire_mode(state: object) -> str:

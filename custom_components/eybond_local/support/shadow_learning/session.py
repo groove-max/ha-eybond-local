@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
-from ..const import LOCAL_METADATA_DIR
+from ...const import LOCAL_METADATA_DIR
 
 
 _SHADOW_SESSION_DIR = "shadow_learning_traces"

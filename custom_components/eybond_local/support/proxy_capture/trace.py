@@ -10,7 +10,7 @@ import re
 from typing import Any
 import zipfile
 
-from ..const import LOCAL_METADATA_DIR, LOCAL_PROXY_TRACES_DIR
+from ...const import LOCAL_METADATA_DIR, LOCAL_PROXY_TRACES_DIR
 
 
 @dataclass(frozen=True, slots=True)

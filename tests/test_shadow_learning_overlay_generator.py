@@ -29,12 +29,12 @@ from custom_components.eybond_local.metadata.register_schema_loader import (
     clear_register_schema_loader_cache,
     set_external_register_schema_roots,
 )
-from custom_components.eybond_local.support.shadow_learning_overlay_generator import (
+from custom_components.eybond_local.support.shadow_learning.overlay_generator import (
     _build_learned_read_overlay,
     _classify_learned_control,
     generate_shadow_learning_overlay_drafts,
 )
-from custom_components.eybond_local.support.shadow_learning_review_model import (
+from custom_components.eybond_local.support.shadow_learning.review_model import (
     RISK_HIGH,
     RISK_NORMAL,
     RISK_UNCERTAIN,
@@ -156,7 +156,7 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
         # The duplicate-emission validation toggle may be left True in the working tree; force it
         # off so these dedup-count assertions test the real (deduplicated) behaviour.
         patcher = mock.patch(
-            "custom_components.eybond_local.support.shadow_learning_overlay_generator."
+            "custom_components.eybond_local.support.shadow_learning.overlay_generator."
             "_EMIT_BUILTIN_DUPLICATE_CONTROLS",
             False,
         )
@@ -895,7 +895,7 @@ class LearnedControlClassificationFromFieldDefTests(unittest.TestCase):
 class LearnedControlReviewModelTests(unittest.TestCase):
     def setUp(self) -> None:
         patcher = mock.patch(
-            "custom_components.eybond_local.support.shadow_learning_overlay_generator."
+            "custom_components.eybond_local.support.shadow_learning.overlay_generator."
             "_EMIT_BUILTIN_DUPLICATE_CONTROLS",
             False,
         )
@@ -1198,7 +1198,7 @@ class LearnedReadOverlayTests(unittest.TestCase):
         self.assertEqual(deduped["generated"], [])  # normally skipped
 
         with mock.patch(
-            "custom_components.eybond_local.support.shadow_learning_overlay_generator."
+            "custom_components.eybond_local.support.shadow_learning.overlay_generator."
             "force_unsupported_models",
             return_value=True,
         ):

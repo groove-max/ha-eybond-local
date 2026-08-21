@@ -14,9 +14,9 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.collector.protocol import build_collector_request
-from custom_components.eybond_local.support.shadow_learning_backend import ShadowLearningSeed
-from custom_components.eybond_local.support.shadow_learning_proxy import InProcessFailClosedShadowProxyHandler
-from custom_components.eybond_local.support.shadow_learning_session import (
+from custom_components.eybond_local.support.shadow_learning.backend import ShadowLearningSeed
+from custom_components.eybond_local.support.shadow_learning.proxy import InProcessFailClosedShadowProxyHandler
+from custom_components.eybond_local.support.shadow_learning.session import (
     build_shadow_learning_lease_deadline,
     build_shadow_learning_session_state,
     clear_shadow_learning_session_state,

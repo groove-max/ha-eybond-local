@@ -14,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 from custom_components.eybond_local.support.shadow_learning import (  # noqa: E402
     ShadowWriteObservation,
 )
-from custom_components.eybond_local.support.valuecloud_shadow_learning_orchestrator import (  # noqa: E402
+from custom_components.eybond_local.support.shadow_learning.valuecloud_orchestrator import (  # noqa: E402
     async_orchestrate_valuecloud_shadow_learning,
     build_valuecloud_learning_plan,
 )

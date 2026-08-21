@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
-from ..collector.protocol import HEADER_SIZE, decode_header
-from ..collector.smartess_local import parse_query_collector_response, parse_set_collector_response
-from .cloud_session_wire import consume_cloud_message
-from .collector_cloud_proxy import JsonLineWriter
-from .shadow_learning_backend import InProcessShadowLearningHandler, ShadowLearningSeed, utc_now_iso
+from ...collector.protocol import HEADER_SIZE, decode_header
+from ...collector.smartess_local import parse_query_collector_response, parse_set_collector_response
+from ..cloud_session_wire import consume_cloud_message
+from ..collector_cloud_proxy import JsonLineWriter
+from .backend import InProcessShadowLearningHandler, ShadowLearningSeed, utc_now_iso
 
 
 _COLLECTOR_FORWARD_FCODES = frozenset({1, 2, 3, 22, 23, 24, 31, 32, 50})

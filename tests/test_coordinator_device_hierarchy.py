@@ -530,7 +530,7 @@ def _install_coordinator_stubs() -> None:
     )
 
     support_proxy_session = ensure_module(
-        "custom_components.eybond_local.support.proxy_session"
+        "custom_components.eybond_local.support.proxy_capture.session"
     )
     support_proxy_session.build_proxy_capture_command = lambda *args, **kwargs: []
     support_proxy_session.build_proxy_capture_restore_trigger_path = (
@@ -549,7 +549,7 @@ def _install_coordinator_stubs() -> None:
     )
 
     support_proxy_trace = ensure_module(
-        "custom_components.eybond_local.support.proxy_trace"
+        "custom_components.eybond_local.support.proxy_capture.trace"
     )
     support_proxy_trace.build_proxy_capture_lease_deadline = (
         lambda *args, **kwargs: "2026-04-28T12:10:00+00:00"
@@ -592,7 +592,7 @@ def _install_coordinator_stubs() -> None:
     )
 
     support_shadow_backend = ensure_module(
-        "custom_components.eybond_local.support.shadow_learning_backend"
+        "custom_components.eybond_local.support.shadow_learning.backend"
     )
     support_shadow_backend.build_shadow_learning_preflight = (
         lambda *args, **kwargs: types.SimpleNamespace(can_start=True, blockers=[])
@@ -605,7 +605,7 @@ def _install_coordinator_stubs() -> None:
     )
 
     support_shadow_proxy = ensure_module(
-        "custom_components.eybond_local.support.shadow_learning_proxy"
+        "custom_components.eybond_local.support.shadow_learning.proxy"
     )
     support_shadow_proxy.route_status_indicates_control_ready = (
         lambda status: bool(status.get("collector_connected"))
@@ -617,7 +617,7 @@ def _install_coordinator_stubs() -> None:
     )
 
     support_shadow_session = ensure_module(
-        "custom_components.eybond_local.support.shadow_learning_session"
+        "custom_components.eybond_local.support.shadow_learning.session"
     )
     support_shadow_session.build_shadow_learning_lease_deadline = (
         lambda *args, **kwargs: "2026-06-05T12:20:00+00:00"
@@ -736,13 +736,13 @@ _STUBBED_MODULE_NAMES: tuple[str, ...] = (
     "custom_components.eybond_local.support.diagnostic_runner",
     "custom_components.eybond_local.support.package",
     "custom_components.eybond_local.support.proxy_capture",
-    "custom_components.eybond_local.support.proxy_session",
-    "custom_components.eybond_local.support.proxy_trace",
+    "custom_components.eybond_local.support.proxy_capture.session",
+    "custom_components.eybond_local.support.proxy_capture.trace",
     "custom_components.eybond_local.support.shadow_learning",
-    "custom_components.eybond_local.support.shadow_learning_backend",
-    "custom_components.eybond_local.support.shadow_learning_proxy",
-    "custom_components.eybond_local.support.shadow_learning_runtime",
-    "custom_components.eybond_local.support.shadow_learning_session",
+    "custom_components.eybond_local.support.shadow_learning.backend",
+    "custom_components.eybond_local.support.shadow_learning.proxy",
+    "custom_components.eybond_local.support.shadow_learning.runtime",
+    "custom_components.eybond_local.support.shadow_learning.session",
     "custom_components.eybond_local.support.workflow",
     "custom_components.eybond_local.runtime.coordinator",
     "homeassistant",

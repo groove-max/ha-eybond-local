@@ -15,7 +15,7 @@ from custom_components.eybond_local.support.proxy_capture import (
     build_proxy_capture_overview,
     resolve_proxy_wire_mode,
 )
-from custom_components.eybond_local.support.proxy_trace import build_proxy_capture_session_state
+from custom_components.eybond_local.support.proxy_capture.trace import build_proxy_capture_session_state
 
 
 class ProxyCapturePlannerTests(unittest.TestCase):

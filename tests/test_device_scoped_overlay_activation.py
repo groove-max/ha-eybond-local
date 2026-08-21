@@ -28,7 +28,7 @@ from custom_components.eybond_local.models import CollectorInfo  # noqa: E402
 from custom_components.eybond_local.device_scoped_overlay import (  # noqa: E402
     filter_learned_read_measurements_for_activation,
 )
-from custom_components.eybond_local.support.shadow_learning_review_model import (  # noqa: E402
+from custom_components.eybond_local.support.shadow_learning.review_model import (  # noqa: E402
     attach_learned_read_review_model,
     build_activation_selection,
     build_learned_control_review_model,

@@ -24,7 +24,7 @@ from .shared import (
 )
 from ...runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
 from ...support.cloud_evidence_providers import resolve_cloud_evidence_provider
-from ...support.shadow_learning_overlay_generator import (
+from ...support.shadow_learning.overlay_generator import (
     generate_shadow_learning_overlay_drafts,
 )
 

@@ -12,7 +12,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.support.proxy_session import (  # noqa: E402
+from custom_components.eybond_local.support.proxy_capture.session import (  # noqa: E402
     InProcessProxyCaptureHandler,
     build_proxy_capture_command,
     build_proxy_capture_restore_trigger_path,

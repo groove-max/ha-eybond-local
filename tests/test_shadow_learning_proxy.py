@@ -32,8 +32,8 @@ from custom_components.eybond_local.payload.modbus import (
 from custom_components.eybond_local.support.cloud_session_wire import (
     consume_cloud_message,
 )
-from custom_components.eybond_local.support.shadow_learning_backend import ShadowLearningSeed
-from custom_components.eybond_local.support.shadow_learning_proxy import (
+from custom_components.eybond_local.support.shadow_learning.backend import ShadowLearningSeed
+from custom_components.eybond_local.support.shadow_learning.proxy import (
     InProcessFailClosedShadowProxyHandler,
     route_status_indicates_control_ready,
     route_status_indicates_control_write_ready,

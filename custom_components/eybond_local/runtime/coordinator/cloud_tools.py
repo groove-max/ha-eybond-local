@@ -36,14 +36,14 @@ from ...support.proxy_capture import (
     build_proxy_capture_overview,
     resolve_proxy_wire_mode,
 )
-from ...support.proxy_session import (
+from ...support.proxy_capture.session import (
     build_proxy_capture_restore_trigger_path,
     build_proxy_capture_trace_path,
     inspect_proxy_capture_start_status,
     open_proxy_trace_output_file,
     summarize_proxy_capture_trace,
 )
-from ...support.proxy_trace import (
+from ...support.proxy_capture.trace import (
     build_proxy_capture_lease_deadline,
     build_proxy_capture_session_state,
     build_proxy_trace_manifest,
@@ -58,13 +58,13 @@ from ...support.proxy_trace import (
     refresh_proxy_capture_session_lease,
     save_proxy_capture_session_state,
 )
-from ...support.shadow_learning_backend import (
+from ...support.shadow_learning.backend import (
     build_shadow_learning_preflight,
     build_shadow_learning_seed,
     build_shadow_learning_trace_path,
 )
-from ...support.shadow_learning_proxy import route_status_indicates_control_ready
-from ...support.shadow_learning_session import (
+from ...support.shadow_learning.proxy import route_status_indicates_control_ready
+from ...support.shadow_learning.session import (
     build_shadow_learning_lease_deadline,
     build_shadow_learning_session_state,
     clear_shadow_learning_session_state,

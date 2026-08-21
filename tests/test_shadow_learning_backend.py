@@ -24,13 +24,13 @@ from custom_components.eybond_local.payload.modbus import (
     build_write_multiple_request,
 )
 from custom_components.eybond_local.runtime.link import EybondRuntimeLinkManager
-from custom_components.eybond_local.support.shadow_learning_backend import (
+from custom_components.eybond_local.support.shadow_learning.backend import (
     InProcessShadowLearningHandler,
     ShadowLearningSeed,
     build_shadow_learning_preflight,
     build_shadow_learning_seed,
 )
-from custom_components.eybond_local.support.shadow_learning_protocol import (
+from custom_components.eybond_local.support.shadow_learning.protocol import (
     EybondGAsciiShadowLearningAdapter,
     ModbusRtuShadowLearningAdapter,
     resolve_shadow_learning_protocol_adapter,
@@ -81,8 +81,8 @@ class ShadowLearningBackendTests(unittest.TestCase):
 
     def test_shadow_trace_start_paths_do_not_block_event_loop_with_file_open(self) -> None:
         for relative_path, class_name in (
-            ("support/shadow_learning_backend.py", "InProcessShadowLearningHandler"),
-            ("support/shadow_learning_proxy.py", "InProcessFailClosedShadowProxyHandler"),
+            ("support/shadow_learning/backend.py", "InProcessShadowLearningHandler"),
+            ("support/shadow_learning/proxy.py", "InProcessFailClosedShadowProxyHandler"),
         ):
             module_path = REPO_ROOT / "custom_components/eybond_local" / relative_path
             tree = ast.parse(module_path.read_text(encoding="utf-8"))

@@ -14,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.support.proxy_trace import (
+from custom_components.eybond_local.support.proxy_capture.trace import (
     anonymize_proxy_trace_text,
     active_proxy_capture_state_path,
     build_proxy_capture_lease_deadline,

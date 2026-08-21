@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from ..metadata.local_metadata import (
+from ...metadata.local_metadata import (
     _dump_json,
     _ensure_can_write,
     ensure_local_metadata_dirs,
@@ -17,18 +17,18 @@ from ..metadata.local_metadata import (
     local_register_schema_path,
     local_register_schemas_root,
 )
-from ..metadata.device_catalog_loader import force_unsupported_models
-from ..metadata.profile_loader import builtin_base_profile_name, load_driver_profile
-from ..metadata.semantic_titles_loader import resolve_semantic_title
-from ..metadata.register_schema_loader import builtin_base_schema_name, load_register_schema
-from ..eybond_g_ascii_settings import G_ASCII_SETTINGS_BY_VALUECLOUD_FIELD
-from .read_learning_binder import match_enum_bindings
-from .shadow_learning import (
+from ...metadata.device_catalog_loader import force_unsupported_models
+from ...metadata.profile_loader import builtin_base_profile_name, load_driver_profile
+from ...metadata.semantic_titles_loader import resolve_semantic_title
+from ...metadata.register_schema_loader import builtin_base_schema_name, load_register_schema
+from ...eybond_g_ascii_settings import G_ASCII_SETTINGS_BY_VALUECLOUD_FIELD
+from ..read_learning_binder import match_enum_bindings
+from . import (
     coerce_optional_int as _to_int,
     deterministic_evidence_hash,
     shadow_learning_slug as _slugify,
 )
-from .shadow_learning_review_model import (
+from .review_model import (
     attach_learned_read_review_model,
     build_learned_control_review_model,
 )

@@ -32,10 +32,12 @@ class AffectedValidationMappingTests(unittest.TestCase):
             "custom_components/eybond_local/runtime/coordinator/strategy.py",
             "custom_components/eybond_local/flows/options/proxy.py",
             "custom_components/eybond_local/collector/transport/listener.py",
+            "custom_components/eybond_local/support/shadow_learning/backend.py",
         )
         self.assertIn("test_coordinator_device_hierarchy.py", selected)
         self.assertIn("test_config_flow.py", selected)
         self.assertIn("test_shared_transport.py", selected)
+        self.assertIn("test_support_package_boundaries.py", selected)
 
     def test_changed_unit_test_selects_itself(self) -> None:
         self.assertEqual(
