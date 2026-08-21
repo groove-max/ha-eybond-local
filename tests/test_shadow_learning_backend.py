@@ -71,7 +71,7 @@ class ShadowLearningBackendTests(unittest.TestCase):
     def test_coordinator_exposes_shadow_learning_lifecycle_methods(self) -> None:
         runtime_dir = REPO_ROOT / "custom_components/eybond_local/runtime"
         method_names: set[str] = set()
-        for path in sorted(runtime_dir.glob("coordinator*.py")):
+        for path in sorted((runtime_dir / "coordinator").glob("*.py")):
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 if isinstance(node, ast.AsyncFunctionDef):
                     method_names.add(node.name)
@@ -749,8 +749,8 @@ class ShadowLearningBackendTests(unittest.TestCase):
         self.assertFalse(blockers)
 
         async def _run() -> None:
-            with patch("custom_components.eybond_local.runtime.link_cloud_routes.InProcessFailClosedShadowProxyHandler", _Handler), patch(
-                "custom_components.eybond_local.runtime.link_cloud_routes.SharedProxyCaptureRoute",
+            with patch("custom_components.eybond_local.runtime.link.cloud_routes.InProcessFailClosedShadowProxyHandler", _Handler), patch(
+                "custom_components.eybond_local.runtime.link.cloud_routes.SharedProxyCaptureRoute",
                 _Route,
             ):
                 await manager.async_start_shadow_learning_route(

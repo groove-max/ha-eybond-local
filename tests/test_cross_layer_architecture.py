@@ -37,10 +37,9 @@ from custom_components.eybond_local.support.cloud_evidence_providers import (  #
 from custom_components.eybond_local.collector import transport_profile  # noqa: E402
 
 _CC = REPO_ROOT / "custom_components" / "eybond_local"
-_COORDINATOR = _CC / "runtime" / "coordinator.py"
-_COORDINATOR_MODULES = tuple(
-    sorted((_CC / "runtime").glob("coordinator*.py"))
-)
+_COORDINATOR_PACKAGE = _CC / "runtime" / "coordinator"
+_COORDINATOR = _COORDINATOR_PACKAGE / "root.py"
+_COORDINATOR_MODULES = tuple(sorted(_COORDINATOR_PACKAGE.glob("*.py")))
 _TRANSPORT_PROFILE = _CC / "collector" / "transport_profile.py"
 
 

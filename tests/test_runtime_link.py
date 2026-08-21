@@ -185,10 +185,10 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         ]
 
         with patch(
-            "custom_components.eybond_local.runtime.link_common.subprocess.check_output",
+            "custom_components.eybond_local.runtime.link.common.subprocess.check_output",
             side_effect=side_effects,
         ), patch(
-            "custom_components.eybond_local.runtime.link_common._default_local_ip",
+            "custom_components.eybond_local.runtime.link.common._default_local_ip",
             return_value="192.168.1.104",
         ):
             resolved = resolve_server_ip(
@@ -200,10 +200,10 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
     def test_resolve_server_ip_prefers_active_ip_on_collector_subnet(self) -> None:
         with patch(
-            "custom_components.eybond_local.runtime.link_common._active_ipv4_interfaces",
+            "custom_components.eybond_local.runtime.link.common._active_ipv4_interfaces",
             return_value=(("192.168.1.104", 24), ("192.168.88.92", 24)),
         ), patch(
-            "custom_components.eybond_local.runtime.link_common._default_local_ip",
+            "custom_components.eybond_local.runtime.link.common._default_local_ip",
             return_value="192.168.1.104",
         ):
             resolved = resolve_server_ip(
@@ -215,10 +215,10 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
     def test_resolve_server_ip_keeps_same_subnet_config_for_ap_mode(self) -> None:
         with patch(
-            "custom_components.eybond_local.runtime.link_common._active_ipv4_interfaces",
+            "custom_components.eybond_local.runtime.link.common._active_ipv4_interfaces",
             return_value=(("192.168.1.104", 24),),
         ), patch(
-            "custom_components.eybond_local.runtime.link_common._default_local_ip",
+            "custom_components.eybond_local.runtime.link.common._default_local_ip",
             return_value="192.168.1.104",
         ):
             resolved = resolve_server_ip(
@@ -230,10 +230,10 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
     def test_resolve_server_ip_tolerates_blocked_socket_fallback(self) -> None:
         with patch(
-            "custom_components.eybond_local.runtime.link_common._active_ipv4_interfaces",
+            "custom_components.eybond_local.runtime.link.common._active_ipv4_interfaces",
             return_value=(),
         ), patch(
-            "custom_components.eybond_local.runtime.link_common.socket.socket",
+            "custom_components.eybond_local.runtime.link.common.socket.socket",
             side_effect=RuntimeError("socket probe blocked"),
         ):
             resolved = resolve_server_ip(
@@ -530,7 +530,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         probe = _fake_probe()
 
         with patch(
-            "custom_components.eybond_local.runtime.link_callback.async_send_callback_trigger", probe
+            "custom_components.eybond_local.runtime.link.callback.async_send_callback_trigger", probe
         ):
             connected = asyncio.run(
                 manager.async_try_connect(timeout=5.0, require_heartbeat=True)
@@ -700,7 +700,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
             "custom_components.eybond_local.runtime.link.resolve_server_ip",
             return_value="192.168.1.10",
         ), patch(
-            "custom_components.eybond_local.runtime.link_transport_lifecycle."
+            "custom_components.eybond_local.runtime.link.transport_lifecycle."
             "resolve_server_ip",
             return_value="192.168.1.20",
         ):
@@ -745,7 +745,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         manager._announcer = _FakeAnnouncer()  # type: ignore[assignment]
 
         with patch(
-            "custom_components.eybond_local.runtime.link_callback.async_send_callback_trigger",
+            "custom_components.eybond_local.runtime.link.callback.async_send_callback_trigger",
             new=AsyncMock(
                 return_value=DiscoveryProbeResult(
                     target_ip="192.168.1.14",
@@ -803,8 +803,8 @@ class RuntimeLinkManagerTests(unittest.TestCase):
                 events.append(("route_stop", None))
 
         async def _run() -> None:
-            with patch("custom_components.eybond_local.runtime.link_cloud_routes.InProcessProxyCaptureHandler", _Handler), patch(
-                "custom_components.eybond_local.runtime.link_cloud_routes.SharedProxyCaptureRoute",
+            with patch("custom_components.eybond_local.runtime.link.cloud_routes.InProcessProxyCaptureHandler", _Handler), patch(
+                "custom_components.eybond_local.runtime.link.cloud_routes.SharedProxyCaptureRoute",
                 _Route,
             ):
                 await manager.async_start_proxy_capture_route(
@@ -883,13 +883,13 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
         async def _run() -> None:
             with patch(
-                "custom_components.eybond_local.runtime.link_cloud_routes.InProcessProxyCaptureHandler",
+                "custom_components.eybond_local.runtime.link.cloud_routes.InProcessProxyCaptureHandler",
                 _Handler,
             ), patch(
-                "custom_components.eybond_local.runtime.link_cloud_routes.InProcessFailClosedShadowProxyHandler",
+                "custom_components.eybond_local.runtime.link.cloud_routes.InProcessFailClosedShadowProxyHandler",
                 _Handler,
             ), patch(
-                "custom_components.eybond_local.runtime.link_cloud_routes.SharedProxyCaptureRoute",
+                "custom_components.eybond_local.runtime.link.cloud_routes.SharedProxyCaptureRoute",
                 _Route,
             ):
                 proxy_start = asyncio.create_task(
@@ -968,13 +968,13 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
         async def _run() -> None:
             with patch(
-                "custom_components.eybond_local.runtime.link_cloud_routes.InProcessProxyCaptureHandler",
+                "custom_components.eybond_local.runtime.link.cloud_routes.InProcessProxyCaptureHandler",
                 _Handler,
             ), patch(
-                "custom_components.eybond_local.runtime.link_cloud_routes.InProcessFailClosedShadowProxyHandler",
+                "custom_components.eybond_local.runtime.link.cloud_routes.InProcessFailClosedShadowProxyHandler",
                 _Handler,
             ), patch(
-                "custom_components.eybond_local.runtime.link_cloud_routes.SharedProxyCaptureRoute",
+                "custom_components.eybond_local.runtime.link.cloud_routes.SharedProxyCaptureRoute",
                 _Route,
             ):
                 with self.assertRaisesRegex(RuntimeError, "bind_failed"):
@@ -1036,10 +1036,10 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
         async def _run() -> None:
             with patch(
-                "custom_components.eybond_local.runtime.link_cloud_routes.InProcessProxyCaptureHandler",
+                "custom_components.eybond_local.runtime.link.cloud_routes.InProcessProxyCaptureHandler",
                 _Handler,
             ), patch(
-                "custom_components.eybond_local.runtime.link_cloud_routes.SharedProxyCaptureRoute",
+                "custom_components.eybond_local.runtime.link.cloud_routes.SharedProxyCaptureRoute",
                 _Route,
             ):
                 await manager.async_start_proxy_capture_route(
@@ -1094,10 +1094,10 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
         async def _run() -> None:
             with patch(
-                "custom_components.eybond_local.runtime.link_cloud_routes.InProcessFailClosedShadowProxyHandler",
+                "custom_components.eybond_local.runtime.link.cloud_routes.InProcessFailClosedShadowProxyHandler",
                 _Handler,
             ), patch(
-                "custom_components.eybond_local.runtime.link_cloud_routes.SharedProxyCaptureRoute",
+                "custom_components.eybond_local.runtime.link.cloud_routes.SharedProxyCaptureRoute",
                 _Route,
             ):
                 await manager.async_start_shadow_learning_route(
@@ -1147,7 +1147,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         probe = _fake_probe()
 
         with patch(
-            "custom_components.eybond_local.runtime.link_callback.async_send_callback_trigger", probe
+            "custom_components.eybond_local.runtime.link.callback.async_send_callback_trigger", probe
         ):
             connected = asyncio.run(
                 manager.async_try_connect(timeout=5.0, require_heartbeat=True)
@@ -1280,7 +1280,7 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
     def _run_connect(self, manager, *, timeout=0.2):
         probe = _fake_probe()
         with patch(
-            "custom_components.eybond_local.runtime.link_callback.async_send_callback_trigger", probe
+            "custom_components.eybond_local.runtime.link.callback.async_send_callback_trigger", probe
         ):
             ok = asyncio.run(manager.async_try_connect(timeout=timeout))
         return ok, probe
@@ -1499,7 +1499,7 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
         probe = _fake_probe()
 
         with patch(
-            "custom_components.eybond_local.runtime.link_callback.async_send_callback_trigger",
+            "custom_components.eybond_local.runtime.link.callback.async_send_callback_trigger",
             probe,
         ):
             activated = asyncio.run(

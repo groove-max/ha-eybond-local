@@ -4,7 +4,7 @@ This is a maintainer-facing reference for how EyeBond Local decides *how* a
 collector is connected, *who* owns a live collector session, and *whether* the
 integration may touch the collector's server endpoint. It is the contract that
 the phase 2–8 refactor established; read it before changing anything in
-`connection/`, `runtime/link.py`, `runtime/coordinator.py`,
+`connection/`, `runtime/link/`, `runtime/coordinator/`,
 `collector/transport.py`, or `passive_discovery.py`.
 
 The whole point of this design is that these decisions are **explicit and
@@ -122,7 +122,7 @@ Short/full PN reconciliation lives **only** in the registry (`reconcile_pn` /
 `pn_is_same_identity`); the transport, link, and passive discovery delegate to it
 instead of re-implementing prefix logic.
 
-The live-wire truth comes from the registry too: `runtime/link.py` reads the
+The live-wire truth comes from the registry too: `runtime/link/` reads the
 entry-claimed `SessionHandle` (via the runtime-scoped registry over the public
 `SharedEybondTransport.observed_collector_sessions()` facade) and negotiates the
 wire from the *observed* session, not from a persisted `collector_session_protocol`
@@ -131,7 +131,7 @@ hint. Untrusted states (`route_identity_mismatch`, `waiting_for_route_identity`,
 
 ## `callback_on_demand` is one-shot
 
-`runtime/link.py` sends exactly one `async_probe_target` datagram per connect
+`runtime/link/` sends exactly one `async_probe_target` datagram per connect
 attempt, then bounded-waits for the inbound session. There is **no** continuous
 `DiscoveryAnnouncer` loop in the connect path. Typed outcomes are recorded in
 `_last_callback_state` and surfaced via `callback_trigger_diagnostics()` into

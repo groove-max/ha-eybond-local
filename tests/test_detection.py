@@ -715,7 +715,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             (integration_root / "runtime" / "driver_detection.py").exists()
         )
         self.assertTrue(
-            (integration_root / "runtime" / "link_baud_sweep.py").exists()
+            (integration_root / "runtime" / "link" / "baud_sweep.py").exists()
         )
 
     def test_unified_scan_has_no_deep_flow_or_public_detector_surface(self) -> None:

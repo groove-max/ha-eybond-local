@@ -21,7 +21,7 @@ class AffectedValidationMappingTests(unittest.TestCase):
 
     def test_runtime_coordinator_selects_behavior_and_boundary_tests(self) -> None:
         selected = self._names(
-            "custom_components/eybond_local/runtime/coordinator_strategy.py"
+            "custom_components/eybond_local/runtime/coordinator/strategy.py"
         )
         self.assertIn("test_coordinator_device_hierarchy.py", selected)
         self.assertIn("test_coordinator_module_boundaries.py", selected)

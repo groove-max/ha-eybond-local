@@ -72,7 +72,7 @@ def _loopback_patches(integration, repair_mod=None, sv_mod=None, fast_policy=Non
     patches = [
         patch.object(integration, "PLATFORMS", ()),
         patch(
-            "custom_components.eybond_local.runtime.link_common._default_local_ip",
+            "custom_components.eybond_local.runtime.link.common._default_local_ip",
             return_value="127.0.0.1",
         ),
         patch(

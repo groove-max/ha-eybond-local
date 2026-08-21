@@ -147,7 +147,7 @@ async def test_discovery_inbound_full_ha_lifecycle(
             }
         ]
         with patch.object(integration, "PLATFORMS", ()), patch(
-            "custom_components.eybond_local.runtime.link_common._default_local_ip",
+            "custom_components.eybond_local.runtime.link.common._default_local_ip",
             return_value="127.0.0.1",
         ), patch(
             "custom_components.eybond_local.network_interfaces.get_ipv4_interfaces",

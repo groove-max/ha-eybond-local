@@ -44,7 +44,7 @@ from custom_components.eybond_local.const import (
     COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE,
 )
 from custom_components.eybond_local.runtime.link import EybondRuntimeLinkManager
-from custom_components.eybond_local.runtime.link_common import (
+from custom_components.eybond_local.runtime.link.common import (
     _UnavailablePayloadTransport,
     _callback_identity_status_values,
 )

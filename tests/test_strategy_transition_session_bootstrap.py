@@ -20,10 +20,10 @@ from custom_components.eybond_local.const import (  # noqa: E402
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
 )
-from custom_components.eybond_local.runtime.coordinator_strategy import (  # noqa: E402
+from custom_components.eybond_local.runtime.coordinator.strategy import (  # noqa: E402
     CoordinatorStrategyTransitionMixin,
 )
-from custom_components.eybond_local.runtime.hub_lifecycle import (  # noqa: E402
+from custom_components.eybond_local.runtime.hub.lifecycle import (  # noqa: E402
     HubLifecycleMixin,
 )
 

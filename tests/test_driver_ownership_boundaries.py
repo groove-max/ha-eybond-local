@@ -54,7 +54,7 @@ from custom_components.eybond_local.support.workflow import build_support_workfl
 
 _CC = REPO_ROOT / "custom_components" / "eybond_local"
 _HUB = _CC / "runtime" / "hub.py"
-_HUB_SUPPORT = _CC / "runtime" / "hub_support.py"
+_HUB_SUPPORT = _CC / "runtime" / "hub" / "support.py"
 _BUNDLE = _CC / "support" / "bundle.py"
 _WORKFLOW = _CC / "support" / "workflow.py"
 

@@ -1140,7 +1140,7 @@ class HubSnapshotTests(unittest.TestCase):
 
             with (
                 patch(
-                    "custom_components.eybond_local.runtime.hub_support.ModbusSession",
+                    "custom_components.eybond_local.runtime.hub.support.ModbusSession",
                     _RecordingSession,
                 ),
                 patch.object(
@@ -2802,11 +2802,11 @@ class RuntimeStateMachineTests(unittest.TestCase):
             )
             with (
                 patch(
-                    "custom_components.eybond_local.runtime.hub_detection.async_detect_inverter",
+                    "custom_components.eybond_local.runtime.hub.detection.async_detect_inverter",
                     return_value=context,
                 ) as first_match,
                 patch(
-                    "custom_components.eybond_local.runtime.hub_detection.async_detect_inverter_candidates",
+                    "custom_components.eybond_local.runtime.hub.detection.async_detect_inverter_candidates",
                     side_effect=AssertionError("full scan must not run"),
                 ),
             ):
@@ -2859,7 +2859,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
                 return scan
 
             with patch(
-                "custom_components.eybond_local.runtime.hub_detection.async_detect_inverter_candidates",
+                "custom_components.eybond_local.runtime.hub.detection.async_detect_inverter_candidates",
                 side_effect=_scan,
             ):
                 first = await hub._async_detect_driver()
@@ -2890,7 +2890,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
                 model="Hybrid 5K",
             )
             with patch(
-                "custom_components.eybond_local.runtime.hub_detection.async_detect_inverter_candidates",
+                "custom_components.eybond_local.runtime.hub.detection.async_detect_inverter_candidates",
                 return_value=DriverCandidateScan(candidates=(context,)),
             ):
                 result = await hub._async_detect_driver()
@@ -2936,7 +2936,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
             )
 
             with patch(
-                "custom_components.eybond_local.runtime.hub_detection.async_detect_inverter_candidates",
+                "custom_components.eybond_local.runtime.hub.detection.async_detect_inverter_candidates",
                 return_value=scan,
             ):
                 self.assertEqual(await hub._async_detect_driver(), "")
@@ -3003,7 +3003,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
                 ),
             )
             with patch(
-                "custom_components.eybond_local.runtime.hub_detection.async_detect_inverter_candidates",
+                "custom_components.eybond_local.runtime.hub.detection.async_detect_inverter_candidates",
                 side_effect=failure,
             ):
                 result = await hub._async_detect_driver()
@@ -3048,7 +3048,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
 
             with (
                 patch(
-                    "custom_components.eybond_local.runtime.hub_detection."
+                    "custom_components.eybond_local.runtime.hub.detection."
                     "async_detect_inverter_candidates",
                     side_effect=failure,
                 ),
@@ -3076,7 +3076,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
             )
             with (
                 patch(
-                    "custom_components.eybond_local.runtime.hub_detection."
+                    "custom_components.eybond_local.runtime.hub.detection."
                     "async_detect_inverter",
                     side_effect=failure,
                 ),
@@ -3118,22 +3118,22 @@ class RuntimeStateMachineTests(unittest.TestCase):
 
             with (
                 patch(
-                    "custom_components.eybond_local.runtime.hub_detection."
+                    "custom_components.eybond_local.runtime.hub.detection."
                     "RuntimeLinkBaudChannel",
                     return_value=channel,
                 ),
                 patch(
-                    "custom_components.eybond_local.runtime.hub_detection."
+                    "custom_components.eybond_local.runtime.hub.detection."
                     "catalog_link_baud_hints",
                     return_value=(2400, 9600),
                 ),
                 patch(
-                    "custom_components.eybond_local.runtime.hub_detection."
+                    "custom_components.eybond_local.runtime.hub.detection."
                     "driver_keys_for_link_baud",
                     return_value=("pi30",),
                 ),
                 patch(
-                    "custom_components.eybond_local.runtime.hub_detection."
+                    "custom_components.eybond_local.runtime.hub.detection."
                     "async_detect_inverter_candidates",
                     return_value=recovered,
                 ) as detect,
@@ -3181,11 +3181,11 @@ class RuntimeStateMachineTests(unittest.TestCase):
 
         with (
             patch(
-                "custom_components.eybond_local.runtime.hub_detection."
+                "custom_components.eybond_local.runtime.hub.detection."
                 "RuntimeLinkBaudChannel",
             ) as channel_type,
             patch(
-                "custom_components.eybond_local.runtime.hub_detection."
+                "custom_components.eybond_local.runtime.hub.detection."
                 "async_detect_inverter_candidates",
                 new=AsyncMock(
                     side_effect=AssertionError(
@@ -3260,7 +3260,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
             # Live detection confirms the SAME identity -> promote to live-confirmed.
             live_inverter = self._inverter()
             with patch(
-                "custom_components.eybond_local.runtime.hub_detection.async_detect_inverter",
+                "custom_components.eybond_local.runtime.hub.detection.async_detect_inverter",
                 new=self._fake_detection(live_inverter, _SuccessDriver()),
             ):
                 snapshot = await hub.async_refresh(poll_interval=3.0)
@@ -3285,7 +3285,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
                 raise RuntimeError("modbus_catalog:probe_timeout")
 
             with patch(
-                "custom_components.eybond_local.runtime.hub_detection.async_detect_inverter",
+                "custom_components.eybond_local.runtime.hub.detection.async_detect_inverter",
                 new=_probe_timeout,
             ):
                 snapshot = await hub.async_refresh(poll_interval=3.0)
@@ -3309,7 +3309,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
             # Live detection reports a DIFFERENT serial (different physical inverter).
             other = self._inverter(serial=self._OTHER_SERIAL)
             with patch(
-                "custom_components.eybond_local.runtime.hub_detection.async_detect_inverter",
+                "custom_components.eybond_local.runtime.hub.detection.async_detect_inverter",
                 new=self._fake_detection(other, _SuccessDriver()),
             ):
                 snapshot = await hub.async_refresh(poll_interval=3.0)
@@ -3421,7 +3421,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
                 raise RuntimeError("probe_timeout")
 
             with patch(
-                "custom_components.eybond_local.runtime.hub_detection.async_detect_inverter",
+                "custom_components.eybond_local.runtime.hub.detection.async_detect_inverter",
                 new=_always_fail,
             ):
                 for _ in range(6):
@@ -3495,7 +3495,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
                     raise
 
             with patch(
-                "custom_components.eybond_local.runtime.hub_detection.async_detect_inverter_candidates",
+                "custom_components.eybond_local.runtime.hub.detection.async_detect_inverter_candidates",
                 side_effect=_slow_detection,
             ):
                 detection = asyncio.create_task(hub._async_detect_driver())

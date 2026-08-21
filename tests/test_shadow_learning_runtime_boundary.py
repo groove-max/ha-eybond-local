@@ -328,10 +328,10 @@ class ShadowLearningRuntimeFacadeTests(unittest.IsolatedAsyncioTestCase):
 class ShadowLearningRuntimeArchitectureTests(unittest.TestCase):
     def test_production_consumers_do_not_access_coordinator_privates(self) -> None:
         violations: list[str] = []
-        coordinator_path = PRODUCTION_ROOT / "runtime" / "coordinator.py"
+        coordinator_package = PRODUCTION_ROOT / "runtime" / "coordinator"
 
         for path in sorted(PRODUCTION_ROOT.rglob("*.py")):
-            if path == coordinator_path:
+            if coordinator_package in path.parents:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
@@ -394,11 +394,11 @@ class ShadowLearningRuntimeArchitectureTests(unittest.TestCase):
         files_and_classes = (
             (PRODUCTION_ROOT / "runtime" / "manager.py", "RuntimeManager"),
             (
-                PRODUCTION_ROOT / "runtime" / "link_cloud_routes.py",
+                PRODUCTION_ROOT / "runtime" / "link" / "cloud_routes.py",
                 "LinkCloudRoutesMixin",
             ),
             (
-                PRODUCTION_ROOT / "runtime" / "hub_lifecycle.py",
+                PRODUCTION_ROOT / "runtime" / "hub" / "lifecycle.py",
                 "HubLifecycleMixin",
             ),
         )
@@ -422,7 +422,9 @@ class ShadowLearningRuntimeArchitectureTests(unittest.TestCase):
 
         coordinator_source = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in sorted((PRODUCTION_ROOT / "runtime").glob("coordinator*.py"))
+            for path in sorted(
+                (PRODUCTION_ROOT / "runtime" / "coordinator").glob("*.py")
+            )
         )
         self.assertIn("def shadow_learning_runtime(", coordinator_source)
         for method_name in required_methods:

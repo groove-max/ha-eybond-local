@@ -50,12 +50,10 @@ from custom_components.eybond_local.support.cloud_evidence_providers import (  #
 )
 
 _CC = REPO_ROOT / "custom_components" / "eybond_local"
-_COORDINATOR = _CC / "runtime" / "coordinator.py"
-_COORDINATOR_LIFECYCLE = (
-    _COORDINATOR,
-    *sorted((_CC / "runtime").glob("coordinator_*.py")),
-)
-_COORDINATOR_SUPPORT = _CC / "runtime" / "coordinator_support.py"
+_COORDINATOR_PACKAGE = _CC / "runtime" / "coordinator"
+_COORDINATOR = _COORDINATOR_PACKAGE / "root.py"
+_COORDINATOR_LIFECYCLE = tuple(sorted(_COORDINATOR_PACKAGE.glob("*.py")))
+_COORDINATOR_SUPPORT = _CC / "runtime" / "coordinator" / "support.py"
 _PROVIDERS = _CC / "support" / "cloud_evidence_providers.py"
 _CONST = _CC / "const.py"
 _CONFIG_FLOW = _CC / "config_flow.py"

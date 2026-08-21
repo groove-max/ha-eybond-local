@@ -116,7 +116,7 @@ class DeviceProjectionArchitectureTests(unittest.TestCase):
         self,
     ) -> None:
         runtime_dir = REPO_ROOT / "custom_components/eybond_local/runtime"
-        source = (runtime_dir / "coordinator_device_registry.py").read_text(
+        source = (runtime_dir / "coordinator" / "device_registry.py").read_text(
             encoding="utf-8"
         )
         tree = ast.parse(source)
@@ -138,7 +138,7 @@ class DeviceProjectionArchitectureTests(unittest.TestCase):
         self.assertIn("build_inverter_device_info_payload", source)
         self.assertIn("build_collector_device_info_payload", source)
 
-        composition_source = (runtime_dir / "coordinator.py").read_text(
+        composition_source = (runtime_dir / "coordinator" / "root.py").read_text(
             encoding="utf-8"
         )
         self.assertIn("CoordinatorDeviceRegistryMixin", composition_source)

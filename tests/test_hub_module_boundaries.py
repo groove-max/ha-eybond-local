@@ -11,15 +11,16 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / "custom_components" / "eybond_local" / "runtime"
-HUB = RUNTIME / "hub.py"
+HUB_PACKAGE = RUNTIME / "hub"
+HUB = HUB_PACKAGE / "__init__.py"
 
 MIXINS = {
-    "hub_lifecycle.py": "HubLifecycleMixin",
-    "hub_refresh.py": "HubRefreshMixin",
-    "hub_management.py": "HubManagementMixin",
-    "hub_support.py": "HubSupportMixin",
-    "hub_detection.py": "HubDetectionMixin",
-    "hub_snapshot.py": "HubSnapshotMixin",
+    "lifecycle.py": "HubLifecycleMixin",
+    "refresh.py": "HubRefreshMixin",
+    "management.py": "HubManagementMixin",
+    "support.py": "HubSupportMixin",
+    "detection.py": "HubDetectionMixin",
+    "snapshot.py": "HubSnapshotMixin",
 }
 
 EXPECTED_MRO = [
@@ -32,7 +33,7 @@ EXPECTED_MRO = [
 ]
 
 EXPECTED_METHOD_MULTISET_SHA256 = (
-    "1e64d4429024a075207a2c0b54268a5e32c0dec725a19edad6c570a629bcb393"
+    "da6ae9c5af040c6cec37edc9c9683bf7c0621405dc2e87db3c0925d75c9db39d"
 )
 
 
@@ -83,9 +84,9 @@ class HubCompositionBoundaryTests(unittest.TestCase):
     def test_every_original_method_has_one_owner_and_matching_multiplicity(self) -> None:
         owners: dict[str, set[str]] = {}
         counts: Counter[str] = Counter()
-        classes = [("hub.py", _class(HUB, "EybondHub"))]
+        classes = [("__init__.py", _class(HUB, "EybondHub"))]
         classes.extend(
-            (filename, _class(RUNTIME / filename, class_name))
+            (filename, _class(HUB_PACKAGE / filename, class_name))
             for filename, class_name in MIXINS.items()
         )
         for filename, lifecycle in classes:
@@ -96,8 +97,8 @@ class HubCompositionBoundaryTests(unittest.TestCase):
         duplicates = {name: paths for name, paths in owners.items() if len(paths) != 1}
         self.assertEqual(duplicates, {})
         payload = "\n".join(f"{name}:{count}" for name, count in sorted(counts.items()))
-        self.assertEqual(sum(counts.values()), 105)
-        self.assertEqual(len(counts), 100)
+        self.assertEqual(sum(counts.values()), 106)
+        self.assertEqual(len(counts), 101)
         self.assertEqual(
             hashlib.sha256(payload.encode()).hexdigest(),
             EXPECTED_METHOD_MULTISET_SHA256,
@@ -105,7 +106,7 @@ class HubCompositionBoundaryTests(unittest.TestCase):
 
     def test_mixins_have_no_constructor_or_hub_back_import(self) -> None:
         for filename, class_name in MIXINS.items():
-            path = RUNTIME / filename
+            path = HUB_PACKAGE / filename
             self.assertNotIn("__init__", _methods(_class(path, class_name)), filename)
             imports = _imported_modules(path)
             self.assertFalse(
@@ -115,25 +116,25 @@ class HubCompositionBoundaryTests(unittest.TestCase):
 
     def test_one_class_owns_each_stateful_family(self) -> None:
         expected = {
-            "async_refresh": "hub_refresh.py",
-            "_resolve_runtime_measurements": "hub_refresh.py",
-            "async_write_capability": "hub_management.py",
-            "async_set_collector_server_endpoint": "hub_management.py",
-            "async_capture_support_evidence": "hub_support.py",
-            "_async_detect_driver": "hub_detection.py",
-            "_build_snapshot": "hub_snapshot.py",
-            "async_start_proxy_capture_route": "hub_lifecycle.py",
-            "async_start_shadow_learning_route": "hub_lifecycle.py",
+            "async_refresh": "refresh.py",
+            "_resolve_runtime_measurements": "refresh.py",
+            "async_write_capability": "management.py",
+            "async_set_collector_server_endpoint": "management.py",
+            "async_capture_support_evidence": "support.py",
+            "_async_detect_driver": "detection.py",
+            "_build_snapshot": "snapshot.py",
+            "async_start_proxy_capture_route": "lifecycle.py",
+            "async_start_shadow_learning_route": "lifecycle.py",
         }
         actual: dict[str, str] = {}
         for filename, class_name in MIXINS.items():
-            for method in _methods(_class(RUNTIME / filename, class_name)):
+            for method in _methods(_class(HUB_PACKAGE / filename, class_name)):
                 if method in expected:
                     actual[method] = filename
         self.assertEqual(actual, expected)
 
     def test_shared_module_is_not_a_second_hub_or_state_owner(self) -> None:
-        common = RUNTIME / "hub_common.py"
+        common = HUB_PACKAGE / "common.py"
         classes = [node.name for node in _tree(common).body if isinstance(node, ast.ClassDef)]
         self.assertNotIn("EybondHub", classes)
         self.assertFalse(any(name.startswith("Hub") for name in classes))

@@ -9,28 +9,29 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / "custom_components" / "eybond_local" / "runtime"
-COORDINATOR = RUNTIME / "coordinator.py"
+COORDINATOR_PACKAGE = RUNTIME / "coordinator"
+COORDINATOR = COORDINATOR_PACKAGE / "root.py"
 
 MIXINS = {
-    "coordinator_lifecycle.py": "CoordinatorLifecycleMixin",
-    "coordinator_diagnostics.py": "CoordinatorDiagnosticsMixin",
-    "coordinator_startup.py": "CoordinatorStartupIdentityMixin",
-    "coordinator_cloud_tools.py": "CoordinatorCloudToolsMixin",
-    "coordinator_snapshot_projection.py": "CoordinatorSnapshotProjectionMixin",
-    "coordinator_support.py": "CoordinatorSupportMixin",
-    "coordinator_strategy.py": "CoordinatorStrategyTransitionMixin",
-    "coordinator_management.py": "CoordinatorManagementMixin",
-    "coordinator_management_projection.py": "CoordinatorManagementProjectionMixin",
-    "coordinator_network.py": "CoordinatorNetworkReconcileMixin",
-    "coordinator_entity_reload.py": "CoordinatorEntityReloadMixin",
-    "coordinator_operating_profile.py": "CoordinatorOperatingProfileMixin",
-    "coordinator_persistence.py": "CoordinatorPersistenceMixin",
-    "coordinator_runtime_profile.py": "CoordinatorRuntimeProfileMixin",
-    "coordinator_polling.py": "CoordinatorPollingMixin",
-    "coordinator_collector_profile.py": "CoordinatorCollectorProfileMixin",
-    "coordinator_control_projection.py": "CoordinatorControlProjectionMixin",
-    "coordinator_inverter_profile.py": "CoordinatorInverterProfileMixin",
-    "coordinator_device_registry.py": "CoordinatorDeviceRegistryMixin",
+    "lifecycle.py": "CoordinatorLifecycleMixin",
+    "diagnostics.py": "CoordinatorDiagnosticsMixin",
+    "startup.py": "CoordinatorStartupIdentityMixin",
+    "cloud_tools.py": "CoordinatorCloudToolsMixin",
+    "snapshot_projection.py": "CoordinatorSnapshotProjectionMixin",
+    "support.py": "CoordinatorSupportMixin",
+    "strategy.py": "CoordinatorStrategyTransitionMixin",
+    "management.py": "CoordinatorManagementMixin",
+    "management_projection.py": "CoordinatorManagementProjectionMixin",
+    "network.py": "CoordinatorNetworkReconcileMixin",
+    "entity_reload.py": "CoordinatorEntityReloadMixin",
+    "operating_profile.py": "CoordinatorOperatingProfileMixin",
+    "persistence.py": "CoordinatorPersistenceMixin",
+    "runtime_profile.py": "CoordinatorRuntimeProfileMixin",
+    "polling.py": "CoordinatorPollingMixin",
+    "collector_profile.py": "CoordinatorCollectorProfileMixin",
+    "control_projection.py": "CoordinatorControlProjectionMixin",
+    "inverter_profile.py": "CoordinatorInverterProfileMixin",
+    "device_registry.py": "CoordinatorDeviceRegistryMixin",
 }
 
 EXPECTED_MRO = [
@@ -107,9 +108,9 @@ class CoordinatorCompositionBoundaryTests(unittest.TestCase):
 
     def test_every_lifecycle_method_has_exactly_one_owner(self) -> None:
         owners: dict[str, list[str]] = {}
-        classes = [("coordinator.py", _class(COORDINATOR, "EybondLocalCoordinator"))]
+        classes = [("root.py", _class(COORDINATOR, "EybondLocalCoordinator"))]
         classes.extend(
-            (filename, _class(RUNTIME / filename, class_name))
+            (filename, _class(COORDINATOR_PACKAGE / filename, class_name))
             for filename, class_name in MIXINS.items()
         )
         for filename, lifecycle in classes:
@@ -125,7 +126,9 @@ class CoordinatorCompositionBoundaryTests(unittest.TestCase):
     def test_provider_neutral_cloud_evidence_surface_has_no_smartess_wrapper(self) -> None:
         methods = set()
         for filename, class_name in MIXINS.items():
-            methods.update(_methods(_class(RUNTIME / filename, class_name)))
+            methods.update(
+                _methods(_class(COORDINATOR_PACKAGE / filename, class_name))
+            )
         self.assertNotIn("async_export_smartess_cloud_evidence", methods)
         self.assertNotIn("smartess_cloud_export_available", methods)
         self.assertIn("async_export_cloud_evidence", methods)
@@ -134,7 +137,7 @@ class CoordinatorCompositionBoundaryTests(unittest.TestCase):
 
     def test_mixins_have_no_constructor_or_coordinator_back_import(self) -> None:
         for filename, class_name in MIXINS.items():
-            path = RUNTIME / filename
+            path = COORDINATOR_PACKAGE / filename
             self.assertNotIn("__init__", _methods(_class(path, class_name)), filename)
             imports = _imported_modules(path)
             self.assertFalse(
@@ -144,21 +147,21 @@ class CoordinatorCompositionBoundaryTests(unittest.TestCase):
 
     def test_one_class_owns_each_transaction_family(self) -> None:
         expected = {
-            "async_start_proxy_capture": "coordinator_cloud_tools.py",
-            "async_start_shadow_learning": "coordinator_cloud_tools.py",
-            "_run_finalization_shielded": "coordinator_cloud_tools.py",
-            "async_run_connection_strategy_transition": "coordinator_strategy.py",
+            "async_start_proxy_capture": "cloud_tools.py",
+            "async_start_shadow_learning": "cloud_tools.py",
+            "_run_finalization_shielded": "cloud_tools.py",
+            "async_run_connection_strategy_transition": "strategy.py",
             "_async_prepare_strategy_transition_management_session": (
-                "coordinator_strategy.py"
+                "strategy.py"
             ),
-            "_apply_transition_commit": "coordinator_strategy.py",
-            "_collector_endpoint_operation": "coordinator_management.py",
-            "_async_update_data": "coordinator_polling.py",
-            "_async_update_data_with_runtime_lock": "coordinator_polling.py",
+            "_apply_transition_commit": "strategy.py",
+            "_collector_endpoint_operation": "management.py",
+            "_async_update_data": "polling.py",
+            "_async_update_data_with_runtime_lock": "polling.py",
         }
         actual: dict[str, str] = {}
         for filename, class_name in MIXINS.items():
-            for method in _methods(_class(RUNTIME / filename, class_name)):
+            for method in _methods(_class(COORDINATOR_PACKAGE / filename, class_name)):
                 if method in expected:
                     actual[method] = filename
         self.assertEqual(actual, expected)
@@ -167,11 +170,11 @@ class CoordinatorCompositionBoundaryTests(unittest.TestCase):
 class CoordinatorPureProjectionBoundaryTests(unittest.TestCase):
     def test_pure_projection_modules_do_not_import_ha_or_lifecycles(self) -> None:
         for filename in (
-            "coordinator_endpoint_projection.py",
-            "coordinator_poll_projection.py",
-            "coordinator_tooling_projection.py",
+            "endpoint_projection.py",
+            "poll_projection.py",
+            "tooling_projection.py",
         ):
-            imports = _imported_modules(RUNTIME / filename)
+            imports = _imported_modules(COORDINATOR_PACKAGE / filename)
             self.assertFalse(any(module.startswith("homeassistant") for module in imports), filename)
             self.assertFalse(
                 any(module.startswith("coordinator_") for module in imports),

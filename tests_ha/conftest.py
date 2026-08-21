@@ -264,7 +264,7 @@ def fake_runtime():
         return manager
 
     with patch(
-        "custom_components.eybond_local.runtime.coordinator.create_runtime_manager",
+        "custom_components.eybond_local.runtime.coordinator.root.create_runtime_manager",
         side_effect=_create,
     ):
         yield created

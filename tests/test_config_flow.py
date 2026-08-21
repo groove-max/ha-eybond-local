@@ -14737,7 +14737,7 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
 
         import inspect
 
-        from custom_components.eybond_local.runtime.coordinator_strategy import (
+        from custom_components.eybond_local.runtime.coordinator.strategy import (
             CoordinatorStrategyTransitionMixin,
         )
 

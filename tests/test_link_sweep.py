@@ -14,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.runtime.link_baud_sweep import (  # noqa: E402
+from custom_components.eybond_local.runtime.link.baud_sweep import (  # noqa: E402
     RuntimeLinkBaudChannel,
     async_run_link_baud_sweep,
     catalog_link_baud_hints,
@@ -129,7 +129,7 @@ class SilenceClassifierTests(unittest.TestCase):
 
 class CatalogHintTests(unittest.TestCase):
     def test_driver_keys_for_link_baud_restrict_the_resweep(self) -> None:
-        from custom_components.eybond_local.runtime.link_baud_sweep import (
+        from custom_components.eybond_local.runtime.link.baud_sweep import (
             driver_keys_for_link_baud,
         )
 
@@ -175,7 +175,7 @@ class RuntimeLinkBaudChannelTests(unittest.IsolatedAsyncioTestCase):
             parameter=34,
         )
         with patch(
-            "custom_components.eybond_local.runtime.link_baud_sweep."
+            "custom_components.eybond_local.runtime.link.baud_sweep."
             "CollectorWireManagementSession",
             return_value=session,
         ):

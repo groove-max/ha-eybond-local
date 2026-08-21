@@ -11,20 +11,21 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / "custom_components" / "eybond_local" / "runtime"
-LINK = RUNTIME / "link.py"
-LINK_WIRE_AUTHORITY = RUNTIME / "link_wire_authority.py"
+LINK_PACKAGE = RUNTIME / "link"
+LINK = LINK_PACKAGE / "__init__.py"
+LINK_WIRE_AUTHORITY = LINK_PACKAGE / "wire_authority.py"
 POLL_SCHEDULER = RUNTIME / "poll_scheduler.py"
 POLL_POLICY_SHIM = RUNTIME / "poll_policy.py"
 SESSION_HANDLE = ROOT / "custom_components" / "eybond_local" / "connection" / "session_handle.py"
 
 MIXINS = {
-    "link_session_projection.py": "LinkSessionProjectionMixin",
-    "link_lifecycle.py": "LinkLifecycleMixin",
-    "link_callback.py": "LinkCallbackMixin",
-    "link_cloud_routes.py": "LinkCloudRoutesMixin",
-    "link_connection.py": "LinkConnectionMixin",
-    "link_wire_authority.py": "LinkWireAuthorityMixin",
-    "link_transport_lifecycle.py": "LinkTransportLifecycleMixin",
+    "session_projection.py": "LinkSessionProjectionMixin",
+    "lifecycle.py": "LinkLifecycleMixin",
+    "callback.py": "LinkCallbackMixin",
+    "cloud_routes.py": "LinkCloudRoutesMixin",
+    "connection.py": "LinkConnectionMixin",
+    "wire_authority.py": "LinkWireAuthorityMixin",
+    "transport_lifecycle.py": "LinkTransportLifecycleMixin",
 }
 
 EXPECTED_MRO = [
@@ -89,9 +90,9 @@ class LinkCompositionBoundaryTests(unittest.TestCase):
     def test_every_original_method_has_one_owner_and_matching_multiplicity(self) -> None:
         owners: dict[str, set[str]] = {}
         counts: Counter[str] = Counter()
-        classes = [("link.py", _class(LINK, "EybondRuntimeLinkManager"))]
+        classes = [("__init__.py", _class(LINK, "EybondRuntimeLinkManager"))]
         classes.extend(
-            (filename, _class(RUNTIME / filename, class_name))
+            (filename, _class(LINK_PACKAGE / filename, class_name))
             for filename, class_name in MIXINS.items()
         )
         for filename, lifecycle in classes:
@@ -113,7 +114,7 @@ class LinkCompositionBoundaryTests(unittest.TestCase):
 
     def test_mixins_have_no_constructor_or_link_back_import(self) -> None:
         for filename, class_name in MIXINS.items():
-            path = RUNTIME / filename
+            path = LINK_PACKAGE / filename
             self.assertNotIn("__init__", _methods(_class(path, class_name)), filename)
             imports = _imported_modules(path)
             self.assertFalse(
@@ -123,25 +124,25 @@ class LinkCompositionBoundaryTests(unittest.TestCase):
 
     def test_one_class_owns_each_stateful_family(self) -> None:
         expected = {
-            "async_trigger_reverse_discovery": "link_callback.py",
-            "_async_callback_connect_within_causality": "link_connection.py",
-            "async_start_proxy_capture_route": "link_cloud_routes.py",
-            "async_start_shadow_learning_route": "link_cloud_routes.py",
-            "_live_session_handle": "link_wire_authority.py",
-            "_effective_wire_binding": "link_wire_authority.py",
-            "_apply_live_wire_to_transports": "link_wire_authority.py",
-            "_build_transport_pair": "link_transport_lifecycle.py",
-            "async_reconcile_collector_session_profile": "link_lifecycle.py",
+            "async_trigger_reverse_discovery": "callback.py",
+            "_async_callback_connect_within_causality": "connection.py",
+            "async_start_proxy_capture_route": "cloud_routes.py",
+            "async_start_shadow_learning_route": "cloud_routes.py",
+            "_live_session_handle": "wire_authority.py",
+            "_effective_wire_binding": "wire_authority.py",
+            "_apply_live_wire_to_transports": "wire_authority.py",
+            "_build_transport_pair": "transport_lifecycle.py",
+            "async_reconcile_collector_session_profile": "lifecycle.py",
         }
         actual: dict[str, str] = {}
         for filename, class_name in MIXINS.items():
-            for method in _methods(_class(RUNTIME / filename, class_name)):
+            for method in _methods(_class(LINK_PACKAGE / filename, class_name)):
                 if method in expected:
                     actual[method] = filename
         self.assertEqual(actual, expected)
 
     def test_common_module_is_not_a_second_link_or_session_authority(self) -> None:
-        common = RUNTIME / "link_common.py"
+        common = LINK_PACKAGE / "common.py"
         class_names = {
             node.name for node in _tree(common).body if isinstance(node, ast.ClassDef)
         }

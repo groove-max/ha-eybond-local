@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import dataclasses
 import importlib
-import importlib.util
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -840,36 +839,31 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         }
         _install_coordinator_stubs()
 
-        coordinator_spec = importlib.util.spec_from_file_location(
-            "custom_components.eybond_local.runtime.coordinator",
-            REPO_ROOT / "custom_components" / "eybond_local" / "runtime" / "coordinator.py",
+        coordinator_module = importlib.import_module(
+            "custom_components.eybond_local.runtime.coordinator.root"
         )
-        assert coordinator_spec is not None and coordinator_spec.loader is not None
-        coordinator_module = importlib.util.module_from_spec(coordinator_spec)
-        sys.modules[coordinator_spec.name] = coordinator_module
-        coordinator_spec.loader.exec_module(coordinator_module)
 
         cls.coordinator_module = coordinator_module
         cls.coordinator_polling_module = importlib.import_module(
-            "custom_components.eybond_local.runtime.coordinator_polling"
+            "custom_components.eybond_local.runtime.coordinator.polling"
         )
         cls.coordinator_inverter_profile_module = importlib.import_module(
-            "custom_components.eybond_local.runtime.coordinator_inverter_profile"
+            "custom_components.eybond_local.runtime.coordinator.inverter_profile"
         )
         cls.coordinator_tooling_projection_module = importlib.import_module(
-            "custom_components.eybond_local.runtime.coordinator_tooling_projection"
+            "custom_components.eybond_local.runtime.coordinator.tooling_projection"
         )
         cls.coordinator_snapshot_projection_module = importlib.import_module(
-            "custom_components.eybond_local.runtime.coordinator_snapshot_projection"
+            "custom_components.eybond_local.runtime.coordinator.snapshot_projection"
         )
         cls.coordinator_cloud_tools_module = importlib.import_module(
-            "custom_components.eybond_local.runtime.coordinator_cloud_tools"
+            "custom_components.eybond_local.runtime.coordinator.cloud_tools"
         )
         cls.coordinator_diagnostics_module = importlib.import_module(
-            "custom_components.eybond_local.runtime.coordinator_diagnostics"
+            "custom_components.eybond_local.runtime.coordinator.diagnostics"
         )
         cls.coordinator_startup_module = importlib.import_module(
-            "custom_components.eybond_local.runtime.coordinator_startup"
+            "custom_components.eybond_local.runtime.coordinator.startup"
         )
         cls.platform_context_module = importlib.import_module(
             "custom_components.eybond_local.platform_context"

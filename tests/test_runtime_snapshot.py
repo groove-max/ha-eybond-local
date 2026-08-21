@@ -24,7 +24,7 @@ class RuntimeSnapshotCollectorMetadataTests(unittest.TestCase):
         runtime_dir = REPO_ROOT / "custom_components/eybond_local/runtime"
         return tuple(
             path.read_text(encoding="utf-8")
-            for path in sorted(runtime_dir.glob("coordinator*.py"))
+            for path in sorted((runtime_dir / "coordinator").glob("*.py"))
         )
 
     @classmethod
@@ -182,7 +182,7 @@ class RuntimeSnapshotCollectorMetadataTests(unittest.TestCase):
         }
         self.assertIn("set_collector_server_endpoint", publisher_calls)
 
-        hub_path = REPO_ROOT / "custom_components/eybond_local/runtime/hub_snapshot.py"
+        hub_path = REPO_ROOT / "custom_components/eybond_local/runtime/hub/snapshot.py"
         hub_tree = ast.parse(hub_path.read_text(encoding="utf-8"))
         hub_class = next(
             node

@@ -19,27 +19,37 @@ from pathlib import Path
 import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-COORDINATOR = REPO_ROOT / "custom_components" / "eybond_local" / "runtime" / "coordinator.py"
+COORDINATOR = (
+    REPO_ROOT
+    / "custom_components"
+    / "eybond_local"
+    / "runtime"
+    / "coordinator"
+    / "root.py"
+)
 POLL_PROJECTION = (
     REPO_ROOT
     / "custom_components"
     / "eybond_local"
     / "runtime"
-    / "coordinator_poll_projection.py"
+    / "coordinator"
+    / "poll_projection.py"
 )
 POLLING = (
     REPO_ROOT
     / "custom_components"
     / "eybond_local"
     / "runtime"
-    / "coordinator_polling.py"
+    / "coordinator"
+    / "polling.py"
 )
 STARTUP = (
     REPO_ROOT
     / "custom_components"
     / "eybond_local"
     / "runtime"
-    / "coordinator_startup.py"
+    / "coordinator"
+    / "startup.py"
 )
 
 

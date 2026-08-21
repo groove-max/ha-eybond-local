@@ -35,9 +35,9 @@ state owners.
 | --- | ---: | --- |
 | `config_flow.py` | 41 lines | journey-specific `config_*.py` mixins and neutral form/presentation helpers |
 | `options_flow.py` | 28 lines | `options_*.py` lifecycle/journey mixins |
-| `runtime/coordinator.py` | 335 lines | 19 cohesive coordinator responsibility mixins |
-| `runtime/hub.py` | 165 lines | lifecycle, refresh, management, support, detection and snapshot mixins |
-| `runtime/link.py` | 175 lines | session projection, callback, cloud routes, connection, transport lifecycle and one wire-authority mixin |
+| `runtime/coordinator/` | lazy public package + 335-line root | 19 cohesive coordinator responsibility mixins |
+| `runtime/hub/` | 165-line package root | lifecycle, refresh, management, support, detection and snapshot mixins |
+| `runtime/link/` | 175-line package root | session projection, callback, cloud routes, connection, transport lifecycle and one wire-authority mixin |
 | `collector/transport.py` | 39 lines | common framing, socket connections, one shared listener, proxy route and framed/AT facades |
 | package `__init__.py` | 379 lines | HA lifecycle root plus registration, metadata, entity, precision and migration modules |
 | `connection/recovery/verification.py` | 102 lines | immutable models, one reset engine, one observed-session channel and one production transaction assembly |

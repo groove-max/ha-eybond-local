@@ -446,7 +446,7 @@ class TypedTelemetryArchitectureTests(unittest.TestCase):
         self.assertEqual(len(runtime_view_calls), 1)
 
     def test_hub_write_authority_uses_typed_first_snapshot_values(self) -> None:
-        path = REPO_ROOT / "custom_components/eybond_local/runtime/hub_management.py"
+        path = REPO_ROOT / "custom_components/eybond_local/runtime/hub/management.py"
         tree = ast.parse(path.read_text(encoding="utf-8"))
         hub_class = next(
             node
