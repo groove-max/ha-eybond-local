@@ -27,7 +27,7 @@ from ..metadata.smartess_draft import (
     create_smartess_known_family_draft,
     resolve_smartess_known_family_draft_plan,
 )
-from ..smartess_cloud import classify_smartess_cloud_error
+from ..smartess_cloud import SmartEssCloudError, classify_smartess_cloud_error
 from ..metadata.smartess_onboarding import (
     SMARTESS_ONBOARDING_SOURCE,
     build_smartess_onboarding_assist,
@@ -236,6 +236,17 @@ class CloudEvidenceProvider(ABC):
 
         return "unexpected"
 
+    def classify_control_discovery_error(self, exc: BaseException) -> str:
+        """Classify only an error owned by this provider's discovery runner.
+
+        An empty result means the exception belongs to flow/runtime orchestration,
+        not to the provider client. This keeps route and safety failures out of
+        the cloud-error UX while retaining ``classify_error`` as the broader
+        adapter used around direct provider calls.
+        """
+
+        return ""
+
     def diagnostics(self, context: CloudEvidenceContext) -> dict[str, object]:
         """Return SAFE diagnostics -- never credentials or raw cloud payloads."""
 
@@ -279,6 +290,11 @@ class SmartEssCloudEvidenceProvider(CloudEvidenceProvider):
         return bool(str(context.collector_pn or "").strip())
 
     def classify_error(self, exc: BaseException) -> str:
+        return classify_smartess_cloud_error(exc)
+
+    def classify_control_discovery_error(self, exc: BaseException) -> str:
+        if not isinstance(exc, (SmartEssCloudError, TimeoutError)):
+            return ""
         return classify_smartess_cloud_error(exc)
 
     def export(

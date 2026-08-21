@@ -50,6 +50,8 @@ the GitHub release body should be rendered from the matching version section her
 - Fixed slow cloud-evidence reads blocking the Home Assistant event loop and
   tightened callback-listener cleanup during replacement, cancellation, and
   shutdown.
+- Fixed proxy-capture startup after the coordinator package split and preserved
+  safe, localized cloud failure reasons when device learning cannot finish.
 - Fixed sensor, capability, collector-endpoint, cloud metadata, and derived
   energy projections so they all publish from the same validated runtime
   snapshot.

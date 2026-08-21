@@ -30,6 +30,7 @@ from custom_components.eybond_local.support.cloud_evidence_providers import (  #
     supported_cloud_evidence_providers,
 )
 from custom_components.eybond_local.support.cloud_evidence import CloudEvidenceRecord  # noqa: E402
+from custom_components.eybond_local.smartess_cloud import SmartEssCloudError  # noqa: E402
 
 
 def _context(**overrides) -> CloudEvidenceContext:
@@ -64,6 +65,26 @@ class RegistryTests(unittest.TestCase):
 
 
 class ProviderIsolationTests(unittest.TestCase):
+    def test_control_discovery_classifier_accepts_only_provider_owned_errors(self) -> None:
+        provider = SmartEssCloudEvidenceProvider()
+
+        self.assertEqual(
+            provider.classify_control_discovery_error(
+                SmartEssCloudError("network_error:timed out")
+            ),
+            "timeout",
+        )
+        self.assertEqual(
+            provider.classify_control_discovery_error(TimeoutError()),
+            "timeout",
+        )
+        self.assertEqual(
+            provider.classify_control_discovery_error(
+                RuntimeError("runtime_route_failed")
+            ),
+            "",
+        )
+
     def test_smartess_export_runs_only_smartess_code(self) -> None:
         record = CloudEvidenceRecord(path=Path("/tmp/x.json"), payload={"provider": "smartess"})
         with patch.object(

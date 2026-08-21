@@ -41,6 +41,12 @@ CONTROL_DISCOVERY_FAILURE_KEYS = (
     "control_discovery_route_dropped",
     "control_discovery_run_incomplete",
     "control_discovery_safety_stop",
+    "control_discovery_cloud_auth_failed",
+    "control_discovery_cloud_rate_limited",
+    "control_discovery_cloud_unavailable",
+    "control_discovery_cloud_timeout",
+    "control_discovery_cloud_network",
+    "control_discovery_cloud_unexpected",
     "control_discovery_failure_generic",
 )
 

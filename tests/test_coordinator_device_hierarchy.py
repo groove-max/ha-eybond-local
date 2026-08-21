@@ -880,6 +880,23 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = original
+        # Restoring ``sys.modules`` directly does not recreate the child-module
+        # attributes that normal import machinery installs on each parent
+        # package. Other suites may already have loaded additional descendants
+        # (for example ``support.shadow_learning.overlay_generator``) that this
+        # coordinator harness never stubs. Rebind every surviving integration
+        # child so a later dotted patch/import sees the same module topology it
+        # had before this harness replaced the parent packages.
+        integration_prefix = "custom_components.eybond_local."
+        for name, module in sorted(
+            tuple(sys.modules.items()), key=lambda item: item[0].count(".")
+        ):
+            if module is None or not name.startswith(integration_prefix):
+                continue
+            parent_name, separator, child_name = name.rpartition(".")
+            parent = sys.modules.get(parent_name)
+            if separator and parent is not None:
+                setattr(parent, child_name, module)
         super().tearDownClass()
 
     def setUp(self) -> None:
@@ -5608,6 +5625,33 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertNotIn("proxy_capture_session_anonymized", coordinator.data.values)
         self.assertEqual(coordinator.data.values["proxy_trace_path"], "/config/trace.jsonl")
         self.assertNotIn("proxy_capture_session_status", coordinator._tooling_values)
+
+    def test_proxy_capture_deadline_scheduler_uses_trace_timestamp_parser(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        scheduled: list[tuple[float, object]] = []
+        handle = types.SimpleNamespace(cancel=lambda: None)
+        coordinator._proxy_capture_deadline_refresh_handle = None
+        coordinator.hass = types.SimpleNamespace(
+            loop=types.SimpleNamespace(
+                call_later=lambda delay, callback: (
+                    scheduled.append((delay, callback)) or handle
+                )
+            )
+        )
+        deadline = datetime.now().astimezone()
+
+        with patch.object(
+            self.coordinator_cloud_tools_module,
+            "parse_proxy_capture_session_timestamp",
+            return_value=deadline,
+        ) as parser:
+            coordinator._schedule_proxy_capture_deadline_refresh(
+                "2026-08-21T12:00:00+00:00"
+            )
+
+        parser.assert_called_once_with("2026-08-21T12:00:00+00:00")
+        self.assertEqual(len(scheduled), 1)
+        self.assertIs(coordinator._proxy_capture_deadline_refresh_handle, handle)
 
     def test_active_proxy_capture_state_ignores_stale_running_session_without_route(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)

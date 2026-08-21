@@ -9635,6 +9635,43 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             options_shadow_review_module.CONTROL_DISCOVERY_FAILURE_GENERIC,
         )
 
+    async def test_control_discovery_runner_classifies_cloud_timeout_without_leaking(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=True)
+        options = self._runner_options_flow(coordinator)
+        captured: dict = {}
+        login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(
+            captured=captured,
+            fetch_side_effect=TimeoutError("secret cloud detail"),
+        )
+
+        with login_p, fetch_p, orchestrate_p, overlay_p:
+            await options._async_run_control_discovery()
+
+        discovery = options._shadow_learning_state["discovery"]
+        self.assertEqual(discovery["status"], "error")
+        self.assertEqual(discovery["reason"], "control_discovery_cloud_timeout")
+        self.assertNotIn("secret", str(discovery))
+        self.assertEqual(len(coordinator.stopped), 1)
+
+    def test_control_discovery_cloud_reason_boundary_is_closed(self) -> None:
+        options = self._wizard_options_flow()
+
+        self.assertEqual(
+            options._control_discovery_failure_reason(
+                RuntimeError("private detail"), cloud_error_code="network"
+            ),
+            "control_discovery_cloud_network",
+        )
+        for malformed in ("unknown", " timeout ", object(), None):
+            with self.subTest(malformed=malformed):
+                self.assertEqual(
+                    options._control_discovery_failure_reason(
+                        RuntimeError("private detail"),
+                        cloud_error_code=malformed,
+                    ),
+                    options_shadow_review_module.CONTROL_DISCOVERY_FAILURE_GENERIC,
+                )
+
     async def test_control_discovery_runner_treats_leaked_write_as_failure(self) -> None:
         coordinator = self._RunnerCoordinator(ready=True)
         options = self._runner_options_flow(coordinator)

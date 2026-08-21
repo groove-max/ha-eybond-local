@@ -18,6 +18,7 @@ from .shared import (
     CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED,
     CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE,
     CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
+    control_discovery_cloud_failure_reason,
 )
 from ...support.shadow_learning.review_model import (
     build_activation_selection,
@@ -295,7 +296,11 @@ class ShadowLearningReviewMixin:
         )
 
     @staticmethod
-    def _control_discovery_failure_reason(exc: Exception) -> str:
+    def _control_discovery_failure_reason(
+        exc: Exception,
+        *,
+        cloud_error_code: object = "",
+    ) -> str:
         """Reduce internal exceptions to a closed user-facing reason set."""
 
         reason = str(exc).strip()
@@ -305,6 +310,9 @@ class ShadowLearningReviewMixin:
             CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
         }:
             return reason
+        cloud_reason = control_discovery_cloud_failure_reason(cloud_error_code)
+        if cloud_reason:
+            return cloud_reason
         return CONTROL_DISCOVERY_FAILURE_GENERIC
 
     def _control_discovery_error_detail(self) -> str:
@@ -327,6 +335,24 @@ class ShadowLearningReviewMixin:
             CONTROL_DISCOVERY_FAILURE_SAFETY_STOP: (
                 "The safety check stopped the scan because a command may have "
                 "bypassed the local learning route. Check the inverter before trying again."
+            ),
+            "control_discovery_cloud_auth_failed": (
+                "The cloud service rejected the login. Check the username and password."
+            ),
+            "control_discovery_cloud_rate_limited": (
+                "The cloud service temporarily limited requests. Wait a little and try again."
+            ),
+            "control_discovery_cloud_unavailable": (
+                "The cloud service could not provide the device data needed for this check."
+            ),
+            "control_discovery_cloud_timeout": (
+                "The cloud service did not respond in time. Try again later."
+            ),
+            "control_discovery_cloud_network": (
+                "Home Assistant could not reach the cloud service. Check its internet connection."
+            ),
+            "control_discovery_cloud_unexpected": (
+                "The cloud service returned an unexpected response."
             ),
             CONTROL_DISCOVERY_FAILURE_GENERIC: (
                 "Home Assistant stopped safely and restored the collector connection."

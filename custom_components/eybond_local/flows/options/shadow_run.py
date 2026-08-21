@@ -322,17 +322,32 @@ class ShadowLearningRunMixin:
             # Fail-closed cleanup: stop the shadow session and restore the
             # collector endpoint, then surface the failure in flow state.
             progress = dict(self._shadow_learning_state.get("progress") or {})
+            provider_id = str(
+                getattr(coordinator, "cloud_evidence_provider", "") or ""
+            ).strip()
+            cloud_error_code = ""
+            if str(progress.get("stage") or "") in {"fetching", "testing"}:
+                cloud_error_code = resolve_cloud_evidence_provider(
+                    provider_id
+                ).classify_control_discovery_error(exc)
+            failure_reason = self._control_discovery_failure_reason(
+                exc,
+                cloud_error_code=cloud_error_code,
+            )
             logger.error(
-                "Control discovery failed entry=%s provider=%s stage=%s exception_type=%s",
+                "Control discovery failed entry=%s provider=%s stage=%s "
+                "exception_type=%s cloud_error_code=%s failure_reason=%s",
                 getattr(self._config_entry, "entry_id", ""),
-                str(getattr(coordinator, "cloud_evidence_provider", "") or ""),
+                provider_id,
                 str(progress.get("stage") or "unknown"),
                 type(exc).__name__,
+                cloud_error_code or "not_cloud_classified",
+                failure_reason,
             )
             await self._async_control_discovery_failsafe_stop(coordinator)
             self._shadow_learning_state["discovery"] = {
                 "status": "error",
-                "reason": self._control_discovery_failure_reason(exc),
+                "reason": failure_reason,
             }
             self._shadow_learning_state["status"] = self._tr(
                 "common.dynamic.control_discovery_failed",
@@ -400,11 +415,9 @@ class ShadowLearningRunMixin:
                 )
             )
 
-        # The active provider owns login/fetch/parse/action/orchestrate. It logs
-        # in before redirecting the collector, then fetches device-bound
-        # metadata and performs the control sweep through that same cloud
-        # session. This avoids both wasting the short-lived E500 proxy socket on
-        # authentication and creating a competing pre-proxy collector session.
+        # The active provider owns login/fetch/parse/action/orchestrate, including
+        # the exact provider-specific ordering around the temporary route. The
+        # flow only opens that route on request and renders normalized progress.
         shadow_runtime = self._shadow_learning_runtime(coordinator)
         runner = provider_impl.control_discovery_runner()
 

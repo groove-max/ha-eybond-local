@@ -52,6 +52,7 @@ from ...support.proxy_capture.trace import (
     export_proxy_trace_manifest,
     load_latest_proxy_trace_manifest,
     load_proxy_capture_session_state,
+    parse_proxy_capture_session_timestamp,
     proxy_capture_restore_guard_reason,
     proxy_capture_session_is_active,
     proxy_capture_session_is_expired,
