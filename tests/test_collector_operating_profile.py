@@ -31,8 +31,23 @@ from custom_components.eybond_local.const import (  # noqa: E402
 PRODUCTION_ROOT = REPO_ROOT / "custom_components" / "eybond_local"
 
 
+def _lifecycle_paths(pattern: str) -> tuple[Path, ...]:
+    if pattern == "config_*.py":
+        return (
+            PRODUCTION_ROOT / "config_flow.py",
+            PRODUCTION_ROOT / "config_entry.py",
+            *sorted((PRODUCTION_ROOT / "flows" / "config").glob("*.py")),
+        )
+    if pattern == "options_*.py":
+        return (
+            PRODUCTION_ROOT / "options_flow.py",
+            *sorted((PRODUCTION_ROOT / "flows" / "options").glob("*.py")),
+        )
+    raise AssertionError(f"unknown lifecycle family: {pattern}")
+
+
 def _lifecycle_method_source(pattern: str, name: str) -> str:
-    for path in sorted(PRODUCTION_ROOT.glob(pattern)):
+    for path in _lifecycle_paths(pattern):
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
         for node in ast.walk(tree):
@@ -42,8 +57,8 @@ def _lifecycle_method_source(pattern: str, name: str) -> str:
 
 
 def _coordinator_method_source(name: str) -> str:
-    runtime_root = PRODUCTION_ROOT / "runtime"
-    for path in sorted(runtime_root.glob("coordinator*.py")):
+    coordinator_root = PRODUCTION_ROOT / "runtime" / "coordinator"
+    for path in sorted(coordinator_root.glob("*.py")):
         source = path.read_text(encoding="utf-8")
         for node in ast.walk(ast.parse(source)):
             if (
@@ -297,7 +312,7 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
     def test_config_flow_has_no_hidden_operation_mode_state(self) -> None:
         source = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in sorted(PRODUCTION_ROOT.glob("config_*.py"))
+            for path in _lifecycle_paths("config_*.py")
         )
 
         self.assertNotIn("self._collector_operation_mode", source)
@@ -310,7 +325,7 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         source = "\n".join(
             path.read_text(encoding="utf-8")
             for path in sorted(
-                (PRODUCTION_ROOT / "runtime").glob("coordinator*.py")
+                (PRODUCTION_ROOT / "runtime" / "coordinator").glob("*.py")
             )
         )
         shadow_start = _coordinator_method_source("async_start_shadow_learning")

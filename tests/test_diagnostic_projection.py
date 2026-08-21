@@ -112,10 +112,12 @@ class DiagnosticProjectionArchitectureTests(unittest.TestCase):
         self.assertNotIn("runtime.coordinator", projection_source)
         self.assertNotIn("config_flow", projection_source)
 
-        runtime_dir = REPO_ROOT / "custom_components/eybond_local/runtime"
+        runtime_dir = (
+            REPO_ROOT / "custom_components/eybond_local/runtime/coordinator"
+        )
         coordinator_sources = [
             path.read_text(encoding="utf-8")
-            for path in sorted(runtime_dir.glob("coordinator*.py"))
+            for path in sorted(runtime_dir.glob("*.py"))
         ]
         method_names: set[str] = set()
         for source in coordinator_sources:

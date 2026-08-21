@@ -59,13 +59,12 @@ from custom_components.eybond_local.connection.session_handle import (
 )
 
 _CC = REPO_ROOT / "custom_components" / "eybond_local"
-_HUB = _CC / "runtime" / "hub.py"
-_HUB_FAMILY = (_HUB, *sorted((_CC / "runtime").glob("hub_*.py")))
-_COORDINATOR = _CC / "runtime" / "coordinator.py"
-_COORDINATOR_FAMILY = (
-    _COORDINATOR,
-    *sorted((_CC / "runtime").glob("coordinator_*.py")),
-)
+_HUB_ROOT = _CC / "runtime" / "hub"
+_HUB = _HUB_ROOT / "root.py"
+_HUB_FAMILY = tuple(sorted(_HUB_ROOT.glob("*.py")))
+_COORDINATOR_ROOT = _CC / "runtime" / "coordinator"
+_COORDINATOR = _COORDINATOR_ROOT / "root.py"
+_COORDINATOR_FAMILY = tuple(sorted(_COORDINATOR_ROOT.glob("*.py")))
 _MANAGEMENT = _CC / "collector" / "management.py"
 # Collector-management ACTION wire knowledge that must live only in the adapter.
 _FORBIDDEN_WIRE_TOKENS = (

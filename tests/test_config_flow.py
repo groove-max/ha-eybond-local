@@ -15652,8 +15652,21 @@ class ConfigFlowDeadSurfaceGuards(unittest.TestCase):
         package = REPO_ROOT / "custom_components/eybond_local"
 
         def _methods(pattern: str) -> set[str]:
+            if pattern == "config_*.py":
+                paths = (
+                    package / "config_flow.py",
+                    package / "config_entry.py",
+                    *sorted((package / "flows" / "config").glob("*.py")),
+                )
+            elif pattern == "options_*.py":
+                paths = (
+                    package / "options_flow.py",
+                    *sorted((package / "flows" / "options").glob("*.py")),
+                )
+            else:
+                raise AssertionError(f"unknown lifecycle family: {pattern}")
             methods: set[str] = set()
-            for path in sorted(package.glob(pattern)):
+            for path in paths:
                 tree = ast.parse(path.read_text(encoding="utf-8"))
                 for node in tree.body:
                     if not isinstance(node, ast.ClassDef):

@@ -4,9 +4,11 @@ This decision record explains how Graphify metrics are interpreted in this
 repository and where the decomposition boundary currently ends. It deliberately
 does not equate file length or raw graph degree with an architecture defect.
 
-Current WIP graph (2026-08-20): 9,501 nodes, 22,879 edges and 321 communities.
-The graph was rebuilt after the config/options/runtime/transport/integration/
-recovery decomposition described below.
+Current structural graph (2026-08-21): 8,961 nodes, 20,908 edges and 341
+communities. Graphify was incrementally refreshed in code-only mode and then
+reclustered after the config/options/runtime/transport/support decomposition
+described below. The existing semantic documentation layer was retained, not
+re-extracted, because no semantic backend was configured for this run.
 
 ## Interpreting God Nodes
 
@@ -33,12 +35,14 @@ state owners.
 
 | Former root | Current root | Concrete ownership modules |
 | --- | ---: | --- |
-| `config_flow.py` | 41 lines | journey-specific `config_*.py` mixins and neutral form/presentation helpers |
-| `options_flow.py` | 28 lines | `options_*.py` lifecycle/journey mixins |
-| `runtime/coordinator/` | lazy public package + 335-line root | 19 cohesive coordinator responsibility mixins |
+| `config_flow.py` | 41 lines | `flows/config/` journey mixins plus `flows/common/` form/presentation helpers |
+| `options_flow.py` | 28 lines | `flows/options/` lifecycle/journey mixins |
+| `runtime/coordinator/` | lazy public package + 335-line root | 22 cohesive coordinator responsibility modules |
 | `runtime/hub/` | 165-line package root | lifecycle, refresh, management, support, detection and snapshot mixins |
 | `runtime/link/` | 175-line package root | session projection, callback, cloud routes, connection, transport lifecycle and one wire-authority mixin |
-| `collector/transport.py` | 39 lines | common framing, socket connections, one shared listener, proxy route and framed/AT facades |
+| `collector/transport/` | 39-line package facade | common framing, socket connections, one shared listener, proxy route and framed/AT facades |
+| `support/proxy_capture/` | package API plus two implementation modules | capture planning, subprocess session and trace/artifact persistence |
+| `support/shadow_learning/` | package model plus nine implementation modules | protocol, backend, proxy, review, runtime, session and provider orchestrators |
 | package `__init__.py` | 379 lines | HA lifecycle root plus registration, metadata, entity, precision and migration modules |
 | `connection/recovery/verification.py` | 102 lines | immutable models, one reset engine, one observed-session channel and one production transaction assembly |
 
@@ -60,6 +64,7 @@ The corresponding guards are:
 - `test_hub_module_boundaries.py`
 - `test_link_module_boundaries.py`
 - `test_transport_module_boundaries.py`
+- `test_support_package_boundaries.py`
 - `test_integration_module_boundaries.py`
 - `test_recovery_verification_module_boundaries.py`
 
@@ -87,7 +92,7 @@ called them:
 - test-only connection-policy simulation and declaration helpers live in tests,
   not in the production policy module.
 
-Static inspection of all 282 production modules reports zero top-level runtime
+Static inspection of all 287 production modules reports zero top-level runtime
 import cycles and zero implementation-to-facade back-edges across the decomposed
 families. Boundary and behavior tests make these removals load-bearing.
 
@@ -167,9 +172,11 @@ The newer decompositions also removed implicit root dependencies:
 
 At this checkpoint:
 
-- quality gate: 5/5 (full unit discovery included);
+- quality gate: 5/5 (full 3,814-test unit discovery included; 18 skipped);
 - HA 2026.7 / Python 3.14 lane: 57/57;
 - HA 2026.2 / Python 3.13 lane: 57/57;
+- Graphify multigraph diagnostics: zero dangling endpoints, self-loops, exact
+  duplicates or collapsed endpoint pairs;
 - `py_compile` and `git diff --check`: clean.
 
 The HA lanes must run sequentially: both exercise a real shared listener and can

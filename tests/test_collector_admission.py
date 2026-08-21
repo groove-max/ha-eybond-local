@@ -256,10 +256,12 @@ class CollectorAdmissionArchitectureGuards(unittest.TestCase):
             / "custom_components"
             / "eybond_local"
         )
-        sources = {
-            path: path.read_text(encoding="utf-8")
-            for path in sorted(package.glob("config_*.py"))
-        }
+        paths = (
+            package / "config_flow.py",
+            package / "config_entry.py",
+            *sorted((package / "flows" / "config").glob("*.py")),
+        )
+        sources = {path: path.read_text(encoding="utf-8") for path in paths}
         cls.module_source = "\n".join(sources.values())
         cls.method_source: dict[str, str] = {}
         cls.method_names: set = set()

@@ -53,8 +53,7 @@ from custom_components.eybond_local.collector.metadata import (  # noqa: E402
 )
 
 _CC = REPO_ROOT / "custom_components" / "eybond_local"
-_HUB = _CC / "runtime" / "hub.py"
-_HUB_FAMILY = (_HUB, *sorted((_CC / "runtime").glob("hub_*.py")))
+_HUB_FAMILY = tuple(sorted((_CC / "runtime" / "hub").glob("*.py")))
 _MANAGEMENT = _CC / "collector" / "management.py"
 _SERVICE = _CC / "runtime" / "collector_metadata.py"
 _READERS = _CC / "collector" / "metadata.py"

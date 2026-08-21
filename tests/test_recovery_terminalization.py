@@ -601,9 +601,14 @@ class TerminalArchitectureGuardTests(unittest.TestCase):
         self.assertNotIn("owner_for_pn", transaction)
         self.assertIn("verify_prepared_handoff", transaction)
         self.assertIn("prepared_handoff_identity", transaction)
+        lifecycle_paths = (
+            self._PACKAGE / "config_flow.py",
+            self._PACKAGE / "config_entry.py",
+            *sorted((self._PACKAGE / "flows" / "config").glob("*.py")),
+        )
         lifecycle = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in sorted(self._PACKAGE.glob("config_*.py"))
+            for path in lifecycle_paths
         )
         self.assertNotIn("_LegacyCallbackContinuation", lifecycle)
 

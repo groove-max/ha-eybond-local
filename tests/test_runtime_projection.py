@@ -162,10 +162,12 @@ class RuntimeSupportProjectionTests(unittest.TestCase):
 
 class RuntimeProjectionArchitectureTests(unittest.TestCase):
     def test_coordinator_delegates_and_does_not_redefine_projection_helpers(self) -> None:
-        runtime_dir = REPO_ROOT / "custom_components/eybond_local/runtime"
+        runtime_dir = (
+            REPO_ROOT / "custom_components/eybond_local/runtime/coordinator"
+        )
         sources = [
             path.read_text(encoding="utf-8")
-            for path in sorted(runtime_dir.glob("coordinator*.py"))
+            for path in sorted(runtime_dir.glob("*.py"))
         ]
         source = "\n".join(sources)
         method_names: set[str] = set()

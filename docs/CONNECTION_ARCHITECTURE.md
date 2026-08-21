@@ -5,7 +5,7 @@ collector is connected, *who* owns a live collector session, and *whether* the
 integration may touch the collector's server endpoint. It is the contract that
 the phase 2–8 refactor established; read it before changing anything in
 `connection/`, `runtime/link/`, `runtime/coordinator/`,
-`collector/transport.py`, or `passive_discovery.py`.
+`collector/transport/`, or `passive_discovery.py`.
 
 The whole point of this design is that these decisions are **explicit and
 opaque**. They are *not* inferred from hostnames, peer IP addresses, or collector

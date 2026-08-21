@@ -704,7 +704,9 @@ def test_repair_flow_decision_path_has_no_framed_only_branch() -> None:
     import ast
     import inspect
 
-    from custom_components.eybond_local import options_strategy
+    from custom_components.eybond_local.flows.options import (
+        strategy as options_strategy,
+    )
     from custom_components.eybond_local.connection import strategy_transition_repair
     from custom_components.eybond_local.connection import callback_matching
 

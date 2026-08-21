@@ -735,6 +735,7 @@ async def test_coordinator_recovery_state_splits_trigger_and_listener_bind(
         tcp_port=free_port,
     )
     coordinator._runtime = types.SimpleNamespace(listener_bind_host="0.0.0.0")
+    coordinator._runtime_operation_lock = asyncio.Lock()
     coordinator.data = types.SimpleNamespace(
         values={},
         collector_server_endpoint="",

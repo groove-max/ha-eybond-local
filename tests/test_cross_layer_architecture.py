@@ -733,10 +733,15 @@ class DegradedRepairBoundaryGuards(unittest.TestCase):
         )
 
     def test_config_flow_touches_no_listener_internals(self) -> None:
+        config_paths = (
+            _CC / "config_flow.py",
+            _CC / "config_entry.py",
+            *sorted((_CC / "flows" / "config").glob("*.py")),
+        )
         seen = set().union(
             *(
                 _code_identifiers(_read(path))
-                for path in sorted(_CC.glob("config_*.py"))
+                for path in config_paths
             )
         )
         for internal in (

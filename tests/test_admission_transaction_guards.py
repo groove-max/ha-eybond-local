@@ -13,7 +13,11 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PKG = REPO_ROOT / "custom_components" / "eybond_local"
 CONFIG_FLOW = PKG / "config_flow.py"
-CONFIG_LIFECYCLE = tuple(sorted(PKG.glob("config_*.py")))
+CONFIG_LIFECYCLE = (
+    CONFIG_FLOW,
+    PKG / "config_entry.py",
+    *sorted((PKG / "flows" / "config").glob("*.py")),
+)
 TRANSACTION = PKG / "connection" / "admission_transaction.py"
 
 

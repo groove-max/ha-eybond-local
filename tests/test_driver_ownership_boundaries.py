@@ -53,7 +53,6 @@ from custom_components.eybond_local.support.bundle import build_support_bundle_p
 from custom_components.eybond_local.support.workflow import build_support_workflow_state  # noqa: E402
 
 _CC = REPO_ROOT / "custom_components" / "eybond_local"
-_HUB = _CC / "runtime" / "hub.py"
 _HUB_SUPPORT = _CC / "runtime" / "hub" / "support.py"
 _BUNDLE = _CC / "support" / "bundle.py"
 _WORKFLOW = _CC / "support" / "workflow.py"
@@ -62,7 +61,7 @@ _WORKFLOW = _CC / "support" / "workflow.py"
 def _hub_family_source() -> str:
     return "\n".join(
         path.read_text(encoding="utf-8")
-        for path in sorted((_CC / "runtime").glob("hub*.py"))
+        for path in sorted((_CC / "runtime" / "hub").glob("*.py"))
     )
 
 

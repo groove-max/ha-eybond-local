@@ -491,25 +491,17 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
                     ),
                 },
             )()
-            # Bind the REAL coordinator write path at call time: another test
-            # module in a full discover run may have parked a blank stub module
-            # under this name -- reload restores the genuine source.
-            import importlib
+            # Bind the real implementation owner directly. Entity tests may
+            # install a lightweight coordinator facade, but the package remains
+            # importable and must never change which mixin owns persistence.
+            from custom_components.eybond_local.runtime.coordinator.persistence import (
+                CoordinatorPersistenceMixin,
+            )
 
-            coordinator_module = importlib.import_module(
-                "custom_components.eybond_local.runtime.coordinator"
+            persist = (
+                CoordinatorPersistenceMixin
+                ._persist_confirmed_session_protocol_from_runtime
             )
-            persist = getattr(
-                getattr(coordinator_module, "EybondLocalCoordinator", None),
-                "_persist_confirmed_session_protocol_from_runtime",
-                None,
-            )
-            if persist is None:
-                coordinator_module = importlib.reload(coordinator_module)
-                persist = (
-                    coordinator_module.EybondLocalCoordinator
-                    ._persist_confirmed_session_protocol_from_runtime
-                )
             persist(stub)
             self.assertEqual(
                 entry.data.get("collector_confirmed_session_protocol"),

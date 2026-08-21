@@ -756,7 +756,12 @@ class AdmissionConvergenceArchitectureGuards(unittest.TestCase):
 
     def _flow_methods(self):
         methods = {}
-        for path in sorted(PKG.glob("config_*.py")):
+        paths = (
+            PKG / "config_flow.py",
+            PKG / "config_entry.py",
+            *sorted((PKG / "flows" / "config").glob("*.py")),
+        )
+        for path in paths:
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for flow in (node for node in tree.body if isinstance(node, ast.ClassDef)):
                 methods.update(

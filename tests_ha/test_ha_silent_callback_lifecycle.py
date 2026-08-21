@@ -64,8 +64,10 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
     from fake_collector_lib import CollectorProfile, resolve_scenario
 
     import custom_components.eybond_local as integration
-    from custom_components.eybond_local import config_admission
     from custom_components.eybond_local import config_flow as config_flow_module
+    from custom_components.eybond_local.flows.config import (
+        admission as config_admission,
+    )
     from custom_components.eybond_local.connection.recovery_contract import (
         RecoveryContract,
     )

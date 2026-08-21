@@ -8,7 +8,7 @@ import types
 import unittest
 from unittest import mock
 
-from helpers.homeassistant_stubs import ensure_module
+from helpers.homeassistant_stubs import ensure_module, ensure_package
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -66,17 +66,16 @@ def _install_button_stubs() -> None:
     helpers.update_coordinator = update_coordinator
 
     if "custom_components.eybond_local.runtime.coordinator" not in sys.modules:
-        runtime_coordinator = types.ModuleType(
-            "custom_components.eybond_local.runtime.coordinator"
+        runtime_coordinator = ensure_package(
+            "custom_components.eybond_local.runtime.coordinator",
+            REPO_ROOT
+            / "custom_components/eybond_local/runtime/coordinator",
         )
 
         class EybondLocalCoordinator:
             pass
 
         runtime_coordinator.EybondLocalCoordinator = EybondLocalCoordinator
-        sys.modules[
-            "custom_components.eybond_local.runtime.coordinator"
-        ] = runtime_coordinator
 
 
 _install_button_stubs()

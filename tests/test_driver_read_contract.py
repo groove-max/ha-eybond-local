@@ -1235,9 +1235,8 @@ class NeutralLayerHasNoPi30KeyMappingTests(unittest.TestCase):
     def test_neutral_layers_hold_no_pi30_command_or_key_mapping(self) -> None:
         cc = REPO_ROOT / "custom_components" / "eybond_local"
         paths = (
-            cc / "runtime" / "hub.py",
-            *sorted((cc / "runtime").glob("hub_*.py")),
-            *sorted((cc / "runtime").glob("coordinator*.py")),
+            *sorted((cc / "runtime" / "hub").glob("*.py")),
+            *sorted((cc / "runtime" / "coordinator").glob("*.py")),
             cc / "runtime" / "poll_scheduler.py",
             cc / "poll_policy.py",
         )
