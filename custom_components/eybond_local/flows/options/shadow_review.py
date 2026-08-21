@@ -13,13 +13,13 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
-from .flow_translation import with_translation_bundle as _with_translation_bundle
-from .options_shared import (
+from ..common.translation import with_translation_bundle as _with_translation_bundle
+from .shared import (
     CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED,
     CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE,
     CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
 )
-from .support.shadow_learning_review_model import (
+from ...support.shadow_learning_review_model import (
     build_activation_selection,
     default_learned_control_label,
 )

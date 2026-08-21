@@ -18,20 +18,20 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
 )
 
-from .const import (
+from ...const import (
     CONF_DETECTED_MODEL,
     CONF_DETECTED_SERIAL,
     CONF_PROXY_CAPTURE_DURATION_MINUTES,
     DEFAULT_PROXY_CAPTURE_DURATION_MINUTES,
 )
-from .flow_presentation import _smartess_credential_schema_fields
-from .flow_translation import with_translation_bundle as _with_translation_bundle
-from .metadata.local_metadata import (
+from ..common.presentation import _smartess_credential_schema_fields
+from ..common.translation import with_translation_bundle as _with_translation_bundle
+from ...metadata.local_metadata import (
     local_profile_override_details,
     local_register_schema_override_details,
     resolve_local_metadata_rollback_paths,
 )
-from .options_shared import (
+from .shared import (
     _BOOLEAN_SELECTOR,
     _MULTILINE_LOG_TEXT_SELECTOR,
     _coerce_proxy_capture_duration_minutes,

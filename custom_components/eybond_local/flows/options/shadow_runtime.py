@@ -7,17 +7,17 @@ import logging
 from contextlib import suppress
 from typing import Any
 
-from .runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
-from .support.memory_guard import (
+from ...runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
+from ...support.memory_guard import (
     read_available_memory_mib,
     shadow_learning_memory_blocker,
 )
-from .support.shadow_learning_backend import (
+from ...support.shadow_learning_backend import (
     build_shadow_learning_preflight,
     build_shadow_learning_seed,
 )
-from .support.shadow_learning_proxy import route_status_indicates_control_write_ready
-from .support.shadow_learning_runtime import (
+from ...support.shadow_learning_proxy import route_status_indicates_control_write_ready
+from ...support.shadow_learning_runtime import (
     ShadowLearningRouteStatus,
     ShadowLearningRuntimeView,
 )

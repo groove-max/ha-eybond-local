@@ -14,32 +14,32 @@ from homeassistant.helpers.selector import (
     TextSelector,
 )
 
-from . import network_interfaces
-from .config_common import (
+from ... import network_interfaces
+from .common import (
     _AUTO_SCAN_TIMEOUT,
     _compute_broadcast_24,
 )
-from .connection.branch_registry import (
+from ...connection.branch_registry import (
     get_connection_branch,
     supported_connection_types,
 )
-from .connection.ui import ConnectionFormField
-from .connection_form import (
+from ...connection.ui import ConnectionFormField
+from ..common.connection_form import (
     IP_TEXT_SELECTOR as _IP_TEXT_SELECTOR,
 )
-from .connection_form import (
+from ..common.connection_form import (
     build_connection_fields_schema as _build_shared_connection_fields_schema,
 )
-from .connection_form import (
+from ..common.connection_form import (
     interface_selector as _interface_selector,
 )
-from .connection_form import (
+from ..common.connection_form import (
     selector_for_connection_field as _shared_connection_field_selector,
 )
-from .connection_form import (
+from ..common.connection_form import (
     validate_connection_inputs as _validate_shared_connection_inputs,
 )
-from .const import (
+from ...const import (
     CONF_COLLECTOR_IP,
     CONF_CONNECTION_TYPE,
     CONF_DISCOVERY_TARGET,
@@ -48,7 +48,7 @@ from .const import (
     DEFAULT_DISCOVERY_TARGET,
     DRIVER_HINT_AUTO,
 )
-from .flow_presentation import (
+from ..common.presentation import (
     MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
     MANUAL_CONFIRM_ACTION_ENABLE_DISCOVERY,
     MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
@@ -56,10 +56,10 @@ from .flow_presentation import (
     _collector_network_status_selector,
     _flatten_sections,
 )
-from .models import (
+from ...models import (
     OnboardingResult,
 )
-from .onboarding.detection import DiscoveryTarget
+from ...onboarding.detection import DiscoveryTarget
 
 _SCAN_PROGRESS_BAR_WIDTH = 12
 

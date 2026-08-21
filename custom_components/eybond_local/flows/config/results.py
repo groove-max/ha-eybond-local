@@ -4,17 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from .collector.smartess_ble import (
+from ...collector.smartess_ble import (
     SmartEssBleCandidate,
 )
-from .config_result_model import (
+from .result_model import (
     _collector_identity_matches,
 )
-from .connection.admission import ObservedCollectorSession
-from .connection.recovery.verification import (
+from ...connection.admission import ObservedCollectorSession
+from ...connection.recovery.verification import (
     CallbackRecoveryRoute,
 )
-from .const import (
+from ...const import (
     CONF_COLLECTOR_IP,
     CONF_COLLECTOR_PN,
     CONF_DETECTED_SERIAL,
@@ -23,10 +23,10 @@ from .const import (
     DOMAIN,
     DRIVER_HINT_AUTO,
 )
-from .models import (
+from ...models import (
     OnboardingResult,
 )
-from .onboarding.presentation import (
+from ...onboarding.presentation import (
     confidence_sort_score,
     scan_result_sort_key,
     scan_result_status_code,

@@ -24,11 +24,11 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
 )
 
-from .connection.branch_registry import get_connection_branch
-from .connection.ui import ConnectionFormField
-from .const import DRIVER_HINT_AUTO
-from .drivers.registry import driver_options
-from .flow_translation import selector_option_label
+from ...connection.branch_registry import get_connection_branch
+from ...connection.ui import ConnectionFormField
+from ...const import DRIVER_HINT_AUTO
+from ...drivers.registry import driver_options
+from .translation import selector_option_label
 
 PORT_SELECTOR = NumberSelector(
     NumberSelectorConfig(min=1, max=65535, mode=NumberSelectorMode.BOX)

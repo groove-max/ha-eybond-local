@@ -8,7 +8,7 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
 )
 
-from .const import (
+from ...const import (
     DEFAULT_PROXY_CAPTURE_DURATION_MINUTES,
     MAX_PROXY_CAPTURE_DURATION_MINUTES,
     MIN_PROXY_CAPTURE_DURATION_MINUTES,

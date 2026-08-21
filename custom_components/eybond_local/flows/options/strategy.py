@@ -19,20 +19,20 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
 )
 
-from .collector_identity import pn_is_same_identity
-from .collector_endpoint import (
+from ...collector_identity import pn_is_same_identity
+from ...collector_endpoint import (
     CollectorEndpointWriteShape,
     resolve_collector_endpoint_write_shape,
 )
-from .connection.connection_policy import (
+from ...connection.connection_policy import (
     resolve_connection_strategy,
 )
-from .connection.operating_profile import (
+from ...connection.operating_profile import (
     OPERATING_PROFILE_CLOUD_AND_HA,
     OPERATING_PROFILE_CUSTOM,
     OPERATING_PROFILE_HA_ONLY,
 )
-from .connection.strategy_transition_context import (
+from ...connection.strategy_transition_context import (
     PROVENANCE_EXPLICIT_ADVERTISED,
     TransitionEndpointCandidate,
     earned_advertised_route,
@@ -41,13 +41,13 @@ from .connection.strategy_transition_context import (
     resolve_cloud_rollback_endpoint,
     resolve_default_ha_endpoint,
 )
-from .connection_form import (
+from ..common.connection_form import (
     IP_TEXT_SELECTOR as _IP_TEXT_SELECTOR,
 )
-from .connection_form import (
+from ..common.connection_form import (
     PORT_SELECTOR as _PORT_SELECTOR,
 )
-from .const import (
+from ...const import (
     CONF_ADVERTISED_SERVER_IP,
     CONF_ADVERTISED_TCP_PORT,
     CONF_COLLECTOR_IP,
@@ -67,13 +67,13 @@ from .const import (
     ENDPOINT_CONTROL_EXTERNAL,
     ENDPOINT_CONTROL_INTEGRATION_MANAGED,
 )
-from .flow_presentation import (
+from ..common.presentation import (
     _connection_strategy_selector,
     _flatten_sections,
     _shared_recovery_failure_explanation,
 )
-from .flow_translation import with_translation_bundle as _with_translation_bundle
-from .timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
+from ..common.translation import with_translation_bundle as _with_translation_bundle
+from ...timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +252,7 @@ class StrategyTransitionOptionsMixin:
           local hint, which the resolver only offers for a callback entry.
         """
 
-        from .connection.recovery_contract import (
+        from ...connection.recovery_contract import (
             RECOVERY_CONTRACT_KEY,
             RecoveryContract,
         )
@@ -638,7 +638,7 @@ class StrategyTransitionOptionsMixin:
 
         if self._transition_target_strategy != CONNECTION_STRATEGY_CALLBACK_ON_DEMAND:
             return False
-        from .connection.connection_policy import resolve_endpoint_control_policy
+        from ...connection.connection_policy import resolve_endpoint_control_policy
 
         policy = resolve_endpoint_control_policy(
             dict(self._config_entry.data), dict(self._config_entry.options)
@@ -659,7 +659,7 @@ class StrategyTransitionOptionsMixin:
         selection is passed to the coordinator which persists it before any write.
         """
 
-        from .collector.cloud_rollback_catalog import (
+        from ...collector.cloud_rollback_catalog import (
             cloud_rollback_selection_from_candidate,
             cloud_rollback_selection_from_catalog_key,
             cloud_rollback_selection_from_manual,
@@ -669,7 +669,7 @@ class StrategyTransitionOptionsMixin:
         if self._transition_target_strategy not in CONNECTION_STRATEGIES:
             return await self.async_step_runtime()
 
-        from .connection.strategy_transition_context import CloudRollbackEndpoint
+        from ...connection.strategy_transition_context import CloudRollbackEndpoint
 
         # Pin the exact read-model fact shown on the first render.  A submit must
         # never silently substitute a newer endpoint that the user did not see;
@@ -893,22 +893,22 @@ class StrategyTransitionOptionsMixin:
 
         from homeassistant.config_entries import ConfigEntryState
 
-        from .collector.callback_bootstrap import CallbackBootstrapChannel
-        from .connection.recovery.terminal import merge_recovery_contract
-        from .connection.strategy_transition_recovery import (
+        from ...collector.callback_bootstrap import CallbackBootstrapChannel
+        from ...connection.recovery.terminal import merge_recovery_contract
+        from ...connection.strategy_transition_recovery import (
             RECOVERY_PHASE_PENDING,
             RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,
             StrategyTransitionRecoveryState,
         )
-        from .connection.strategy_transition_repair import (
+        from ...connection.strategy_transition_repair import (
             REPAIR_STATE_INVALID,
             async_run_degraded_recovery_repair,
         )
-        from .passive_discovery import (
+        from ...passive_discovery import (
             get_callback_session_registry,
             get_passive_callback_discovery,
         )
-        from .timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
+        from ...timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
 
         state = StrategyTransitionRecoveryState.from_record(
             self._config_entry.data.get(CONF_STRATEGY_TRANSITION_STATE)
@@ -1319,7 +1319,7 @@ class StrategyTransitionOptionsMixin:
             return False
         if str(data.get(CONF_STRATEGY_TRANSITION_STATE) or "").strip():
             return False  # a recovery marker means a physical repair is pending
-        from .connection.recovery_contract import RecoveryContract
+        from ...connection.recovery_contract import RecoveryContract
 
         contract = RecoveryContract.from_entry_data(data)
         return contract is not None and contract.callback_verified

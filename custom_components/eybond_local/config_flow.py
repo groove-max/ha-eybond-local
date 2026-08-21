@@ -4,18 +4,18 @@ from __future__ import annotations
 
 from homeassistant.config_entries import ConfigFlow
 
-from .config_admission import CollectorAdmissionFlowMixin
-from .config_base import ConfigFlowBaseMixin
-from .config_ble import BluetoothProvisioningFlowMixin
-from .config_collector import SelectedCollectorFlowMixin
-from .config_confirmation import CollectorConfirmationFlowMixin
+from .flows.config.admission import CollectorAdmissionFlowMixin
+from .flows.config.base import ConfigFlowBaseMixin
+from .flows.config.ble import BluetoothProvisioningFlowMixin
+from .flows.config.collector import SelectedCollectorFlowMixin
+from .flows.config.confirmation import CollectorConfirmationFlowMixin
 from .config_entry import EntryCommitFlowMixin
-from .config_manual import ManualCollectorFlowMixin
-from .config_network import ConfigNetworkFlowMixin
-from .config_results import ScanResultPresentationMixin
-from .config_scan import CollectorScanFlowMixin
+from .flows.config.manual import ManualCollectorFlowMixin
+from .flows.config.network import ConfigNetworkFlowMixin
+from .flows.config.results import ScanResultPresentationMixin
+from .flows.config.scan import CollectorScanFlowMixin
 from .const import DOMAIN
-from .flow_translation import TranslationBundleMixin
+from .flows.common.translation import TranslationBundleMixin
 
 
 class EybondLocalConfigFlow(

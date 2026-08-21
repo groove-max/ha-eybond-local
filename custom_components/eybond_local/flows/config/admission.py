@@ -17,37 +17,37 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
-from .config_common import (
+from .common import (
     _ONBOARDING_TIMEOUT_POLICY,
     _PASSIVE_LISTENER_HOST,
     _is_ipv4,
 )
-from .connection.admission import CollectorAdmissionRequest, ObservedCollectorSession
-from .connection.admission_transaction import (
+from ...connection.admission import CollectorAdmissionRequest, ObservedCollectorSession
+from ...connection.admission_transaction import (
     CollectorAdmissionTransaction,
 )
-from .connection.callback_identity import (
+from ...connection.callback_identity import (
     IDENTITY_SILENT_SESSION_STALE,
     CallbackIdentityOutcome,
     CallbackIdentityRequest,
     ObservedSessionWireProbeIntent,
 )
-from .connection.recovery.verification import (
+from ...connection.recovery.verification import (
     CallbackRecoveryRoute,
 )
-from .connection.spec_factory import (
+from ...connection.spec_factory import (
     build_connection_spec_from_values,
 )
-from .const import (
+from ...const import (
     CONF_COLLECTOR_IP,
     CONF_COLLECTOR_PN,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
 )
-from .flow_translation import (
+from ..common.translation import (
     with_translation_bundle as _with_translation_bundle,
 )
-from .models import (
+from ...models import (
     OnboardingResult,
 )
 
@@ -821,7 +821,7 @@ class CollectorAdmissionFlowMixin:
         return self._abort_if_unique_id_configured()
 
     def _callback_session_registry(self):
-        from .passive_discovery import get_callback_session_registry
+        from ...passive_discovery import get_callback_session_registry
 
         try:
             return get_callback_session_registry(self.hass)

@@ -101,7 +101,7 @@ _util.dt = _dt_util
 from custom_components.eybond_local import (  # noqa: E402
     _register_entry_callback_session_claim,
 )
-import custom_components.eybond_local.config_base as config_base_module  # noqa: E402
+import custom_components.eybond_local.flows.config.base as config_base_module  # noqa: E402
 from custom_components.eybond_local.collector.transport import (  # noqa: E402
     _acquire_shared_listener,
     _release_shared_listener,

@@ -1123,9 +1123,9 @@ class Cp1bArchitectureGuards(unittest.TestCase):
 
     PKG = REPO_ROOT / "custom_components" / "eybond_local"
     CONFIG_FLOW = PKG / "config_flow.py"
-    OPTIONS_RUNTIME = PKG / "options_runtime.py"
-    OPTIONS_STRATEGY = PKG / "options_strategy.py"
-    COORDINATOR = PKG / "runtime" / "coordinator.py"
+    OPTIONS_RUNTIME = PKG / "flows" / "options" / "runtime.py"
+    OPTIONS_STRATEGY = PKG / "flows" / "options" / "strategy.py"
+    COORDINATOR = PKG / "runtime" / "coordinator" / "root.py"
 
     def _method(self, path, cls_name, method_name):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -1193,7 +1193,7 @@ class Cp1bArchitectureGuards(unittest.TestCase):
     def test_durable_route_write_is_in_authority_commits_only(self) -> None:
         coord_src = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in sorted((self.PKG / "runtime").glob("coordinator*.py"))
+            for path in sorted((self.PKG / "runtime" / "coordinator").glob("*.py"))
         )
         non_authority_flow_src = "\n".join(
             path.read_text(encoding="utf-8")

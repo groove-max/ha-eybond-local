@@ -22,7 +22,7 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
 )
 
-from .collector.smartess_ble import (
+from ...collector.smartess_ble import (
     BleakSmartEssBleLink,
     BleakSmartEssBleScanner,
     SmartEssBleCandidate,
@@ -35,20 +35,20 @@ from .collector.smartess_ble import (
     async_probe_ble_host_capability,
     normalize_discovered_candidate,
 )
-from .config_common import (
+from .common import (
     _async_timeout,
 )
-from .const import (
+from ...const import (
     CONF_SERVER_IP,
 )
-from .flow_presentation import (
+from ..common.presentation import (
     _PASSWORD_TEXT_SELECTOR,
     CONF_WIFI_PASSWORD,
     CONF_WIFI_SSID,
     _ble_wifi_selector,
     _exception_detail,
 )
-from .flow_translation import (
+from ..common.translation import (
     with_translation_bundle as _with_translation_bundle,
 )
 

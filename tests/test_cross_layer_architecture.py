@@ -455,9 +455,12 @@ class IdentityConsumersNeverMintRecoveryEvidenceTests(unittest.TestCase):
     def test_the_guard_sees_the_real_consumers(self) -> None:
         # The guard must never silently go blind: the config flow's
         # manual/reconfigure mapper has to remain in its scope.
-        names = {path.name for path, _source in self._identity_consumers()}
+        names = {
+            path.relative_to(_CC).as_posix()
+            for path, _source in self._identity_consumers()
+        }
         self.assertTrue(
-            {"config_manual.py", "config_admission.py"}.issubset(names),
+            {"flows/config/manual.py", "flows/config/admission.py"}.issubset(names),
             msg=f"identity consumer guard lost the flow lifecycle: {names}",
         )
 
@@ -501,8 +504,8 @@ class StrategyTransitionAuthorityGuardTests(unittest.TestCase):
     ALLOWED_WRITER_FILES = {
         "config_flow.py",
         "config_entry.py",
-        "options_runtime.py",
-        "options_strategy.py",
+        "flows/options/runtime.py",
+        "flows/options/strategy.py",
         "integration_migration.py",
         "connection_policy.py",
         "strategy_transition.py",
@@ -548,8 +551,9 @@ class StrategyTransitionAuthorityGuardTests(unittest.TestCase):
         offenders: dict[str, int] = {}
         for path in sorted(_CC.rglob("*.py")):
             writes = self._strategy_key_writes(_read(path))
-            if writes and path.name not in self.ALLOWED_WRITER_FILES:
-                offenders[str(path.relative_to(_CC))] = writes
+            relative = path.relative_to(_CC).as_posix()
+            if writes and relative not in self.ALLOWED_WRITER_FILES and path.name not in self.ALLOWED_WRITER_FILES:
+                offenders[relative] = writes
         self.assertEqual(
             offenders,
             {},
@@ -797,14 +801,15 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
     access), and the activation retry re-runs ONLY the load -- never the repair or
     the proof state."""
 
-    _OPTIONS_STRATEGY = _CC / "options_strategy.py"
-    _OPTIONS_BASE = _CC / "options_base.py"
-    _FLOW_PRESENTATION = _CC / "flow_presentation.py"
+    _OPTIONS_STRATEGY = _CC / "flows" / "options" / "strategy.py"
+    _OPTIONS_BASE = _CC / "flows" / "options" / "base.py"
+    _FLOW_PRESENTATION = _CC / "flows" / "common" / "presentation.py"
 
     @classmethod
     def _options_source(cls) -> str:
         return "\n".join(
-            _read(path) for path in sorted(_CC.glob("options_*.py"))
+            _read(path)
+            for path in sorted((_CC / "flows" / "options").glob("*.py"))
         )
 
     @staticmethod

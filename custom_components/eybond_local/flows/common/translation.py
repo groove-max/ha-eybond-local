@@ -18,8 +18,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_TRANSLATIONS_DIR = Path(__file__).with_name("translations")
-_FLOW_TRANSLATIONS_DIR = Path(__file__).with_name("flow_translations")
+_INTEGRATION_DIR = Path(__file__).resolve().parents[2]
+_TRANSLATIONS_DIR = _INTEGRATION_DIR / "translations"
+_FLOW_TRANSLATIONS_DIR = _INTEGRATION_DIR / "flow_translations"
 
 
 def _translation_candidates(language: str) -> list[str]:

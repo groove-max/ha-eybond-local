@@ -19,13 +19,13 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
 )
 
-from .collector.smartess_ble import (
+from ...collector.smartess_ble import (
     SmartEssBleWifiNetwork,
 )
 from .connection_form import (
     IP_TEXT_SELECTOR as _IP_TEXT_SELECTOR,
 )
-from .const import (
+from ...const import (
     CONF_ADVERTISED_TCP_PORT,
     CONF_CONTROL_MODE,
     CONF_DETECTED_DRIVER,
@@ -48,10 +48,10 @@ from .const import (
     POLL_MODE_AUTO,
     POLL_MODE_MANUAL,
 )
-from .drivers.registry import (
+from ...drivers.registry import (
     poll_policy_for_driver_key,
 )
-from .flow_translation import (
+from .translation import (
     selector_option_label as _selector_option_label,
 )
 

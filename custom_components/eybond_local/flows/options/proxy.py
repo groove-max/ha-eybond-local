@@ -21,18 +21,18 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
-from .const import (
+from ...const import (
     CONF_PROXY_CAPTURE_DURATION_MINUTES,
     DEFAULT_PROXY_CAPTURE_DURATION_MINUTES,
     MAX_PROXY_CAPTURE_DURATION_MINUTES,
     MIN_PROXY_CAPTURE_DURATION_MINUTES,
 )
-from .flow_translation import with_translation_bundle as _with_translation_bundle
-from .options_shared import (
+from ..common.translation import with_translation_bundle as _with_translation_bundle
+from .shared import (
     _MULTILINE_LOG_TEXT_SELECTOR,
     _coerce_proxy_capture_duration_minutes,
 )
-from .support.download import sign_proxy_capture_download_url
+from ...support.download import sign_proxy_capture_download_url
 
 logger = logging.getLogger(__name__)
 

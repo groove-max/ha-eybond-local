@@ -25,12 +25,12 @@ from .collector.smartess_local import (
 from .collector.transport import (
     SharedCollectorAtTransport,
 )
-from .config_common import (
+from .flows.config.common import (
     _async_timeout,
     _compute_broadcast_24,
     _sanitize_collector_route_hint,
 )
-from .config_result_model import (
+from .flows.config.result_model import (
     _apply_collector_cloud_family_metadata,
     _apply_collector_first_entry_semantics,
     _apply_collector_profile_metadata,
@@ -92,10 +92,10 @@ from .const import (
     POLL_MODE_AUTO,
     POLL_MODE_MANUAL,
 )
-from .flow_presentation import (
+from .flows.common.presentation import (
     _flatten_sections,
 )
-from .flow_translation import (
+from .flows.common.translation import (
     with_translation_bundle as _with_translation_bundle,
 )
 from .models import (

@@ -366,14 +366,14 @@ class ShadowLearningRuntimeArchitectureTests(unittest.TestCase):
     def test_shadow_handler_is_not_exposed_to_config_flow(self) -> None:
         onboarding_source = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in sorted(PRODUCTION_ROOT.glob("config_*.py"))
+            for path in sorted((PRODUCTION_ROOT / "flows" / "config").glob("*.py"))
         )
-        options_source = (PRODUCTION_ROOT / "options_shadow_runtime.py").read_text(
+        options_source = (PRODUCTION_ROOT / "flows" / "options" / "shadow_runtime.py").read_text(
             encoding="utf-8"
         )
         lifecycle_source = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in sorted(PRODUCTION_ROOT.glob("options_*.py"))
+            for path in sorted((PRODUCTION_ROOT / "flows" / "options").glob("*.py"))
         )
         source = onboarding_source + "\n" + lifecycle_source
 

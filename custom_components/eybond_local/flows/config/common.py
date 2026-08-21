@@ -6,13 +6,13 @@ import asyncio
 import socket
 from contextlib import asynccontextmanager
 
-from .const import (
+from ...const import (
     DEFAULT_DISCOVERY_TARGET,
 )
-from .onboarding.timeouts import (
+from ...onboarding.timeouts import (
     auto_scan_timeout_seconds as _onboarding_auto_scan_timeout_seconds,
 )
-from .timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
+from ...timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
 
 _ONBOARDING_TIMEOUT_POLICY = DEFAULT_ONBOARDING_TIMEOUT_POLICY
 

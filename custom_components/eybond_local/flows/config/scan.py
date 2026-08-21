@@ -21,36 +21,36 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
-from .collector.transport_profile import (
+from ...collector.transport_profile import (
     collector_session_protocol_from_inventory_state,
 )
-from .config_common import (
+from .common import (
     _async_timeout,
     _is_ipv4,
 )
-from .config_result_model import (
+from .result_model import (
     _result_indicates_inverter_link_down,
 )
-from .connection.admission import ObservedCollectorSession
-from .connection.spec_factory import (
+from ...connection.admission import ObservedCollectorSession
+from ...connection.spec_factory import (
     build_connection_spec_from_values,
 )
-from .const import (
+from ...const import (
     CONF_ENTRY_ROLE,
     CONF_SERVER_IP,
     CONNECTION_TYPE_EYBOND,
     DOMAIN,
     ENTRY_ROLE_LISTENER,
 )
-from .flow_translation import (
+from ..common.translation import (
     with_translation_bundle as _with_translation_bundle,
 )
-from .models import (
+from ...models import (
     CollectorCandidate,
     CollectorInfo,
     OnboardingResult,
 )
-from .onboarding.factory import create_onboarding_manager
+from ...onboarding.factory import create_onboarding_manager
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ class CollectorScanFlowMixin:
         # integration async_setup, so refresh its edge-triggered publication state
         # before creating (or discovering that we already have) the bootstrap
         # entry. Import-created listener entries deliberately do not do this.
-        from .passive_discovery import get_passive_callback_discovery
+        from ...passive_discovery import get_passive_callback_discovery
 
         discovery = get_passive_callback_discovery(self.hass)
         if discovery is not None:
@@ -273,7 +273,7 @@ class CollectorScanFlowMixin:
         # Passive discovery shares this scan's callback listener. Mark sockets
         # accepted while the active UDP probe runs as results of this flow so
         # HA does not publish a duplicate integration-discovery card for them.
-        from .passive_discovery import get_passive_callback_discovery
+        from ...passive_discovery import get_passive_callback_discovery
 
         passive_discovery = get_passive_callback_discovery(self.hass)
         probe_scope_id = f"config_flow_scan:{id(self)}:{uuid.uuid4().hex}"
@@ -398,7 +398,7 @@ class CollectorScanFlowMixin:
         connection strategy.
         """
 
-        from .passive_discovery import get_passive_callback_discovery
+        from ...passive_discovery import get_passive_callback_discovery
 
         discovery = get_passive_callback_discovery(self.hass)
         snapshot = getattr(discovery, "snapshot_unclaimed_collector_sessions", None)

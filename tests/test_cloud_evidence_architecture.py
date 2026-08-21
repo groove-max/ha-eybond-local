@@ -57,10 +57,10 @@ _COORDINATOR_SUPPORT = _CC / "runtime" / "coordinator" / "support.py"
 _PROVIDERS = _CC / "support" / "cloud_evidence_providers.py"
 _CONST = _CC / "const.py"
 _CONFIG_FLOW = _CC / "config_flow.py"
-_CONFIG_LIFECYCLE = tuple(sorted(_CC.glob("config_*.py")))
-_OPTIONS_SHADOW_RUN = _CC / "options_shadow_run.py"
-_OPTIONS_SHADOW_RUNTIME = _CC / "options_shadow_runtime.py"
-_OPTIONS_LIFECYCLE = tuple(sorted(_CC.glob("options_*.py")))
+_CONFIG_LIFECYCLE = tuple(sorted((_CC / "flows" / "config").glob("*.py")))
+_OPTIONS_SHADOW_RUN = _CC / "flows" / "options" / "shadow_run.py"
+_OPTIONS_SHADOW_RUNTIME = _CC / "flows" / "options" / "shadow_runtime.py"
+_OPTIONS_LIFECYCLE = tuple(sorted((_CC / "flows" / "options").glob("*.py")))
 
 
 def _read(path: Path) -> str:

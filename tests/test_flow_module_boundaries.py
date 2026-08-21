@@ -9,36 +9,39 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENT = ROOT / "custom_components" / "eybond_local"
 CONFIG_FLOW = COMPONENT / "config_flow.py"
-CONFIG_BASE = COMPONENT / "config_base.py"
-CONFIG_NETWORK = COMPONENT / "config_network.py"
+CONFIG_IMPLEMENTATION = COMPONENT / "flows" / "config"
+OPTIONS_IMPLEMENTATION = COMPONENT / "flows" / "options"
+FLOW_COMMON = COMPONENT / "flows" / "common"
+CONFIG_BASE = CONFIG_IMPLEMENTATION / "base.py"
+CONFIG_NETWORK = CONFIG_IMPLEMENTATION / "network.py"
 CONFIG_MODULES = {
-    "config_base.py": "ConfigFlowBaseMixin",
-    "config_admission.py": "CollectorAdmissionFlowMixin",
-    "config_scan.py": "CollectorScanFlowMixin",
-    "config_ble.py": "BluetoothProvisioningFlowMixin",
-    "config_confirmation.py": "CollectorConfirmationFlowMixin",
-    "config_manual.py": "ManualCollectorFlowMixin",
+    "flows/config/base.py": "ConfigFlowBaseMixin",
+    "flows/config/admission.py": "CollectorAdmissionFlowMixin",
+    "flows/config/scan.py": "CollectorScanFlowMixin",
+    "flows/config/ble.py": "BluetoothProvisioningFlowMixin",
+    "flows/config/confirmation.py": "CollectorConfirmationFlowMixin",
+    "flows/config/manual.py": "ManualCollectorFlowMixin",
     "config_entry.py": "EntryCommitFlowMixin",
-    "config_collector.py": "SelectedCollectorFlowMixin",
-    "config_network.py": "ConfigNetworkFlowMixin",
-    "config_results.py": "ScanResultPresentationMixin",
+    "flows/config/collector.py": "SelectedCollectorFlowMixin",
+    "flows/config/network.py": "ConfigNetworkFlowMixin",
+    "flows/config/results.py": "ScanResultPresentationMixin",
 }
 OPTIONS_FLOW = COMPONENT / "options_flow.py"
-OPTIONS_RUNTIME = COMPONENT / "options_runtime.py"
+OPTIONS_RUNTIME = OPTIONS_IMPLEMENTATION / "runtime.py"
 OPTIONS_MODULES = {
-    "options_base.py": "OptionsFlowBase",
-    "options_runtime.py": "RuntimeOptionsMixin",
-    "options_strategy.py": "StrategyTransitionOptionsMixin",
-    "options_shadow_run.py": "ShadowLearningRunMixin",
-    "options_shadow_review.py": "ShadowLearningReviewMixin",
-    "options_shadow_runtime.py": "ShadowLearningRuntimeMixin",
-    "options_proxy.py": "ProxyCaptureOptionsMixin",
-    "options_diagnostics.py": "DiagnosticsOptionsMixin",
+    "flows/options/base.py": "OptionsFlowBase",
+    "flows/options/runtime.py": "RuntimeOptionsMixin",
+    "flows/options/strategy.py": "StrategyTransitionOptionsMixin",
+    "flows/options/shadow_run.py": "ShadowLearningRunMixin",
+    "flows/options/shadow_review.py": "ShadowLearningReviewMixin",
+    "flows/options/shadow_runtime.py": "ShadowLearningRuntimeMixin",
+    "flows/options/proxy.py": "ProxyCaptureOptionsMixin",
+    "flows/options/diagnostics.py": "DiagnosticsOptionsMixin",
 }
-FLOW_TRANSLATION = COMPONENT / "flow_translation.py"
-FLOW_PRESENTATION = COMPONENT / "flow_presentation.py"
+FLOW_TRANSLATION = FLOW_COMMON / "translation.py"
+FLOW_PRESENTATION = FLOW_COMMON / "presentation.py"
 LISTENER_OPTIONS_FLOW = COMPONENT / "listener_options_flow.py"
-CONNECTION_FORM = COMPONENT / "connection_form.py"
+CONNECTION_FORM = FLOW_COMMON / "connection_form.py"
 NETWORK_INTERFACES = COMPONENT / "network_interfaces.py"
 
 
@@ -113,8 +116,8 @@ class FlowTranslationBoundaryTests(unittest.TestCase):
         self.assertEqual(
             definitions,
             {
-                "TranslationBundleMixin": ["flow_translation.py"],
-                "load_translation_bundle": ["flow_translation.py"],
+                "TranslationBundleMixin": ["flows/common/translation.py"],
+                "load_translation_bundle": ["flows/common/translation.py"],
             },
         )
 
@@ -319,17 +322,27 @@ class ConfigFlowDecompositionBoundaryTests(unittest.TestCase):
             )
 
     def test_config_lifecycles_do_not_depend_on_peer_lifecycles(self) -> None:
-        support_modules = {"config_common", "config_result_model"}
+        lifecycle_modules = {
+            "admission",
+            "base",
+            "ble",
+            "collector",
+            "confirmation",
+            "manual",
+            "network",
+            "results",
+            "scan",
+        }
         for filename in CONFIG_MODULES:
+            tree = _tree(COMPONENT / filename)
             peer_imports = {
-                module
-                for module in _imported_modules(_tree(COMPONENT / filename))
-                if module.startswith("config_")
+                node.module
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom)
+                and node.level == 1
+                and node.module in lifecycle_modules
             }
-            self.assertTrue(
-                peer_imports <= support_modules,
-                f"{filename} imports peer lifecycle modules {sorted(peer_imports - support_modules)}",
-            )
+            self.assertEqual(peer_imports, set(), filename)
 
     def test_each_config_lifecycle_method_has_one_owner(self) -> None:
         owners: dict[str, str] = {}
@@ -468,16 +481,26 @@ class OptionsFlowDecompositionBoundaryTests(unittest.TestCase):
                 )
 
     def test_options_lifecycles_do_not_depend_on_peer_lifecycles(self) -> None:
+        lifecycle_modules = {
+            "base",
+            "diagnostics",
+            "proxy",
+            "runtime",
+            "shadow_review",
+            "shadow_run",
+            "shadow_runtime",
+            "strategy",
+        }
         for filename in OPTIONS_MODULES:
+            tree = _tree(COMPONENT / filename)
             peer_imports = {
-                module
-                for module in _imported_modules(_tree(COMPONENT / filename))
-                if module.startswith("options_")
+                node.module
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom)
+                and node.level == 1
+                and node.module in lifecycle_modules
             }
-            self.assertTrue(
-                peer_imports <= {"options_shared"},
-                f"{filename} imports peer lifecycle modules {sorted(peer_imports - {'options_shared'})}",
-            )
+            self.assertEqual(peer_imports, set(), filename)
 
     def test_each_lifecycle_method_has_one_owner(self) -> None:
         owners: dict[str, str] = {}
@@ -532,7 +555,6 @@ class NetworkInterfaceBoundaryTests(unittest.TestCase):
                 alias.name
                 for node in tree.body
                 if isinstance(node, ast.ImportFrom)
-                and node.level == 1
                 and node.module is None
                 for alias in node.names
             }

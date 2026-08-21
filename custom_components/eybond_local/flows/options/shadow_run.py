@@ -13,18 +13,18 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.config_entries import ConfigFlowResult
 
-from .collector.transport import _finish_cleanup_on_cancel
-from .flow_presentation import _smartess_credential_schema_fields
-from .flow_translation import with_translation_bundle as _with_translation_bundle
-from .options_shared import (
+from ...collector.transport import _finish_cleanup_on_cancel
+from ..common.presentation import _smartess_credential_schema_fields
+from ..common.translation import with_translation_bundle as _with_translation_bundle
+from .shared import (
     _BOOLEAN_SELECTOR,
     CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED,
     CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE,
     CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
 )
-from .runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
-from .support.cloud_evidence_providers import resolve_cloud_evidence_provider
-from .support.shadow_learning_overlay_generator import (
+from ...runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
+from ...support.cloud_evidence_providers import resolve_cloud_evidence_provider
+from ...support.shadow_learning_overlay_generator import (
     generate_shadow_learning_overlay_drafts,
 )
 

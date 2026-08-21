@@ -11,21 +11,21 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.data_entry_flow import section
 
-from .collector_identity import (
+from ...collector_identity import (
     pn_is_same_identity,
 )
-from .connection.admission import ObservedCollectorSession
-from .connection.callback_identity import (
+from ...connection.admission import ObservedCollectorSession
+from ...connection.callback_identity import (
     CallbackIdentityOutcome,
     CallbackIdentityRequest,
     OnboardingWireProbeIntent,
 )
-from .connection.recovery.verification import (
+from ...connection.recovery.verification import (
     EVIDENCE_USER_CONFIRMED_SESSION,
     CallbackRecoveryRoute,
 )
-from .connection.session_handle import WIRE_AT_TEXT, WIRE_FRAMED
-from .const import (
+from ...connection.session_handle import WIRE_AT_TEXT, WIRE_FRAMED
+from ...const import (
     CONF_ADVERTISED_SERVER_IP,
     CONF_ADVERTISED_TCP_PORT,
     CONF_COLLECTOR_IP,
@@ -40,7 +40,7 @@ from .const import (
     DEFAULT_DRIVER_DETECTION_STRATEGY,
     DRIVER_DETECTION_STRATEGIES,
 )
-from .flow_presentation import (
+from ..common.presentation import (
     MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
     MANUAL_CONFIRM_ACTION_ENABLE_DISCOVERY,
     MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
@@ -50,8 +50,8 @@ from .flow_presentation import (
     _flatten_sections,
     _shared_recovery_failure_explanation,
 )
-from .flow_translation import with_translation_bundle as _with_translation_bundle
-from .models import (
+from ..common.translation import with_translation_bundle as _with_translation_bundle
+from ...models import (
     CollectorCandidate,
     CollectorInfo,
     OnboardingResult,
@@ -505,7 +505,7 @@ class ManualCollectorFlowMixin:
     ) -> tuple[ObservedCollectorSession, ...]:
         """Return the shared live strong-PN inventory, fail-closed."""
 
-        from .passive_discovery import get_passive_callback_discovery
+        from ...passive_discovery import get_passive_callback_discovery
 
         discovery = get_passive_callback_discovery(self.hass)
         snapshot = getattr(discovery, "snapshot_unclaimed_collector_sessions", None)

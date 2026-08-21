@@ -10,11 +10,11 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
 )
 
-from .config_result_model import (
+from .result_model import (
     _result_collector_capabilities,
     _result_is_virtual_bridge,
 )
-from .const import (
+from ...const import (
     CONF_DRIVER_DETECTION_STRATEGY,
     CONF_POLL_INTERVAL,
     CONF_POLL_MODE,
@@ -26,7 +26,7 @@ from .const import (
     POLL_MODE_AUTO,
     POLL_MODE_MANUAL,
 )
-from .flow_presentation import (
+from ..common.presentation import (
     _driver_detection_strategy_selector,
     _exception_detail,
     _flatten_sections,
@@ -34,13 +34,13 @@ from .flow_presentation import (
     _poll_mode_selector,
     _smartess_credential_schema_fields,
 )
-from .flow_translation import (
+from ..common.translation import (
     with_translation_bundle as _with_translation_bundle,
 )
-from .models import (
+from ...models import (
     OnboardingResult,
 )
-from .support.cloud_evidence_providers import (
+from ...support.cloud_evidence_providers import (
     CloudEvidenceContext,
     CloudEvidenceOnboardingAssist,
     CloudEvidenceSettingHighlight,

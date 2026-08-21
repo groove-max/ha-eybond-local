@@ -7,53 +7,53 @@ from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Any
 
-from .collector.at_runtime import query_runtime_collector_at_values
-from .collector.callback_endpoint import home_assistant_callback_endpoint
-from .collector.capabilities import (
+from ...collector.at_runtime import query_runtime_collector_at_values
+from ...collector.callback_endpoint import home_assistant_callback_endpoint
+from ...collector.capabilities import (
     parse_esp_collector_hardware_token,
 )
-from .collector.cloud_family import collector_cloud_family_observation_from_endpoint
-from .collector.discovery import async_send_callback_trigger
-from .collector.parameter_registry import (
+from ...collector.cloud_family import collector_cloud_family_observation_from_endpoint
+from ...collector.discovery import async_send_callback_trigger
+from ...collector.parameter_registry import (
     COLLECTOR_PARAMETER_DEFINITION_BY_ID,
     query_runtime_collector_values,
 )
-from .collector.smartess_local import (
+from ...collector.smartess_local import (
     QUERY_REBOOT_REQUIRED,
     SET_REBOOT_OR_APPLY,
     SET_SERVER_ENDPOINT,
     SmartEssLocalSession,
 )
-from .collector.transport import (
+from ...collector.transport import (
     SharedCollectorAtTransport,
     SharedEybondTransport,
 )
-from .collector_endpoint import (
+from ...collector_endpoint import (
     inspect_collector_server_endpoint,
 )
-from .collector_identity import (
+from ...collector_identity import (
     pn_is_same_identity,
     reconcile_pn,
 )
-from .config_common import (
+from .common import (
     _async_timeout,
 )
-from .config_result_model import (
+from .result_model import (
     _result_collector_capabilities,
     _result_is_virtual_bridge,
     _smartess_collector_firmware_version_for_result,
 )
-from .connection.admission import ObservedCollectorSession
-from .connection.admission_transaction import (
+from ...connection.admission import ObservedCollectorSession
+from ...connection.admission_transaction import (
     CollectorAdmissionTransaction,
 )
-from .connection.recovery.verification import (
+from ...connection.recovery.verification import (
     CallbackRecoveryRoute,
 )
-from .connection.spec_factory import (
+from ...connection.spec_factory import (
     build_connection_spec_from_values,
 )
-from .const import (
+from ...const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
@@ -65,11 +65,11 @@ from .const import (
     DEFAULT_TCP_PORT,
     DRIVER_HINT_AUTO,
 )
-from .models import (
+from ...models import (
     CollectorInfo,
     OnboardingResult,
 )
-from .support.collector_registry import remember_collector_original_endpoint
+from ...support.collector_registry import remember_collector_original_endpoint
 
 logger = logging.getLogger(__name__)
 

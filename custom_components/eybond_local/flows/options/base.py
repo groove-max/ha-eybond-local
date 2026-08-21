@@ -7,44 +7,44 @@ from typing import Any
 from homeassistant.config_entries import ConfigFlowResult, OptionsFlow
 from homeassistant.helpers.selector import SelectSelector, TextSelector
 
-from .collector.capabilities import (
+from ...collector.capabilities import (
     CollectorCapabilityProfile,
     collector_capability_profile_from_runtime,
 )
-from .collector.smartess_ble import SmartEssBleWifiNetwork
-from .connection.operating_profile import (
+from ...collector.smartess_ble import SmartEssBleWifiNetwork
+from ...connection.operating_profile import (
     OPERATING_PROFILE_CLOUD_AND_HA,
     OPERATING_PROFILE_CUSTOM,
     OPERATING_PROFILE_HA_ONLY,
     CollectorOperatingProfile,
     collector_operating_profile_from_entry,
 )
-from .connection.ui import ConnectionFormField
-from .connection_form import (
+from ...connection.ui import ConnectionFormField
+from ..common.connection_form import (
     IP_TEXT_SELECTOR as _IP_TEXT_SELECTOR,
 )
-from .connection_form import (
+from ..common.connection_form import (
     build_connection_fields_schema as _build_shared_connection_fields_schema,
 )
-from .connection_form import (
+from ..common.connection_form import (
     interface_selector as _interface_selector,
 )
-from .connection_form import (
+from ..common.connection_form import (
     selector_for_connection_field as _shared_connection_field_selector,
 )
-from .const import (
+from ...const import (
     CONF_DETECTED_DRIVER,
     CONF_DRIVER_HINT,
     CONF_STRATEGY_TRANSITION_STATE,
     DRIVER_HINT_AUTO,
 )
-from .flow_translation import (
+from ..common.translation import (
     TranslationBundleMixin as _TranslationBundleMixin,
 )
-from .flow_translation import (
+from ..common.translation import (
     with_translation_bundle as _with_translation_bundle,
 )
-from .runtime.manager import RuntimeInverterCandidate
+from ...runtime.manager import RuntimeInverterCandidate
 
 
 class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):

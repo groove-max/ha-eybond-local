@@ -14,31 +14,31 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 
-from .collector.smartess_ble import (
+from ...collector.smartess_ble import (
     SmartEssBleWifiNetwork,
 )
-from .collector.transport_profile import (
+from ...collector.transport_profile import (
     collector_session_protocol_from_inventory_state,
     normalize_collector_session_protocol,
 )
-from .config_common import (
+from .common import (
     _AUTO_SCAN_TIMEOUT,
     _ONBOARDING_TIMEOUT_POLICY,
     _PASSIVE_LISTENER_HOST,
 )
-from .connection.admission import CollectorAdmissionRequest, ObservedCollectorSession
-from .connection.admission_transaction import (
+from ...connection.admission import CollectorAdmissionRequest, ObservedCollectorSession
+from ...connection.admission_transaction import (
     CollectorAdmissionTransaction,
     ManualCallbackContinuationTransaction,
 )
-from .connection.branch_registry import (
+from ...connection.branch_registry import (
     supported_connection_types,
 )
-from .connection.callback_continuation import (
+from ...connection.callback_continuation import (
     CallbackContinuation,
     CallbackIdentityContext,
 )
-from .const import (
+from ...const import (
     CONF_COLLECTOR_PN,
     CONF_CONNECTION_TYPE,
     CONF_ENTRY_ROLE,
@@ -49,15 +49,15 @@ from .const import (
     DEFAULT_TCP_PORT,
     ENTRY_ROLE_LISTENER,
 )
-from .flow_translation import (
+from ..common.translation import (
     with_translation_bundle as _with_translation_bundle,
 )
-from .models import (
+from ...models import (
     CollectorCandidate,
     CollectorInfo,
     OnboardingResult,
 )
-from .support.cloud_evidence_providers import (
+from ...support.cloud_evidence_providers import (
     CloudEvidenceOnboardingAssist as _SmartEssCloudAssistState,
 )
 
@@ -242,10 +242,10 @@ class ConfigFlowBaseMixin:
     def async_get_options_flow(config_entry):
         role = str(config_entry.data.get(CONF_ENTRY_ROLE) or "")
         if role == ENTRY_ROLE_LISTENER:
-            from .listener_options_flow import ListenerOptionsFlow
+            from ...listener_options_flow import ListenerOptionsFlow
 
             return ListenerOptionsFlow(config_entry)
-        from .options_flow import EybondLocalOptionsFlow
+        from ...options_flow import EybondLocalOptionsFlow
 
         return EybondLocalOptionsFlow(config_entry)
 
@@ -262,7 +262,7 @@ class ConfigFlowBaseMixin:
         if getattr(self, "_force_unsupported_refreshed", False):
             return
         self._force_unsupported_refreshed = True
-        from .metadata.device_catalog_loader import refresh_force_unsupported_override
+        from ...metadata.device_catalog_loader import refresh_force_unsupported_override
 
         with suppress(Exception):
             config_root = Path(self.hass.config.path("eybond_local")).resolve()

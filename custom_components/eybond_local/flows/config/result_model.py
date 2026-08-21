@@ -5,21 +5,21 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .collector.capabilities import (
+from ...collector.capabilities import (
     CollectorCapabilityProfile,
     collector_capability_profile_from_runtime,
     collector_profile_entry_fields,
 )
-from .collector.transport_profile import (
+from ...collector.transport_profile import (
     collector_session_protocol_from_inventory_state,
 )
-from .collector_identity import (
+from ...collector_identity import (
     identity_source_is_strong,
     pn_is_same_identity,
     reconcile_pn,
 )
-from .connection.admission import ObservedCollectorSession
-from .const import (
+from ...connection.admission import ObservedCollectorSession
+from ...const import (
     COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE,
     CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_CONFIRMED_SESSION_PROTOCOL,
@@ -34,11 +34,11 @@ from .const import (
     CONF_SMARTESS_PROTOCOL_ASSET_ID,
     DRIVER_HINT_AUTO,
 )
-from .drivers.catalog_identity import ERROR_INVERTER_LINK_DOWN
-from .flow_presentation import (
+from ...drivers.catalog_identity import ERROR_INVERTER_LINK_DOWN
+from ..common.presentation import (
     _clear_runtime_inverter_facts,
 )
-from .models import (
+from ...models import (
     OnboardingResult,
 )
 

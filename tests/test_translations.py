@@ -207,7 +207,7 @@ class RecoveryFailureLocalizationTests(unittest.TestCase):
 
     def _load_bundle(self, language: str) -> dict:
         # The REAL loader every flow uses -- not a hand-built dict.
-        from custom_components.eybond_local.flow_translation import (
+        from custom_components.eybond_local.flows.common.translation import (
             load_translation_bundle,
         )
 

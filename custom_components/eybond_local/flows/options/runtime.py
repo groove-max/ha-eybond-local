@@ -16,10 +16,10 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
-from . import network_interfaces
-from .collector.discovery import async_send_callback_trigger
-from .collector.smartess_ble import SmartEssBleWifiNetwork, parse_wifi_scan_response
-from .collector.smartess_local import (
+from ... import network_interfaces
+from ...collector.discovery import async_send_callback_trigger
+from ...collector.smartess_ble import SmartEssBleWifiNetwork, parse_wifi_scan_response
+from ...collector.smartess_local import (
     QUERY_HARDWARE_VERSION,
     QUERY_NETWORK_DIAGNOSTICS,
     QUERY_SERIAL_BAUDRATE,
@@ -29,18 +29,18 @@ from .collector.smartess_local import (
     SET_TARGET_SSID,
     SmartEssLocalSession,
 )
-from .collector.transport import SharedEybondTransport
-from .connection.branch_registry import get_connection_branch
-from .connection.connection_policy import resolve_connection_strategy
-from .connection.entry import build_runtime_option_settings
-from .connection.spec_factory import build_connection_spec
-from .connection_form import (
+from ...collector.transport import SharedEybondTransport
+from ...connection.branch_registry import get_connection_branch
+from ...connection.connection_policy import resolve_connection_strategy
+from ...connection.entry import build_runtime_option_settings
+from ...connection.spec_factory import build_connection_spec
+from ..common.connection_form import (
     DRIVER_DISPLAY_LABELS as _DRIVER_DISPLAY_LABELS,
 )
-from .connection_form import (
+from ..common.connection_form import (
     validate_connection_inputs as _validate_shared_connection_inputs,
 )
-from .const import (
+from ...const import (
     CONF_ADVERTISED_SERVER_IP,
     CONF_ADVERTISED_TCP_PORT,
     CONF_COLLECTOR_IP,
@@ -78,9 +78,9 @@ from .const import (
     POLL_MODE_AUTO,
     POLL_MODE_MANUAL,
 )
-from .control_policy import control_mode_options
-from .drivers.registry import driver_options
-from .flow_presentation import (
+from ...control_policy import control_mode_options
+from ...drivers.registry import driver_options
+from ..common.presentation import (
     _PASSWORD_TEXT_SELECTOR,
     CONF_WIFI_PASSWORD,
     CONF_WIFI_SSID,
@@ -92,10 +92,10 @@ from .flow_presentation import (
     _poll_interval_selector,
     _poll_mode_selector,
 )
-from .flow_translation import (
+from ..common.translation import (
     selector_option_label as _selector_option_label,
 )
-from .flow_translation import (
+from ..common.translation import (
     with_translation_bundle as _with_translation_bundle,
 )
 
