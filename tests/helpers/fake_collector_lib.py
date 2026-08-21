@@ -102,6 +102,11 @@ class CollectorScenario:
     # until a NEW set>server datagram arrives on its UDP listener (the
     # callback-recovery lifecycle).
     set_29_mode: str = "fail"
+    # Support the framed endpoint-management lifecycle used by strategy
+    # transition repair: FC=2/3 parameter 21 read/write plus parameter 30
+    # reboot-required readback. Disabled by default so older scenarios keep
+    # their exact unsupported behavior.
+    framed_endpoint_management: bool = False
     reboot_reconnect_delay: float = 0.3
     # FC=1 heartbeat REQUEST replies: "immediate" is the real device behavior
     # (a reply is never an unsolicited byte; first_heartbeat_delay gates only
@@ -174,6 +179,7 @@ def resolve_scenario(
     query_14_mode: str | None = None,
     fc4_mode: str | None = None,
     set_29_mode: str | None = None,
+    framed_endpoint_management: bool = False,
     reboot_reconnect_delay: float = 0.3,
     pi30_mode: str | None = None,
     fc1_reply_mode: str | None = None,
@@ -219,6 +225,7 @@ def resolve_scenario(
         fc2_query_modes={5: resolved_query_5_mode, 14: resolved_query_14_mode},
         fc4_mode=resolved_fc4_mode,
         set_29_mode=str(set_29_mode or "fail"),
+        framed_endpoint_management=bool(framed_endpoint_management),
         reboot_reconnect_delay=float(reboot_reconnect_delay),
         pi30_mode=str(pi30_mode or "nak"),
         fc1_reply_mode=str(fc1_reply_mode or "immediate"),

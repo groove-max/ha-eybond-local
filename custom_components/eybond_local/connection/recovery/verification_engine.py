@@ -91,7 +91,7 @@ class _ControlledResetRecoveryEngine:
         causality_lease (held from BEFORE baseline to the terminal outcome)
         |-- inhibit_callback_triggers
         |     strong identity -> promote -> baseline -> adapter reboot
-        |     -> old socket closed -> bounded inbound reconnect wait
+        |     -> baseline-cohort reset activity -> bounded reconnect wait
         |__ (inhibitor exits HERE; the lease does NOT)
         callback phase (route mode only):
               post-reset baseline -> exactly ONE own unicast sequence
@@ -142,6 +142,7 @@ class _ControlledResetRecoveryEngine:
         owner_certifier: Callable[[str], Any] | None = None,
         probe_reconnected_identity: Callable[[str], Any] | None = None,
         silent_session_probe: Any = None,
+        expected_inbound_listener_port: int = 0,
         ledger: Any = None,
         poll_interval: float = _DEFAULT_POLL_INTERVAL_SECONDS,
     ) -> None:
@@ -162,8 +163,11 @@ class _ControlledResetRecoveryEngine:
         # session-id claim becomes the durable full-PN claim in the registry.
         # Raising ValueError means another owner holds the identity.
         self._promote_claim = promote_claim
-        # Ownership retarget hook: MUST move the registry claim from the closed
-        # old socket to ``new_session_id`` (idempotent when already there).
+        # Ownership retarget hook: MUST move the registry claim from the
+        # baseline management socket to ``new_session_id`` (idempotent when
+        # already there). The old socket may still overlap physically; the
+        # complete baseline + new-id/strong-PN gates establish recovery, not a
+        # single old-socket EOF assumption.
         # Success without a retargeted claim is not success: the entry's
         # ownership handoff must carry the NEW socket. MANDATORY for any
         # proof-producing run -- ``async_verify`` refuses upfront when absent.
@@ -188,6 +192,13 @@ class _ControlledResetRecoveryEngine:
         # (see collector.silent_session_probe). Optional: without it the
         # engine sees only sessions that volunteer identity, as before.
         self._silent_session_probe = silent_session_probe
+        if (
+            type(expected_inbound_listener_port) is not int
+            or type(expected_inbound_listener_port) is bool
+            or not 0 <= expected_inbound_listener_port <= 65535
+        ):
+            raise ValueError("recovery_expected_listener_port_invalid")
+        self._expected_inbound_listener_port = expected_inbound_listener_port
         # Captured from the TRUSTED live handle right before the reboot; the
         # only wire authority a silent-reconnect probe may use.
         self._wire_authority: RecoveryWireProbeAuthority | None = None
@@ -205,6 +216,12 @@ class _ControlledResetRecoveryEngine:
         )
         self._poll_interval = max(0.01, float(poll_interval))
         self._baseline_session_ids: frozenset[str] = frozenset()
+        # The subset of the baseline that is positively attributable to this
+        # collector.  A real collector may keep several overlapping same-PN
+        # sockets alive, and the management command can be carried by one while
+        # a sibling is the first socket to close.  Reset causality therefore
+        # cannot hinge on one arbitrarily selected ``old_session_id``.
+        self._reset_target_session_ids: frozenset[str] = frozenset()
         self._transitions: list[str] = [STATE_OBSERVED_SESSION]
         # The lease's per-attempt trigger accounting (own vs foreign sends);
         # bound while the causality lease is held.
@@ -245,13 +262,6 @@ class _ControlledResetRecoveryEngine:
         except Exception:
             logger.debug("Recovery verification sessions source failed", exc_info=True)
             return ()
-
-    def _old_session_live(self) -> bool:
-        for session in self._sessions():
-            if str(session.get("session_id") or "").strip() != self._session_id:
-                continue
-            return not _session_is_closed(session)
-        return False
 
     def _session_entry(self, session_id: str) -> Mapping[str, Any] | None:
         for session in self._sessions():
@@ -311,11 +321,71 @@ class _ControlledResetRecoveryEngine:
         phase).
         """
 
+        sessions = self._sessions()
         self._baseline_session_ids = frozenset(
             str(session.get("session_id") or "").strip()
-            for session in self._sessions()
+            for session in sessions
             if str(session.get("session_id") or "").strip()
         ) | {self._session_id}
+        target_ids = {self._session_id}
+        for session in sessions:
+            session_id = str(session.get("session_id") or "").strip()
+            session_pn = str(session.get("collector_pn") or "").strip()
+            if (
+                session_id
+                and not _session_is_closed(session)
+                and session_pn
+                and pn_is_same_identity(self._collector_pn, session_pn)
+            ):
+                target_ids.add(session_id)
+        self._reset_target_session_ids = frozenset(target_ids)
+
+    def _reset_activity_observed(self) -> tuple[bool, str]:
+        """Return whether the controlled reset changed the target cohort.
+
+        This is deliberately an *activity* gate, not a recovery proof.  It
+        accepts either disappearance/closure of any baseline socket positively
+        tied to the collector, or appearance of a new same-identity/fully-silent
+        socket outside the complete baseline.  The later reconnect path still
+        requires a NEW strong exact-PN session, the expected listener, and a
+        successful ownership retarget before it can mint a proof.
+
+        Counting a new silent socket here is necessary for collectors that open
+        their successor before an overlapping management socket has closed.  A
+        foreign/noisy socket can at most advance to the fail-closed identity
+        wait; it can never certify success.
+        """
+
+        sessions = self._sessions()
+        by_id = {
+            str(session.get("session_id") or "").strip(): session
+            for session in sessions
+            if str(session.get("session_id") or "").strip()
+        }
+        for session_id in self._reset_target_session_ids:
+            session = by_id.get(session_id)
+            if session is None or _session_is_closed(session):
+                return True, f"baseline_closed:{session_id}"
+
+        for session_id, session in by_id.items():
+            if session_id in self._baseline_session_ids or _session_is_closed(session):
+                continue
+            session_pn = str(session.get("collector_pn") or "").strip()
+            if session_pn and pn_is_same_identity(self._collector_pn, session_pn):
+                return True, f"new_same_identity:{session_id}"
+
+        probe = self._silent_session_probe
+        if probe is not None:
+            try:
+                for session_id in probe.snapshot_silent_session_ids():
+                    if (
+                        session_id not in self._pending_baseline
+                        and session_id not in self._baseline_session_ids
+                    ):
+                        return True, f"new_silent:{session_id}"
+            except Exception:
+                pass
+        return False, ""
 
     def _find_new_inbound_session(self) -> str:
         """Return the session_id of a NEW live session of the same full PN, or ""."""
@@ -327,6 +397,8 @@ class _ControlledResetRecoveryEngine:
                 # dial-in -- including parallel baseline sessions of the same PN.
                 continue
             if _session_is_closed(session):
+                continue
+            if not self._session_matches_expected_inbound_port(session_id):
                 continue
             if _session_state(session) in _UNTRUSTED_SESSION_STATES:
                 continue
@@ -353,12 +425,50 @@ class _ControlledResetRecoveryEngine:
                 continue
             if _session_is_closed(session) or _session_state(session) in _UNTRUSTED_SESSION_STATES:
                 continue
+            if not self._session_matches_expected_inbound_port(session_id):
+                continue
             if _session_has_strong_identity(session):
                 continue
             session_pn = str(session.get("collector_pn") or "").strip()
             if session_pn and pn_is_same_identity(self._collector_pn, session_pn):
                 return session_id
         return ""
+
+    def _session_matches_expected_inbound_port(self, session_id: str) -> bool:
+        """Whether a candidate arrived on this transition's pinned listener."""
+
+        expected = self._expected_inbound_listener_port
+        return expected == 0 or self._session_listener_port(session_id) == expected
+
+    def _fresh_callback_socket_observed(self) -> bool:
+        """Whether retransmitting the same callback route is no longer useful.
+
+        This is deliberately weaker than proof: any fresh live socket on the
+        pinned listener stops UDP retransmission, but the normal strong-PN,
+        baseline, route and ownership gates below still decide whether that
+        socket can certify success.  A false positive can only yield a safe
+        timeout; it can never mint a proof for the wrong collector.
+        """
+
+        for session in self._sessions():
+            session_id = str(session.get("session_id") or "").strip()
+            if not session_id or session_id in self._baseline_session_ids:
+                continue
+            if _session_is_closed(session):
+                continue
+            if self._session_listener_port(session_id) == self._callback_route.listener_port:
+                return True
+        probe = self._silent_session_probe
+        if probe is None:
+            return False
+        try:
+            return any(
+                session_id not in self._pending_baseline
+                and session_id not in self._baseline_session_ids
+                for session_id in probe.snapshot_silent_session_ids()
+            )
+        except Exception:
+            return False
 
     async def _async_wait_for_new_same_pn_session(
         self, deadline: float
@@ -474,6 +584,7 @@ class _ControlledResetRecoveryEngine:
             and session_id not in self._baseline_session_ids
             and session_id != self._session_id
             and session_id not in attempted
+            and self._session_matches_expected_inbound_port(session_id)
         )
         if not candidates:
             return _SILENT_OBS_NONE
@@ -614,7 +725,7 @@ class _ControlledResetRecoveryEngine:
             return self._fail(FAILURE_CAUSALITY_BUSY)
 
     async def _async_reset_phase(self) -> RecoveryVerificationOutcome | None:
-        """Identity -> promote -> baseline -> reboot -> disconnect -> inbound wait.
+        """Identity -> promote -> baseline -> reboot -> reset activity -> reconnect.
 
         Returns a terminal outcome, or ``None`` exactly when the inbound window
         expired AND a callback route is armed (the expected transition to the
@@ -719,24 +830,43 @@ class _ControlledResetRecoveryEngine:
             await self._close_channel()
             return self._fail(FAILURE_RESTART_NOT_CONFIRMED)
 
+        logger.info(
+            "Recovery verification: restart confirmed collector=%s old_session=%s",
+            self._collector_pn,
+            self._session_id,
+        )
+
         try:
-            # restart_requested -> waiting_for_disconnect: the collector itself
-            # must drop the old TCP session (we never close it ourselves before
-            # observing the disconnect, so the EOF is genuine device behavior).
+            # restart_requested -> waiting_for_disconnect (compat state name):
+            # observe a change in the WHOLE pre-reset target cohort.  Some
+            # collectors overlap same-PN sockets, so requiring the one selected
+            # management socket to close is neither necessary nor correct.
             self._enter(STATE_WAITING_FOR_DISCONNECT)
             deadline = loop.time() + self._disconnect_timeout
-            # The registry's physical session_id is the sole disconnect truth.
-            # ``RestartChannel`` wraps a reusable transport facade which may
-            # immediately attach to a successor socket and remain connected;
-            # consulting it here would turn a successful reboot/reconnect into
-            # a false ``disconnect_not_observed`` result.
-            while self._old_session_live():
+            while True:
+                reset_observed, reset_reason = self._reset_activity_observed()
+                if reset_observed:
+                    logger.info(
+                        "Recovery verification: reset activity observed "
+                        "collector=%s management_session=%s reason=%s",
+                        self._collector_pn,
+                        self._session_id,
+                        reset_reason,
+                    )
+                    break
                 if loop.time() >= deadline:
+                    logger.info(
+                        "Recovery verification: baseline cohort did not change "
+                        "collector=%s management_session=%s target_sessions=%s",
+                        self._collector_pn,
+                        self._session_id,
+                        sorted(self._reset_target_session_ids),
+                    )
                     return self._fail(FAILURE_DISCONNECT_NOT_OBSERVED)
                 await asyncio.sleep(self._poll_interval)
         finally:
-            # Release the (now dead or failed) claimed socket before watching
-            # for the collector's fresh dial-in.
+            # Release the exact management facade after the reset activity
+            # barrier; proof collection uses the registry/silent probe views.
             await self._close_channel()
 
         # waiting_for_disconnect -> waiting_for_inbound_reconnect. Only an
@@ -806,7 +936,7 @@ class _ControlledResetRecoveryEngine:
             return self._fail(FAILURE_INBOUND_PROOF_INVALID)
 
         # SUCCESS leaves the registry claim bound to the NEW socket, never the
-        # closed baseline one -- the entry's ownership handoff must carry the
+        # baseline management one -- the entry's ownership handoff must carry the
         # session the collector actually opened. Idempotent when the weak-path
         # enrichment already retargeted. The hook is guaranteed by the upfront
         # ownership gate: success without a retargeted claim cannot exist.
@@ -866,8 +996,11 @@ class _ControlledResetRecoveryEngine:
             return self._fail(FAILURE_CALLBACK_INTERFERENCE)
 
         self._enter(STATE_CALLBACK_TRIGGER_REQUESTED)
+        callback_deadline = loop.time() + self._callback_wait_timeout
         sender = self._trigger_sender or _ProductionRecoveryTriggerSender(
-            timeout=self._policy.discovery_timeout
+            timeout=self._policy.discovery_timeout,
+            retry_window=max(0.0, callback_deadline - loop.time()),
+            stop_requested=self._fresh_callback_socket_observed,
         )
         try:
             await sender.async_send(route)
@@ -887,9 +1020,7 @@ class _ControlledResetRecoveryEngine:
             return self._fail(FAILURE_TRIGGER_NOT_SENT)
 
         self._enter(STATE_WAITING_FOR_CALLBACK_SESSION)
-        wait = await self._async_wait_for_new_same_pn_session(
-            loop.time() + self._callback_wait_timeout
-        )
+        wait = await self._async_wait_for_new_same_pn_session(callback_deadline)
         new_session_id = wait.session_id
         if not new_session_id:
             # Only THIS phase's post-reset baseline/window fed the wait, so a

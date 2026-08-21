@@ -32,6 +32,16 @@ derives it from legacy fields exactly as `migrate_entry_axes` does).
 - **`callback_on_demand`** — Home Assistant asks the collector to dial back.
   Runtime sends **exactly one** UDP trigger per connect attempt (see below).
 
+ESP EyeBond Collector persists a valid discovery redirect as its server endpoint.
+The options form may prefill the bridge's current management-readback endpoint,
+but that value is presentation context only: it is not a recovery proof and does
+not bypass the verified inbound transition.
+For that capability profile, callback is therefore a bootstrap route rather than
+a stable operating profile. Its normal options surface manages the Home Assistant
+endpoint and runs either callback-origin → inbound verification or a verified
+inbound → inbound endpoint relocation through this same transition authority.
+It never exposes a cloud rollback chooser.
+
 #### `entry.data` is the single canonical owner (schema v4)
 
 `connection_strategy` has **exactly one** owner: **`entry.data`**. Every authority
@@ -136,6 +146,34 @@ snapshot values (and the support bundle):
 
 `inbound` entries send **zero** UDP triggers, even while disconnected.
 
+## Controlled reset and overlapping sessions
+
+A callback-mode entry is legitimately idle between polls. Before a
+`callback_on_demand` → `inbound` transition can write the persistent Home
+Assistant endpoint, the coordinator therefore asks the existing runtime
+connection path to establish one management session. This is not a second
+recovery implementation: it uses the normal one-shot callback trigger and
+causality lease, then pins the registry's exact currently-observed socket. The
+neutral transition authority still refuses without that session and still owns
+the active identity/restart/reconnect proof. The whole bootstrap and transition
+hold the coordinator's runtime-operation lock, so ordinary polling cannot race
+their wire traffic.
+
+A strategy transition sends its endpoint write/apply or reboot through one
+exact, registry-owned physical session. The temporary management facade is
+session-pinned and its teardown preserves that socket; it cannot switch to a
+same-PN sibling and cannot create reconnect evidence by closing the socket
+itself.
+
+Reset activity is observed against the complete pre-action session cohort, not
+against one selected socket's EOF. Some collectors briefly keep several
+same-PN sockets alive: a baseline sibling may close, or a new socket may open,
+while the management socket survives. This activity only opens the recovery
+wait. A proof still requires a new session id outside the whole baseline, a
+strong exact PN, the expected listener route, and a successful same-owner
+registry retarget. Baseline sessions and foreign-PN sockets can never certify a
+transition.
+
 ## Endpoint ownership rules
 
 - The integration never silently redirects a collector.
@@ -146,6 +184,29 @@ snapshot values (and the support bundle):
   `external`.
 - `integration_managed` implies the integration wrote the endpoint and recorded
   provenance (`endpoint_written_value`/`at`).
+
+Endpoint serialization and route semantics are separate facts. The declarative
+collector cloud-profile catalog is the single authority for both:
+
+- `host_port_protocol` and `host_port` collectors expose an editable advertised
+  port while preserving their required wire shape.
+- `host_only` collectors store only the host, but the catalog default port is
+  still part of the route. For the legacy binary family this is TCP `502`.
+  When configuring the persistent HA-only endpoint, transition UI therefore
+  does not ask for a port the firmware cannot store; listener preparation,
+  reconnect matching and persisted `advertised_tcp_port` all use `502` while
+  `endpoint_written_value` remains host-only.
+- A `set>server=host:port` callback route is a separate transport fact. It does
+  not inherit the persistent endpoint's host-only shape or implicit port. Its
+  advertised port is explicit (and may be an external NAT/VPN forwarding port),
+  while `listener_port` remains the local configured callback listener. The
+  integration passively listens on the conventional `502`, `8899` and `18899`
+  ports, but those listener defaults are not a global allowlist for advertised
+  callback ports.
+- A pre-existing host-only record with generic-port metadata is never rewritten
+  as a migration guess. Selecting the current HA-only profile routes through the
+  normal restart/same-PN verification and commits the corrected route only after
+  the collector reconnects on the fixed listener.
 
 ## Shadow-learning route ownership temporarily blocks reconcile
 

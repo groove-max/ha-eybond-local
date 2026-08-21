@@ -7,6 +7,10 @@ import logging
 from pathlib import Path
 
 from ..collector.callback_endpoint import home_assistant_callback_endpoint
+from ..collector_endpoint import (
+    CollectorEndpointWriteShape,
+    resolve_collector_endpoint_write_shape,
+)
 from ..collector.transport_profile import (
     apply_observed_collector_session_protocol,
     collector_cloud_family_from_entry_context,
@@ -192,6 +196,27 @@ class CoordinatorCollectorProfileMixin:
             ),
             template_endpoint=template_endpoint,
             cloud_family=self.collector_cloud_family,
+        )
+
+    @property
+    def collector_endpoint_write_shape(self) -> CollectorEndpointWriteShape:
+        """Return the catalog-backed endpoint shape used by this collector.
+
+        This is a read-only projection.  It does not decide identity, choose an
+        address or mint transition evidence; it only explains how the already
+        selected family/template serializes the endpoint and, for a host-only
+        format, which implicit TCP port that value means on the wire.
+        """
+
+        template_endpoint = (
+            self.data.collector_server_endpoint
+            or self.collector_server_endpoint_rollback_target
+            or getattr(self, "_remembered_collector_server_endpoint", "")
+            or ""
+        )
+        return resolve_collector_endpoint_write_shape(
+            cloud_family=self.collector_cloud_family,
+            template_endpoint=template_endpoint,
         )
 
     @property

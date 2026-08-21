@@ -35,6 +35,23 @@ from .transport_connections import _CollectorAtConnection, _CollectorConnection
 
 logger = logging.getLogger(__name__)
 
+
+_TERMINAL_SESSION_STATES = frozenset(
+    {
+        "parked_evicted",
+        "parked_expired",
+        "parked_peer_closed",
+        "parked_read_failed",
+    }
+)
+
+
+def _session_state_is_terminal(state: str) -> bool:
+    """Return whether one socket-scoped inventory state is irreversible."""
+
+    normalized = str(state or "").strip()
+    return normalized.startswith("closed") or normalized in _TERMINAL_SESSION_STATES
+
 @dataclass(slots=True)
 class _PendingCollectorSocket:
     remote_ip: str
@@ -551,6 +568,23 @@ class _SharedEybondListener:
         )
         return connection
 
+    @staticmethod
+    def _connection_is_unbound_placeholder(
+        connection: object,
+        session_connections: dict[str, object],
+    ) -> bool:
+        """Return whether a facade is safe to bind to one new physical socket.
+
+        A connection object is mutable transport state (reader, writer and
+        session id), so two accepted sockets must never share it.  The only
+        reusable object is an idle placeholder that has not yet been assigned
+        to any socket-scoped session id.
+        """
+
+        return not bool(getattr(connection, "connected", False)) and not any(
+            candidate is connection for candidate in session_connections.values()
+        )
+
     def current_connection(self, *, heartbeat_interval: float, write_timeout: float) -> _CollectorConnection | None:
         connected = tuple(
             connection
@@ -821,6 +855,15 @@ class _SharedEybondListener:
     def _mark_session_state(self, session_id: str, state: str) -> None:
         entry = self._session_inventory.get(session_id)
         if entry is not None:
+            # Session ids describe physical TCP sockets.  Once that socket has
+            # reached a terminal state, a slower route/identity coroutine must
+            # never resurrect it as ``routed_*`` or ``route_identity_mismatch``.
+            # E500 collectors can open several replacement sockets almost at
+            # once, making this ordering observable during strategy recovery.
+            if _session_state_is_terminal(entry.state) and not _session_state_is_terminal(
+                state
+            ):
+                return
             entry.state = state
 
     def _mark_socket_session_closed(self, session_id: str, connection: object) -> None:
@@ -843,6 +886,11 @@ class _SharedEybondListener:
             if mapping.get(normalized) is connection:
                 mapping.pop(normalized, None)
         self._mark_session_state(normalized, "closed_disconnected")
+        logger.info(
+            "Collector socket session closed listener_port=%s session=%s",
+            self._port,
+            normalized,
+        )
 
     def _mark_session_first_bytes(self, session_id: str, chunk: bytes) -> None:
         entry = self._session_inventory.get(session_id)
@@ -1565,6 +1613,49 @@ class _SharedEybondListener:
             selected_connections,
         )
 
+    async def _disconnect_matching_session_connections(
+        self,
+        session_connections: dict[str, object],
+        *,
+        collector_ip: str,
+        collector_pn: str,
+        preserve_session_id: str,
+    ) -> None:
+        """Close every exact physical session belonging to one released route."""
+
+        selected: list[object] = []
+        seen: set[int] = set()
+        for session_id, connection in tuple(session_connections.items()):
+            if preserve_session_id and session_id == preserve_session_id:
+                continue
+            entry = self._session_inventory.get(session_id)
+            if entry is None:
+                continue
+            matches = False
+            if collector_pn:
+                matches = self._collector_pn_matches(
+                    collector_pn,
+                    str(entry.collector_pn or "").strip(),
+                )
+            elif collector_ip:
+                matches = self._callback_ip_matches_collector(
+                    collector_ip,
+                    str(entry.remote_ip or "").strip(),
+                )
+            if not matches or id(connection) in seen:
+                continue
+            seen.add(id(connection))
+            selected.append(connection)
+
+        for connection in selected:
+            disconnect = getattr(connection, "disconnect", None)
+            if callable(disconnect):
+                await disconnect()
+            # ``run()`` normally invokes this through its disconnect callback;
+            # repeat it idempotently so cancellation/teardown ordering cannot
+            # leave a now-unowned exact-session index behind.
+            self._drop_connection_indexes_for_connection(connection)
+
     async def release_collector_connections(
         self,
         collector_ip: str,
@@ -1616,6 +1707,12 @@ class _SharedEybondListener:
                 await self._close_pending_socket(pending)
 
         if close_payload:
+            await self._disconnect_matching_session_connections(
+                self._session_payload_connections,
+                collector_ip=collector_ip,
+                collector_pn=collector_pn,
+                preserve_session_id=preserve_session_id,
+            )
             payload_keys = set()
             if collector_pn:
                 payload_keys.update(
@@ -1645,6 +1742,12 @@ class _SharedEybondListener:
                 self._last_connection_ip = ""
 
         if close_at:
+            await self._disconnect_matching_session_connections(
+                self._session_at_connections,
+                collector_ip=collector_ip,
+                collector_pn=collector_pn,
+                preserve_session_id=preserve_session_id,
+            )
             at_keys = set()
             if collector_pn:
                 at_keys.update(
@@ -1693,7 +1796,10 @@ class _SharedEybondListener:
                 remote_ip,
                 connections=self._at_connections,
             )
-        if connection is None:
+        if connection is None or not self._connection_is_unbound_placeholder(
+            connection,
+            self._session_at_connections,
+        ):
             connection = _CollectorAtConnection(
                 remote_ip_hint=remote_ip,
                 write_timeout=write_timeout,
@@ -1755,7 +1861,10 @@ class _SharedEybondListener:
             connection = self._connections.get(remote_ip)
         if connection is None and not normalized_pn:
             connection = self._resolve_public_placeholder_alias(remote_ip)
-        if connection is None:
+        if connection is None or not self._connection_is_unbound_placeholder(
+            connection,
+            self._session_payload_connections,
+        ):
             connection = _CollectorConnection(
                 remote_ip_hint=remote_ip,
                 heartbeat_interval=heartbeat_interval,
@@ -2061,7 +2170,10 @@ class _SharedEybondListener:
                     pending.remote_ip,
                     connections=self._at_connections,
                 )
-            if connection is None:
+            if connection is None or not self._connection_is_unbound_placeholder(
+                connection,
+                self._session_at_connections,
+            ):
                 has_ip_owner = self._has_owner_for_remote_ip(
                     self._at_owner_counts,
                     pending.remote_ip,
@@ -2115,7 +2227,10 @@ class _SharedEybondListener:
             connection = self._connections.get(pending.remote_ip)
         if connection is None and not initial_pn:
             connection = self._resolve_public_placeholder_alias(pending.remote_ip)
-        if connection is None:
+        if connection is None or not self._connection_is_unbound_placeholder(
+            connection,
+            self._session_payload_connections,
+        ):
             has_ip_owner = self._has_owner_for_remote_ip(
                 self._payload_owner_counts,
                 pending.remote_ip,

@@ -49,9 +49,11 @@ class OnboardingTimeoutPolicy:
     # in production without making every failed discovery flow block for three
     # minutes. This is an upper bound; a session ends the wait immediately.
     inbound_reconnect_timeout: float = 60.0
-    # Callback recovery: after the immediate autonomous snapshot and exactly
-    # ONE unicast set>server sequence, how long the collector may take to dial
-    # the advertised endpoint. LINK budget only -- no detection runs here.
+    # Callback-session establishment: how long one causally-owned callback
+    # operation may wait for the collector to dial the advertised endpoint.
+    # Shared by callback recovery after restart and the callback->inbound
+    # transition preflight; both are the same physical set>server -> TCP-session
+    # mechanism. LINK budget only -- no inverter detection runs here.
     #
     # E500 hardware observed in production may accept the reboot, take roughly
     # 30 seconds to drop the old socket, and then need another ~30 seconds after

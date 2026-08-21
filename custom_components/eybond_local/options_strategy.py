@@ -20,6 +20,10 @@ from homeassistant.helpers.selector import (
 )
 
 from .collector_identity import pn_is_same_identity
+from .collector_endpoint import (
+    CollectorEndpointWriteShape,
+    resolve_collector_endpoint_write_shape,
+)
 from .connection.connection_policy import (
     resolve_connection_strategy,
 )
@@ -31,8 +35,10 @@ from .connection.operating_profile import (
 from .connection.strategy_transition_context import (
     PROVENANCE_EXPLICIT_ADVERTISED,
     TransitionEndpointCandidate,
+    earned_advertised_route,
     normalized_advertised_host,
     parse_advertised_port,
+    resolve_cloud_rollback_endpoint,
     resolve_default_ha_endpoint,
 )
 from .connection_form import (
@@ -45,14 +51,20 @@ from .const import (
     CONF_ADVERTISED_SERVER_IP,
     CONF_ADVERTISED_TCP_PORT,
     CONF_COLLECTOR_IP,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_COLLECTOR_PN,
     CONF_CONNECTION_STRATEGY,
+    CONF_ENDPOINT_CONTROL_POLICY,
+    CONF_ENDPOINT_WRITTEN_AT,
+    CONF_ENDPOINT_WRITTEN_VALUE,
     CONF_SERVER_IP,
     CONF_STRATEGY_TRANSITION_STATE,
     CONF_TCP_PORT,
     CONNECTION_STRATEGIES,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
+    DEFAULT_TCP_PORT,
+    ENDPOINT_CONTROL_EXTERNAL,
     ENDPOINT_CONTROL_INTEGRATION_MANAGED,
 )
 from .flow_presentation import (
@@ -76,6 +88,27 @@ class StrategyTransitionOptionsMixin:
     """StrategyTransitionOptions lifecycle."""
 
     @_with_translation_bundle
+    async def async_step_collector_endpoint(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Move a local bridge to one user-confirmed Home Assistant endpoint.
+
+        ESP EyeBond Collector persists a successful ``set>server`` redirect, so
+        callback-on-demand is not a stable product profile for that firmware.
+        Both a callback-origin entry and an already-inbound bridge therefore use
+        the existing verified inbound transition.  This step is presentation
+        only: endpoint write, restart, same-PN proof and the atomic entry commit
+        remain owned by the one strategy-transition authority.
+        """
+
+        if not self._collector_capabilities().virtual_bridge:
+            return await self.async_step_init()
+        if self._transition_target_strategy != CONNECTION_STRATEGY_INBOUND:
+            self._stage_connection_strategy_transition(CONNECTION_STRATEGY_INBOUND)
+        return await self.async_step_strategy_transition(user_input)
+
+    @_with_translation_bundle
     async def async_step_connection(
         self,
         user_input: dict[str, Any] | None = None,
@@ -94,6 +127,9 @@ class StrategyTransitionOptionsMixin:
             if type(target) is not str or target not in CONNECTION_STRATEGIES:
                 errors[CONF_CONNECTION_STRATEGY] = "invalid_selection"
             elif target == current_strategy:
+                if self._transition_route_metadata_requires_verification(target):
+                    self._stage_connection_strategy_transition(target)
+                    return await self.async_step_strategy_transition()
                 if profile.stable:
                     return self.async_create_entry(
                         data=dict(self._config_entry.options)
@@ -164,6 +200,37 @@ class StrategyTransitionOptionsMixin:
             self._config_entry.options,
         )
 
+    def _transition_endpoint_write_shape(self) -> CollectorEndpointWriteShape:
+        """Return the coordinator's typed endpoint shape, fail-safe editable by default."""
+
+        coordinator = self._coordinator()
+        shape = getattr(coordinator, "collector_endpoint_write_shape", None)
+        if type(shape) is CollectorEndpointWriteShape:
+            return shape
+        return resolve_collector_endpoint_write_shape()
+
+    def _transition_route_metadata_requires_verification(self, target: object) -> bool:
+        """Whether a host-only inbound record carries the wrong implicit port.
+
+        This is only a routing decision into the existing verified transition;
+        it never repairs entry data itself.  The correction is committed only
+        after the same collector disconnects and reconnects on the catalog-
+        defined listener port.
+        """
+
+        if (
+            target != CONNECTION_STRATEGY_INBOUND
+            or self._transition_current_strategy() != CONNECTION_STRATEGY_INBOUND
+        ):
+            return False
+        shape = self._transition_endpoint_write_shape()
+        if not shape.port_is_fixed:
+            return False
+        data = self._config_entry.data
+        host = normalized_advertised_host(data.get(CONF_ADVERTISED_SERVER_IP))
+        port = parse_advertised_port(data.get(CONF_ADVERTISED_TCP_PORT))
+        return bool(host and port != shape.fixed_port)
+
     def _transition_prefill(self) -> dict[str, Any]:
         """Resolve the default advertised endpoint via the CP1a typed resolver.
 
@@ -179,6 +246,8 @@ class StrategyTransitionOptionsMixin:
         * the advertised endpoint of the entry's VALIDATED, PN-bound callback
           proof (read only via ``RecoveryContract.from_entry_data``);
         * no confirmed-HA-endpoint role authority exists yet -> ``None``;
+        * for a virtual bridge only, the exact endpoint currently exposed by the
+          live collector-management snapshot, as an editable observation;
         * the effective runtime route (``server_ip:tcp_port``) as an editable
           local hint, which the resolver only offers for a callback entry.
         """
@@ -191,13 +260,30 @@ class StrategyTransitionOptionsMixin:
         data = self._config_entry.data
         options = self._config_entry.options
         if CONF_ADVERTISED_SERVER_IP in data or CONF_ADVERTISED_TCP_PORT in data:
-            explicit_host = data.get(CONF_ADVERTISED_SERVER_IP, "")
-            explicit_port = data.get(CONF_ADVERTISED_TCP_PORT, 0)
+            # Canonical data must carry the complete pair. A missing half is
+            # PRESENT-but-malformed and must reach the strict resolver as such.
+            explicit_host = data.get(CONF_ADVERTISED_SERVER_IP)
+            explicit_port = data.get(CONF_ADVERTISED_TCP_PORT)
         elif (
             CONF_ADVERTISED_SERVER_IP in options or CONF_ADVERTISED_TCP_PORT in options
         ):
-            explicit_host = options.get(CONF_ADVERTISED_SERVER_IP, "")
-            explicit_port = options.get(CONF_ADVERTISED_TCP_PORT, 0)
+            option_host = options.get(CONF_ADVERTISED_SERVER_IP)
+            option_port = options.get(CONF_ADVERTISED_TCP_PORT)
+            # The retired runtime-options UI serialized an ABSENT optional pair
+            # as two exact empty strings. Canonicalize only that complete legacy
+            # shape. Partial, padded, duck or otherwise malformed values remain
+            # present and fail closed in ``resolve_default_ha_endpoint``.
+            if (
+                CONF_ADVERTISED_SERVER_IP in options
+                and CONF_ADVERTISED_TCP_PORT in options
+                and type(option_host) is str
+                and option_host == ""
+                and type(option_port) is str
+                and option_port == ""
+            ):
+                explicit_host, explicit_port = "", 0
+            else:
+                explicit_host, explicit_port = option_host, option_port
         else:
             explicit_host, explicit_port = "", 0
 
@@ -244,11 +330,22 @@ class StrategyTransitionOptionsMixin:
             else data.get(CONF_TCP_PORT)
         )
 
+        observed_current_endpoint: object = ""
+        if self._collector_capabilities().virtual_bridge:
+            coordinator = self._coordinator()
+            runtime_data = getattr(coordinator, "data", None)
+            values = getattr(runtime_data, "values", None)
+            if type(values) is dict:
+                observed_current_endpoint = values.get(
+                    "collector_server_endpoint", ""
+                )
+
         candidate = resolve_default_ha_endpoint(
             explicit_advertised_host=explicit_host,
             explicit_advertised_port=explicit_port,
             callback_proof_endpoint=proof_endpoint,
             confirmed_ha_endpoint=None,
+            observed_current_endpoint=observed_current_endpoint,
             current_strategy=resolve_connection_strategy(data, options),
             server_ip=server_ip,
             tcp_port=tcp_port,
@@ -261,6 +358,21 @@ class StrategyTransitionOptionsMixin:
             and candidate.provenance != PROVENANCE_EXPLICIT_ADVERTISED
         ):
             candidate = TransitionEndpointCandidate.none()
+        endpoint_shape = self._transition_endpoint_write_shape()
+        if (
+            self._transition_target_strategy == CONNECTION_STRATEGY_INBOUND
+            and candidate.has_candidate
+            and endpoint_shape.port_is_fixed
+        ):
+            # Endpoint serialization applies only to the persistent HA-only
+            # route. A host-only CLDSRVHOST1 value cannot carry an editable
+            # port, so its catalog default is the direct dial route semantics.
+            # It says nothing about a later set>server callback route.
+            candidate = TransitionEndpointCandidate(
+                host=candidate.host,
+                port=endpoint_shape.fixed_port,
+                provenance=candidate.provenance,
+            )
         collector_ip = str(
             options.get(CONF_COLLECTOR_IP) or data.get(CONF_COLLECTOR_IP) or ""
         ).strip()
@@ -348,8 +460,13 @@ class StrategyTransitionOptionsMixin:
             self._transition_rollback_candidate_snapshot = None
             self._transition_rollback_candidate_pinned = False
         to_inbound = target == CONNECTION_STRATEGY_INBOUND
+        local_bridge_endpoint = bool(
+            to_inbound and self._collector_capabilities().virtual_bridge
+        )
         errors: dict[str, str] = {}
         prefill = self._transition_prefill()
+        endpoint_shape = self._transition_endpoint_write_shape()
+        fixed_direct_endpoint = bool(to_inbound and endpoint_shape.port_is_fixed)
 
         if user_input is not None:
             flat = _flatten_sections(user_input)
@@ -376,7 +493,13 @@ class StrategyTransitionOptionsMixin:
             # is a form error, never a 500.
             raw_host = flat.get(CONF_ADVERTISED_SERVER_IP)
             host = normalized_advertised_host(raw_host)
-            port = parse_advertised_port(flat.get(CONF_ADVERTISED_TCP_PORT))
+            if fixed_direct_endpoint:
+                raw_port = flat.get(CONF_ADVERTISED_TCP_PORT)
+                port = endpoint_shape.fixed_port
+                if raw_port is not None and parse_advertised_port(raw_port) != port:
+                    errors[CONF_ADVERTISED_TCP_PORT] = "invalid_selection"
+            else:
+                port = parse_advertised_port(flat.get(CONF_ADVERTISED_TCP_PORT))
             collector_ip = str(flat.get(CONF_COLLECTOR_IP) or "").strip()
             if raw_host is None or raw_host == "":
                 errors[CONF_ADVERTISED_SERVER_IP] = "required"
@@ -413,16 +536,25 @@ class StrategyTransitionOptionsMixin:
             ] = _IP_TEXT_SELECTOR
         else:
             schema_fields[vol.Required(CONF_ADVERTISED_SERVER_IP)] = _IP_TEXT_SELECTOR
-        if prefill["port"]:
-            schema_fields[
-                vol.Required(CONF_ADVERTISED_TCP_PORT, default=prefill["port"])
-            ] = _PORT_SELECTOR
-        else:
-            # No known port: an empty text field (never the NumberSelector
-            # minimum 1 presented as a chosen default).
-            schema_fields[vol.Required(CONF_ADVERTISED_TCP_PORT)] = (
-                _PORT_EMPTY_TEXT_SELECTOR
-            )
+        if not fixed_direct_endpoint:
+            if prefill["port"]:
+                schema_fields[
+                    vol.Required(CONF_ADVERTISED_TCP_PORT, default=prefill["port"])
+                ] = _PORT_SELECTOR
+            elif not to_inbound:
+                # set>server callback routing is independent from the
+                # collector's persistent endpoint serialization. The local
+                # listener default is the useful same-LAN suggestion; users
+                # behind NAT may still enter the externally forwarded port.
+                schema_fields[
+                    vol.Required(CONF_ADVERTISED_TCP_PORT, default=DEFAULT_TCP_PORT)
+                ] = _PORT_SELECTOR
+            else:
+                # No known port: an empty text field (never the NumberSelector
+                # minimum 1 presented as a chosen default).
+                schema_fields[vol.Required(CONF_ADVERTISED_TCP_PORT)] = (
+                    _PORT_EMPTY_TEXT_SELECTOR
+                )
         if not to_inbound:
             schema_fields[
                 vol.Required(CONF_COLLECTOR_IP, default=prefill["collector_ip"])
@@ -433,7 +565,14 @@ class StrategyTransitionOptionsMixin:
         schema_fields[
             vol.Required(CONF_CONFIRM_CONNECTION_STRATEGY_RISK, default=False)
         ] = BooleanSelector()
-        if to_inbound:
+        if local_bridge_endpoint:
+            risk_note = self._tr(
+                "common.dynamic.connection_endpoint_local_risk",
+                "Home Assistant will save this address in the collector and "
+                "verify that the same collector reconnects. Make sure the "
+                "address and port are reachable from the collector.",
+            )
+        elif to_inbound:
             risk_note = self._tr(
                 "common.dynamic.connection_strategy_risk_inbound",
                 "The collector will connect directly to Home Assistant. Cloud "
@@ -446,19 +585,42 @@ class StrategyTransitionOptionsMixin:
                 "The collector will use the cloud again. Home Assistant will "
                 "request a connection only when it needs data.",
             )
-        rollback_note = self._connection_strategy_rollback_note(
-            to_inbound=to_inbound,
-            rollback=await self._resolve_cloud_rollback_context(),
+        if fixed_direct_endpoint:
+            fixed_port_note = self._tr(
+                "common.dynamic.connection_endpoint_fixed_port",
+                "This collector uses fixed TCP port {port}; only the address is stored.",
+            )
+            try:
+                fixed_port_note = fixed_port_note.format(
+                    port=endpoint_shape.fixed_port
+                )
+            except (KeyError, IndexError, ValueError):
+                pass
+            risk_note = f"{risk_note} {fixed_port_note}"
+        rollback_note = (
+            ""
+            if local_bridge_endpoint
+            else self._connection_strategy_rollback_note(
+                to_inbound=to_inbound,
+                rollback=await self._resolve_cloud_rollback_context(),
+            )
         )
         return self.async_show_form(
             step_id="strategy_transition",
             data_schema=vol.Schema(schema_fields),
             errors=errors,
             description_placeholders={
-                "target_strategy": self._operating_profile_label(
-                    OPERATING_PROFILE_HA_ONLY
-                    if target == CONNECTION_STRATEGY_INBOUND
-                    else OPERATING_PROFILE_CLOUD_AND_HA
+                "target_strategy": (
+                    self._tr(
+                        "common.dynamic.connection_endpoint_local_target",
+                        "Home Assistant connection address",
+                    )
+                    if local_bridge_endpoint
+                    else self._operating_profile_label(
+                        OPERATING_PROFILE_HA_ONLY
+                        if target == CONNECTION_STRATEGY_INBOUND
+                        else OPERATING_PROFILE_CLOUD_AND_HA
+                    )
                 ),
                 "connection_strategy_risk": risk_note,
                 "connection_strategy_rollback": rollback_note,
@@ -734,6 +896,8 @@ class StrategyTransitionOptionsMixin:
         from .collector.callback_bootstrap import CallbackBootstrapChannel
         from .connection.recovery.terminal import merge_recovery_contract
         from .connection.strategy_transition_recovery import (
+            RECOVERY_PHASE_PENDING,
+            RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,
             StrategyTransitionRecoveryState,
         )
         from .connection.strategy_transition_repair import (
@@ -758,11 +922,54 @@ class StrategyTransitionOptionsMixin:
             self._transition_error = "transition_runtime_unavailable"
             return
 
+        # Pending is write-ahead intent, not a confirmed cloud restore. Resolve
+        # only the exact durable user choice; malformed input fails closed.
+        pending_restore_endpoint = None
+        persist_restore_confirmed = None
+        if state.phase == RECOVERY_PHASE_PENDING:
+            durable_original = (
+                self._config_entry.data[CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT]
+                if CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT
+                in self._config_entry.data
+                else self._config_entry.options.get(
+                    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT, ""
+                )
+            )
+            pending_restore_endpoint = resolve_cloud_rollback_endpoint(
+                explicit_user_endpoint="",
+                durable_original_endpoint=durable_original,
+                registry_endpoint="",
+                registry_pn="",
+                entry_pn=self._config_entry.data.get(CONF_COLLECTOR_PN),
+                observed_current_endpoint="",
+                confirmed_ha_endpoint=TransitionEndpointCandidate.none(),
+            )
+
+            def _persist_restore_confirmed(
+                confirmed_state: StrategyTransitionRecoveryState,
+            ) -> None:
+                if (
+                    type(confirmed_state) is not StrategyTransitionRecoveryState
+                    or confirmed_state.phase != RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN
+                    or not pn_is_same_identity(
+                        confirmed_state.collector_pn,
+                        state.collector_pn,
+                    )
+                ):
+                    raise ValueError("transition_recovery_state_invalid")
+                data = dict(self._config_entry.data)
+                data[CONF_ENDPOINT_CONTROL_POLICY] = ENDPOINT_CONTROL_EXTERNAL
+                data[CONF_STRATEGY_TRANSITION_STATE] = confirmed_state.to_record()
+                data.pop(CONF_ENDPOINT_WRITTEN_VALUE, None)
+                data.pop(CONF_ENDPOINT_WRITTEN_AT, None)
+                self.hass.config_entries.async_update_entry(self._config_entry, data=data)
+
+            persist_restore_confirmed = _persist_restore_confirmed
+
         entry_id = self._config_entry.entry_id
 
-        # The SAME bootstrap+proof orchestrator repairs the degraded entry whether
-        # it is cold or already running. Only the persistence + activation boundary
-        # differs, keyed on the entry's real load state:
+        # The same orchestrator repairs cold and loaded entries; only lifecycle
+        # persistence/activation differs:
         #
         #  * UNLOADED (cold): the flow persists the terminal state directly (an
         #    unloaded entry has no update listener, so the write triggers no
@@ -778,9 +985,7 @@ class StrategyTransitionOptionsMixin:
         #    repair with exclusive use of the collector session, and activates with
         #    the SAME single awaited ``async_setup``.
         #
-        # Either way exactly ONE lifecycle activation runs while the flow still
-        # holds the observed-listener lease -- never a LOADED refusal, never an
-        # ``async_update_entry`` auto-reload plus a second reload.
+        # Exactly one activation runs while the observed-listener lease is held.
         was_loaded = self._config_entry.state is ConfigEntryState.LOADED
 
         # ONE lifecycle ledger: every exit path (success, typed failure, error,
@@ -802,10 +1007,34 @@ class StrategyTransitionOptionsMixin:
             data = dict(self._config_entry.data)
             data.update(updates)
             data.pop(CONF_STRATEGY_TRANSITION_STATE, None)
+            route_host, route_port, route_refusal = earned_advertised_route(
+                committed_strategy=updates.get(CONF_CONNECTION_STRATEGY),
+                terminal=terminal,
+                attempted_host=state.advertised_host,
+                attempted_port=state.advertised_port,
+            )
+            if route_refusal:
+                return route_refusal
+            if route_host:
+                data[CONF_ADVERTISED_SERVER_IP] = route_host
+                data[CONF_ADVERTISED_TCP_PORT] = route_port
             refusal = merge_recovery_contract(data, terminal)
             if refusal:
                 return refusal
-            self.hass.config_entries.async_update_entry(self._config_entry, data=data)
+            # Home Assistant requires ``options`` to be a mapping whenever the
+            # keyword is present; passing ``None`` can apply ``data`` first and
+            # then raise from MappingProxyType(None), turning a completed proof
+            # into a false UI failure. Commit the complete, byte-equivalent
+            # options mapping even when there are no stale route keys to drop.
+            options = dict(self._config_entry.options)
+            if route_host:
+                options.pop(CONF_ADVERTISED_SERVER_IP, None)
+                options.pop(CONF_ADVERTISED_TCP_PORT, None)
+            self.hass.config_entries.async_update_entry(
+                self._config_entry,
+                data=data,
+                options=options,
+            )
             lifecycle["durable_commit_completed"] = True
             return ""
 
@@ -852,6 +1081,8 @@ class StrategyTransitionOptionsMixin:
                 channel=channel,
                 commit=_commit,
                 clock=lambda: datetime.now(timezone.utc).isoformat(),
+                pending_restore_endpoint=pending_restore_endpoint,
+                persist_restore_confirmed=persist_restore_confirmed,
             )
             self._transition_result = result
             if not result.success:

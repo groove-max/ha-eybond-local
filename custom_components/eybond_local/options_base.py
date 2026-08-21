@@ -319,9 +319,14 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
         # actions, so cloud-only control discovery / shadow learning is hidden).
         bridge_note = ""
         if capabilities.virtual_bridge:
-            menu_options = ["runtime", "collector_wifi", "diagnostics"]
+            menu_options = [
+                "collector_endpoint",
+                "runtime",
+                "collector_wifi",
+                "diagnostics",
+            ]
             if capabilities.uart_management:
-                menu_options.insert(2, "collector_uart")
+                menu_options.insert(3, "collector_uart")
             bridge_note = self._tr(
                 "common.dynamic.collector_virtual_bridge_note",
                 "\n\nThis collector is a local ESP EyeBond Collector bridge with no "

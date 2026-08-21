@@ -310,10 +310,13 @@ class ForeignPnOwnershipMatrix(unittest.TestCase):
                 )
                 self.assertEqual(reg.claimed_session_id(owner), "sA2")
 
-                # A retarget to the foreign socket is refused; the owned exact
-                # binding is A on sA2, untouched by B.
-                with self.assertRaises(ValueError):
+                # A retarget to the foreign socket is refused without mutation;
+                # the owned exact binding is A on sA2, untouched by B. Identity
+                # mismatch is a normal fail-closed candidate refusal here, while
+                # a conflicting owner remains the exceptional case.
+                self.assertFalse(
                     reg.retarget_claim_to_reconnected_session(owner, "sB")
+                )
                 handle = reg.session_handle_for_owned_session(owner, "sA2")
                 self.assertIsNotNone(handle)
                 self.assertTrue(pn_is_same_identity(handle.collector_pn, TARGET_PN))

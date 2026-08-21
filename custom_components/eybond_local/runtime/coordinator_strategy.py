@@ -23,6 +23,7 @@ from ..const import (
     CONF_ENDPOINT_WRITTEN_VALUE,
     CONF_STRATEGY_TRANSITION_STATE,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+    CONNECTION_STRATEGY_INBOUND,
     CONTROL_MODE_AUTO,
     CONTROL_MODE_FULL,
     CONTROL_MODE_READ_ONLY,
@@ -39,6 +40,87 @@ logger = logging.getLogger(__name__)
 
 class CoordinatorStrategyTransitionMixin:
     """Run the existing strategy authority through one coordinator facade."""
+
+    async def _async_prepare_strategy_transition_management_session(
+        self,
+        *,
+        registry: Any,
+        entry_id: str,
+        target_strategy: str,
+        timeout: float,
+    ) -> str:
+        """Pin the exact live socket needed by one strategy transaction.
+
+        A callback-mode entry is allowed to be idle between polls.  Switching
+        it to inbound therefore has a mandatory preflight: ask the EXISTING
+        runtime connection path for one callback session, then pin only the
+        registry's strongly-observed current socket for this durable owner.
+        The runtime path owns set>server causality; this method creates no
+        parallel trigger/matcher and accepts no peer-IP evidence.
+
+        Other transition directions retain their existing fail-closed
+        semantics: they must already have a usable management session and this
+        preflight never sends a callback trigger for them.
+        """
+
+        if registry is None:
+            return ""
+
+        previous_session_id = registry.claimed_session_id(entry_id)
+        pinned_session_id = registry.pin_owner_claim_to_current_observed_session(
+            entry_id
+        )
+        if pinned_session_id:
+            logger.info(
+                "Strategy transition management session selected "
+                "previous_session=%s selected_session=%s",
+                previous_session_id or "none",
+                pinned_session_id,
+            )
+            return pinned_session_id
+
+        if not (
+            self.connection_strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
+            and target_strategy == CONNECTION_STRATEGY_INBOUND
+        ):
+            return ""
+
+        ensure_session = getattr(
+            self._runtime,
+            "async_ensure_collector_management_session",
+            None,
+        )
+        if not callable(ensure_session):
+            return ""
+
+        try:
+            connected = await ensure_session(timeout=timeout)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.info(
+                "Strategy transition callback session bootstrap failed: %s",
+                exc,
+            )
+            return ""
+        if connected is not True:
+            return ""
+
+        pinned_session_id = registry.pin_owner_claim_to_current_observed_session(
+            entry_id
+        )
+        if not pinned_session_id:
+            logger.info(
+                "Strategy transition callback bootstrap produced no trusted "
+                "owned session"
+            )
+            return ""
+        logger.info(
+            "Strategy transition callback management session established "
+            "selected_session=%s",
+            pinned_session_id,
+        )
+        return pinned_session_id
 
     def _apply_transition_commit(
         self,
@@ -87,17 +169,18 @@ class CoordinatorStrategyTransitionMixin:
         refusal = merge_recovery_contract(data, terminal)
         if refusal:
             return refusal
-        options = None
+        # ``async_update_entry`` accepts an options MAPPING, not ``None``. Keep
+        # the full existing mapping when no option delta exists so the atomic
+        # data commit cannot succeed and then raise while wrapping options.
+        options = dict(self.config_entry.options)
         # Pass options even with an empty option_payload when stale advertised
         # keys must be dropped, so they can never survive the commit and re-mask
         # the new canonical data route.
-        if option_updates or route_host:
-            options = dict(self.config_entry.options)
-            if option_updates:
-                options.update(option_updates)
-            if route_host:
-                options.pop(CONF_ADVERTISED_SERVER_IP, None)
-                options.pop(CONF_ADVERTISED_TCP_PORT, None)
+        if option_updates:
+            options.update(option_updates)
+        if route_host:
+            options.pop(CONF_ADVERTISED_SERVER_IP, None)
+            options.pop(CONF_ADVERTISED_TCP_PORT, None)
         self._async_update_entry_without_reload(data=data, options=options)
         # Exactly ONE reload, and only after the whole terminal state (axes +
         # contract) is consistent.
@@ -262,12 +345,16 @@ class CoordinatorStrategyTransitionMixin:
         durable_pn = self._durable_transition_collector_pn(
             identity_registry=identity_registry, owner_id=owner_id
         )
-        if (
-            not durable_pn
-            or collector_pn != durable_pn
-            or self.collector_capabilities.virtual_bridge
-        ):
+        if not durable_pn or collector_pn != durable_pn:
             return TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED
+        if self.collector_capabilities.virtual_bridge:
+            # A local ESP bridge has no vendor-cloud endpoint to preserve.  Its
+            # server endpoint is the Home Assistant route itself, so moving it
+            # to another confirmed HA address must not be blocked by the cloud
+            # rollback registry.  The transition still requires the strong
+            # durable PN above and still performs the normal endpoint write,
+            # controlled restart and same-PN reconnect proof.
+            return ""
         normalized = ""
         if endpoint:
             try:
@@ -358,12 +445,32 @@ class CoordinatorStrategyTransitionMixin:
             TRANSITION_ALREADY_RUNNING,
             StrategyTransitionResult,
             async_run_strategy_transition,
-            trusted_transition_wire,
         )
         from ..connection.recovery.verification import CallbackRecoveryRoute
+        from ..connection.recovery.verification import ObservedSessionRestartChannel
+        from ..collector_endpoint import CollectorEndpointWriteShape
         from ..passive_discovery import get_callback_session_registry
 
         target = str(target_strategy or "").strip()
+        endpoint_shape = self.collector_endpoint_write_shape
+        if (
+            target == CONNECTION_STRATEGY_INBOUND
+            and type(endpoint_shape) is CollectorEndpointWriteShape
+            and endpoint_shape.port_is_fixed
+            and (
+                type(advertised_host) is not str
+                or not advertised_host
+                or advertised_host != advertised_host.strip()
+                or type(advertised_port) is not int
+                or type(advertised_port) is bool
+                or advertised_port != endpoint_shape.fixed_port
+            )
+        ):
+            return StrategyTransitionResult(
+                success=False,
+                target_strategy=target,
+                failure_reason="transition_advertised_route_invalid",
+            )
         entry_id = self.config_entry.entry_id
         # Atomic per-entry exclusive lease: acquired SYNCHRONOUSLY before the
         # first await/side effect (no check-then-await-then-set window), and
@@ -402,56 +509,69 @@ class CoordinatorStrategyTransitionMixin:
                 failure_reason=reason,
             )
         silent_probe = None
+        runtime_operation_locked = False
         try:
             from ..connection.strategy_transition_recovery import (
                 StrategyTransitionRecoveryState,
             )
+            from ..timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
+
+            # One strategy transition is one exclusive runtime transport
+            # operation.  In particular, an ordinary poll may not race the
+            # callback bootstrap, endpoint write or reboot.  The endpoint lease
+            # above owns cross-feature mutation; this lock owns this entry's
+            # live transport frames.
+            await self._runtime_operation_lock.acquire()
+            runtime_operation_locked = True
 
             registry = get_callback_session_registry(self.hass)
             spec = self._connection_spec
+            inbound_listener_port = int(getattr(spec, "tcp_port", 0) or 0)
+            inbound_expected_listener_port = 0
+            callback_listener_port = int(getattr(spec, "tcp_port", 0) or 0)
+            if (
+                target == CONNECTION_STRATEGY_INBOUND
+                and type(endpoint_shape) is CollectorEndpointWriteShape
+                and endpoint_shape.port_is_fixed
+            ):
+                inbound_listener_port = endpoint_shape.fixed_port
+                inbound_expected_listener_port = endpoint_shape.fixed_port
+            probe_listener_port = (
+                inbound_listener_port
+                if target == CONNECTION_STRATEGY_INBOUND
+                else callback_listener_port
+            )
+
+            # The durable PN claim can remember a proof socket which has since
+            # closed while runtime has already adopted a newer routed socket.
+            # Select the registry's canonical trusted handle first.  An idle
+            # callback-mode entry switching to inbound gets exactly one normal
+            # runtime callback bootstrap, then the SAME exact selection is run
+            # again.  No peer-IP/session-order fallback exists here.
+            await self._async_prepare_strategy_transition_management_session(
+                registry=registry,
+                entry_id=entry_id,
+                target_strategy=target,
+                timeout=(
+                    DEFAULT_ONBOARDING_TIMEOUT_POLICY.callback_recovery_session_wait
+                ),
+            )
 
             def _resolve_owned_session_id() -> str:
-                """The entry's LIVE owned session id, from the registry's truth."""
+                """Return only the claim's exact currently-trusted socket."""
 
                 if registry is None:
                     return ""
                 sid = str(registry.claimed_session_id(entry_id) or "")
-                if sid:
-                    for session in registry.observed_sessions_per_socket():
-                        if session.session_id == sid and not session.state.startswith(
-                            "closed"
-                        ):
-                            return sid
-                for session in registry.observed_sessions_per_socket():
-                    if (
-                        session.owner_entry_id == entry_id
-                        and not session.state.startswith("closed")
-                    ):
-                        return session.session_id
-                return ""
-
-            # EXPLICIT registry op (not a PN search inside the wire resolver):
-            # pin the durable by-PN claim to the live owned socket so the exact
-            # session-pinned wire authority can resolve. Idempotent, never binds
-            # a foreign socket.
-            if registry is not None:
-                _pin_sid = _resolve_owned_session_id()
-                if _pin_sid:
-                    registry.pin_owner_claim_to_session(entry_id, _pin_sid)
+                if not sid:
+                    return ""
+                handle = registry.session_handle_for_owned_session(entry_id, sid)
+                if handle is None or not handle.observed or handle.conflict:
+                    return ""
+                return sid
 
             def _claimed_session_id() -> str:
                 return _resolve_owned_session_id()
-
-            def _live_wire() -> str:
-                # The ONE wire authority: the registry's session-PINNED trusted
-                # SessionHandle boundary (owner + claim.session_id + handle
-                # session_id all agree, strict observed, no conflict) — never the
-                # inventory protocol string, never a same-PN sibling.
-                if registry is None:
-                    return ""
-                return trusted_transition_wire(
-                    registry, entry_id, str(registry.claimed_session_id(entry_id) or "")
-                )
 
             # Build the callback route FIRST so the confirmed-restore hook can
             # snapshot the exact repair route into the persisted recovery state.
@@ -472,7 +592,7 @@ class CoordinatorStrategyTransitionMixin:
                         trigger_udp_port=int(getattr(spec, "udp_port", 0) or 0),
                         advertised_ha_host=effective_host,
                         advertised_ha_port=effective_port,
-                        listener_port=int(getattr(spec, "tcp_port", 0) or 0),
+                        listener_port=callback_listener_port,
                     )
 
             # CP2B.2: assemble read-only validation/persistence capabilities for
@@ -574,6 +694,23 @@ class CoordinatorStrategyTransitionMixin:
                 self._endpoint_effective_parts(current_endpoint)
                 != self._endpoint_effective_parts(inbound_endpoint)
             )
+            persisted_advertised_host = self.config_entry.data.get(
+                CONF_ADVERTISED_SERVER_IP
+            )
+            persisted_advertised_port = self.config_entry.data.get(
+                CONF_ADVERTISED_TCP_PORT
+            )
+            route_metadata_needs_reverification = bool(
+                target == CONNECTION_STRATEGY_INBOUND
+                and self.connection_strategy == CONNECTION_STRATEGY_INBOUND
+                and not endpoint_needs_write
+                and type(endpoint_shape) is CollectorEndpointWriteShape
+                and endpoint_shape.port_is_fixed
+                and (
+                    persisted_advertised_host != advertised_host
+                    or persisted_advertised_port != advertised_port
+                )
+            )
             current_external_endpoint = ""
             if current_endpoint:
                 try:
@@ -597,14 +734,36 @@ class CoordinatorStrategyTransitionMixin:
                     owner_id=entry_id,
                 )
 
-            async def _write_endpoint(endpoint: str) -> dict[str, object]:
-                return await self._runtime.async_set_collector_server_endpoint(
-                    endpoint,
-                    apply_changes=True,
+            def _management_channel_for_session(
+                expected_session_id: str,
+            ) -> ObservedSessionRestartChannel:
+                listener_port = 0
+                if registry is not None:
+                    for observed_session in registry.observed_sessions_per_socket():
+                        if observed_session.session_id == expected_session_id:
+                            listener_port = observed_session.listener_port
+                            break
+                # The session's listener is observed wire location, never an
+                # endpoint/peer-IP guess.  A missing location remains invalid
+                # and the channel fails closed before transport creation.
+                return ObservedSessionRestartChannel(
+                    host=str(
+                        getattr(self._runtime, "listener_bind_host", "")
+                        or "0.0.0.0"
+                    ),
+                    port=listener_port,
+                    collector_pn=str(durable_entry_pn or ""),
+                    session_id=expected_session_id,
+                    session_id_provider=lambda: expected_session_id,
+                    handle_provider=lambda: (
+                        registry.session_handle_for_owned_session(
+                            entry_id,
+                            expected_session_id,
+                        )
+                        if registry is not None
+                        else None
+                    ),
                 )
-
-            async def _reboot() -> dict[str, object]:
-                return await self._runtime.async_reboot_collector()
 
             def _on_written(value: str) -> None:
                 self._persist_connection_axes(
@@ -675,7 +834,7 @@ class CoordinatorStrategyTransitionMixin:
 
             silent_probe = SilentSessionIdentityProbeChannel(
                 host=str(getattr(spec, "server_ip", "") or "0.0.0.0"),
-                port=int(getattr(spec, "tcp_port", 0) or 0),
+                port=probe_listener_port,
             )
             await silent_probe.async_open()
             return await async_run_strategy_transition(
@@ -687,16 +846,16 @@ class CoordinatorStrategyTransitionMixin:
                 owner_id=entry_id,
                 registry=registry,
                 claimed_session_id=_claimed_session_id,
-                live_wire=_live_wire,
                 clock=lambda: datetime.now(timezone.utc).isoformat(),
                 commit=_commit,
                 ledger=get_callback_trigger_ledger(),
                 inbound_endpoint=inbound_endpoint,
                 endpoint_needs_write=endpoint_needs_write,
-                write_endpoint=_write_endpoint,
-                reboot=_reboot,
+                route_metadata_needs_reverification=route_metadata_needs_reverification,
+                management_channel_factory=_management_channel_for_session,
                 prepare_listener=_prepare_local_listener,
-                local_listener_port=int(getattr(spec, "tcp_port", 0) or 0),
+                local_listener_port=inbound_listener_port,
+                expected_inbound_listener_port=inbound_expected_listener_port,
                 on_endpoint_written=_on_written,
                 current_external_endpoint=current_external_endpoint,
                 persist_inbound_rollback_endpoint=_persist_inbound_rollback,
@@ -716,6 +875,8 @@ class CoordinatorStrategyTransitionMixin:
             )
         finally:
             STRATEGY_TRANSITION_LEASES.release(entry_id)
+            if runtime_operation_locked:
+                self._runtime_operation_lock.release()
             if silent_probe is not None:
                 await silent_probe.async_close()
 

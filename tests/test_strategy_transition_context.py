@@ -30,6 +30,7 @@ from custom_components.eybond_local.connection.strategy_transition_context impor
     PROVENANCE_EFFECTIVE_RUNTIME_ROUTE,
     PROVENANCE_EXPLICIT_ADVERTISED,
     PROVENANCE_NONE,
+    PROVENANCE_OBSERVED_CURRENT_ENDPOINT,
     StrategyTransitionContext,
     TransitionEndpointCandidate,
     earned_advertised_route,
@@ -113,6 +114,7 @@ def _resolve(**over):
         explicit_advertised_port=0,
         callback_proof_endpoint="",
         confirmed_ha_endpoint=None,
+        observed_current_endpoint="",
         current_strategy=CB_ON,
         server_ip="192.168.1.50",
         tcp_port=8899,
@@ -143,7 +145,7 @@ class ResolverPriority(unittest.TestCase):
         confirmed = TransitionEndpointCandidate(
             host="198.51.100.7", port=6000, provenance=PROVENANCE_CONFIRMED_HA_ENDPOINT
         )
-        # explicit > proof > confirmed > effective
+        # explicit > proof > confirmed > observed current > effective
         self.assertEqual(
             _resolve(
                 explicit_advertised_host="203.0.113.9",
@@ -164,7 +166,45 @@ class ResolverPriority(unittest.TestCase):
             _resolve(confirmed_ha_endpoint=confirmed).provenance,
             PROVENANCE_CONFIRMED_HA_ENDPOINT,
         )
+        self.assertEqual(
+            _resolve(
+                observed_current_endpoint="198.51.100.8,18899,TCP"
+            ).provenance,
+            PROVENANCE_OBSERVED_CURRENT_ENDPOINT,
+        )
         self.assertEqual(_resolve().provenance, PROVENANCE_EFFECTIVE_RUNTIME_ROUTE)
+
+    def test_observed_current_endpoint_prefills_inbound_without_becoming_proof(self) -> None:
+        candidate = _resolve(
+            current_strategy=INBOUND,
+            observed_current_endpoint="195.191.72.37,18899,TCP",
+        )
+        self.assertEqual(
+            (candidate.host, candidate.port, candidate.provenance),
+            (
+                "195.191.72.37",
+                18899,
+                PROVENANCE_OBSERVED_CURRENT_ENDPOINT,
+            ),
+        )
+        self.assertNotEqual(
+            candidate.provenance, PROVENANCE_CONFIRMED_HA_ENDPOINT
+        )
+
+    def test_malformed_observed_current_endpoint_fails_closed(self) -> None:
+        for value in (
+            object(),
+            None,
+            " host,18899,TCP ",
+            "host",
+            "host,18899,UDP",
+            "0.0.0.0,18899,TCP",
+            "host,0,TCP",
+        ):
+            candidate = _resolve(observed_current_endpoint=value)
+            self.assertEqual(
+                candidate.provenance, PROVENANCE_NONE, msg=repr(value)
+            )
 
     def test_effective_route_only_when_currently_callback(self) -> None:
         # An inbound entry with nothing known -> none (honest, no synthetic port).
@@ -322,6 +362,7 @@ class EndpointCandidateConstruction(unittest.TestCase):
             PROVENANCE_EXPLICIT_ADVERTISED,
             PROVENANCE_CALLBACK_PROOF,
             PROVENANCE_CONFIRMED_HA_ENDPOINT,
+            PROVENANCE_OBSERVED_CURRENT_ENDPOINT,
             PROVENANCE_EFFECTIVE_RUNTIME_ROUTE,
         )
         for wild in ("0.0.0.0", "::", "0:0:0:0:0:0:0:0", "*"):
@@ -1149,27 +1190,40 @@ class Cp1bArchitectureGuards(unittest.TestCase):
         self.assertNotIn("CONF_ADVERTISED_SERVER_IP", payload_src or "")
         self.assertNotIn("CONF_ADVERTISED_TCP_PORT", payload_src or "")
 
-    def test_durable_route_write_is_in_coordinator_commit_only(self) -> None:
+    def test_durable_route_write_is_in_authority_commits_only(self) -> None:
         coord_src = "\n".join(
             path.read_text(encoding="utf-8")
             for path in sorted((self.PKG / "runtime").glob("coordinator*.py"))
         )
-        flow_src = "\n".join(
+        non_authority_flow_src = "\n".join(
             path.read_text(encoding="utf-8")
             for path in (
                 self.CONFIG_FLOW,
                 self.OPTIONS_RUNTIME,
-                self.OPTIONS_STRATEGY,
             )
         )
-        # The ONE durable advertised-route write lives in the coordinator commit,
-        # via the neutral earned_advertised_route helper.
+        repair_authority_src = self.OPTIONS_STRATEGY.read_text(encoding="utf-8")
+        # Normal transitions persist through the coordinator commit. Cold repair
+        # has no running coordinator, so its single durable commit lives in the
+        # repair orchestrator. Both use the same neutral earned-route boundary.
         self.assertIn("earned_advertised_route", coord_src)
         self.assertIn("data[CONF_ADVERTISED_SERVER_IP] = route_host", coord_src)
         self.assertIn("options.pop(CONF_ADVERTISED_SERVER_IP", coord_src)
-        # The config flow performs NO durable advertised-route write.
-        self.assertNotIn("data[CONF_ADVERTISED_SERVER_IP]", flow_src)
-        self.assertNotIn("options[CONF_ADVERTISED_SERVER_IP]", flow_src)
+        self.assertEqual(
+            repair_authority_src.count(
+                "data[CONF_ADVERTISED_SERVER_IP] = route_host"
+            ),
+            1,
+        )
+        self.assertIn("earned_advertised_route", repair_authority_src)
+        # Presentation and generic runtime-options code perform no durable route
+        # write outside those two atomic authority commits.
+        self.assertNotIn(
+            "data[CONF_ADVERTISED_SERVER_IP]", non_authority_flow_src
+        )
+        self.assertNotIn(
+            "options[CONF_ADVERTISED_SERVER_IP]", non_authority_flow_src
+        )
 
     def test_resolver_takes_no_peer_l2_hostname_cloudfamily_input(self) -> None:
         # The resolver signature admits ONLY strictly-separated route sources.

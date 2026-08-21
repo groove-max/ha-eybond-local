@@ -225,6 +225,8 @@ class _Harness:
             StrategyTransitionRecoveryState,
         )
 
+        write = kwargs.pop("write_endpoint", None)
+        reboot = kwargs.pop("reboot", None)
         base = dict(
             target_strategy=target,
             current_strategy=self.current_strategy,
@@ -232,7 +234,6 @@ class _Harness:
             owner_id=ENTRY_ID,
             registry=self.registry,
             claimed_session_id=lambda: self.registry.claimed_session_id(ENTRY_ID),
-            live_wire=lambda: "eybond_framed",
             clock=lambda: TS,
             commit=self.commit,
             policy=FAST_POLICY,
@@ -279,6 +280,43 @@ class _Harness:
                 persist_rollback_selection=lambda _selection: "",
             )
         base.update(kwargs)
+        if "management_channel_factory" not in kwargs:
+            class _HarnessSessionChannel:
+                def __init__(self, session_id: str) -> None:
+                    self._session_id = session_id
+
+                def observed_wire(self) -> str:
+                    return "eybond_framed"
+
+                async def async_probe_identity(self) -> str:
+                    return FULL_PN
+
+                async def async_write_endpoint(
+                    self, endpoint: str, *, apply_changes: bool
+                ):
+                    if write is None:
+                        raise RuntimeError("write_endpoint_missing")
+                    result = await write(endpoint)
+                    out = dict(result or {})
+                    out["apply_changes"] = apply_changes
+                    out["management_session_id"] = self._session_id
+                    return out
+
+                async def async_send_restart(self):
+                    if reboot is None:
+                        raise RuntimeError("reboot_missing")
+                    result = await reboot()
+                    out = dict(result or {})
+                    out["management_session_id"] = self._session_id
+                    return out
+
+                def is_connected(self) -> bool:
+                    return True
+
+                async def async_close(self) -> None:
+                    return None
+
+            base["management_channel_factory"] = _HarnessSessionChannel
         return await async_run_strategy_transition(**base)
 
 
@@ -318,6 +356,53 @@ class CallbackToInboundTransitionTests(unittest.IsolatedAsyncioTestCase):
         # The strategy landed ONLY via the success commit, with honest axes.
         assert h.committed is not None
         self.assertEqual(h.committed["connection_strategy"], "inbound")
+
+    async def test_management_channel_is_built_for_verifier_exact_session(self) -> None:
+        h = _Harness(current_strategy="callback_on_demand")
+        scoped_sessions: list[str] = []
+
+        class _ExactSessionChannel:
+            def __init__(self, session_id: str) -> None:
+                self.session_id = session_id
+
+            def observed_wire(self) -> str:
+                return "eybond_framed"
+
+            async def async_probe_identity(self) -> str:
+                return FULL_PN
+
+            async def async_write_endpoint(
+                self, endpoint: str, *, apply_changes: bool
+            ):
+                self.assert_apply = apply_changes
+                result = await h.write_endpoint(endpoint)
+                result["management_session_id"] = self.session_id
+                return result
+
+            async def async_send_restart(self) -> None:
+                await h.reboot()
+
+            def is_connected(self) -> bool:
+                return True
+
+            async def async_close(self) -> None:
+                return None
+
+        def _factory(session_id: str):
+            scoped_sessions.append(session_id)
+            return _ExactSessionChannel(session_id)
+
+        result = await h.run(
+            target="inbound",
+            inbound_endpoint="198.51.100.20:18899",
+            endpoint_needs_write=True,
+            write_endpoint=h.write_endpoint,
+            reboot=h.reboot,
+            management_channel_factory=_factory,
+        )
+
+        self.assertTrue(result.success, result.failure_reason)
+        self.assertEqual(scoped_sessions, [OLD_SESSION])
         self.assertEqual(h.committed["endpoint_control_policy"], "integration_managed")
         self.assertEqual(
             h.committed["endpoint_written_value"], "198.51.100.20:18899"
@@ -708,6 +793,72 @@ class TransitionFailureMatrixTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.failure_reason, TRANSITION_NOT_REQUIRED)
         self.assertEqual(h.reboot_calls, 0)
 
+    async def test_same_inbound_strategy_relocates_a_changed_endpoint(self) -> None:
+        h = _Harness(current_strategy="inbound")
+
+        result = await h.run(
+            target="inbound",
+            inbound_endpoint="198.51.100.25:19001",
+            endpoint_needs_write=True,
+            current_external_endpoint="",
+            persist_inbound_rollback_endpoint=lambda _endpoint: "",
+            write_endpoint=h.write_endpoint,
+            reboot=h.reboot,
+        )
+
+        self.assertTrue(result.success, result.failure_reason)
+        self.assertEqual(h.write_calls, ["198.51.100.25:19001"])
+        self.assertEqual(h.reboot_calls, 0)
+        self.assertEqual(h.committed["connection_strategy"], "inbound")
+        self.assertEqual(len(h.commit_terminals), 1)
+        self.assertIsNotNone(h.commit_terminals[0].inbound_proof)
+
+    async def test_host_only_metadata_correction_reboots_and_proves_fixed_listener(self) -> None:
+        h = _Harness(current_strategy="inbound")
+        prepared: list[int] = []
+
+        async def _reboot_on_502():
+            result = await h.reboot()
+            h.inventory[-1]["listener_port"] = 502
+            return result
+
+        async def _prepare(port: int) -> None:
+            prepared.append(port)
+
+        result = await h.run(
+            target="inbound",
+            inbound_endpoint="192.168.1.50",
+            endpoint_needs_write=False,
+            route_metadata_needs_reverification=True,
+            reboot=_reboot_on_502,
+            prepare_listener=_prepare,
+            local_listener_port=502,
+            expected_inbound_listener_port=502,
+        )
+
+        self.assertTrue(result.success, result.failure_reason)
+        self.assertEqual(h.write_calls, [])
+        self.assertEqual(h.reboot_calls, 1)
+        self.assertEqual(prepared, [502])
+        self.assertEqual(h.registry.claimed_session_id(ENTRY_ID), NEW_SESSION)
+
+    async def test_fixed_listener_verification_ignores_same_pn_on_other_port(self) -> None:
+        h = _Harness(current_strategy="inbound")
+
+        result = await h.run(
+            target="inbound",
+            inbound_endpoint="192.168.1.50",
+            endpoint_needs_write=False,
+            route_metadata_needs_reverification=True,
+            reboot=h.reboot,
+            local_listener_port=502,
+            expected_inbound_listener_port=502,
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.failure_reason, "inbound_reconnect_timeout")
+        self.assertIsNone(h.committed)
+
 
 class NatAndForeignCollectorTests(unittest.IsolatedAsyncioTestCase):
     """E. Two collectors behind one peer IP: only the PN distinguishes them."""
@@ -888,66 +1039,6 @@ class CorrectiveBlockerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             registry.certify_owner_reconnected_session("nobody", OLD_SESSION),
             "",
-        )
-
-    # -- 2. trusted wire authority ----------------------------------------
-    async def test_wire_authority_requires_trusted_session_handle(self) -> None:
-        from custom_components.eybond_local.connection.session_registry import (
-            CallbackSessionRegistry,
-        )
-        from custom_components.eybond_local.connection.strategy_transition import (
-            trusted_transition_wire,
-        )
-
-        def _raw(session_id, pn, state, shape="eybond_framed"):
-            return {
-                "session_id": session_id,
-                "peer_ip": "203.0.113.10",
-                "listener_port": 18899,
-                "collector_pn": pn,
-                "state": state,
-                "protocol_shape": shape,
-                "collector_identity_source": "fc2_parameter_2",
-            }
-
-        # UNTRUSTED (identity-mismatch) framed-looking session: the sniffed
-        # shape / inventory protocol string must NEVER become the authority.
-        inventory = [_raw(OLD_SESSION, FULL_PN, "route_identity_mismatch")]
-        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(inventory))
-        registry.claim_session(ENTRY_ID, session_id=OLD_SESSION)
-        registry.promote_claim_to_full_pn(ENTRY_ID, FULL_PN)
-        # The claim is pinned to OLD_SESSION (claim_session), so the 3-way
-        # (owner / claim.session_id / handle.session_id) match can hold.
-        self.assertEqual(trusted_transition_wire(registry, ENTRY_ID, OLD_SESSION), "")
-
-        # A routed-state/shape CONFLICT negotiates fail-closed: no authority.
-        inventory[0] = _raw(OLD_SESSION, FULL_PN, "routed_framed", shape="at_text")
-        self.assertEqual(trusted_transition_wire(registry, ENTRY_ID, OLD_SESSION), "")
-
-        # Routed (trusted) framed session -> framed authority.
-        inventory[0] = _raw(OLD_SESSION, FULL_PN, "routed_framed")
-        self.assertEqual(
-            trusted_transition_wire(registry, ENTRY_ID, OLD_SESSION), "eybond_framed"
-        )
-
-        # A DIFFERENT session id than the claim pins -> no authority (no
-        # fallback to another same-PN session).
-        inventory.append(_raw(NEW_SESSION, FULL_PN, "routed_framed"))
-        self.assertEqual(trusted_transition_wire(registry, ENTRY_ID, NEW_SESSION), "")
-        inventory.pop()
-
-        # Routed AT session -> at_text authority.
-        inventory[0] = _raw(
-            OLD_SESSION, FULL_PN, "routed_at_text", shape="at_text"
-        )
-        self.assertEqual(
-            trusted_transition_wire(registry, ENTRY_ID, OLD_SESSION), "at_text"
-        )
-
-        # A foreign-PN routed session the claim does not pin is NOT authority.
-        inventory[0] = _raw("foreign-sock", OTHER_FULL_PN, "routed_framed")
-        self.assertEqual(
-            trusted_transition_wire(registry, ENTRY_ID, "foreign-sock"), ""
         )
 
     # -- 4. atomic lease (unit shape: guard must precede every await) ------
@@ -1266,6 +1357,71 @@ class RegistryPermanentCapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(reg.session_handle_for_owned_session(ENTRY_ID, "other"))
         # Pinning a foreign/absent session id fails.
         self.assertFalse(reg.pin_owner_claim_to_session(ENTRY_ID, "absent"))
+
+    async def test_management_pin_replaces_stale_route_mismatch_with_current_wire(
+        self,
+    ) -> None:
+        """Field repro: the previous proof socket must not win the next switch."""
+
+        stale = {
+            "session_id": OLD_SESSION,
+            "peer_ip": "203.0.113.10",
+            "listener_port": 8899,
+            "collector_pn": FULL_PN,
+            "state": "route_identity_mismatch",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+        }
+        current = {
+            "session_id": NEW_SESSION,
+            "peer_ip": "198.51.100.20",
+            "listener_port": 8899,
+            "collector_pn": FULL_PN,
+            "state": "routed_framed",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+        }
+        inventory = [stale, current]
+        reg = self._registry(inventory)
+        reg.claim(ENTRY_ID, collector_pn=FULL_PN)
+        self.assertTrue(reg.pin_owner_claim_to_session(ENTRY_ID, OLD_SESSION))
+
+        selected = reg.pin_owner_claim_to_current_observed_session(ENTRY_ID)
+
+        self.assertEqual(selected, NEW_SESSION)
+        self.assertEqual(reg.claimed_session_id(ENTRY_ID), NEW_SESSION)
+        handle = reg.session_handle_for_owned_session(ENTRY_ID, NEW_SESSION)
+        self.assertIsNotNone(handle)
+        self.assertTrue(handle.observed)
+
+    async def test_management_pin_refuses_untrusted_or_foreign_candidates(self) -> None:
+        stale = {
+            "session_id": OLD_SESSION,
+            "peer_ip": "203.0.113.10",
+            "listener_port": 8899,
+            "collector_pn": FULL_PN,
+            "state": "route_identity_mismatch",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+        }
+        foreign = {
+            "session_id": NEW_SESSION,
+            "peer_ip": "203.0.113.10",
+            "listener_port": 8899,
+            "collector_pn": OTHER_FULL_PN,
+            "state": "routed_framed",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+        }
+        inventory = [stale, foreign]
+        reg = self._registry(inventory)
+        reg.claim(ENTRY_ID, collector_pn=FULL_PN)
+        self.assertTrue(reg.pin_owner_claim_to_session(ENTRY_ID, OLD_SESSION))
+
+        self.assertEqual(
+            reg.pin_owner_claim_to_current_observed_session(ENTRY_ID), ""
+        )
+        self.assertEqual(reg.claimed_session_id(ENTRY_ID), OLD_SESSION)
 
 
 class AtomicRestoreAndInboundRecoveredTests(unittest.IsolatedAsyncioTestCase):

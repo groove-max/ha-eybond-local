@@ -325,6 +325,26 @@ class ReconnectAndMismatchTests(unittest.TestCase):
         self.assertTrue(registry.complete_handoff(FULL_PN, "entry-1"))
         self.assertEqual(registry.owner_for_pn(FULL_PN), "entry-1")
 
+    def test_overlapping_same_pn_socket_can_retarget_while_previous_is_live(self) -> None:
+        """The registry owns an identity, not a one-socket EOF assumption."""
+
+        sessions = [
+            _observed("s1", FULL_PN, state="routed_framed", source="at_dtupn"),
+            _observed("s2", FULL_PN, state="routed_framed", source="at_dtupn"),
+        ]
+        registry = CallbackSessionRegistry(sessions_source=lambda: sessions)
+        registry.claim(
+            "verify-owner", collector_pn=FULL_PN, session_id="s1"
+        )
+
+        self.assertTrue(
+            registry.retarget_claim_to_reconnected_session(
+                "verify-owner", "s2"
+            )
+        )
+        self.assertEqual(registry.claimed_session_id("verify-owner"), "s2")
+        self.assertEqual(sessions[0]["state"], "routed_framed")
+
     def test_identity_mismatch_does_not_claim_another_collector(self) -> None:
         # Scenario 6: promoting a transient claim to a PN already owned by another
         # entry fails closed -- it never carves a different collector out from its

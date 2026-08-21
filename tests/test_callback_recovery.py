@@ -16,6 +16,7 @@ import inspect
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -285,6 +286,52 @@ class CallbackRecoverySuccessTests(unittest.IsolatedAsyncioTestCase):
         # The immediate autonomous snapshot ran first; no timed inbound window.
         self.assertIn(STATE_WAITING_FOR_CALLBACK_SESSION, outcome.transitions)
         self.assertIn("waiting_for_inbound_reconnect", outcome.transitions)
+
+    async def test_callback_proof_survives_overlapping_management_socket(self) -> None:
+        """E500 regression: another target socket closes; selected one survives."""
+
+        sibling_id = "listener-18899-baseline-sibling"
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(
+            _strong_old(),
+            _session(sibling_id, FULL_PN),
+        )
+
+        class _OverlappingChannel(_FakeChannel):
+            async def async_send_restart(self) -> None:
+                await super().async_send_restart()
+                # Apply/reset affects a same-PN sibling first. The exact socket
+                # that carried management remains live through the callback
+                # trigger and must not block the proof.
+                inventory.sessions = [
+                    session
+                    for session in inventory.sessions
+                    if session["session_id"] != sibling_id
+                ]
+
+        sender = _Sender(
+            ledger=ledger,
+            on_send=lambda: inventory.sessions.append(
+                _session(NEW_SESSION, FULL_PN)
+            ),
+        )
+        retargets: list[str] = []
+
+        outcome = await _verifier(
+            _OverlappingChannel(drops_on_restart=False),
+            inventory,
+            ledger=ledger,
+            sender=sender,
+            retarget_claim=lambda sid: retargets.append(sid) or True,
+        ).async_verify()
+
+        self.assertTrue(outcome.callback_verified, outcome.failure_reason)
+        self.assertEqual(outcome.new_session_id, NEW_SESSION)
+        self.assertEqual(retargets[-1], NEW_SESSION)
+        self.assertTrue(
+            any(s["session_id"] == OLD_SESSION for s in inventory.sessions)
+        )
+        self.assertEqual(len(sender.routes), 1)
 
     async def test_sender_receives_advertised_values_verbatim(self) -> None:
         # NAT model: bind != advertised host; advertised port != listener_port.
@@ -951,6 +998,95 @@ class CallbackRecoveryFailureTests(unittest.IsolatedAsyncioTestCase):
         # No trigger was ever sent for an unresettable collector.
         self.assertEqual(sender.routes, [])
         self.assertEqual(ledger.snapshot_generation(), 0)
+
+
+class CallbackRecoveryRetransmissionTests(unittest.IsolatedAsyncioTestCase):
+    """One causal operation survives a collector's post-reboot UDP gap."""
+
+    async def test_production_sender_retries_until_same_pn_session_arrives(self) -> None:
+        import custom_components.eybond_local.collector.discovery as discovery
+        import custom_components.eybond_local.connection.callback_ledger as ledger_module
+
+        ledger = CallbackTriggerLedger()
+        inventory = _Inventory(_strong_old())
+        channel = _reset_drops_old(inventory)
+        probe_calls: list[dict[str, object]] = []
+
+        async def _probe(**kwargs):
+            probe_calls.append(kwargs)
+            if len(probe_calls) == 2:
+                inventory.sessions.append(_session(NEW_SESSION, FULL_PN))
+                return discovery.DiscoveryProbeResult(
+                    target_ip=str(kwargs["target_ip"]),
+                    message="set>server=198.51.100.7:48899;",
+                    local_port=40000,
+                    reply="rsp>server=1;",
+                    reply_from="192.168.1.60:58899",
+                )
+            return discovery.DiscoveryProbeResult(
+                target_ip=str(kwargs["target_ip"]),
+                message="set>server=198.51.100.7:48899;",
+                local_port=40000,
+            )
+
+        policy = replace(
+            FAST_POLICY,
+            discovery_timeout=0.01,
+            callback_recovery_session_wait=0.2,
+        )
+        with patch.object(discovery, "async_probe_target", new=_probe), patch.object(
+            ledger_module, "get_callback_trigger_ledger", return_value=ledger
+        ):
+            outcome = await _verifier(
+                channel,
+                inventory,
+                ledger=ledger,
+                sender=None,
+                policy=policy,
+            ).async_verify()
+
+        self.assertTrue(outcome.callback_verified, outcome.failure_reason)
+        self.assertEqual(len(probe_calls), 2)
+        # Retransmissions are physical reliability inside ONE attributed
+        # operation, not competing causal attempts.
+        self.assertEqual(ledger.snapshot_generation(), 1)
+        records = ledger.recent_records()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].source, "callback_recovery_transaction")
+
+    async def test_fresh_socket_stops_retransmission_without_minting_proof(self) -> None:
+        import custom_components.eybond_local.collector.discovery as discovery
+        import custom_components.eybond_local.connection.callback_ledger as ledger_module
+
+        ledger = CallbackTriggerLedger()
+        probe_calls: list[dict[str, object]] = []
+
+        async def _probe(**kwargs):
+            probe_calls.append(kwargs)
+            return discovery.DiscoveryProbeResult(
+                target_ip=str(kwargs["target_ip"]),
+                message="set>server=198.51.100.7:48899;",
+                local_port=40000,
+            )
+
+        with patch.object(discovery, "async_probe_target", new=_probe), patch.object(
+            ledger_module, "get_callback_trigger_ledger", return_value=ledger
+        ):
+            result = await discovery.async_send_callback_trigger(
+                bind_ip="192.168.1.50",
+                advertised_server_ip="198.51.100.7",
+                advertised_server_port=48899,
+                target_ip="192.168.1.60",
+                udp_port=58899,
+                timeout=0.01,
+                source="callback_recovery_transaction",
+                retry_window=0.2,
+                stop_requested=lambda: True,
+            )
+
+        self.assertEqual(result.reply, "")
+        self.assertEqual(len(probe_calls), 1)
+        self.assertEqual(ledger.snapshot_generation(), 1)
 
 
 class CallbackRecoveryOwnershipTests(unittest.IsolatedAsyncioTestCase):

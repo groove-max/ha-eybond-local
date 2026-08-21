@@ -381,7 +381,24 @@ class FakeCollectorService:
 
                 if header.fcode == FC_QUERY_COLLECTOR:
                     parameter = payload[0] if payload else 0
-                    response_payload = build_query_collector_response(parameter, self._scenario)
+                    if (
+                        self._scenario.framed_endpoint_management
+                        and parameter == 21
+                    ):
+                        response_payload = (
+                            bytes((0, parameter))
+                            + self._cloud_endpoint.encode("ascii")
+                        )
+                    elif (
+                        self._scenario.framed_endpoint_management
+                        and parameter == 30
+                    ):
+                        response_payload = bytes((0, parameter)) + b"1"
+                    else:
+                        response_payload = build_query_collector_response(
+                            parameter,
+                            self._scenario,
+                        )
                     if response_payload is None:
                         _LOG.info("Frame DROP fc=2 parameter=%d behavior=timeout", parameter)
                         continue
@@ -402,12 +419,20 @@ class FakeCollectorService:
 
                 if header.fcode == FC_SET_COLLECTOR:
                     parameter = payload[0] if payload else 0
+                    writes_endpoint = (
+                        parameter == 21
+                        and self._scenario.framed_endpoint_management
+                    )
+                    if writes_endpoint:
+                        self._cloud_endpoint = payload[1:].decode(
+                            "ascii", errors="strict"
+                        )
                     reboots = (
                         parameter == 29
                         and self._scenario.set_29_mode in ("reboot", "reboot_silent")
                     )
                     response_payload = build_set_collector_response(
-                        parameter, success=reboots
+                        parameter, success=reboots or writes_endpoint
                     )
                     await self._send_framed_response(
                         tid=header.tid,

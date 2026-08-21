@@ -273,18 +273,20 @@ class _CollectorConnection:
         try:
             await self._reader_task
         finally:
+            # EOF/reset is the physical session-lifetime boundary. Publish it
+            # before bounded writer/task cleanup: wait_closed() may legitimately
+            # consume another five seconds on a rebooting collector, but recovery
+            # must not misreport that already-observed disconnect as a timeout.
+            # Session ids are socket-scoped, and the listener callback removes
+            # only this exact id, so an overlapping successor remains untouched.
+            if session_id and session_closed_callback is not None:
+                session_closed_callback(session_id, self)
             if self._run_epoch == epoch:
                 await self._disconnect(skip_task=current_task)
             # Re-check: a replacement may have started while the disconnect
             # above was awaiting; the callback must not fire for it then.
             if self._run_epoch == epoch and disconnect_callback is not None:
                 disconnect_callback(self)
-            # Socket/session lifetime is independent of the reusable
-            # connection facade lifetime. A replacement run deliberately skips
-            # ``disconnect_callback`` so it cannot unindex its successor, but
-            # the replaced session_id must still become terminal in inventory.
-            if session_id and session_closed_callback is not None:
-                session_closed_callback(session_id, self)
 
     async def _heartbeat_loop(self) -> None:
         try:
@@ -829,12 +831,14 @@ class _CollectorAtConnection:
         try:
             await self._reader_task
         finally:
+            # Same physical-session boundary as the framed connection: publish
+            # EOF/reset before bounded writer cleanup, never after it.
+            if session_id and session_closed_callback is not None:
+                session_closed_callback(session_id, self)
             if self._run_epoch == epoch:
                 await self._disconnect(skip_task=current_task)
             if self._run_epoch == epoch and disconnect_callback is not None:
                 disconnect_callback(self)
-            if session_id and session_closed_callback is not None:
-                session_closed_callback(session_id, self)
 
     async def disconnect(self) -> None:
         await self._disconnect(reason="manual_disconnect")

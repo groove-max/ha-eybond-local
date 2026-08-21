@@ -410,6 +410,7 @@
         "description": "Виберіть, чим саме ви хочете керувати для цього запису.{bridge_note}",
         "menu_options": {
           "connection": "Підключення колектора та хмари",
+          "collector_endpoint": "Адреса підключення до Home Assistant",
           "runtime": "Опитування та визначення інвертора",
           "cloud_tools": "Інструменти хмарного трафіку",
           "collector_wifi": "Змінити Wi-Fi колектора",
@@ -637,8 +638,8 @@
         "description": "**{action_title}**\n\n{status}\n\n**Шлях:** `{path}`\n**Завантажити:** {download_markdown}\n\n**Наступний крок:** {next_step}"
       },
       "strategy_transition": {
-        "title": "Змінити режим підключення",
-        "description": "Home Assistant перемкне колектор у режим **{target_strategy}** і перевірить повторне підключення.\n\n{connection_strategy_risk}\n\n{connection_strategy_rollback}\n\nПеревірте адреси та підтвердьте продовження.",
+        "title": "Параметри підключення",
+        "description": "Home Assistant застосує **{target_strategy}** і перевірить повторне підключення того самого колектора.\n\n{connection_strategy_risk}\n\n{connection_strategy_rollback}\n\nПеревірте адреси та підтвердьте продовження.",
         "data": {
           "advertised_server_ip": "Адреса Home Assistant",
           "advertised_tcp_port": "Порт Home Assistant",

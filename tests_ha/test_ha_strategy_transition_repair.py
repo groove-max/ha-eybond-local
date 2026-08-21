@@ -131,6 +131,7 @@ def _target_entry(
 ) -> MockConfigEntry:
     from custom_components.eybond_local.connection.strategy_transition_recovery import (
         RECOVERY_PHASE_PENDING,
+        RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,
         StrategyTransitionRecoveryState,
     )
 
@@ -149,7 +150,7 @@ def _target_entry(
         trigger_bind_host="127.0.0.1",
         listener_bind_host="0.0.0.0",
         local_listener_port=tcp_port,
-        phase=recovery_phase or RECOVERY_PHASE_PENDING,
+        phase=recovery_phase or RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,
     )
     data = {
         "connection_type": "eybond",
@@ -232,6 +233,9 @@ async def test_cold_degraded_repair_through_real_ha(
     from custom_components.eybond_local.connection.recovery_contract import (
         RecoveryContract,
     )
+    from custom_components.eybond_local.connection.strategy_transition_recovery import (
+        RECOVERY_PHASE_PENDING,
+    )
     from custom_components.eybond_local.connection import (
         strategy_transition_repair as repair_mod,
     )
@@ -266,6 +270,7 @@ async def test_cold_degraded_repair_through_real_ha(
             first_heartbeat_delay=1.5,
             # Phase B: reboot on FC=29 and stay down until the callback set>server.
             set_29_mode="reboot_silent",
+            framed_endpoint_management=True,
             reboot_reconnect_delay=0.3,
             pi30_mode="success",
         ),
@@ -288,7 +293,21 @@ async def test_cold_degraded_repair_through_real_ha(
     target = _target_entry(
         tcp_port=tcp_port,
         udp_port=udp_port,
-        extra_data={"discovery_interval": 3600},
+        recovery_phase=RECOVERY_PHASE_PENDING,
+        extra_data={
+            "discovery_interval": 3600,
+            # Real pending repair: the old canonical strategy and HA endpoint
+            # provenance are still intact. The durable user-confirmed cloud
+            # endpoint must be applied through Phase A's exact session before
+            # the callback proof is allowed to begin.
+            "endpoint_control_policy": "integration_managed",
+            "endpoint_written_value": f"127.0.0.1,{tcp_port},TCP",
+            "endpoint_written_at": TS,
+            "collector_original_server_endpoint": "cloud.example,18899,TCP",
+            "collector_original_server_endpoint_source": "user_confirmed_existing",
+            "collector_original_server_endpoint_profile_key": "",
+            "collector_original_server_endpoint_observed_at": TS,
+        },
     )
     try:
         with ExitStack() as stack:
@@ -457,6 +476,8 @@ async def test_cold_degraded_repair_through_real_ha(
             # ---- proven commit, cleared state, owned identity --------------
             assert target.data["connection_strategy"] == "callback_on_demand"
             assert target.data["endpoint_control_policy"] == "external"
+            assert "endpoint_written_value" not in target.data
+            assert "endpoint_written_at" not in target.data
             assert CONF_STRATEGY_TRANSITION_STATE not in target.data
             contract = RecoveryContract.from_entry_data(target.data)
             assert contract is not None and contract.callback_verified
@@ -714,7 +735,10 @@ async def test_coordinator_recovery_state_splits_trigger_and_listener_bind(
         tcp_port=free_port,
     )
     coordinator._runtime = types.SimpleNamespace(listener_bind_host="0.0.0.0")
-    coordinator.data = types.SimpleNamespace(values={})
+    coordinator.data = types.SimpleNamespace(
+        values={},
+        collector_server_endpoint="",
+    )
     coordinator.hass = types.SimpleNamespace()
 
     captured: dict = {}

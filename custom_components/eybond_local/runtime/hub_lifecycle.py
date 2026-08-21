@@ -240,6 +240,27 @@ class HubLifecycleMixin:
                     return False
         return False
 
+    async def async_ensure_collector_management_session(
+        self,
+        *,
+        timeout: float,
+    ) -> bool:
+        """Ensure a live collector session without running inverter detection.
+
+        This is the public runtime boundary for a management transaction which
+        needs the entry's normal connection strategy first.  In callback mode
+        it uses the SAME callback trigger, causality lease and exact ownership
+        path as an ordinary runtime reconnect; in inbound mode it only waits for
+        the already-configured autonomous session.  It never probes an inverter
+        and never manufactures recovery evidence.
+        """
+
+        connected = await self._async_try_connect_for_session_lifecycle(
+            timeout=timeout,
+            require_heartbeat=False,
+        )
+        return connected is True
+
     def _mark_owned_session_stable(self) -> None:
         """Record the owned session generation that completed a driver poll."""
 

@@ -9,6 +9,7 @@ from typing import Any, Callable
 import uuid
 
 from ...timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY, OnboardingTimeoutPolicy
+from ..managed_session_action import ManagedSessionRestartChannel
 from .verification_channel import ObservedSessionRestartChannel
 from .verification_engine import _ControlledResetRecoveryEngine
 from .verification_models import (
@@ -83,6 +84,8 @@ async def async_run_callback_recovery_transaction(
     poll_interval: float = _DEFAULT_POLL_INTERVAL_SECONDS,
     permanent_owner_id: str | None = None,
     owner_certifier: Callable[[str], Any] | None = None,
+    management_endpoint: str = "",
+    on_management_confirmed: Callable[[Any], None] | None = None,
 ) -> RecoveryVerificationOutcome:
     """THE public callback-recovery transaction: owns the whole claim lifecycle.
 
@@ -110,6 +113,18 @@ async def async_run_callback_recovery_transaction(
     prepared-but-unconsumed handoff), the channel and its transports are
     stopped, and the lease/inhibitor are gone.
     """
+
+    # Optional endpoint-apply mode is a trust boundary of the public
+    # transaction.  Reject malformed wiring before taking or mutating any
+    # registry claim.
+    if type(management_endpoint) is not str or (
+        management_endpoint != management_endpoint.strip()
+    ):
+        raise ValueError("callback_recovery_management_endpoint_invalid")
+    if on_management_confirmed is not None and not callable(on_management_confirmed):
+        raise TypeError("callback_recovery_confirmation_callback_invalid")
+    if not management_endpoint and on_management_confirmed is not None:
+        raise ValueError("callback_recovery_confirmation_without_endpoint")
 
     permanent_mode = bool(permanent_owner_id) and owner_certifier is not None
     owner = (
@@ -166,13 +181,23 @@ async def async_run_callback_recovery_transaction(
             )
             return ""
 
-    channel = ObservedSessionRestartChannel(
+    session_channel = ObservedSessionRestartChannel(
         host=listener_host,
         port=route.listener_port,
         collector_pn="",
         session_id=session_id,
         session_id_provider=_claimed_session_id,
         handle_provider=lambda: registry.session_handle_for_claimed_session(owner),
+    )
+    channel = (
+        ManagedSessionRestartChannel(
+            session_channel=session_channel,
+            expected_session_id=session_id,
+            endpoint=management_endpoint,
+            on_confirmed=on_management_confirmed,
+        )
+        if management_endpoint
+        else session_channel
     )
     from ...collector.silent_session_probe import SilentSessionIdentityProbeChannel
 

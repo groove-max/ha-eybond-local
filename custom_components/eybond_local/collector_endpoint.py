@@ -1,4 +1,4 @@
-"""Validation helpers for collector callback endpoint strings."""
+"""Validation helpers for persistent collector server endpoint strings."""
 
 from __future__ import annotations
 
@@ -20,10 +20,64 @@ DEFAULT_COLLECTOR_SERVER_PORT = 18899
 LEGACY_BINARY_COLLECTOR_SERVER_PORT = 502
 DEFAULT_COLLECTOR_SERVER_PROTOCOL = "TCP"
 
+ENDPOINT_WRITE_FORMAT_HOST_ONLY = "host_only"
+ENDPOINT_WRITE_FORMAT_HOST_PORT = "host_port"
+ENDPOINT_WRITE_FORMAT_HOST_PORT_PROTOCOL = "host_port_protocol"
+_ENDPOINT_WRITE_FORMATS = frozenset(
+    {
+        ENDPOINT_WRITE_FORMAT_HOST_ONLY,
+        ENDPOINT_WRITE_FORMAT_HOST_PORT,
+        ENDPOINT_WRITE_FORMAT_HOST_PORT_PROTOCOL,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CollectorEndpointWriteShape:
+    """Typed CLDSRVHOST1 serialization shape and its wire semantics.
+
+    ``fixed_port`` is non-zero only when the collector does not serialize a
+    port at all.  In that format the catalog's default port is nevertheless a
+    real part of the route the collector will dial; it must drive listener
+    preparation, reconnect verification and persisted advertised-route
+    metadata even though it is absent from the value written to the device.
+    """
+
+    write_format: str
+    fixed_port: int
+    protocol: str
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.write_format) is not str
+            or self.write_format not in _ENDPOINT_WRITE_FORMATS
+        ):
+            raise ValueError("collector_endpoint_write_format_invalid")
+        if type(self.fixed_port) is not int or type(self.fixed_port) is bool:
+            raise TypeError("collector_endpoint_fixed_port_type_invalid")
+        if self.write_format == ENDPOINT_WRITE_FORMAT_HOST_ONLY:
+            if not 1 <= self.fixed_port <= 65535:
+                raise ValueError("collector_endpoint_fixed_port_invalid")
+        elif self.fixed_port != 0:
+            raise ValueError("collector_endpoint_editable_port_must_not_be_fixed")
+        if (
+            type(self.protocol) is not str
+            or not self.protocol
+            or self.protocol != self.protocol.strip()
+            or self.protocol != self.protocol.upper()
+        ):
+            raise ValueError("collector_endpoint_protocol_invalid")
+
+    @property
+    def port_is_fixed(self) -> bool:
+        """Whether the collector's endpoint format fixes the dial port."""
+
+        return self.fixed_port > 0
+
 
 @dataclass(frozen=True, slots=True)
 class CollectorServerEndpointParts:
-    """Structured collector callback endpoint with raw-shape metadata."""
+    """Structured persistent server endpoint with raw-shape metadata."""
 
     host: str
     port: int
@@ -43,7 +97,7 @@ class CollectorServerEndpointParts:
 
 
 def validate_collector_server_host(server_host: str) -> str:
-    """Validate one collector callback host as IPv4 or DNS hostname."""
+    """Validate one collector server host as IPv4 or DNS hostname."""
 
     host = str(server_host or "").strip()
     if not host or not host.isascii() or "," in host:
@@ -70,7 +124,7 @@ def validate_collector_server_host(server_host: str) -> str:
 
 
 def validate_collector_server_port(server_port: int | str) -> int:
-    """Validate one collector callback TCP port."""
+    """Validate one persistent collector-server TCP port."""
 
     try:
         port = int(server_port)
@@ -98,7 +152,7 @@ def validate_collector_server_protocol(
 
 
 def default_collector_server_port(*, cloud_family: str = "") -> int:
-    """Return the semantic default callback port for one collector cloud family."""
+    """Return the semantic default server port for one collector cloud family."""
 
     normalized_family = str(cloud_family or "").strip().lower()
     if normalized_family:
@@ -120,6 +174,75 @@ def default_collector_server_protocol(*, cloud_family: str = "") -> str:
         if default_protocol:
             return default_protocol
     return DEFAULT_COLLECTOR_SERVER_PROTOCOL
+
+
+def resolve_collector_endpoint_write_shape(
+    *,
+    cloud_family: object = "",
+    template_endpoint: object = "",
+) -> CollectorEndpointWriteShape:
+    """Resolve one collector's endpoint serialization and implicit dial port.
+
+    The catalog is authoritative when a known family is available.  For an
+    unknown family, a valid template preserves its observed shape; without
+    either fact the existing canonical ``host,port,protocol`` format remains
+    the safe editable default.  Malformed/padded/duck inputs never influence
+    the result.
+    """
+
+    normalized_family = (
+        cloud_family.lower()
+        if type(cloud_family) is str
+        and cloud_family
+        and cloud_family == cloud_family.strip()
+        else ""
+    )
+    parsed_template: CollectorServerEndpointParts | None = None
+    if (
+        type(template_endpoint) is str
+        and template_endpoint
+        and template_endpoint == template_endpoint.strip()
+    ):
+        try:
+            parsed_template = inspect_collector_server_endpoint(
+                template_endpoint,
+                require_explicit_port=False,
+                require_explicit_protocol=False,
+                require_tcp=True,
+            )
+        except ValueError:
+            parsed_template = None
+
+    if not normalized_family and parsed_template is not None:
+        normalized_family = resolve_collector_cloud_family_by_host(
+            parsed_template.host.lower()
+        )
+
+    write_format = resolve_collector_cloud_endpoint_write_format(normalized_family)
+    if not write_format and parsed_template is not None:
+        if not parsed_template.has_explicit_port:
+            write_format = ENDPOINT_WRITE_FORMAT_HOST_ONLY
+        elif not parsed_template.has_explicit_protocol:
+            write_format = ENDPOINT_WRITE_FORMAT_HOST_PORT
+        else:
+            write_format = ENDPOINT_WRITE_FORMAT_HOST_PORT_PROTOCOL
+    if write_format not in _ENDPOINT_WRITE_FORMATS:
+        write_format = ENDPOINT_WRITE_FORMAT_HOST_PORT_PROTOCOL
+
+    protocol = default_collector_server_protocol(cloud_family=normalized_family)
+    if parsed_template is not None:
+        protocol = parsed_template.protocol
+    protocol = validate_collector_server_protocol(protocol, require_tcp=True)
+
+    fixed_port = 0
+    if write_format == ENDPOINT_WRITE_FORMAT_HOST_ONLY:
+        fixed_port = default_collector_server_port(cloud_family=normalized_family)
+
+    return CollectorEndpointWriteShape(
+        write_format=write_format,
+        fixed_port=fixed_port,
+        protocol=protocol,
+    )
 
 
 def format_collector_server_endpoint(

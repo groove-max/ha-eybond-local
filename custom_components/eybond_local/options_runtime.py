@@ -41,6 +41,8 @@ from .connection_form import (
     validate_connection_inputs as _validate_shared_connection_inputs,
 )
 from .const import (
+    CONF_ADVERTISED_SERVER_IP,
+    CONF_ADVERTISED_TCP_PORT,
     CONF_COLLECTOR_IP,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
@@ -711,6 +713,19 @@ class RuntimeOptionsMixin:
             CONF_CONNECTION_TYPE, CONNECTION_TYPE_EYBOND
         )
         persisted_options = build_runtime_option_settings(connection_type, flat_input)
+        # An absent optional advertised route is not a persisted fact. Older
+        # runtime forms wrote the exact pair ("", ""), which later looked like
+        # a PRESENT malformed explicit route and correctly blocked lower-priority
+        # transition hints. Drop only that complete legacy-empty shape; partial
+        # or malformed values are never normalized into absence here.
+        if (
+            type(persisted_options.get(CONF_ADVERTISED_SERVER_IP)) is str
+            and persisted_options.get(CONF_ADVERTISED_SERVER_IP) == ""
+            and type(persisted_options.get(CONF_ADVERTISED_TCP_PORT)) is str
+            and persisted_options.get(CONF_ADVERTISED_TCP_PORT) == ""
+        ):
+            persisted_options.pop(CONF_ADVERTISED_SERVER_IP)
+            persisted_options.pop(CONF_ADVERTISED_TCP_PORT)
         persisted_options[CONF_POLL_INTERVAL] = flat_input.get(
             CONF_POLL_INTERVAL,
             self._config_entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),

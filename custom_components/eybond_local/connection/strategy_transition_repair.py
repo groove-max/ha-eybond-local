@@ -33,6 +33,7 @@ listener internal, never picks a wire, and never re-implements the matcher.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import uuid
 from dataclasses import dataclass
@@ -60,12 +61,19 @@ from .callback_ledger import CallbackCausalityBusyError
 from ..collector_identity import pn_is_same_identity
 from .strategy_transition import STRATEGY_REPAIR_LEASES, TRANSITION_ALREADY_RUNNING
 from .strategy_transition_recovery import StrategyTransitionRecoveryState
+from .strategy_transition_recovery import (
+    RECOVERY_PHASE_PENDING,
+    RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,
+)
+from .strategy_transition_context import CloudRollbackEndpoint
 
 logger = logging.getLogger(__name__)
 
 # Orchestration-level preflight reasons (before Phase A even starts).
 REPAIR_STATE_INVALID = "repair_state_invalid"
 REPAIR_ROUTE_INCOMPLETE = "repair_route_incomplete"
+REPAIR_ROLLBACK_ENDPOINT_UNAVAILABLE = "transition_rollback_endpoint_unavailable"
+REPAIR_CONFIRMED_PERSIST_UNAVAILABLE = "transition_persist_confirmed_unavailable"
 
 # Typed Phase-A bootstrap outcomes (translation keys; never raw exception text).
 BOOTSTRAP_EXISTING_OWNER_CERTIFIED = "existing_owner_certified"
@@ -405,6 +413,10 @@ async def async_run_degraded_recovery_repair(
     policy: OnboardingTimeoutPolicy | None = None,
     poll_interval: float = 0.2,
     strategy_leases: Any = None,
+    pending_restore_endpoint: CloudRollbackEndpoint | None = None,
+    persist_restore_confirmed: (
+        Callable[[StrategyTransitionRecoveryState], Any] | None
+    ) = None,
 ) -> DegradedRepairResult:
     """Finish the degraded transition from a cold start. Single-owner path.
 
@@ -426,6 +438,35 @@ async def async_run_degraded_recovery_repair(
         return DegradedRepairResult(
             success=False, failure_reason=REPAIR_ROUTE_INCOMPLETE
         )
+
+    # ``transition_pending`` is write-ahead intent, NOT evidence that the cloud
+    # endpoint was restored.  It must finish that exact physical action through
+    # the certified Phase-A session and persist the confirmed phase at the
+    # management receipt boundary.  Treating pending as confirmed makes the
+    # subsequent callback proof reboot a collector that still points at HA; it
+    # then autonomously reconnects and the callback window can never be causal.
+    if state.phase == RECOVERY_PHASE_PENDING:
+        if (
+            type(pending_restore_endpoint) is not CloudRollbackEndpoint
+            or not pending_restore_endpoint.known
+        ):
+            return DegradedRepairResult(
+                success=False,
+                failure_reason=REPAIR_ROLLBACK_ENDPOINT_UNAVAILABLE,
+            )
+        if persist_restore_confirmed is None:
+            return DegradedRepairResult(
+                success=False,
+                failure_reason=REPAIR_CONFIRMED_PERSIST_UNAVAILABLE,
+            )
+    elif state.phase == RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN:
+        if pending_restore_endpoint is not None or persist_restore_confirmed is not None:
+            return DegradedRepairResult(
+                success=False,
+                failure_reason=REPAIR_STATE_INVALID,
+            )
+    else:  # defensive behind the strict recovery-state constructor
+        return DegradedRepairResult(success=False, failure_reason=REPAIR_STATE_INVALID)
 
     if not strategy_leases.acquire(owner_id):
         return DegradedRepairResult(
@@ -455,6 +496,26 @@ async def async_run_degraded_recovery_repair(
             current_sid = str(registry.claimed_session_id(owner_id) or "")
             return registry.certify_permanent_owned_session(owner_id, current_sid)
 
+        management_endpoint = ""
+        on_management_confirmed = None
+        if state.phase == RECOVERY_PHASE_PENDING:
+            assert type(pending_restore_endpoint) is CloudRollbackEndpoint
+            assert persist_restore_confirmed is not None
+            management_endpoint = pending_restore_endpoint.endpoint
+
+            def _persist_confirmed(_receipt: Any) -> None:
+                confirmed = state.with_phase(
+                    RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,
+                    now=clock(),
+                )
+                persisted = persist_restore_confirmed(confirmed)
+                if inspect.isawaitable(persisted):
+                    raise RuntimeError("repair_confirmed_persist_must_be_sync")
+                if persisted:
+                    raise RuntimeError(str(persisted))
+
+            on_management_confirmed = _persist_confirmed
+
         outcome = await async_run_callback_recovery_transaction(
             registry=registry,
             collector_pn=state.collector_pn,
@@ -468,6 +529,8 @@ async def async_run_degraded_recovery_repair(
             poll_interval=poll_interval,
             permanent_owner_id=owner_id,
             owner_certifier=_owner_certifier,
+            management_endpoint=management_endpoint,
+            on_management_confirmed=on_management_confirmed,
         )
         if not outcome.callback_verified:
             return DegradedRepairResult(
@@ -526,6 +589,8 @@ __all__ = [
     "DegradedRepairResult",
     "PhaseABootstrapOutcome",
     "REPAIR_ROUTE_INCOMPLETE",
+    "REPAIR_ROLLBACK_ENDPOINT_UNAVAILABLE",
+    "REPAIR_CONFIRMED_PERSIST_UNAVAILABLE",
     "REPAIR_STATE_INVALID",
     "async_run_callback_bootstrap_transaction",
     "async_run_degraded_recovery_repair",

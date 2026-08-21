@@ -159,7 +159,16 @@ When a bridge is detected:
 - It is shown as **ESP EyeBond Collector**.
 - Cloud-only actions are hidden because the bridge does not talk to a vendor cloud.
 - Collector mode is Home Assistant only.
-- Local actions still work: diagnostics, connection settings, and Wi-Fi change.
+- **Home Assistant connection address** changes the host and port saved in the
+  bridge. Home Assistant applies the address and accepts it only after the same
+  collector reconnects.
+- If the connected bridge reports its current server address, that address is
+  prefilled as an editable suggestion. It is not treated as verification: the
+  normal reconnect check still runs before a changed address is saved.
+- A callback discovery redirect is not a permanent user mode for this firmware:
+  the bridge saves the received Home Assistant address and subsequently connects
+  to it on its own.
+- Local actions still work: diagnostics, connection settings, Wi-Fi, and UART.
 
 If the integration does not recognize the bridge, update the bridge firmware first.
 

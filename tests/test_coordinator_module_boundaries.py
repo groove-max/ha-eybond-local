@@ -57,7 +57,7 @@ EXPECTED_MRO = [
 ]
 
 EXPECTED_METHOD_SET_SHA256 = (
-    "822403e40da3e75c2b3ba57315ddabd4e21c619e2eb3e361d67d05456df1f28d"
+    "d4f9f14737dc3eb103a399db10fb2b0e78c3d4b738aebefe6d8fe21ffee0912e"
 )
 
 
@@ -119,7 +119,7 @@ class CoordinatorCompositionBoundaryTests(unittest.TestCase):
         duplicates = {name: paths for name, paths in owners.items() if len(paths) != 1}
         self.assertEqual(duplicates, {})
         digest = hashlib.sha256("\n".join(sorted(owners)).encode()).hexdigest()
-        self.assertEqual(len(owners), 277)
+        self.assertEqual(len(owners), 279)
         self.assertEqual(digest, EXPECTED_METHOD_SET_SHA256)
 
     def test_provider_neutral_cloud_evidence_surface_has_no_smartess_wrapper(self) -> None:
@@ -148,6 +148,9 @@ class CoordinatorCompositionBoundaryTests(unittest.TestCase):
             "async_start_shadow_learning": "coordinator_cloud_tools.py",
             "_run_finalization_shielded": "coordinator_cloud_tools.py",
             "async_run_connection_strategy_transition": "coordinator_strategy.py",
+            "_async_prepare_strategy_transition_management_session": (
+                "coordinator_strategy.py"
+            ),
             "_apply_transition_commit": "coordinator_strategy.py",
             "_collector_endpoint_operation": "coordinator_management.py",
             "_async_update_data": "coordinator_polling.py",

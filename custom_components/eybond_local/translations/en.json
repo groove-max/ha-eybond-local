@@ -410,6 +410,7 @@
         "description": "Choose what you want to manage for this entry.{bridge_note}",
         "menu_options": {
           "connection": "Collector connection and cloud",
+          "collector_endpoint": "Home Assistant connection address",
           "runtime": "Polling and inverter detection",
           "cloud_tools": "Cloud traffic tools",
           "collector_wifi": "Change collector Wi-Fi",
@@ -637,8 +638,8 @@
         "description": "**{action_title}**\n\n{status}\n\n**Path:** `{path}`\n**Download:** {download_markdown}\n\n**Next step:** {next_step}"
       },
       "strategy_transition": {
-        "title": "Change connection mode",
-        "description": "Home Assistant will switch the collector to **{target_strategy}** and verify that it reconnects.\n\n{connection_strategy_risk}\n\n{connection_strategy_rollback}\n\nCheck the addresses and confirm to continue.",
+        "title": "Connection settings",
+        "description": "Home Assistant will apply **{target_strategy}** and verify that the same collector reconnects.\n\n{connection_strategy_risk}\n\n{connection_strategy_rollback}\n\nCheck the addresses and confirm to continue.",
         "data": {
           "advertised_server_ip": "Home Assistant address",
           "advertised_tcp_port": "Home Assistant port",

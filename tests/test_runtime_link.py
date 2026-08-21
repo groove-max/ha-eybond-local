@@ -85,6 +85,7 @@ class _FakeTransport:
         self.disconnect_calls = 0
         self.start_calls = 0
         self.stop_calls = 0
+        self.preserved_stop_sessions: list[str] = []
 
     @property
     def listener_key(self) -> str:
@@ -96,8 +97,9 @@ class _FakeTransport:
     async def start(self) -> None:
         self.start_calls += 1
 
-    async def stop(self) -> None:
+    async def stop(self, *, preserve_session_id: str = "") -> None:
         self.stop_calls += 1
+        self.preserved_stop_sessions.append(preserve_session_id)
 
     async def wait_until_connected(self, timeout: float) -> bool:
         self.connected_waits.append(timeout)
@@ -386,6 +388,32 @@ class RuntimeLinkManagerTests(unittest.TestCase):
             self.assertEqual(manager.listener_diagnostics()["collector_callback_identity_strategy"], "at_dtupn")
             self.assertTrue(manager._started)
             self.assertEqual(manager.listener_status, "listening")
+
+        asyncio.run(_run())
+
+    def test_transport_stop_preserves_the_exact_owned_session(self) -> None:
+        async def _run() -> None:
+            manager = self._build_manager()
+            payload = _FakeTransport(listener_key="payload")
+            at_transport = _FakeTransport(listener_key="at")
+            manager._transport = payload  # type: ignore[assignment]
+            manager._at_transport = at_transport  # type: ignore[assignment]
+
+            with patch.object(
+                manager,
+                "_claimed_session_id",
+                return_value="listener-8899-owned",
+            ):
+                await manager._stop_all_transports()
+
+            self.assertEqual(
+                payload.preserved_stop_sessions,
+                ["listener-8899-owned"],
+            )
+            self.assertEqual(
+                at_transport.preserved_stop_sessions,
+                ["listener-8899-owned"],
+            )
 
         asyncio.run(_run())
 
@@ -1573,7 +1601,7 @@ class _FakeAuxAtTransport:
     async def start(self) -> None:
         self.start_calls += 1
 
-    async def stop(self) -> None:
+    async def stop(self, *, preserve_session_id: str = "") -> None:
         self.stop_calls += 1
 
     async def wait_until_connected(self, timeout: float) -> bool:

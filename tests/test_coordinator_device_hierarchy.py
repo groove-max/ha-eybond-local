@@ -973,6 +973,8 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         reloads: list[str] = []
 
         def _upd(config_entry, **kw):
+            if "options" in kw:
+                self.assertIsNotNone(kw["options"])
             updates.append(dict(kw))
             if kw.get("data") is not None:
                 config_entry.data = dict(kw["data"])
@@ -1078,6 +1080,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
         self.assertEqual(refusal, "")
         self.assertNotIn("advertised_server_ip", entry.data)
+        self.assertEqual(updates[0]["options"], {})
 
     def test_di_invalid_committed_strategy_commits_nothing(self) -> None:
         # A bogus committed strategy is refused BEFORE any write -- it is never a
@@ -2348,6 +2351,29 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(coordinator.collector_callback_target_endpoint, "192.168.1.50")
         self.assertEqual(coordinator.proxy_capture_target_endpoint, "192.168.1.50")
 
+    def test_host_only_endpoint_shape_exposes_implicit_legacy_port(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator._connection_spec = types.SimpleNamespace(
+            effective_advertised_server_ip="192.168.1.50",
+            effective_advertised_tcp_port=8899,
+        )
+        coordinator._runtime = types.SimpleNamespace(
+            collector_server_endpoint_rollback_target="ess.eybond.com",
+        )
+        coordinator._remembered_collector_server_endpoint = ""
+        coordinator.config_entry = types.SimpleNamespace(
+            data={"collector_cloud_family": "legacy_binary"}, options={}
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            values={"collector_server_endpoint": "192.168.1.50"}
+        )
+
+        shape = coordinator.collector_endpoint_write_shape
+
+        self.assertEqual(shape.write_format, "host_only")
+        self.assertEqual(shape.fixed_port, 502)
+        self.assertTrue(shape.port_is_fixed)
+
     def test_prepare_listener_uses_legacy_port_for_host_only_family(self) -> None:
         listener_ports: list[int] = []
 
@@ -3282,6 +3308,33 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
             self.assertEqual(error, TRANSITION_ROLLBACK_REGISTRY_PN_REQUIRED)
             self.assertEqual(order, [])
+
+        asyncio.run(_run())
+
+    def test_bridge_endpoint_relocation_needs_no_cloud_rollback_record(self) -> None:
+        async def _run() -> None:
+            pn = "E5000025SYN0000000001"
+            coordinator, order = self._persist_coordinator(
+                data={
+                    "collector_virtual_bridge": True,
+                    "collector_kind": "esp_eybond_bridge",
+                    "collector_pn": pn,
+                },
+                options={},
+                config_dir="/nonexistent-local-bridge-relocation",
+            )
+            coordinator._durable_transition_collector_pn = lambda **_kwargs: pn
+
+            refusal = await coordinator._async_persist_inbound_rollback_endpoint(
+                "192.168.1.50,8899,TCP",
+                collector_pn=pn,
+            )
+
+            self.assertEqual(refusal, "")
+            self.assertEqual(order, [])
+            self.assertNotIn(
+                "collector_original_server_endpoint", coordinator.config_entry.data
+            )
 
         asyncio.run(_run())
 

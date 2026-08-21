@@ -60,6 +60,7 @@ from ..const import (
     ENDPOINT_CONTROL_INTEGRATION_MANAGED,
 )
 from .collector_endpoint_operation import OPERATION_STRATEGY_REPAIR
+from .managed_session_action import ManagedSessionRestartChannel
 from .recovery.terminal import RecoveryTerminalInput
 from .recovery.verification import (
     CallbackRecoveryRoute,
@@ -221,43 +222,6 @@ STRATEGY_REPAIR_LEASES = StrategyTransitionLease(
 )
 
 
-def trusted_transition_wire(registry: Any, entry_id: str, session_id: str) -> str:
-    """The ONE wire authority a transition may use: a trusted SessionHandle.
-
-    Session-PINNED and fail-closed. All three of the registry claim owner,
-    ``claim.session_id`` and the ``SessionHandle.session_id`` must agree
-    (``session_handle_for_owned_session``), the handle must literally be a
-    ``SessionHandle`` (no ducks), OBSERVED on the live wire, with no conflict,
-    and its id must equal the requested ``session_id``. There is NO PN search
-    and NO fallback to another same-PN session; if the claim is not yet pinned
-    to this exact socket the caller must run the explicit
-    ``pin_owner_claim_to_session`` registry op first. An inventory
-    ``session_protocol`` string or an expected/persisted protocol can never
-    become the authority.
-    """
-
-    from .session_handle import SessionHandle
-
-    sid = str(session_id or "").strip()
-    if not sid:
-        return ""
-    try:
-        handle = registry.session_handle_for_owned_session(entry_id, sid)
-    except Exception:
-        return ""
-    if type(handle) is not SessionHandle:
-        return ""
-    if handle.session_id != sid:
-        return ""
-    if not handle.observed or handle.conflict:
-        return ""
-    if handle.uses_framed_wire:
-        return "eybond_framed"
-    if handle.uses_at_text_wire:
-        return "at_text"
-    return ""
-
-
 def _disallowed_payload_key(payload: Any) -> str:
     """The first payload key NOT on the orthogonal allowlist, or "".
 
@@ -298,50 +262,6 @@ class StrategyTransitionResult:
     # (confirmed restore without a proven callback strategy).
     degraded_state: str = ""
     outcome: Any = None
-
-
-class _ManagedRestartChannel:
-    """The verifier's restart channel bound to the RUNTIME's own management path.
-
-    ``async_send_restart`` performs the transition's single controlled
-    apply/restart lifecycle — an endpoint write with apply, an endpoint
-    restore with apply, or a plain reboot — through the coordinator-supplied
-    callable. A confirmed write immediately fires ``on_confirmed`` so the
-    endpoint provenance is persisted BEFORE the verification outcome exists.
-
-    ``observed_wire`` returns the live claimed session's negotiated wire (the
-    registry's own live observation — never persisted evidence, never a
-    hostname/cloud guess), which is the only silent-reconnect probe authority
-    the engine accepts.
-    """
-
-    def __init__(
-        self,
-        *,
-        restart: Callable[[], Awaitable[Any]],
-        wire_provider: Callable[[], str],
-        on_confirmed: Callable[[Any], None] | None = None,
-    ) -> None:
-        self._restart = restart
-        self._wire_provider = wire_provider
-        self._on_confirmed = on_confirmed
-
-    async def async_send_restart(self) -> None:
-        result = await self._restart()
-        if self._on_confirmed is not None:
-            self._on_confirmed(result)
-
-    def observed_wire(self) -> str:
-        try:
-            return str(self._wire_provider() or "").strip()
-        except Exception:  # pragma: no cover - fail-closed observation
-            return ""
-
-    def is_connected(self) -> bool:
-        return False
-
-    async def async_close(self) -> None:
-        return None
 
 
 def _applied_endpoint_from_result(result: Any, fallback: str) -> str:
@@ -391,7 +311,6 @@ async def async_run_strategy_transition(
     owner_id: str,
     registry: Any,
     claimed_session_id: Callable[[], str],
-    live_wire: Callable[[], str],
     clock: Callable[[], str],
     commit: Callable[[dict[str, Any], RecoveryTerminalInput], Awaitable[str]],
     policy: OnboardingTimeoutPolicy | None = None,
@@ -400,10 +319,11 @@ async def async_run_strategy_transition(
     # --- to inbound -------------------------------------------------------
     inbound_endpoint: str = "",
     endpoint_needs_write: bool = False,
-    write_endpoint: Callable[[str], Awaitable[Any]] | None = None,
-    reboot: Callable[[], Awaitable[Any]] | None = None,
+    route_metadata_needs_reverification: bool = False,
+    management_channel_factory: Callable[[str], Any] | None = None,
     prepare_listener: Callable[[int], Awaitable[None]] | None = None,
     local_listener_port: int = 0,
+    expected_inbound_listener_port: int = 0,
     on_endpoint_written: Callable[[str], None] | None = None,
     current_external_endpoint: str = "",
     persist_inbound_rollback_endpoint: Callable[[str], Any] | None = None,
@@ -468,7 +388,21 @@ async def async_run_strategy_transition(
             target_strategy=target,
             failure_reason=TRANSITION_TARGET_INVALID,
         )
-    if target == str(current_strategy or "").strip():
+    current = str(current_strategy or "").strip()
+    # A verified inbound endpoint relocation is not a no-op merely because the
+    # strategy axis remains ``inbound``.  The coordinator computes the exact
+    # endpoint delta from the live typed snapshot and the user-confirmed target;
+    # the same restart/reconnect/PN-proof authority then owns the relocation.
+    # Every other same-strategy request remains a preflight-only refusal.
+    endpoint_relocation = bool(
+        target == CONNECTION_STRATEGY_INBOUND
+        and current == CONNECTION_STRATEGY_INBOUND
+        and (
+            endpoint_needs_write is True
+            or route_metadata_needs_reverification is True
+        )
+    )
+    if target == current and not endpoint_relocation:
         return StrategyTransitionResult(
             success=False,
             target_strategy=target,
@@ -508,7 +442,6 @@ async def async_run_strategy_transition(
             owner_id=owner_id,
             registry=registry,
             session_id=session_id,
-            live_wire=live_wire,
             clock=clock,
             commit=commit,
             policy=policy,
@@ -516,15 +449,15 @@ async def async_run_strategy_transition(
             poll_interval=poll_interval,
             inbound_endpoint=inbound_endpoint,
             endpoint_needs_write=endpoint_needs_write,
-            write_endpoint=write_endpoint,
-            reboot=reboot,
             prepare_listener=prepare_listener,
             local_listener_port=local_listener_port,
+            expected_inbound_listener_port=expected_inbound_listener_port,
             on_endpoint_written=on_endpoint_written,
             current_external_endpoint=current_external_endpoint,
             persist_inbound_rollback_endpoint=persist_inbound_rollback_endpoint,
             management_action_available=management_action_available,
             silent_session_probe=silent_session_probe,
+            management_channel_factory=management_channel_factory,
             axis_extra=axis_extra,
             options_updates=options_updates,
         )
@@ -533,7 +466,6 @@ async def async_run_strategy_transition(
         owner_id=owner_id,
         registry=registry,
         session_id=session_id,
-        live_wire=live_wire,
         clock=clock,
         commit=commit,
         policy=policy,
@@ -547,13 +479,12 @@ async def async_run_strategy_transition(
         validate_rollback_selection=validate_rollback_selection,
         persist_rollback_selection=persist_rollback_selection,
         management_action_available=management_action_available,
-        write_endpoint=write_endpoint,
-        reboot=reboot,
         on_endpoint_restored=on_endpoint_restored,
         persist_pending=persist_pending,
         persist_confirmed=persist_confirmed,
         recovery_state=recovery_state,
         silent_session_probe=silent_session_probe,
+        management_channel_factory=management_channel_factory,
         axis_extra=axis_extra,
         options_updates=options_updates,
     )
@@ -565,7 +496,6 @@ async def _async_transition_to_inbound(
     owner_id: str,
     registry: Any,
     session_id: str,
-    live_wire: Callable[[], str],
     clock: Callable[[], str],
     commit: Callable[[dict[str, Any], RecoveryTerminalInput], Awaitable[str]],
     policy: OnboardingTimeoutPolicy,
@@ -573,20 +503,20 @@ async def _async_transition_to_inbound(
     poll_interval: float,
     inbound_endpoint: str,
     endpoint_needs_write: bool,
-    write_endpoint: Callable[[str], Awaitable[Any]] | None,
-    reboot: Callable[[], Awaitable[Any]] | None,
     prepare_listener: Callable[[int], Awaitable[None]] | None,
     local_listener_port: int,
+    expected_inbound_listener_port: int,
     on_endpoint_written: Callable[[str], None] | None,
     current_external_endpoint: str,
     persist_inbound_rollback_endpoint: Callable[[str], Any] | None,
     management_action_available: Callable[[str], bool] | None,
     silent_session_probe: Any,
+    management_channel_factory: Callable[[str], Any] | None,
     axis_extra: dict[str, Any],
     options_updates: dict[str, Any],
 ) -> StrategyTransitionResult:
     endpoint = str(inbound_endpoint or "").strip()
-    if not endpoint or (endpoint_needs_write and write_endpoint is None):
+    if not endpoint:
         # The USER-CONFIRMED Home Assistant endpoint is mandatory input: it is
         # never derived from peer IP / hostname / local-vs-external guessing.
         return StrategyTransitionResult(
@@ -594,11 +524,11 @@ async def _async_transition_to_inbound(
             target_strategy=CONNECTION_STRATEGY_INBOUND,
             failure_reason=TRANSITION_ENDPOINT_REQUIRED,
         )
-    if not endpoint_needs_write and reboot is None:
+    if management_channel_factory is None:
         return StrategyTransitionResult(
             success=False,
             target_strategy=CONNECTION_STRATEGY_INBOUND,
-            failure_reason=TRANSITION_ENDPOINT_REQUIRED,
+            failure_reason=TRANSITION_MANAGEMENT_UNAVAILABLE,
         )
 
     if endpoint_needs_write and management_action_available is not None:
@@ -610,6 +540,16 @@ async def _async_transition_to_inbound(
                 target_strategy=CONNECTION_STRATEGY_INBOUND,
                 failure_reason=TRANSITION_MANAGEMENT_UNAVAILABLE,
             )
+    if (
+        not endpoint_needs_write
+        and management_action_available is not None
+        and not management_action_available("reboot")
+    ):
+        return StrategyTransitionResult(
+            success=False,
+            target_strategy=CONNECTION_STRATEGY_INBOUND,
+            failure_reason=TRANSITION_MANAGEMENT_UNAVAILABLE,
+        )
 
     # Preserve a known current external endpoint inside THIS transaction,
     # before the Home Assistant endpoint can overwrite it.  Background snapshot
@@ -648,25 +588,20 @@ async def _async_transition_to_inbound(
 
     written: dict[str, str] = {}
 
-    async def _restart() -> Any:
-        if endpoint_needs_write:
-            if write_endpoint is None:  # preflight guarantees this
-                raise RuntimeError(TRANSITION_ENDPOINT_REQUIRED)
-            result = await write_endpoint(endpoint)
-            written["value"] = _applied_endpoint_from_result(result, endpoint)
-            return result
-        if reboot is None:  # preflight guarantees this
-            raise RuntimeError(TRANSITION_ENDPOINT_REQUIRED)
-        return await reboot()
-
-    def _confirmed(_result: Any) -> None:
+    def _confirmed(result: Any) -> None:
         # Fires only after the write/apply came back confirmed: the endpoint
         # provenance is earned NOW, independent of the verification outcome.
+        if endpoint_needs_write:
+            written["value"] = _applied_endpoint_from_result(result, endpoint)
         if written and on_endpoint_written is not None:
             on_endpoint_written(written["value"])
 
-    channel = _ManagedRestartChannel(
-        restart=_restart, wire_provider=live_wire, on_confirmed=_confirmed
+    session_channel = management_channel_factory(session_id)
+    channel = ManagedSessionRestartChannel(
+        session_channel=session_channel,
+        expected_session_id=session_id,
+        endpoint=endpoint if endpoint_needs_write else "",
+        on_confirmed=_confirmed,
     )
     verifier = InboundRecoveryVerifier(
         collector_pn=collector_pn,
@@ -680,6 +615,7 @@ async def _async_transition_to_inbound(
         promote_claim=_registry_promote_hook(registry, owner_id),
         retarget_claim=_registry_retarget_hook(registry, owner_id),
         silent_session_probe=silent_session_probe,
+        expected_inbound_listener_port=expected_inbound_listener_port,
     )
     try:
         outcome = await verifier.async_verify()
@@ -747,7 +683,6 @@ async def _async_transition_to_callback(
     owner_id: str,
     registry: Any,
     session_id: str,
-    live_wire: Callable[[], str],
     clock: Callable[[], str],
     commit: Callable[[dict[str, Any], RecoveryTerminalInput], Awaitable[str]],
     policy: OnboardingTimeoutPolicy,
@@ -761,13 +696,12 @@ async def _async_transition_to_callback(
     validate_rollback_selection: Callable[[CloudRollbackSelection], Any] | None,
     persist_rollback_selection: Callable[[CloudRollbackSelection], Any] | None,
     management_action_available: Callable[[str], bool] | None,
-    write_endpoint: Callable[[str], Awaitable[Any]] | None,
-    reboot: Callable[[], Awaitable[Any]] | None,
     on_endpoint_restored: Callable[[str], None] | None,
     persist_pending: Callable[[StrategyTransitionRecoveryState], Any] | None,
     persist_confirmed: Callable[[StrategyTransitionRecoveryState], Any] | None,
     recovery_state: StrategyTransitionRecoveryState | None,
     silent_session_probe: Any,
+    management_channel_factory: Callable[[str], Any] | None,
     axis_extra: dict[str, Any],
     options_updates: dict[str, Any],
 ) -> StrategyTransitionResult:
@@ -785,20 +719,11 @@ async def _async_transition_to_callback(
         == ENDPOINT_CONTROL_INTEGRATION_MANAGED
     )
     restore_target = str(restore_endpoint or "").strip()
-    if needs_restore and write_endpoint is None:
-        # integration_managed means WE pointed the collector here; handing
-        # control back requires the REALLY SAVED previous endpoint. Guessing a
-        # vendor/cloud endpoint by hostname/provider/kind is forbidden.
+    if management_channel_factory is None:
         return StrategyTransitionResult(
             success=False,
             target_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
-            failure_reason=TRANSITION_ROLLBACK_ENDPOINT_UNAVAILABLE,
-        )
-    if not needs_restore and reboot is None:
-        return StrategyTransitionResult(
-            success=False,
-            target_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
-            failure_reason=TRANSITION_CALLBACK_ROUTE_REQUIRED,
+            failure_reason=TRANSITION_MANAGEMENT_UNAVAILABLE,
         )
 
     # --- TYPED recovery-state trust boundary (Blocker 2) ------------------
@@ -876,6 +801,15 @@ async def _async_transition_to_callback(
                 failure_reason=validation_refusal,
             )
         restore_target = cloud_rollback_selection.endpoint_value
+    elif (
+        management_action_available is not None
+        and not management_action_available("reboot")
+    ):
+        return StrategyTransitionResult(
+            success=False,
+            target_strategy=CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+            failure_reason=TRANSITION_MANAGEMENT_UNAVAILABLE,
+        )
 
     # --- CONFIRMED-restore hook must exist BEFORE write-ahead (Blocker 4) --
     # An integration-managed restore WILL confirm the endpoint external and MUST
@@ -960,25 +894,16 @@ async def _async_transition_to_callback(
 
         return DEGRADED_CALLBACK_RESTORE_UNPROVEN if restored else ""
 
-    async def _restart() -> Any:
-        if needs_restore:
-            if write_endpoint is None:  # preflight guarantees this
-                raise RuntimeError(TRANSITION_ROLLBACK_ENDPOINT_UNAVAILABLE)
-            result = await write_endpoint(restore_target)
-            restored["value"] = _applied_endpoint_from_result(
-                result, restore_target
-            )
-            return result
-        if reboot is None:  # preflight guarantees this
-            raise RuntimeError(TRANSITION_CALLBACK_ROUTE_REQUIRED)
-        return await reboot()
-
-    def _confirmed(_result: Any) -> None:
+    def _confirmed(result: Any) -> None:
         # The restore is CONFIRMED: control is honestly external again (and
         # stays that way even if the later proof fails). ONE durable local
         # write advances the recovery state to the confirmed-unproven phase,
         # flips the policy to external and clears the write provenance; the
         # separate snapshot hook is UI-only.
+        if needs_restore:
+            restored["value"] = _applied_endpoint_from_result(
+                result, restore_target
+            )
         if not restored:
             return
         if persist_confirmed is not None:
@@ -989,8 +914,12 @@ async def _async_transition_to_callback(
         if on_endpoint_restored is not None:
             on_endpoint_restored(restored["value"])
 
-    channel = _ManagedRestartChannel(
-        restart=_restart, wire_provider=live_wire, on_confirmed=_confirmed
+    session_channel = management_channel_factory(session_id)
+    channel = ManagedSessionRestartChannel(
+        session_channel=session_channel,
+        expected_session_id=session_id,
+        endpoint=restore_target if needs_restore else "",
+        on_confirmed=_confirmed,
     )
 
     def _certify_permanent_owner(_full_pn: str) -> Any:
@@ -1156,5 +1085,4 @@ __all__ = [
     "TRANSITION_SESSION_UNAVAILABLE",
     "TRANSITION_TARGET_INVALID",
     "async_run_strategy_transition",
-    "trusted_transition_wire",
 ]

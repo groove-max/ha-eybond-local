@@ -35,6 +35,7 @@ _WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", "0:0:0:0:0:0:0:0", "*"})
 PROVENANCE_EXPLICIT_ADVERTISED = "explicit_advertised"
 PROVENANCE_CALLBACK_PROOF = "callback_proof"
 PROVENANCE_CONFIRMED_HA_ENDPOINT = "confirmed_ha_endpoint"
+PROVENANCE_OBSERVED_CURRENT_ENDPOINT = "observed_current_endpoint"
 PROVENANCE_EFFECTIVE_RUNTIME_ROUTE = "effective_runtime_route"
 PROVENANCE_NONE = "none"
 
@@ -43,6 +44,7 @@ _ENDPOINT_PROVENANCE = frozenset(
         PROVENANCE_EXPLICIT_ADVERTISED,
         PROVENANCE_CALLBACK_PROOF,
         PROVENANCE_CONFIRMED_HA_ENDPOINT,
+        PROVENANCE_OBSERVED_CURRENT_ENDPOINT,
         PROVENANCE_EFFECTIVE_RUNTIME_ROUTE,
         PROVENANCE_NONE,
     }
@@ -409,6 +411,7 @@ def resolve_default_ha_endpoint(
     explicit_advertised_port: object,
     callback_proof_endpoint: object,
     confirmed_ha_endpoint: "TransitionEndpointCandidate | None",
+    observed_current_endpoint: object,
     current_strategy: object,
     server_ip: object,
     tcp_port: object,
@@ -422,10 +425,12 @@ def resolve_default_ha_endpoint(
        runtime fallback -- a NAT public endpoint must win over the local bind);
     3. a confirmed HA endpoint the CALLER already role-classified (never derived
        here from peer IP / L2 / hostname / cloud family);
-    4. the effective runtime route (``server_ip:tcp_port``), an editable LOCAL
+    4. the endpoint currently reported by the collector management adapter, an
+       editable observation only (never recovery evidence);
+    5. the effective runtime route (``server_ip:tcp_port``), an editable LOCAL
        HINT only -- behind NAT it may be wrong, and it is NEVER a proof -- offered
        only when the entry currently runs ``callback_on_demand``;
-    5. none -- the form then honestly asks for input (never a synthetic port).
+    6. none -- the form then honestly asks for input (never a synthetic port).
 
     Fail-closed at every source boundary: a PRESENT but malformed explicit route
     or callback proof returns ``none`` -- it never falls through to a
@@ -471,7 +476,38 @@ def resolve_default_ha_endpoint(
     ):
         return confirmed_ha_endpoint
 
-    # 4. effective runtime route (callback_on_demand only). server_ip:tcp_port is
+    # 4. exact current endpoint reported by the collector-management read model.
+    #    It is a useful editable suggestion for an existing entry, but it is NOT
+    #    a RecoveryProof and cannot authorize a transition. A PRESENT malformed
+    #    value fails closed rather than falling through to a guessed local route.
+    if not (
+        type(observed_current_endpoint) is str
+        and observed_current_endpoint == ""
+    ):
+        if (
+            type(observed_current_endpoint) is not str
+            or observed_current_endpoint != observed_current_endpoint.strip()
+        ):
+            return TransitionEndpointCandidate.none()
+        try:
+            observed = inspect_collector_server_endpoint(
+                observed_current_endpoint,
+                require_explicit_port=True,
+                require_explicit_protocol=False,
+                require_tcp=True,
+            )
+        except ValueError:
+            return TransitionEndpointCandidate.none()
+        host = _advertisable_host(observed.host)
+        if host is None or not _valid_port(observed.port):
+            return TransitionEndpointCandidate.none()
+        return TransitionEndpointCandidate(
+            host=host,
+            port=observed.port,
+            provenance=PROVENANCE_OBSERVED_CURRENT_ENDPOINT,
+        )
+
+    # 5. effective runtime route (callback_on_demand only). server_ip:tcp_port is
     #    ONLY an editable LOCAL hint -- it is not necessarily the address the
     #    collector already dials (especially behind NAT), so it is presented for
     #    the user to confirm/correct, never as a proven route. A wildcard bind
@@ -485,7 +521,7 @@ def resolve_default_ha_endpoint(
                 provenance=PROVENANCE_EFFECTIVE_RUNTIME_ROUTE,
             )
 
-    # 5. none
+    # 6. none
     return TransitionEndpointCandidate.none()
 
 
@@ -778,6 +814,7 @@ __all__ = [
     "PROVENANCE_EFFECTIVE_RUNTIME_ROUTE",
     "PROVENANCE_EXPLICIT_ADVERTISED",
     "PROVENANCE_NONE",
+    "PROVENANCE_OBSERVED_CURRENT_ENDPOINT",
     "StrategyTransitionContext",
     "TransitionEndpointCandidate",
     "earned_advertised_route",

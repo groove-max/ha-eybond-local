@@ -127,6 +127,11 @@ class ObservedSessionRestartChannel:
             raise SessionUnavailableError(FAILURE_SESSION_UNAVAILABLE)
         if not handle.observed or handle.conflict:
             raise SessionUnavailableError(FAILURE_SESSION_UNAVAILABLE)
+        # The handle and transport claim must name the SAME physical socket.
+        # A provider that moved to a same-PN sibling between these two reads is
+        # not authority to continue on the sibling.
+        if handle.session_id != self._resolve_session_id():
+            raise SessionUnavailableError(FAILURE_SESSION_UNAVAILABLE)
         return handle
 
     async def _async_ensure_framed_transport(self):
@@ -206,7 +211,7 @@ class ObservedSessionRestartChannel:
         )
         return full_pn
 
-    async def async_send_restart(self) -> None:
+    async def async_send_restart(self) -> dict[str, object]:
         """Reboot through the ONE management-adapter switch (negotiated wire)."""
 
         from ..session_handle import (
@@ -244,7 +249,90 @@ class ObservedSessionRestartChannel:
             framed_transport_provider=lambda: transport,
             at_transport_provider=lambda: transport,
         )
-        await adapter.async_reboot()
+        result = await adapter.async_reboot()
+        return {
+            "status": "reboot_requested",
+            "action": result.action,
+            "performed": result.performed,
+            "management_session_id": self._resolve_session_id(),
+        }
+
+    async def async_write_endpoint(
+        self,
+        endpoint: str,
+        *,
+        apply_changes: bool = True,
+    ) -> dict[str, object]:
+        """Write/apply an endpoint on this exact physical session.
+
+        This is the transition management boundary: unlike the generic runtime
+        management path it never asks for an ``active_transport`` and never
+        re-resolves by PN, peer IP or a mutable registry claim after the exact
+        transport has been created.
+        """
+
+        from ..session_handle import (
+            ADAPTER_COLLECTOR_AT_COMMANDS,
+            ADAPTER_COLLECTOR_FRAMED_COMMANDS,
+        )
+
+        if type(endpoint) is not str or not endpoint or endpoint != endpoint.strip():
+            raise ValueError("collector_endpoint_invalid")
+        if type(apply_changes) is not bool:
+            raise TypeError("apply_changes_must_be_bool")
+
+        handle = self._resolve_trusted_handle()
+        adapter_id = str(handle.collector_management_adapter or "")
+        probe_adapter = select_collector_management_adapter(
+            adapter_id,
+            framed_transport_provider=lambda: None,
+            at_transport_provider=lambda: None,
+        )
+        capabilities = probe_adapter.capabilities
+        if not capabilities.write_endpoint or (
+            apply_changes and not capabilities.apply_changes
+        ):
+            raise CollectorManagementUnsupportedError(
+                "collector_endpoint_write_unsupported_on_negotiated_wire"
+            )
+
+        if adapter_id == ADAPTER_COLLECTOR_FRAMED_COMMANDS:
+            transport = await self._async_ensure_framed_transport()
+        elif adapter_id == ADAPTER_COLLECTOR_AT_COMMANDS:
+            transport = await self._async_ensure_at_transport()
+        else:  # pragma: no cover - capability gate refuses first
+            raise CollectorManagementUnsupportedError(
+                "collector_endpoint_write_unsupported_on_negotiated_wire"
+            )
+        adapter = select_collector_management_adapter(
+            adapter_id,
+            framed_transport_provider=lambda: transport,
+            at_transport_provider=lambda: transport,
+        )
+        result = await adapter.async_write_endpoint(
+            endpoint,
+            apply_changes=apply_changes,
+        )
+        out: dict[str, object] = {
+            "status": "applied" if result.apply_performed else "staged",
+            "requested_endpoint": result.requested_endpoint,
+            "readback_endpoint": result.readback_endpoint,
+            "apply_changes": result.apply_requested,
+            "write_confirmed": result.write_confirmed,
+            "apply_performed": result.apply_performed,
+            "confirmation_source": result.confirmation_source,
+        }
+        if result.previous_endpoint:
+            out["previous_endpoint"] = result.previous_endpoint
+        if result.reboot_or_apply_required:
+            out["reboot_required"] = result.reboot_or_apply_required
+        if result.warnings:
+            out["warning"] = result.warnings[0]
+        out.update(dict(result.extra or {}))
+        # Set after adapter extras so a transport result can never forge the
+        # load-bearing receipt for the physical socket that carried the write.
+        out["management_session_id"] = self._resolve_session_id()
+        return out
 
     def is_connected(self) -> bool:
         for transport in (self._framed_transport, self._at_transport):
@@ -261,8 +349,17 @@ class ObservedSessionRestartChannel:
         transports = (self._framed_transport, self._at_transport)
         self._framed_transport = None
         self._at_transport = None
+        preserve_session_id = ""
+        try:
+            preserve_session_id = self._resolve_session_id()
+        except SessionUnavailableError:
+            # The owner may already have retargeted after a successful proof.
+            # The static session id is bookkeeping only during operation, but
+            # is safe as a teardown exclusion: it grants no wire access and
+            # merely prevents this temporary facade from closing that socket.
+            preserve_session_id = self._session_id
         for transport in transports:
             if transport is None:
                 continue
             with suppress(Exception):
-                await transport.stop()
+                await transport.stop(preserve_session_id=preserve_session_id)

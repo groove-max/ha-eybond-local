@@ -29,7 +29,7 @@ _FAMILY_NAMES = (
 )
 _FAMILY = tuple(_RECOVERY / name for name in _FAMILY_NAMES)
 _ORIGINAL_DEFINITION_DIGEST = (
-    "a7e76e8244e208b54b0869cfb758adefe24887af777b00f6eb59ebccd66cdf28"
+    "bc9427d9ff36b43b8c8fcf9df3f7d72f289df231aba016c3a106589e10692f8e"
 )
 
 
@@ -56,8 +56,8 @@ class RecoveryVerificationModuleBoundaryTests(unittest.TestCase):
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()
-        self.assertEqual(len(definitions), 80)
-        self.assertEqual(len(set(definitions)), 67)
+        self.assertEqual(len(definitions), 83)
+        self.assertEqual(len(set(definitions)), 70)
         self.assertEqual(hashlib.sha256(payload).hexdigest(), _ORIGINAL_DEFINITION_DIGEST)
 
     def test_recovery_responsibilities_have_one_concrete_owner(self) -> None:

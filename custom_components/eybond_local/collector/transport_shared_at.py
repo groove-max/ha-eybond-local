@@ -101,7 +101,15 @@ class SharedCollectorAtTransport:
         )
         self._at_connection(create_placeholder=bool(self._collector_ip))
 
-    async def stop(self) -> None:
+    async def stop(self, *, preserve_session_id: str = "") -> None:
+        """Release this facade without optionally closing its exact socket.
+
+        Recovery management and a reloading runtime borrow an already-observed
+        exact session. Releasing either facade must not manufacture reconnect
+        evidence or discard a pending removal ticket by closing that socket.
+        Unowned teardown passes no preservation id and keeps the close behavior.
+        """
+
         if self._listener is None:
             return
         listener = self._listener
@@ -115,6 +123,7 @@ class SharedCollectorAtTransport:
             unregister_at_owner=True,
             unregister_at_pn_owner=True,
             unregister_session_protocol_owner=True,
+            preserve_session_id=str(preserve_session_id or "").strip(),
         )
 
     async def disconnect(self) -> None:

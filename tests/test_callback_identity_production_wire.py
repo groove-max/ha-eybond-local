@@ -531,15 +531,18 @@ class SilentBootstrapProductionWireTests(ProductionWireHarness):
                 ),
                 timeout=10.0,
             )
+            # Complete the handoff while the certified physical socket is still
+            # live. Stopping the fake collector is real TCP teardown; a registry
+            # handle must correctly disappear after that teardown rather than
+            # remain available from stale inventory state.
+            self.assertTrue(second.identity_certified, second.result)
+            self.assertEqual(second.collector_pn, FULL_PN)
+            self.assertEqual(second.session_id, first.silent_bootstrap_offer.session_id)
+            self.assertEqual(second.identity_source, "fc2_parameter_2")
+            self.assertEqual(getattr(service, "pre_rx_heartbeats", 0), 0)
+            self._assert_certified_handoff_transfers_socket(second)
         finally:
             await service.stop()
-
-        self.assertTrue(second.identity_certified, second.result)
-        self.assertEqual(second.collector_pn, FULL_PN)
-        self.assertEqual(second.session_id, first.silent_bootstrap_offer.session_id)
-        self.assertEqual(second.identity_source, "fc2_parameter_2")
-        self.assertEqual(getattr(service, "pre_rx_heartbeats", 0), 0)
-        self._assert_certified_handoff_transfers_socket(second)
 
     async def test_silent_at_socket_bootstraps_via_explicit_dtupn(self) -> None:
         from custom_components.eybond_local.connection.callback_identity import (
@@ -599,15 +602,14 @@ class SilentBootstrapProductionWireTests(ProductionWireHarness):
                 ),
                 timeout=10.0,
             )
+            self.assertTrue(second.identity_certified, second.result)
+            self.assertEqual(second.collector_pn, AT_FULL_PN)
+            self.assertEqual(second.identity_source, "at_dtupn")
+            self.assertEqual(second.session_id, first.silent_bootstrap_offer.session_id)
+            self.assertGreaterEqual(collector.dtupn_queries, 1)
+            self._assert_certified_handoff_transfers_socket(second)
         finally:
             await collector.stop()
-
-        self.assertTrue(second.identity_certified, second.result)
-        self.assertEqual(second.collector_pn, AT_FULL_PN)
-        self.assertEqual(second.identity_source, "at_dtupn")
-        self.assertEqual(second.session_id, first.silent_bootstrap_offer.session_id)
-        self.assertGreaterEqual(collector.dtupn_queries, 1)
-        self._assert_certified_handoff_transfers_socket(second)
 
     async def test_wrong_protocol_intent_fails_typed_without_fallback(self) -> None:
         # An AT collector, but the user picked FRAMED: the single framed FC=2

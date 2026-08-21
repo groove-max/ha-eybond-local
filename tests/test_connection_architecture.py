@@ -284,7 +284,7 @@ class CallbackSessionRegistryInvariantTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             registry.claim_session("verify-4", session_id="s-2")
 
-    def test_verification_claim_retargets_only_after_old_session_closes(self) -> None:
+    def test_verification_claim_retargets_same_identity_during_socket_overlap(self) -> None:
         sessions = [
             _session("s-old", "V00AAA1111111111", state="routed_framed"),
             _session(
@@ -298,14 +298,14 @@ class CallbackSessionRegistryInvariantTests(unittest.TestCase):
         registry.claim_session("verify-1", session_id="s-old")
         registry.promote_claim_to_full_pn("verify-1", "V00AAA1111111111")
 
-        with self.assertRaises(ValueError):
-            registry.retarget_claim_to_reconnected_session("verify-1", "s-new")
-
-        sessions[0]["state"] = "closed_disconnected"
         self.assertTrue(
             registry.retarget_claim_to_reconnected_session("verify-1", "s-new")
         )
         self.assertEqual(registry.claimed_session_id("verify-1"), "s-new")
+        # The previous physical socket is still live. Recovery causality and
+        # baseline novelty belong to the verifier; the registry enforces the
+        # durable-identity + single-owner boundary only.
+        self.assertEqual(sessions[0]["state"], "routed_framed")
 
     def test_verification_claim_never_retargets_to_different_identity(self) -> None:
         sessions = [

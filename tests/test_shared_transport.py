@@ -3461,6 +3461,116 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(listener._session_at_connections["s1"], placeholder)
         run_mock.assert_awaited_once()
 
+    async def test_two_live_sessions_never_share_one_mutable_connection(self) -> None:
+        """Exact session-pinned I/O stays on the socket the registry selected."""
+
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        collector_pn = "E50000200000000001"
+        placeholder = listener.ensure_connection(
+            "",
+            heartbeat_interval=3600.0,
+            write_timeout=0.5,
+            collector_pn=collector_pn,
+        )
+        first_pending = listener._claim_pending_socket(
+            self._pending(
+                listener,
+                session_id="session-first",
+                remote_ip="192.168.1.55",
+            )
+        )
+        first = await listener.activate_pending_connection(
+            first_pending,
+            collector_ip="",
+            collector_pn=collector_pn,
+            heartbeat_interval=3600.0,
+            write_timeout=0.5,
+        )
+        self.assertIs(first, placeholder)
+        self.assertTrue(first.connected)
+
+        second_pending = listener._claim_pending_socket(
+            self._pending(
+                listener,
+                session_id="session-second",
+                remote_ip="192.168.1.55",
+            )
+        )
+        second = await listener.activate_pending_connection(
+            second_pending,
+            collector_ip="",
+            collector_pn=collector_pn,
+            heartbeat_interval=3600.0,
+            write_timeout=0.5,
+        )
+
+        self.assertIsNot(second, first)
+        self.assertIs(
+            listener.payload_connection_for_session("session-first"), first
+        )
+        self.assertIs(
+            listener.payload_connection_for_session("session-second"), second
+        )
+        self.assertTrue(first.connected)
+        self.assertTrue(second.connected)
+
+        # Closing the newer sibling cannot close, replace or retarget the exact
+        # older session a recovery transaction pinned before sending restart.
+        await second.disconnect()
+        for _ in range(20):
+            if not second.connected:
+                break
+            await asyncio.sleep(0.01)
+        self.assertFalse(second.connected)
+        self.assertTrue(first.connected)
+        self.assertIs(
+            listener.payload_connection_for_session("session-first"), first
+        )
+
+        await first.disconnect()
+
+    async def test_two_automatically_routed_sessions_keep_exact_transports(self) -> None:
+        """The listener's normal accept path preserves the same invariant."""
+
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        collector_pn = "E5000020000000"
+        listener.register_payload_pn_owner(collector_pn)
+        first_pending = self._pending(
+            listener,
+            session_id="session-first",
+            remote_ip="192.168.1.55",
+        )
+        first_task = asyncio.create_task(listener._sniff_pending_socket(first_pending))
+        for _ in range(20):
+            if listener.payload_connection_for_session("session-first") is not None:
+                break
+            await asyncio.sleep(0.01)
+
+        second_pending = self._pending(
+            listener,
+            session_id="session-second",
+            remote_ip="192.168.1.55",
+        )
+        second_task = asyncio.create_task(listener._sniff_pending_socket(second_pending))
+        for _ in range(20):
+            if listener.payload_connection_for_session("session-second") is not None:
+                break
+            await asyncio.sleep(0.01)
+
+        first = listener.payload_connection_for_session("session-first")
+        second = listener.payload_connection_for_session("session-second")
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertIsNot(first, second)
+        self.assertTrue(first.connected)
+        self.assertTrue(second.connected)
+
+        first_pending.reader.feed_eof()
+        second_pending.reader.feed_eof()
+        await asyncio.wait_for(first_task, timeout=2.0)
+        await asyncio.wait_for(second_task, timeout=2.0)
+        listener.unregister_payload_pn_owner(collector_pn)
+
     async def test_unclaimed_callback_is_parked_instead_of_closed(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         pending = self._pending(listener, session_id="s1", remote_ip="203.0.113.10")
@@ -3722,6 +3832,45 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
             listener._session_payload_connections["session-new"], connection
         )
 
+    async def test_late_route_result_cannot_resurrect_closed_socket(self) -> None:
+        """A stale async route result cannot make a dead session live again."""
+
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        connection = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        listener._remember_session(
+            session_id="session-rebooted",
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+        )
+        listener._mark_session_identity(
+            "session-rebooted",
+            "E50000200000009777",
+            "fc2_parameter_2",
+        )
+        listener._mark_session_state("session-rebooted", "routed_framed")
+        listener._session_payload_connections["session-rebooted"] = connection
+
+        # Physical EOF wins.  These are representative late writes from the
+        # route and identity coroutines that can still be unwinding while an
+        # E500 replacement socket is accepted.
+        listener._mark_socket_session_closed("session-rebooted", connection)
+        listener._mark_session_state("session-rebooted", "route_identity_mismatch")
+        listener._mark_session_state("session-rebooted", "routed_framed")
+
+        inventory = {
+            item["session_id"]: item
+            for item in listener.session_inventory_diagnostics()["sessions"]
+        }
+        self.assertEqual(
+            inventory["session-rebooted"]["state"], "closed_disconnected"
+        )
+        self.assertEqual(listener.discovered_collector_sessions(), ())
+        self.assertNotIn("session-rebooted", listener._session_payload_connections)
+
     async def test_disconnect_does_not_wait_for_dead_peer_tcp_timeout(self) -> None:
         class _HangingCloseWriter(_FakeWriter):
             async def wait_closed(self) -> None:
@@ -3744,6 +3893,53 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
             reader.feed_eof()
             await asyncio.wait_for(run, timeout=2.0)
         self.assertTrue(writer.closed)
+
+    async def test_physical_disconnect_closes_inventory_before_writer_cleanup(self) -> None:
+        """EOF is visible to recovery without inheriting wait_closed latency."""
+
+        class _DelayedCloseWriter(_FakeWriter):
+            def __init__(self) -> None:
+                super().__init__()
+                self.cleanup_started = asyncio.Event()
+                self.release_cleanup = asyncio.Event()
+
+            async def wait_closed(self) -> None:
+                self.cleanup_started.set()
+                await self.release_cleanup.wait()
+
+        connection = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        reader = asyncio.StreamReader()
+        writer = _DelayedCloseWriter()
+        session_closed = asyncio.Event()
+        closed_sessions: list[str] = []
+
+        def _closed(session_id: str, _connection: object) -> None:
+            closed_sessions.append(session_id)
+            session_closed.set()
+
+        run = asyncio.create_task(
+            connection.run(
+                reader,
+                writer,
+                session_id="session-rebooted",
+                session_closed_callback=_closed,
+            )  # type: ignore[arg-type]
+        )
+        self.assertTrue(await connection.wait_until_connected(1.0))
+
+        reader.feed_eof()
+        await asyncio.wait_for(writer.cleanup_started.wait(), timeout=1.0)
+        await asyncio.wait_for(session_closed.wait(), timeout=0.1)
+        self.assertEqual(closed_sessions, ["session-rebooted"])
+        self.assertFalse(run.done())
+
+        writer.release_cleanup.set()
+        await asyncio.wait_for(run, timeout=1.0)
+        self.assertEqual(closed_sessions, ["session-rebooted"])
 
     async def test_identityless_pending_socket_is_parked_and_watched(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())

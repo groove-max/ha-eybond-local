@@ -586,7 +586,8 @@ class CallbackSessionRegistry:
         ``claim_session_mismatch`` without mutating anything. A live claim is
         never silently moved to another socket -- the same collector reappearing
         on a new socket is :meth:`retarget_claim_to_reconnected_session` (which
-        proves the old socket is closed and the identity matches), and a new
+        requires the target to match the durable identity and remain single-owner;
+        the recovery caller proves causal novelty against its baseline), and a new
         attempt must :meth:`release` first. Re-claiming used to REPLACE the
         record, so it also demoted a durable-PN claim back to a PN-less transient
         one and reset ``handoff_pending``; the claim is now updated in place and
@@ -830,6 +831,48 @@ class CallbackSessionRegistry:
             return True
         return False
 
+    def pin_owner_claim_to_current_observed_session(self, entry_id: str) -> str:
+        """Pin an identity owner to its best current trusted physical socket.
+
+        A durable claim can outlive many TCP sockets.  Its remembered
+        ``session_id`` is therefore only the last exact binding, not authority
+        to prefer that socket forever.  Before a management transaction starts,
+        this operation resolves the same current observed ``SessionHandle`` the
+        runtime uses for the claim's durable PN, pins that exact session, and
+        re-verifies the owner/session boundary synchronously.
+
+        Selection is based only on the claimed durable identity and trusted live
+        wire observation.  A closed socket, ``route_identity_mismatch``, weak or
+        unobserved candidate, conflicting handle, foreign owner/PN, and peer IP
+        can never win.  Returns the exact pinned session id, or ``""`` without
+        changing the claim when no trusted current session exists.
+        """
+
+        owner = str(entry_id or "").strip()
+        claim = self._claims.get(owner)
+        if claim is None or not claim.collector_pn:
+            return ""
+        handle = self.session_handle_for_entry(owner)
+        if (
+            type(handle) is not SessionHandle
+            or not handle.session_id
+            or not handle.observed
+            or handle.conflict
+        ):
+            return ""
+        sid = handle.session_id
+        if not self.pin_owner_claim_to_session(owner, sid):
+            return ""
+        exact = self.session_handle_for_owned_session(owner, sid)
+        if (
+            type(exact) is not SessionHandle
+            or exact.session_id != sid
+            or not exact.observed
+            or exact.conflict
+        ):
+            return ""
+        return sid
+
     def session_handle_for_owned_session(
         self,
         entry_id: str,
@@ -869,13 +912,17 @@ class CallbackSessionRegistry:
         entry_id: str,
         session_id: object,
     ) -> bool:
-        """Move a verification claim from its closed socket to a new candidate.
+        """Move a verification claim to a new same-identity candidate.
 
-        This is only valid after the previously claimed physical session is
-        terminal and only for a live session whose observed PN is the same
-        identity (possibly the weak heartbeat prefix) as the claim's already
-        strong durable PN. The caller may then perform a read-only identity
-        query on exactly this socket. Peer IP is deliberately irrelevant.
+        The previous socket is deliberately NOT required to be terminal. Real
+        collectors can overlap multiple physical sockets of the same durable
+        PN during an apply/restart lifecycle; making one selected socket's EOF
+        the ownership boundary caused a valid successor to be rejected while a
+        baseline sibling remained live. The recovery authority supplies the
+        causal/new-session boundary. This registry method supplies the identity
+        and single-owner boundary: the target must be live, same identity
+        (possibly the weak heartbeat prefix pending exact enrichment), and not
+        owned by another entry. Peer IP is deliberately irrelevant.
         """
 
         owner = str(entry_id or "").strip()
@@ -884,9 +931,6 @@ class CallbackSessionRegistry:
         if claim is None or not claim.collector_pn or not target_sid:
             return False
         sessions = {session.session_id: session for session in self._normalized_sessions()}
-        previous = sessions.get(claim.session_id)
-        if previous is not None and previous.state != SESSION_STATE_CLOSED:
-            raise ValueError(f"previous_session_still_live:{claim.session_id}")
         target = sessions.get(target_sid)
         if (
             target is None

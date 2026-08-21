@@ -117,10 +117,10 @@ class SharedEybondTransport:
     async def stop(self, *, preserve_session_id: str = "") -> None:
         """Release this facade, optionally leaving one exact socket observable.
 
-        The preservation hook is for the scan-to-admission boundary only: a
-        strongly identified session may have to survive the UI selection step
-        before the admission transaction claims it.  It never preserves by
-        route or peer address.
+        The preservation hook is for exact-session lifecycle boundaries: a
+        strongly identified session may have to survive scan-to-admission,
+        runtime reload/rebuild, or unload-to-removal finalization. It never
+        preserves by route or peer address.
         """
 
         if self._listener is None:

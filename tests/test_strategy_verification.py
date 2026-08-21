@@ -433,6 +433,88 @@ class InboundRecoveryVerifierTests(unittest.TestCase):
         self.assertIsNone(result.proof)
         self.assertEqual(result.failure_reason, FAILURE_RECONNECT_TIMEOUT)
 
+    def test_new_same_pn_session_proves_recovery_while_management_socket_survives(
+        self,
+    ) -> None:
+        """Regression: overlapping same-PN sockets must not require one EOF.
+
+        E500 can keep the exact management socket alive while opening a new
+        strong socket after apply/restart. The new id is outside the complete
+        baseline and may prove recovery; the surviving old id may not block it.
+        """
+
+        inventory = [
+            _strong_old(),
+            _session(PARALLEL_SESSION, FULL_PN),
+        ]
+
+        class _OverlappingRestart(_FakeChannel):
+            async def async_send_restart(self) -> None:
+                self.restart_calls += 1
+                # Both baseline sockets survive; the collector overlaps a new
+                # exact strong session rather than closing the selected one.
+                inventory.append(_session(NEW_SESSION, FULL_PN))
+
+        retargets: list[str] = []
+        outcome = asyncio.run(
+            _verifier(
+                _OverlappingRestart(drops_on_restart=False),
+                lambda: tuple(inventory),
+                retarget_claim=lambda sid: retargets.append(sid) or True,
+            ).async_verify()
+        )
+
+        self.assertTrue(outcome.inbound_verified, outcome.failure_reason)
+        self.assertEqual(outcome.new_session_id, NEW_SESSION)
+        self.assertEqual(retargets, [NEW_SESSION])
+        self.assertTrue(any(s["session_id"] == OLD_SESSION for s in inventory))
+
+    def test_target_sibling_close_is_reset_activity_but_never_a_proof(self) -> None:
+        inventory = [
+            _strong_old(),
+            _session(PARALLEL_SESSION, FULL_PN),
+        ]
+
+        class _SiblingDrops(_FakeChannel):
+            async def async_send_restart(self) -> None:
+                self.restart_calls += 1
+                inventory[:] = [_strong_old()]
+
+        outcome = asyncio.run(
+            _verifier(
+                _SiblingDrops(drops_on_restart=False),
+                lambda: tuple(inventory),
+            ).async_verify()
+        )
+
+        self.assertFalse(outcome.inbound_verified)
+        self.assertEqual(outcome.failure_reason, FAILURE_RECONNECT_TIMEOUT)
+        self.assertIsNone(outcome.proof)
+
+    def test_foreign_baseline_close_is_not_target_reset_activity(self) -> None:
+        inventory = [
+            _strong_old(),
+            _session(PARALLEL_SESSION, OTHER_FULL_PN),
+        ]
+
+        class _ForeignDrops(_FakeChannel):
+            async def async_send_restart(self) -> None:
+                self.restart_calls += 1
+                inventory[:] = [_strong_old()]
+
+        outcome = asyncio.run(
+            _verifier(
+                _ForeignDrops(drops_on_restart=False),
+                lambda: tuple(inventory),
+            ).async_verify()
+        )
+
+        self.assertFalse(outcome.inbound_verified)
+        self.assertEqual(
+            outcome.failure_reason, FAILURE_DISCONNECT_NOT_OBSERVED
+        )
+        self.assertIsNone(outcome.proof)
+
     # Defense in depth behind the lease: a ledger generation change during the
     # window invalidates the proof even though the lease/inhibitor were held.
     def test_global_trigger_generation_invalidates_inbound(self) -> None:
@@ -1033,6 +1115,95 @@ class ObservedSessionRestartChannelTests(unittest.TestCase):
             asyncio.run(channel.async_send_restart())
 
         self._assert_no_transport(channel)
+
+    def test_handle_for_same_pn_sibling_cannot_replace_exact_session(self) -> None:
+        from custom_components.eybond_local.connection.session_handle import (
+            SessionHandle,
+        )
+
+        sibling = SessionHandle(
+            session_id=NEW_SESSION,
+            collector_pn=FULL_PN,
+            wire_framing="eybond_framed",
+            collector_management_adapter="framed_collector_commands",
+            state="routed_framed",
+        )
+        channel = self._channel(handle_provider=lambda: sibling)
+
+        with self.assertRaises(SessionUnavailableError):
+            asyncio.run(channel.async_send_restart())
+        with self.assertRaises(SessionUnavailableError):
+            asyncio.run(
+                channel.async_write_endpoint(
+                    "198.51.100.20,18899,TCP", apply_changes=True
+                )
+            )
+        self._assert_no_transport(channel)
+
+    def test_channel_cleanup_preserves_the_exact_management_socket(self) -> None:
+        preserved: list[str] = []
+
+        class _BorrowedTransport:
+            connected = True
+
+            async def stop(self, *, preserve_session_id: str = "") -> None:
+                preserved.append(preserve_session_id)
+
+        channel = self._channel()
+        channel._framed_transport = _BorrowedTransport()
+
+        asyncio.run(channel.async_close())
+
+        self.assertEqual(preserved, [OLD_SESSION])
+        self.assertIsNone(channel._framed_transport)
+
+    def test_endpoint_write_receipt_names_the_exact_management_session(self) -> None:
+        from custom_components.eybond_local.collector.protocol import (
+            FC_QUERY_COLLECTOR,
+            FC_SET_COLLECTOR,
+        )
+
+        class _Wire:
+            def __init__(self) -> None:
+                self.endpoint = "old.example,18899,TCP"
+                self.calls: list[tuple[int, bytes]] = []
+
+            async def async_send_collector(
+                self, *, fcode, payload, devcode, collector_addr
+            ):
+                del devcode, collector_addr
+                raw = bytes(payload)
+                self.calls.append((fcode, raw))
+                parameter = raw[0]
+                if fcode == FC_QUERY_COLLECTOR:
+                    value = self.endpoint if parameter == 21 else "0"
+                    return object(), bytes((0, parameter)) + value.encode("ascii")
+                if fcode == FC_SET_COLLECTOR:
+                    if parameter == 21:
+                        self.endpoint = raw[1:].decode("ascii")
+                    return object(), bytes((0, parameter))
+                raise AssertionError(f"unexpected fcode {fcode}")
+
+        wire = _Wire()
+        channel = self._channel()
+
+        async def _exact_transport():
+            return wire
+
+        channel._async_ensure_framed_transport = _exact_transport
+        receipt = asyncio.run(
+            channel.async_write_endpoint(
+                "198.51.100.20,18899,TCP", apply_changes=True
+            )
+        )
+
+        self.assertEqual(receipt["management_session_id"], OLD_SESSION)
+        self.assertEqual(receipt["readback_endpoint"], "198.51.100.20,18899,TCP")
+        self.assertIn(
+            (FC_SET_COLLECTOR, bytes((21,)) + b"198.51.100.20,18899,TCP"),
+            wire.calls,
+        )
+        self.assertIn((FC_SET_COLLECTOR, bytes((29,)) + b"1"), wire.calls)
 
     def test_at_adapter_reboot_is_typed_unsupported_without_wire_io(self) -> None:
         # An AT-text live session: the negotiated management adapter honestly

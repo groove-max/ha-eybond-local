@@ -25,7 +25,7 @@ _FAMILY_NAMES = (
 )
 _FAMILY = tuple(_COLLECTOR / name for name in _FAMILY_NAMES)
 _ORIGINAL_DEFINITION_DIGEST = (
-    "399fe6d0e558941469c5d1d5048f161d20f50400d62c3e77d4fa82890af6f563"
+    "825b2f218518326c39566545f06f5a4c680a061162d6258e4f13400568c14f3c"
 )
 
 
@@ -66,8 +66,8 @@ class TransportModuleBoundaryTests(unittest.TestCase):
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()
-        self.assertEqual(len(definitions), 248)
-        self.assertEqual(len(set(definitions)), 190)
+        self.assertEqual(len(definitions), 251)
+        self.assertEqual(len(set(definitions)), 193)
         self.assertEqual(hashlib.sha256(payload).hexdigest(), _ORIGINAL_DEFINITION_DIGEST)
 
     def test_concrete_authorities_have_one_owner_module(self) -> None:

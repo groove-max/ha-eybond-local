@@ -410,6 +410,7 @@
         "description": "Выберите, чем именно вы хотите управлять для этой записи.{bridge_note}",
         "menu_options": {
           "connection": "Подключение коллектора и облака",
+          "collector_endpoint": "Адрес подключения к Home Assistant",
           "runtime": "Опрос и определение инвертора",
           "cloud_tools": "Инструменты облачного трафика",
           "collector_wifi": "Сменить Wi-Fi коллектора",
@@ -637,8 +638,8 @@
         "description": "**{action_title}**\n\n{status}\n\n**Путь:** `{path}`\n**Скачать:** {download_markdown}\n\n**Следующий шаг:** {next_step}"
       },
       "strategy_transition": {
-        "title": "Изменить режим подключения",
-        "description": "Home Assistant переключит коллектор в режим **{target_strategy}** и проверит повторное подключение.\n\n{connection_strategy_risk}\n\n{connection_strategy_rollback}\n\nПроверьте адреса и подтвердите продолжение.",
+        "title": "Настройки подключения",
+        "description": "Home Assistant применит **{target_strategy}** и проверит повторное подключение того же коллектора.\n\n{connection_strategy_risk}\n\n{connection_strategy_rollback}\n\nПроверьте адреса и подтвердите продолжение.",
         "data": {
           "advertised_server_ip": "Адрес Home Assistant",
           "advertised_tcp_port": "Порт Home Assistant",

@@ -47,7 +47,13 @@ from custom_components.eybond_local.connection.strategy_transition import (  # n
     TRANSITION_ALREADY_RUNNING,
 )
 from custom_components.eybond_local.connection.strategy_transition_recovery import (  # noqa: E402
+    RECOVERY_PHASE_PENDING,
+    RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,
     StrategyTransitionRecoveryState,
+)
+from custom_components.eybond_local.connection.strategy_transition_context import (  # noqa: E402
+    CLOUD_PROVENANCE_ORIGINAL,
+    CloudRollbackEndpoint,
 )
 from custom_components.eybond_local.connection.recovery.verification import (  # noqa: E402
     RecoveryVerificationOutcome,
@@ -96,6 +102,7 @@ def _state(**overrides):
         trigger_bind_host="127.0.0.1",
         listener_bind_host="127.0.0.1",
         local_listener_port=8899,
+        phase=RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,
     )
     base.update(overrides)
     return StrategyTransitionRecoveryState.create(**base)
@@ -206,6 +213,7 @@ class _Harness:
         self.ledger = CallbackTriggerLedger()
         self.committed = None
         self.commit_refusal = ""
+        self.phase_b_kwargs = None
 
     def promote(self, sid, pn):
         """A successful exact-session read records a strong PN: enrich an
@@ -242,6 +250,18 @@ class _Harness:
         base.update(kwargs)
 
         async def _fake_phase_b(**tk):
+            self.phase_b_kwargs = dict(tk)
+            confirmed = tk.get("on_management_confirmed")
+            if confirmed is not None:
+                confirmed(
+                    {
+                        "management_session_id": tk["session_id"],
+                        "requested_endpoint": tk["management_endpoint"],
+                        "readback_endpoint": tk["management_endpoint"],
+                        "write_confirmed": True,
+                        "apply_performed": True,
+                    }
+                )
             if proof == "timeout":
                 return RecoveryVerificationOutcome(
                     status="inbound_not_verified",
@@ -317,6 +337,45 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         # A validated recovery state always yields a complete route, so the
         # route-incomplete branch is defensive-only; assert the sanity invariant.
         self.assertIsNotNone(_state().callback_route())
+
+    async def test_pending_state_requires_durable_restore_endpoint(self) -> None:
+        h = _Harness()
+        ch = _FakeChannel(h)
+        result = await h.run(
+            _state(phase=RECOVERY_PHASE_PENDING),
+            channel=ch,
+        )
+        self.assertFalse(result.success)
+        self.assertEqual(
+            result.failure_reason,
+            repair_mod.REPAIR_ROLLBACK_ENDPOINT_UNAVAILABLE,
+        )
+        self.assertEqual(ch.opened, 0)
+        self.assertEqual(ch.sends, 0)
+
+    async def test_pending_state_applies_endpoint_and_persists_confirmed_phase(self) -> None:
+        h = _Harness()
+        ch = _dial(h)
+        persisted = []
+        endpoint = CloudRollbackEndpoint(
+            "dtu_ess.eybond.com,18899,TCP",
+            CLOUD_PROVENANCE_ORIGINAL,
+        )
+        result = await h.run(
+            _state(phase=RECOVERY_PHASE_PENDING),
+            channel=ch,
+            pending_restore_endpoint=endpoint,
+            persist_restore_confirmed=persisted.append,
+        )
+        self.assertTrue(result.success, result.failure_reason)
+        self.assertEqual(
+            h.phase_b_kwargs["management_endpoint"], endpoint.endpoint
+        )
+        self.assertEqual(len(persisted), 1)
+        self.assertEqual(
+            persisted[0].phase,
+            RECOVERY_PHASE_RESTORE_CONFIRMED_UNPROVEN,
+        )
 
 
 class OwnershipTests(unittest.IsolatedAsyncioTestCase):
@@ -611,8 +670,8 @@ class IdentityOnlyOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         # A live WEAK same-PN socket exists BEFORE the trigger. The identity-only
-        # claim must NOT bind it (the old claim() did, which then blocked
-        # retarget with previous_session_still_live). A new STRONG same-PN socket
+        # claim must NOT bind it (the old claim() created a needless physical
+        # socket dependency). A new STRONG same-PN socket
         # arrives on the trigger and IS certified despite the live weak baseline.
         h = _Harness()
         h.add(_session("weak-live", FULL_PN, strong=False))  # live weak baseline
@@ -625,7 +684,7 @@ class IdentityOnlyOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         # A failed cold attempt leaves durable PN ownership but session_id="",
-        # and a retry is NOT blocked by previous_session_still_live.
+        # and a retry starts without inheriting a stale physical binding.
         h = _Harness()
         ch = _FakeChannel(h)  # nobody dials in
         first = await h.run_phase_a(_state(), channel=ch)

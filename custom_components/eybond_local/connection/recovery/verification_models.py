@@ -187,8 +187,8 @@ _UNTRUSTED_SESSION_STATES = frozenset({"route_identity_mismatch"})
 class RestartChannel(Protocol):
     """Transport-side contract for restarting the observed collector session."""
 
-    async def async_send_restart(self) -> None:
-        """Reboot via the negotiated management adapter; raise on failure."""
+    async def async_send_restart(self) -> Any:
+        """Run the negotiated reset action; raise on failure."""
 
     async def async_probe_identity(self) -> str:
         """Read the authoritative collector PN over the claimed session."""
@@ -485,8 +485,16 @@ class _ProductionRecoveryTriggerSender:
     bind address never leaks into it.
     """
 
-    def __init__(self, *, timeout: float) -> None:
+    def __init__(
+        self,
+        *,
+        timeout: float,
+        retry_window: float = 0.0,
+        stop_requested: Callable[[], bool] | None = None,
+    ) -> None:
         self._timeout = float(timeout)
+        self._retry_window = max(0.0, float(retry_window))
+        self._stop_requested = stop_requested
 
     async def async_send(self, route: CallbackRecoveryRoute) -> None:
         from ...collector.discovery import async_send_callback_trigger
@@ -499,6 +507,8 @@ class _ProductionRecoveryTriggerSender:
             udp_port=int(route.trigger_udp_port),
             timeout=self._timeout,
             source="callback_recovery_transaction",
+            retry_window=self._retry_window,
+            stop_requested=self._stop_requested,
         )
 
 

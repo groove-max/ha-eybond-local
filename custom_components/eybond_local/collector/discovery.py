@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import logging
 import socket
 from time import monotonic
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -179,8 +180,10 @@ async def async_send_callback_trigger(
     udp_port: int,
     timeout: float,
     source: str = "",
+    retry_window: float = 0.0,
+    stop_requested: Callable[[], bool] | None = None,
 ) -> DiscoveryProbeResult:
-    """Send one callback trigger and record it in the integration-wide ledger.
+    """Send one logical callback trigger and record it once in the ledger.
 
     This is THE production facade for asking a collector to dial back. All
     integration paths (runtime one-shot callback, manual onboarding probes,
@@ -188,6 +191,14 @@ async def async_send_callback_trigger(
     behavioral inbound verification can prove "no trigger was sent anywhere"
     from one monotonic generation. ``async_probe_target`` stays a raw wire
     utility for tests/tools.
+
+    ``set>server`` is UDP and a collector may drop its old TCP socket before
+    its UDP receiver is ready after a reboot.  ``retry_window`` therefore lets
+    the *same* idempotent route be retransmitted inside this one logical send.
+    The ledger is advanced exactly once and the caller's causality lease stays
+    unchanged.  A UDP reply or ``stop_requested`` (normally a fresh TCP socket)
+    ends retransmission immediately.  The default keeps the historical
+    one-pass behaviour for all callers that do not explicitly opt in.
     """
 
     from ..connection.callback_ledger import get_callback_trigger_ledger
@@ -195,14 +206,37 @@ async def async_send_callback_trigger(
     ledger = get_callback_trigger_ledger()
     with ledger.callback_send_scope():
         ledger.record(target=target_ip, source=source)
-        return await async_probe_target(
-            bind_ip=bind_ip,
-            advertised_server_ip=advertised_server_ip,
-            advertised_server_port=advertised_server_port,
-            target_ip=target_ip,
-            udp_port=udp_port,
-            timeout=timeout,
-        )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, float(retry_window))
+        result: DiscoveryProbeResult | None = None
+        while True:
+            remaining = max(0.0, deadline - loop.time())
+            probe_timeout = float(timeout)
+            if retry_window > 0.0:
+                # One probe sends three compatible payload variants.  Divide
+                # the remaining logical window between them so this helper
+                # never stretches the recovery deadline by another full probe.
+                probe_timeout = min(probe_timeout, remaining / 3.0)
+            result = await async_probe_target(
+                bind_ip=bind_ip,
+                advertised_server_ip=advertised_server_ip,
+                advertised_server_port=advertised_server_port,
+                target_ip=target_ip,
+                udp_port=udp_port,
+                timeout=max(0.01, probe_timeout),
+            )
+            if result.reply:
+                return result
+            if stop_requested is not None:
+                try:
+                    if stop_requested():
+                        return result
+                except Exception:
+                    # Observation is only an optimization; failure to inspect
+                    # it must not turn into a false successful send.
+                    pass
+            if retry_window <= 0.0 or loop.time() >= deadline:
+                return result
 
 
 async def async_send_callback_trigger_replies(

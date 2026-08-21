@@ -11,6 +11,8 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.collector_endpoint import (  # noqa: E402
+    CollectorEndpointWriteShape,
+    ENDPOINT_WRITE_FORMAT_HOST_ONLY,
     default_collector_server_port,
     default_collector_server_protocol,
     format_collector_server_endpoint_for_cloud_profile,
@@ -19,6 +21,7 @@ from custom_components.eybond_local.collector_endpoint import (  # noqa: E402
     normalize_collector_server_endpoint,
     parse_collector_server_endpoint,
     resolve_collector_server_endpoint,
+    resolve_collector_endpoint_write_shape,
 )
 from custom_components.eybond_local.collector.callback_endpoint import (  # noqa: E402
     home_assistant_callback_endpoint,
@@ -29,6 +32,34 @@ from custom_components.eybond_local.metadata.collector_cloud_profile_catalog_loa
 
 
 class CollectorEndpointTests(unittest.TestCase):
+    def test_catalog_backed_write_shape_exposes_host_only_wire_semantics(self) -> None:
+        shape = resolve_collector_endpoint_write_shape(
+            cloud_family="legacy_binary",
+            template_endpoint="ess.eybond.com",
+        )
+
+        self.assertEqual(shape.write_format, ENDPOINT_WRITE_FORMAT_HOST_ONLY)
+        self.assertEqual(shape.fixed_port, 502)
+        self.assertEqual(shape.protocol, "TCP")
+        self.assertTrue(shape.port_is_fixed)
+
+    def test_unknown_canonical_shape_keeps_an_editable_port(self) -> None:
+        shape = resolve_collector_endpoint_write_shape()
+
+        self.assertEqual(shape.write_format, "host_port_protocol")
+        self.assertEqual(shape.fixed_port, 0)
+        self.assertFalse(shape.port_is_fixed)
+
+    def test_write_shape_direct_constructor_is_strict(self) -> None:
+        with self.assertRaises((TypeError, ValueError)):
+            CollectorEndpointWriteShape("host_only", 0, "TCP")
+        with self.assertRaises((TypeError, ValueError)):
+            CollectorEndpointWriteShape("host_port_protocol", 502, "TCP")
+        with self.assertRaises((TypeError, ValueError)):
+            CollectorEndpointWriteShape("host_only", True, "TCP")
+        with self.assertRaises((TypeError, ValueError)):
+            CollectorEndpointWriteShape("host_only", 502, "tcp")
+
     def test_home_assistant_callback_uses_listener_port_not_template_port(self) -> None:
         self.assertEqual(
             home_assistant_callback_endpoint(

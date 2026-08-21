@@ -24,10 +24,19 @@ class LinkTransportLifecycleMixin:
             await transport.start()
 
     async def _stop_all_transports(self) -> None:
+        # A transport facade is not the physical session owner. During a normal
+        # entry reload, listener rebuild, or the unload phase that precedes
+        # ``async_remove_entry``, the registry-owned exact socket must remain
+        # observable so the next runtime can adopt it or the removal finalizer can
+        # restart it. Closing it here loses the config-flow handoff and makes the
+        # removal ticket unusable. The finalizer/collector itself owns the eventual
+        # disconnect; an unowned route resolves to the strict empty id and keeps
+        # the ordinary cleanup behaviour.
+        preserve_session_id = str(self._claimed_session_id() or "").strip()
         for transport in reversed(self._at_transports()):
-            await transport.stop()
+            await transport.stop(preserve_session_id=preserve_session_id)
         for transport in reversed(self._payload_transports()):
-            await transport.stop()
+            await transport.stop(preserve_session_id=preserve_session_id)
 
     async def _disconnect_all_transports(self) -> None:
         for transport in reversed(self._at_transports()):

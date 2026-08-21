@@ -79,6 +79,14 @@ class RuntimeManager(Protocol):
     async def async_refresh(self, *, poll_interval: float | None = None) -> RuntimeSnapshot:
         ...
 
+    async def async_ensure_collector_management_session(
+        self,
+        *,
+        timeout: float,
+    ) -> bool:
+        """Ensure one live collector session through the configured runtime path."""
+        ...
+
     async def async_activate_claimed_session(
         self,
         *,
