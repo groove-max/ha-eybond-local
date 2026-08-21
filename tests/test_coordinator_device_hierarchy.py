@@ -22,40 +22,34 @@ class _FakeInverter:
     register_schema_name: str = ""
 from unittest.mock import AsyncMock, PropertyMock, patch
 
+from helpers.homeassistant_stubs import ensure_module
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-def _ensure_module(name: str) -> types.ModuleType:
-    module = sys.modules.get(name)
-    if module is None:
-        module = types.ModuleType(name)
-        sys.modules[name] = module
-    return module
-
-
 def _install_coordinator_stubs() -> None:
-    custom_components = _ensure_module("custom_components")
-    eybond_local = _ensure_module("custom_components.eybond_local")
-    runtime_package = _ensure_module("custom_components.eybond_local.runtime")
-    homeassistant = _ensure_module("homeassistant")
-    components = _ensure_module("homeassistant.components")
-    components_network = _ensure_module("homeassistant.components.network")
-    components_network_util = _ensure_module("homeassistant.components.network.util")
-    persistent_notification = _ensure_module(
+    custom_components = ensure_module("custom_components")
+    eybond_local = ensure_module("custom_components.eybond_local")
+    runtime_package = ensure_module("custom_components.eybond_local.runtime")
+    homeassistant = ensure_module("homeassistant")
+    components = ensure_module("homeassistant.components")
+    components_network = ensure_module("homeassistant.components.network")
+    components_network_util = ensure_module("homeassistant.components.network.util")
+    persistent_notification = ensure_module(
         "homeassistant.components.persistent_notification"
     )
-    config_entries = _ensure_module("homeassistant.config_entries")
-    ha_const = _ensure_module("homeassistant.const")
-    helpers = _ensure_module("homeassistant.helpers")
-    device_registry = _ensure_module("homeassistant.helpers.device_registry")
-    network = _ensure_module("homeassistant.helpers.network")
-    update_coordinator = _ensure_module("homeassistant.helpers.update_coordinator")
-    util = _ensure_module("homeassistant.util")
-    dt = _ensure_module("homeassistant.util.dt")
-    util_logging = _ensure_module("homeassistant.util.logging")
+    config_entries = ensure_module("homeassistant.config_entries")
+    ha_const = ensure_module("homeassistant.const")
+    helpers = ensure_module("homeassistant.helpers")
+    device_registry = ensure_module("homeassistant.helpers.device_registry")
+    network = ensure_module("homeassistant.helpers.network")
+    update_coordinator = ensure_module("homeassistant.helpers.update_coordinator")
+    util = ensure_module("homeassistant.util")
+    dt = ensure_module("homeassistant.util.dt")
+    util_logging = ensure_module("homeassistant.util.logging")
 
     class ConfigEntry:
         pass
@@ -108,7 +102,7 @@ def _install_coordinator_stubs() -> None:
     network.NoURLAvailableError = RuntimeError
     network.get_url = lambda *args, **kwargs: "http://127.0.0.1:8123"
 
-    const = _ensure_module("custom_components.eybond_local.const")
+    const = ensure_module("custom_components.eybond_local.const")
     const.CONF_COLLECTOR_IP = "collector_ip"
     const.CONF_ADVERTISED_SERVER_IP = "advertised_server_ip"
     const.CONF_ADVERTISED_TCP_PORT = "advertised_tcp_port"
@@ -200,8 +194,8 @@ def _install_coordinator_stubs() -> None:
     const.MIN_PROXY_CAPTURE_DURATION_MINUTES = 1
     const.LOCAL_METADATA_DIR = "eybond_local"
 
-    connection_models = _ensure_module("custom_components.eybond_local.connection.models")
-    connection_spec_factory = _ensure_module(
+    connection_models = ensure_module("custom_components.eybond_local.connection.models")
+    connection_spec_factory = ensure_module(
         "custom_components.eybond_local.connection.spec_factory"
     )
     connection_spec_factory.build_connection_spec = lambda *args, **kwargs: None
@@ -210,14 +204,14 @@ def _install_coordinator_stubs() -> None:
         "custom_components.eybond_local.collector.entity_scope"
     )
 
-    control_policy = _ensure_module("custom_components.eybond_local.control_policy")
+    control_policy = ensure_module("custom_components.eybond_local.control_policy")
     control_policy.can_expose_capability = lambda *args, **kwargs: True
     control_policy.can_expose_preset = lambda *args, **kwargs: True
     control_policy.controls_enabled = lambda *args, **kwargs: True
     control_policy.controls_reason = lambda *args, **kwargs: ""
     control_policy.controls_summary = lambda *args, **kwargs: ""
 
-    drivers_registry = _ensure_module("custom_components.eybond_local.drivers.registry")
+    drivers_registry = ensure_module("custom_components.eybond_local.drivers.registry")
     drivers_registry.get_driver = lambda *args, **kwargs: None
     drivers_registry.all_write_capabilities = lambda *args, **kwargs: []
     # A realistic test double for the neutral policy resolver: mirrors what each
@@ -262,24 +256,24 @@ def _install_coordinator_stubs() -> None:
         lambda driver_key="", variant_key="", profile_name="": None
     )
 
-    fixtures_utils = _ensure_module("custom_components.eybond_local.fixtures.utils")
+    fixtures_utils = ensure_module("custom_components.eybond_local.fixtures.utils")
     fixtures_utils.anonymize_fixture_json = lambda *args, **kwargs: None
     fixtures_utils.build_command_fixture_responses = lambda *args, **kwargs: None
 
-    effective_metadata = _ensure_module(
+    effective_metadata = ensure_module(
         "custom_components.eybond_local.metadata.effective_metadata"
     )
     effective_metadata.resolve_effective_metadata_selection = (
         lambda *args, **kwargs: None
     )
 
-    local_metadata = _ensure_module("custom_components.eybond_local.metadata.local_metadata")
+    local_metadata = ensure_module("custom_components.eybond_local.metadata.local_metadata")
     local_metadata.clear_local_metadata_loader_caches = lambda *args, **kwargs: None
     local_metadata.create_local_profile_draft = lambda *args, **kwargs: None
     local_metadata.create_local_schema_draft = lambda *args, **kwargs: None
     local_metadata.rollback_local_metadata_overrides = lambda *args, **kwargs: None
 
-    smartess_draft = _ensure_module("custom_components.eybond_local.metadata.smartess_draft")
+    smartess_draft = ensure_module("custom_components.eybond_local.metadata.smartess_draft")
 
     class SmartEssKnownFamilyDraftPlan:
         pass
@@ -290,7 +284,7 @@ def _install_coordinator_stubs() -> None:
         lambda *args, **kwargs: None
     )
 
-    smartess_smg_bridge = _ensure_module(
+    smartess_smg_bridge = ensure_module(
         "custom_components.eybond_local.metadata.smartess_smg_bridge"
     )
 
@@ -303,7 +297,7 @@ def _install_coordinator_stubs() -> None:
         lambda *args, **kwargs: None
     )
 
-    models = _ensure_module("custom_components.eybond_local.models")
+    models = ensure_module("custom_components.eybond_local.models")
 
     class CapabilityChoice:
         pass
@@ -479,26 +473,26 @@ def _install_coordinator_stubs() -> None:
     models.WriteCapability = WriteCapability
     models.decimals_for_divisor = lambda _divisor: 0
 
-    runtime_factory = _ensure_module("custom_components.eybond_local.runtime.factory")
+    runtime_factory = ensure_module("custom_components.eybond_local.runtime.factory")
     runtime_factory.create_runtime_manager = lambda *args, **kwargs: None
 
-    runtime_manager = _ensure_module("custom_components.eybond_local.runtime.manager")
+    runtime_manager = ensure_module("custom_components.eybond_local.runtime.manager")
 
     class RuntimeManager:
         pass
 
     runtime_manager.RuntimeManager = RuntimeManager
 
-    schema = _ensure_module("custom_components.eybond_local.schema")
+    schema = ensure_module("custom_components.eybond_local.schema")
     schema.build_runtime_ui_schema = lambda *args, **kwargs: None
     schema.capability_write_exposure_allowed = lambda *args, **kwargs: True
     schema.preset_write_exposure_allowed = lambda *args, **kwargs: True
 
-    support_bundle = _ensure_module("custom_components.eybond_local.support.bundle")
+    support_bundle = ensure_module("custom_components.eybond_local.support.bundle")
     support_bundle.build_support_bundle_payload = lambda *args, **kwargs: None
     support_bundle.export_support_bundle = lambda *args, **kwargs: None
 
-    support_cloud = _ensure_module("custom_components.eybond_local.support.cloud_evidence")
+    support_cloud = ensure_module("custom_components.eybond_local.support.cloud_evidence")
     support_cloud.infer_evidence_provider = lambda payload: (
         str((payload or {}).get("provider") or "").strip().lower()
         if isinstance(payload, dict)
@@ -519,13 +513,13 @@ def _install_coordinator_stubs() -> None:
 
     support_cloud.CloudEvidenceRecord = _CloudEvidenceRecord
 
-    support_package = _ensure_module("custom_components.eybond_local.support.package")
+    support_package = ensure_module("custom_components.eybond_local.support.package")
     support_package.export_support_package = lambda *args, **kwargs: None
     support_package.support_packages_root = (
         lambda config_dir: Path(config_dir) / "eybond_local" / "support_packages"
     )
 
-    support_proxy_capture = _ensure_module(
+    support_proxy_capture = ensure_module(
         "custom_components.eybond_local.support.proxy_capture"
     )
     support_proxy_capture.PROXY_WIRE_TRANSPARENT = "transparent"
@@ -536,7 +530,7 @@ def _install_coordinator_stubs() -> None:
         )
     )
 
-    support_proxy_session = _ensure_module(
+    support_proxy_session = ensure_module(
         "custom_components.eybond_local.support.proxy_session"
     )
     support_proxy_session.build_proxy_capture_command = lambda *args, **kwargs: []
@@ -555,7 +549,7 @@ def _install_coordinator_stubs() -> None:
         lambda *args, **kwargs: {}
     )
 
-    support_proxy_trace = _ensure_module(
+    support_proxy_trace = ensure_module(
         "custom_components.eybond_local.support.proxy_trace"
     )
     support_proxy_trace.build_proxy_capture_lease_deadline = (
@@ -598,7 +592,7 @@ def _install_coordinator_stubs() -> None:
         lambda *args, **kwargs: None
     )
 
-    support_shadow_backend = _ensure_module(
+    support_shadow_backend = ensure_module(
         "custom_components.eybond_local.support.shadow_learning_backend"
     )
     support_shadow_backend.build_shadow_learning_preflight = (
@@ -611,7 +605,7 @@ def _install_coordinator_stubs() -> None:
         lambda *args, **kwargs: Path("/tmp/shadow-learning.jsonl")
     )
 
-    support_shadow_proxy = _ensure_module(
+    support_shadow_proxy = ensure_module(
         "custom_components.eybond_local.support.shadow_learning_proxy"
     )
     support_shadow_proxy.route_status_indicates_control_ready = (
@@ -623,7 +617,7 @@ def _install_coordinator_stubs() -> None:
         )
     )
 
-    support_shadow_session = _ensure_module(
+    support_shadow_session = ensure_module(
         "custom_components.eybond_local.support.shadow_learning_session"
     )
     support_shadow_session.build_shadow_learning_lease_deadline = (
@@ -670,15 +664,15 @@ def _install_coordinator_stubs() -> None:
         lambda: "2026-06-05T12:00:00+00:00"
     )
 
-    support_workflow = _ensure_module("custom_components.eybond_local.support.workflow")
+    support_workflow = ensure_module("custom_components.eybond_local.support.workflow")
     support_workflow.build_support_workflow_state = lambda *args, **kwargs: {}
 
-    support_diagnostic_export = _ensure_module(
+    support_diagnostic_export = ensure_module(
         "custom_components.eybond_local.support.diagnostic_export"
     )
     support_diagnostic_export.export_diagnostic_run = lambda *args, **kwargs: None
 
-    support_diagnostic_runner = _ensure_module(
+    support_diagnostic_runner = ensure_module(
         "custom_components.eybond_local.support.diagnostic_runner"
     )
 

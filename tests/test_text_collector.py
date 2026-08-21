@@ -6,6 +6,8 @@ import sys
 import types
 import unittest
 
+from helpers.homeassistant_stubs import ensure_module
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -30,22 +32,15 @@ _STUBBED_MODULES_SNAPSHOT: dict[str, types.ModuleType | None] = {
 
 
 def _install_text_stubs() -> None:
-    def _ensure_module(name: str) -> types.ModuleType:
-        module = sys.modules.get(name)
-        if module is None:
-            module = types.ModuleType(name)
-            sys.modules[name] = module
-        return module
-
-    ha = _ensure_module("homeassistant")
-    components = _ensure_module("homeassistant.components")
-    text = _ensure_module("homeassistant.components.text")
-    config_entries = _ensure_module("homeassistant.config_entries")
-    helpers = _ensure_module("homeassistant.helpers")
-    entity = _ensure_module("homeassistant.helpers.entity")
-    entity_platform = _ensure_module("homeassistant.helpers.entity_platform")
-    entity_registry = _ensure_module("homeassistant.helpers.entity_registry")
-    update_coordinator = _ensure_module("homeassistant.helpers.update_coordinator")
+    ha = ensure_module("homeassistant")
+    components = ensure_module("homeassistant.components")
+    text = ensure_module("homeassistant.components.text")
+    config_entries = ensure_module("homeassistant.config_entries")
+    helpers = ensure_module("homeassistant.helpers")
+    entity = ensure_module("homeassistant.helpers.entity")
+    entity_platform = ensure_module("homeassistant.helpers.entity_platform")
+    entity_registry = ensure_module("homeassistant.helpers.entity_registry")
+    update_coordinator = ensure_module("homeassistant.helpers.update_coordinator")
 
     class TextEntity:
         pass

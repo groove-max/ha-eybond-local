@@ -8,6 +8,8 @@ import types
 import unittest
 from unittest import mock
 
+from helpers.homeassistant_stubs import ensure_module
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -15,23 +17,16 @@ if str(REPO_ROOT) not in sys.path:
 
 
 def _install_button_stubs() -> None:
-    def _ensure_module(name: str) -> types.ModuleType:
-        module = sys.modules.get(name)
-        if module is None:
-            module = types.ModuleType(name)
-            sys.modules[name] = module
-        return module
-
-    ha = _ensure_module("homeassistant")
-    components = _ensure_module("homeassistant.components")
-    button = _ensure_module("homeassistant.components.button")
-    config_entries = _ensure_module("homeassistant.config_entries")
-    helpers = _ensure_module("homeassistant.helpers")
-    entity = _ensure_module("homeassistant.helpers.entity")
-    entity_platform = _ensure_module("homeassistant.helpers.entity_platform")
-    update_coordinator = _ensure_module("homeassistant.helpers.update_coordinator")
-    util = _ensure_module("homeassistant.util")
-    dt = _ensure_module("homeassistant.util.dt")
+    ha = ensure_module("homeassistant")
+    components = ensure_module("homeassistant.components")
+    button = ensure_module("homeassistant.components.button")
+    config_entries = ensure_module("homeassistant.config_entries")
+    helpers = ensure_module("homeassistant.helpers")
+    entity = ensure_module("homeassistant.helpers.entity")
+    entity_platform = ensure_module("homeassistant.helpers.entity_platform")
+    update_coordinator = ensure_module("homeassistant.helpers.update_coordinator")
+    util = ensure_module("homeassistant.util")
+    dt = ensure_module("homeassistant.util.dt")
 
     class ButtonEntity:
         pass

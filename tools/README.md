@@ -10,6 +10,18 @@ All commands assume the repository root as the current working directory.
 
 ## Validate the project
 
+Use the validation depth appropriate for the current change:
+
+```bash
+python3 tools/validate.py fast
+python3 tools/validate.py affected
+python3 tools/validate.py unit
+python3 tools/validate.py ha --ha-python /path/to/ha-current/bin/python
+```
+
+See [the validation workflow](../docs/VALIDATION.md) for the release command,
+the two HA lanes, and the intended local/CI cadence.
+
 Run the public quality gate used by CI:
 
 ```bash

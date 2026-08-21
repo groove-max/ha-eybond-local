@@ -52,43 +52,50 @@ jobs:
       - name: Run project quality gate
         run: python3 tools/quality_gate.py
 
-  # Failure boundary 2: the REAL Home Assistant lifecycle. The only jobs that
-  # install Home Assistant. Two explicitly pinned lanes: the last Python 3.13
-  # compatibility stack (HA 2026.2) and the current production stack
-  # (HA 2026.7 on Python 3.14). Home Assistant itself is never
-  # installed directly -- each lane's version comes from the exact
-  # pytest-homeassistant-custom-component pin.
-  ha-runtime-tests:
-    name: HA Runtime Tests (${{ matrix.lane }})
+  # Failure boundary 2: the REAL Home Assistant lifecycle. The current lane
+  # runs on every change; the older compatibility lane remains a nightly and
+  # manually-triggered release check.
+  ha-current-tests:
+    name: HA Runtime Tests (2026.7)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # pytest-homeassistant-custom-component 0.13.316 -> homeassistant 2026.2.3
-          - lane: "2026.2"
-            python-version: "3.13"
-            requirements: requirements-test-ha-2026.2.txt
-          # pytest-homeassistant-custom-component 0.13.346 -> homeassistant 2026.7.2
-          - lane: "2026.7"
-            python-version: "3.14"
-            requirements: requirements-test-ha-2026.7.txt
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.14"
           cache: pip
-          cache-dependency-path: ${{ matrix.requirements }}
+          cache-dependency-path: requirements-test-ha-2026.7.txt
       - name: Install Home Assistant test stack
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install -r ${{ matrix.requirements }}
+          python3 -m pip install -r requirements-test-ha-2026.7.txt
       - name: Show resolved Home Assistant stack
         run: python3 -m pip list | grep -Ei '^(homeassistant|pytest|pytest-asyncio|pytest-socket|pytest-homeassistant-custom-component|bleak) '
       - name: Run Home Assistant integration tests
         # Explicit -c: the repo-root pytest.ini disables the Home Assistant
         # plugin for the stub-based suite, which this suite must NOT inherit.
+        run: python3 -m pytest -c tests_ha/pytest.ini tests_ha -q
+
+  ha-compatibility-tests:
+    name: HA Compatibility Tests (2026.2)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-test-ha-2026.2.txt
+      - name: Install Home Assistant test stack
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements-test-ha-2026.2.txt
+      - name: Show resolved Home Assistant stack
+        run: python3 -m pip list | grep -Ei '^(homeassistant|pytest|pytest-asyncio|pytest-socket|pytest-homeassistant-custom-component|bleak) '
+      - name: Run Home Assistant integration tests
         run: python3 -m pytest -c tests_ha/pytest.ini tests_ha -q
