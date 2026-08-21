@@ -14,16 +14,17 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 _COLLECTOR = REPO_ROOT / "custom_components" / "eybond_local" / "collector"
+_TRANSPORT = _COLLECTOR / "transport"
 _FAMILY_NAMES = (
-    "transport.py",
-    "transport_common.py",
-    "transport_connections.py",
-    "transport_listener.py",
-    "transport_proxy.py",
-    "transport_shared_at.py",
-    "transport_shared_framed.py",
+    "__init__.py",
+    "common.py",
+    "connections.py",
+    "listener.py",
+    "proxy.py",
+    "shared_at.py",
+    "shared_framed.py",
 )
-_FAMILY = tuple(_COLLECTOR / name for name in _FAMILY_NAMES)
+_FAMILY = tuple(_TRANSPORT / name for name in _FAMILY_NAMES)
 _ORIGINAL_DEFINITION_DIGEST = (
     "825b2f218518326c39566545f06f5a4c680a061162d6258e4f13400568c14f3c"
 )
@@ -57,7 +58,7 @@ def _assigned_names(path: Path) -> set[str]:
 
 class TransportModuleBoundaryTests(unittest.TestCase):
     def test_transport_root_is_a_small_definition_free_facade(self) -> None:
-        root = _COLLECTOR / "transport.py"
+        root = _TRANSPORT / "__init__.py"
         self.assertLessEqual(len(root.read_text(encoding="utf-8").splitlines()), 80)
         self.assertEqual(_definitions(root), [])
 
@@ -72,12 +73,12 @@ class TransportModuleBoundaryTests(unittest.TestCase):
 
     def test_concrete_authorities_have_one_owner_module(self) -> None:
         expected = {
-            "_CollectorConnection": "transport_connections.py",
-            "_CollectorAtConnection": "transport_connections.py",
-            "_SharedEybondListener": "transport_listener.py",
-            "SharedProxyCaptureRoute": "transport_proxy.py",
-            "SharedEybondTransport": "transport_shared_framed.py",
-            "SharedCollectorAtTransport": "transport_shared_at.py",
+            "_CollectorConnection": "connections.py",
+            "_CollectorAtConnection": "connections.py",
+            "_SharedEybondListener": "listener.py",
+            "SharedProxyCaptureRoute": "proxy.py",
+            "SharedEybondTransport": "shared_framed.py",
+            "SharedCollectorAtTransport": "shared_at.py",
         }
         actual: dict[str, list[str]] = {name: [] for name in expected}
         for path in _FAMILY:
@@ -89,9 +90,9 @@ class TransportModuleBoundaryTests(unittest.TestCase):
     def test_mutable_listener_and_task_registries_have_one_owner(self) -> None:
         assignments = {path.name: _assigned_names(path) for path in _FAMILY}
         for name, owner in {
-            "_LISTENERS": "transport_listener.py",
-            "_LISTENERS_LOCK": "transport_listener.py",
-            "_BACKGROUND_TASKS": "transport_common.py",
+            "_LISTENERS": "listener.py",
+            "_LISTENERS_LOCK": "listener.py",
+            "_BACKGROUND_TASKS": "common.py",
         }.items():
             self.assertEqual(
                 [module for module, names in assignments.items() if name in names],
@@ -101,21 +102,20 @@ class TransportModuleBoundaryTests(unittest.TestCase):
     def test_implementation_modules_do_not_import_the_facade_backwards(self) -> None:
         for path in _FAMILY[1:]:
             source = path.read_text(encoding="utf-8")
-            self.assertNotIn("from .transport import", source, msg=path.name)
-            self.assertNotIn("import .transport", source, msg=path.name)
+            self.assertNotIn("from . import", source, msg=path.name)
 
     def test_facade_exports_the_exact_concrete_types(self) -> None:
         from custom_components.eybond_local.collector import transport
-        from custom_components.eybond_local.collector.transport_listener import (
+        from custom_components.eybond_local.collector.transport.listener import (
             _SharedEybondListener,
         )
-        from custom_components.eybond_local.collector.transport_proxy import (
+        from custom_components.eybond_local.collector.transport.proxy import (
             SharedProxyCaptureRoute,
         )
-        from custom_components.eybond_local.collector.transport_shared_at import (
+        from custom_components.eybond_local.collector.transport.shared_at import (
             SharedCollectorAtTransport,
         )
-        from custom_components.eybond_local.collector.transport_shared_framed import (
+        from custom_components.eybond_local.collector.transport.shared_framed import (
             SharedEybondTransport,
         )
 

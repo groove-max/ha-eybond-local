@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable
 
-from ..link_models import EybondLinkRoute, LinkRoute
-from ..models import CollectorInfo
-from .protocol import EybondHeader
-from .transport_common import _bounded_write_timeout, _copy_collector_info
-from .transport_connections import _CollectorConnection
-from .transport_listener import (
+from ...link_models import EybondLinkRoute, LinkRoute
+from ...models import CollectorInfo
+from ..protocol import EybondHeader
+from .common import _bounded_write_timeout, _copy_collector_info
+from .connections import _CollectorConnection
+from .listener import (
     _LISTENERS,
     _LISTENERS_LOCK,
     _SharedEybondListener,

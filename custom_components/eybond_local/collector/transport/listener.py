@@ -8,14 +8,14 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Callable
 
-from ..collector_identity import (
+from ...collector_identity import (
     identity_source_is_strong,
     prefer_identity_source,
     reconcile_pn,
     validated_collector_pn,
 )
-from .protocol import HEADER_SIZE, decode_header
-from .transport_common import (
+from ..protocol import HEADER_SIZE, decode_header
+from .common import (
     CollectorListenerBindError,
     _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN,
     _COLLECTOR_PN_PREFIX_MATCH_MIN_LEN,
@@ -31,7 +31,7 @@ from .transport_common import (
     _seed_connection_collector_pn,
     _spawn_tracked_task,
 )
-from .transport_connections import _CollectorAtConnection, _CollectorConnection
+from .connections import _CollectorAtConnection, _CollectorConnection
 
 logger = logging.getLogger(__name__)
 

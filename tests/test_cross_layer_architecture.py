@@ -965,7 +965,7 @@ class DegradedRepairLoadedLifecycleGuards(unittest.TestCase):
         self.assertLess(i_bridge, i_repair, "bridge branch must not drop the repair")
 
     def test_listener_acquire_is_cancellation_safe(self) -> None:
-        listener_source = _read(_CC / "collector" / "transport_listener.py")
+        listener_source = _read(_CC / "collector" / "transport" / "listener.py")
         # The bind decrements the reserved refcount on ANY failure incl. cancel.
         acquire = self._method_source(listener_source, "acquire")
         self.assertIn("except BaseException", acquire)
