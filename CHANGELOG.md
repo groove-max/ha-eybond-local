@@ -7,6 +7,62 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+## [0.3.0-beta.3] - 2026-08-21
+
+### Added
+
+- Added a strict typed-telemetry boundary between drivers, runtime state, Home
+  Assistant entities, derived energy, diagnostics, and support tooling. Values
+  now retain their source and observation state instead of being passed through
+  one broad untyped mapping.
+- Added focused architecture guards and a tiered validation command for fast,
+  affected, full-unit, real-Home-Assistant, and two-lane release checks.
+
+### Changed
+
+- Unverified manual attempts no longer create **Pending device** entries. The
+  setup flow now keeps failures inside the active flow and offers retry or
+  background discovery; an identified session can then be added through the
+  normal collector admission path.
+- Collector admission, callback continuation, recovery verification, endpoint
+  switching, runtime orchestration, config/options flows, transport, proxy
+  capture, and device learning now use explicit package boundaries. This is an
+  internal reorganization with no configuration-path migration required.
+- Cloud-traffic tools are hidden for local-only ESP EyeBond Collector firmware,
+  while its local endpoint, connection, UART, diagnostics, and Wi-Fi controls
+  remain available.
+
+### Fixed
+
+- Restored Anenji point-read identity detection and made late inverter
+  identification reload the entity set without losing the established
+  collector session.
+- Fixed callback and inbound admission around silent collectors, shared/NAT
+  peer addresses, routed collector addresses, exact-session ownership, and
+  cancellation cleanup. A stale or foreign connection can no longer substitute
+  for the collector selected by the user.
+- Fixed a discovery-flow completion race that could create the entry and then
+  show **Invalid flow specified** in Home Assistant.
+- Hardened connection-profile switching and recovery: callback-listener routes
+  and direct collector endpoints remain distinct, endpoint formats without an
+  explicit port stay valid for collectors that require them, and a failed
+  transition keeps enough durable state for a safe retry.
+- Fixed slow cloud-evidence reads blocking the Home Assistant event loop and
+  tightened callback-listener cleanup during replacement, cancellation, and
+  shutdown.
+- Fixed sensor, capability, collector-endpoint, cloud metadata, and derived
+  energy projections so they all publish from the same validated runtime
+  snapshot.
+
+### Migration
+
+- Existing obsolete **Pending device** config entries are removed automatically
+  during integration startup. They never owned a verified collector session or
+  endpoint, so removing them does not reconfigure the collector.
+- Existing normal collector entries require no manual migration. Their saved
+  connection strategy, endpoint, recovery proof, detected inverter, and entity
+  registry identities are retained.
+
 ## [0.3.0-beta.2] - 2026-08-18
 
 ### Added
