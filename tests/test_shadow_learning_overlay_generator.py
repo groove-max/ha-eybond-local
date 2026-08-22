@@ -31,6 +31,7 @@ from custom_components.eybond_local.metadata.register_schema_loader import (
     set_external_register_schema_roots,
 )
 from custom_components.eybond_local.support.shadow_learning.overlay_generator import (
+    _build_observed_control_enum_evidence,
     _build_learned_read_overlay,
     _build_read_review_evidence,
     _classify_learned_control,
@@ -216,6 +217,78 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
             "new_sensor",
         )
         self.assertEqual(review_model["counts"]["observed_read_all"], 1)
+
+    def test_same_session_control_evidence_resolves_charger_source_read(self) -> None:
+        correlation = {
+            "matched_count": 4,
+            "unmatched_attempt_count": 0,
+            "unmatched_write_count": 0,
+            "matched": [
+                {
+                    "sequence_index": value,
+                    "field_id": "bat_eybond_ctrl_75",
+                    "field_name": "Charger Source Priority",
+                    "requested_value": str(value),
+                    "value_label": label,
+                    "value_source": "choice",
+                    "requested_at": f"2026-08-22T01:00:0{value}+00:00",
+                    "observation": {
+                        "timestamp": f"2026-08-22T01:00:0{value}.100000+00:00",
+                        "function_code": 16,
+                        "register": 331,
+                        "values": [value],
+                        "devcode": 2376,
+                        "devaddr": 1,
+                    },
+                }
+                for value, label in (
+                    (0, "Utility charging is preferred"),
+                    (1, "PV charging is preferred"),
+                    (2, "PV and utility charging are allowed"),
+                    (3, "Only PV charging is allowed"),
+                )
+            ],
+        }
+        session = _sample_session_manifest()
+
+        evidence = _build_observed_control_enum_evidence(
+            correlation=correlation,
+            session_manifest=session,
+            register_enum_tables={331: "charge_source_priority"},
+        )
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0].register, 331)
+        self.assertEqual(evidence[0].provider_field_ordinal, 75)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = generate_shadow_learning_overlay_drafts(
+                config_dir=Path(temp_dir),
+                source_profile_name="modbus_smg/models/smg_6200.json",
+                source_schema_name="modbus_smg/models/smg_6200.json",
+                session_manifest=session,
+                correlation=correlation,
+                read_map={"registers": {"331": [3]}},
+                read_bindings={
+                    "bindings": [
+                        {
+                            "cloud_id": "sy_eybond_read_75",
+                            "title": "Charger Source Priority",
+                            "cloud_value": "Only PV charging is allowed",
+                            "unit": "",
+                            "status": "enum_label",
+                            "candidates": [],
+                        }
+                    ]
+                },
+            )
+
+        enum_binding = result.manifest["read_enum_bindings"]["bindings"][0]
+        self.assertEqual(enum_binding["status"], "unique")
+        self.assertEqual(enum_binding["method"], "same_session_control_enum")
+        self.assertEqual(enum_binding["candidates"][0]["register"], 331)
+        review = result.manifest["read_review_evidence"][0]
+        self.assertEqual(review["disposition"], "already_in_home_assistant")
+        self.assertEqual(review["reason"], "register_already_decoded")
 
     def test_manifest_read_map_empty_when_session_had_no_reads(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

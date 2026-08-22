@@ -22,7 +22,7 @@ from ...metadata.profile_loader import builtin_base_profile_name, load_driver_pr
 from ...metadata.semantic_titles_loader import resolve_semantic_title
 from ...metadata.register_schema_loader import builtin_base_schema_name, load_register_schema
 from ...eybond_g_ascii_settings import G_ASCII_SETTINGS_BY_VALUECLOUD_FIELD
-from ..read_learning_binder import match_enum_bindings
+from ..read_learning_binder import ObservedControlEnumEvidence, match_enum_bindings
 from . import (
     coerce_optional_int as _to_int,
     deterministic_evidence_hash,
@@ -125,11 +125,18 @@ def generate_shadow_learning_overlay_drafts(
         correlation=correlation,
         session_manifest=normalized_manifest,
     )
+    control_enum_evidence = _build_observed_control_enum_evidence(
+        correlation=correlation,
+        session_manifest=normalized_manifest,
+        register_enum_tables=_register_enum_table_authority(schema),
+    )
     read_enum_bindings = match_enum_bindings(
         read_bindings=read_bindings,
         registers=(read_map or {}).get("registers", {}) if isinstance(read_map, dict) else {},
         enum_tables=dict(schema.enum_tables) if schema.enum_tables else {},
         register_enum_tables=_register_enum_table_authority(schema),
+        control_enum_evidence=control_enum_evidence,
+        session_id=str(normalized_manifest.get("session_id") or ""),
     )
     learned_read = _build_learned_read_overlay(
         schema=schema,
@@ -950,6 +957,112 @@ def _group_matched_records(correlation: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return sorted(output, key=lambda item: (int(item["register"]), str(item["field_name"])))
+
+
+_SMARTESS_CONTROL_FIELD_RE = re.compile(
+    r"(?:^|_)eybond_ctrl_(?P<ordinal>[1-9][0-9]*)$"
+)
+
+
+def _build_observed_control_enum_evidence(
+    *,
+    correlation: dict[str, Any],
+    session_manifest: dict[str, Any],
+    register_enum_tables: dict[int, str] | None = None,
+) -> tuple[ObservedControlEnumEvidence, ...]:
+    """Build strict same-session enum evidence from causally observed writes."""
+
+    session_id = session_manifest.get("session_id")
+    devcode = session_manifest.get("devcode")
+    devaddr = session_manifest.get("devaddr")
+    if (
+        type(session_id) is not str
+        or not session_id
+        or session_id != session_id.strip()
+        or type(devcode) is not int
+        or devcode <= 0
+        or type(devaddr) is not int
+        or devaddr <= 0
+    ):
+        return ()
+
+    evidence: list[ObservedControlEnumEvidence] = []
+    for group in _group_matched_records(correlation):
+        field_id = group.get("field_id")
+        field_name = group.get("field_name")
+        register = group.get("register")
+        if (
+            type(field_id) is not str
+            or field_id != field_id.strip()
+            or type(field_name) is not str
+            or field_name != field_name.strip()
+            or type(register) is not int
+            or register <= 0
+        ):
+            continue
+        field_match = _SMARTESS_CONTROL_FIELD_RE.search(field_id)
+        semantic = resolve_semantic_title(field_name)
+        enum_table = (
+            register_enum_tables.get(register)
+            if isinstance(register_enum_tables, dict)
+            else None
+        )
+        if (
+            field_match is None
+            or semantic is None
+            or semantic.kind != "both"
+            or type(enum_table) is not str
+            or not enum_table
+        ):
+            continue
+
+        labels_by_value: dict[int, str] = {}
+        valid = True
+        for sample in group.get("samples") or []:
+            if not isinstance(sample, dict):
+                valid = False
+                break
+            label = sample.get("value_label")
+            observation = sample.get("observation")
+            if (
+                type(label) is not str
+                or not label
+                or label != label.strip()
+                or not isinstance(observation, dict)
+                or type(observation.get("devcode")) is not int
+                or observation.get("devcode") != devcode
+                or type(observation.get("devaddr")) is not int
+                or observation.get("devaddr") != devaddr
+            ):
+                valid = False
+                break
+            values = observation.get("values")
+            if type(values) is not list or not values or type(values[0]) is not int:
+                valid = False
+                break
+            raw_value = values[0]
+            previous = labels_by_value.get(raw_value)
+            if previous is not None and previous != label:
+                valid = False
+                break
+            labels_by_value[raw_value] = label
+        if not valid or len(labels_by_value) < 2:
+            continue
+        evidence.append(
+            ObservedControlEnumEvidence(
+                provider_id="smartess",
+                session_id=session_id,
+                semantic_key=semantic.semantic_key,
+                cloud_field_id=field_id,
+                enum_table=enum_table,
+                provider_field_ordinal=int(field_match.group("ordinal")),
+                register=register,
+                devcode=devcode,
+                devaddr=devaddr,
+                value_labels=tuple(sorted(labels_by_value.items())),
+            )
+        )
+    return tuple(evidence)
 
 
 def _group_matched_command_records(correlation: dict[str, Any]) -> list[dict[str, Any]]:

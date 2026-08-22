@@ -21,8 +21,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import re
 from typing import Any
 
+from ..metadata.semantic_titles_loader import resolve_semantic_title
 from ..payload.modbus import to_signed_16
 
 
@@ -36,6 +38,68 @@ BIND_STATUS_NO_MATCH = "no_match"
 BIND_STATUS_SKIPPED_ZERO = "skipped_zero"
 BIND_STATUS_ENUM_LABEL = "enum_label"
 BIND_STATUS_NOT_NUMERIC = "not_numeric"
+
+
+_SMARTESS_FIELD_ID_RE = re.compile(
+    r"(?:^|_)eybond_(?P<kind>read|ctrl)_(?P<ordinal>[1-9][0-9]*)$"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ObservedControlEnumEvidence:
+    """One same-session cloud-control enum causally bound to one register.
+
+    This is stronger than a title hint: every value/label pair comes from a
+    cloud control attempt whose exact local write was observed during the same
+    shadow session. The provider field ordinal lets a read field reuse that
+    evidence only when the provider identifies both surfaces as the same field.
+    """
+
+    provider_id: str
+    session_id: str
+    semantic_key: str
+    cloud_field_id: str
+    enum_table: str
+    provider_field_ordinal: int
+    register: int
+    devcode: int
+    devaddr: int
+    value_labels: tuple[tuple[int, str], ...]
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.provider_id,
+            self.session_id,
+            self.semantic_key,
+            self.cloud_field_id,
+            self.enum_table,
+        ):
+            if type(value) is not str:
+                raise TypeError("control_enum_evidence_string_invalid")
+            if not value or value != value.strip():
+                raise ValueError("control_enum_evidence_string_invalid")
+        for value in (
+            self.provider_field_ordinal,
+            self.register,
+            self.devcode,
+            self.devaddr,
+        ):
+            if type(value) is not int:
+                raise TypeError("control_enum_evidence_integer_invalid")
+            if value <= 0:
+                raise ValueError("control_enum_evidence_integer_invalid")
+        if type(self.value_labels) is not tuple or len(self.value_labels) < 2:
+            raise ValueError("control_enum_evidence_values_invalid")
+        seen_values: set[int] = set()
+        for pair in self.value_labels:
+            if type(pair) is not tuple or len(pair) != 2:
+                raise TypeError("control_enum_evidence_value_invalid")
+            raw_value, label = pair
+            if type(raw_value) is not int or type(label) is not str:
+                raise TypeError("control_enum_evidence_value_invalid")
+            if not label or label != label.strip() or raw_value in seen_values:
+                raise ValueError("control_enum_evidence_value_invalid")
+            seen_values.add(raw_value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +355,17 @@ def normalize_enum_label(text: str) -> str:
     return "".join(char for char in str(text or "").lower() if char.isalnum())
 
 
+def _smartess_field_ordinal(field_id: object, *, kind: str) -> int | None:
+    """Return one exact SmartESS read/control field ordinal, without coercion."""
+
+    if type(field_id) is not str or field_id != field_id.strip():
+        return None
+    match = _SMARTESS_FIELD_ID_RE.search(field_id)
+    if match is None or match.group("kind") != kind:
+        return None
+    return int(match.group("ordinal"))
+
+
 def _labels_match(cloud_label: str, table_label: str) -> str:
     """Return the match kind ("exact"/"contains"/"") for two normalized labels."""
 
@@ -314,6 +389,8 @@ def match_enum_bindings(
     registers: dict[Any, Any],
     enum_tables: dict[str, Any] | None,
     register_enum_tables: dict[int, str] | None = None,
+    control_enum_evidence: tuple[ObservedControlEnumEvidence, ...] = (),
+    session_id: str = "",
 ) -> dict[str, Any]:
     """Match enum labels against known tables and their authoritative registers.
 
@@ -332,6 +409,15 @@ def match_enum_bindings(
         ]
     if not bindings or not register_values or not isinstance(enum_tables, dict):
         return {"bindings": [], "unique_count": 0}
+
+    trusted_control_evidence = (
+        control_enum_evidence
+        if type(control_enum_evidence) is tuple
+        and type(session_id) is str
+        and session_id
+        and session_id == session_id.strip()
+        else ()
+    )
 
     results: list[dict[str, Any]] = []
     for item in bindings:
@@ -363,10 +449,74 @@ def match_enum_bindings(
                                 "match_kind": match_kind,
                             }
                         )
+        read_semantic = resolve_semantic_title(str(item.get("title") or ""))
+        read_ordinal = _smartess_field_ordinal(item.get("cloud_id"), kind="read")
+        if read_semantic is not None and read_ordinal is not None:
+            for evidence in trusted_control_evidence:
+                if type(evidence) is not ObservedControlEnumEvidence:
+                    continue
+                if (
+                    evidence.provider_id != "smartess"
+                    or evidence.session_id != session_id
+                    or evidence.semantic_key != read_semantic.semantic_key
+                    or evidence.provider_field_ordinal != read_ordinal
+                ):
+                    continue
+                table_name = (
+                    register_enum_tables.get(evidence.register)
+                    if isinstance(register_enum_tables, dict)
+                    else None
+                )
+                table = enum_tables.get(table_name) if table_name else None
+                if (
+                    not isinstance(table, dict)
+                    or evidence.enum_table != table_name
+                ):
+                    continue
+                samples = register_values.get(evidence.register, ())
+                for raw_value, control_label in evidence.value_labels:
+                    if normalize_enum_label(control_label) != cloud_label:
+                        continue
+                    table_key: object
+                    if raw_value in table:
+                        table_key = raw_value
+                    elif str(raw_value) in table:
+                        table_key = str(raw_value)
+                    else:
+                        continue
+                    if raw_value not in samples:
+                        continue
+                    candidates.append(
+                        {
+                            "register": evidence.register,
+                            "raw_value": raw_value,
+                            "enum_table": str(table_name),
+                            "table_label": str(table[table_key]),
+                            "cloud_control_label": control_label,
+                            "cloud_control_field_id": evidence.cloud_field_id,
+                            "match_kind": "control_exact",
+                            "evidence_method": "same_session_control_enum",
+                        }
+                    )
         # Prefer exact label matches; containment only fills in when nothing
         # exact exists (keeps "Off-Grid Mode" from also matching "Grid Mode").
-        exact = [candidate for candidate in candidates if candidate["match_kind"] == "exact"]
+        exact = [
+            candidate
+            for candidate in candidates
+            if candidate["match_kind"] in {"exact", "control_exact"}
+        ]
         effective = exact if exact else candidates
+        deduplicated: dict[tuple[int, int, str], dict[str, Any]] = {}
+        for candidate in effective:
+            key = (
+                int(candidate["register"]),
+                int(candidate["raw_value"]),
+                str(candidate["enum_table"]),
+            )
+            existing = deduplicated.get(key)
+            if existing is None or candidate["match_kind"] == "control_exact":
+                deduplicated[key] = candidate
+        effective = list(deduplicated.values())
         distinct_registers = sorted({candidate["register"] for candidate in effective})
         if len(distinct_registers) == 1:
             status = ENUM_STATUS_UNIQUE
@@ -381,8 +531,24 @@ def match_enum_bindings(
                 "cloud_value": str(item.get("cloud_value") or ""),
                 "status": status,
                 "candidates": effective,
-                "method": "enum_table_inversion",
-                "value_source": "seed_bank",
+                "method": (
+                    "same_session_control_enum"
+                    if any(
+                        candidate.get("evidence_method")
+                        == "same_session_control_enum"
+                        for candidate in effective
+                    )
+                    else "enum_table_inversion"
+                ),
+                "value_source": (
+                    "seed_bank_and_observed_control"
+                    if any(
+                        candidate.get("evidence_method")
+                        == "same_session_control_enum"
+                        for candidate in effective
+                    )
+                    else "seed_bank"
+                ),
             }
         )
 

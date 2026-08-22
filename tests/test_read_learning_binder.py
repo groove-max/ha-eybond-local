@@ -19,6 +19,7 @@ from custom_components.eybond_local.support.read_learning_binder import (  # noq
     ENUM_STATUS_AMBIGUOUS,
     ENUM_STATUS_NO_TABLE_MATCH,
     ENUM_STATUS_UNIQUE,
+    ObservedControlEnumEvidence,
     bind_cloud_labels_to_registers,
     match_enum_bindings,
     normalize_enum_label,
@@ -174,11 +175,17 @@ class ReadLearningBinderTests(unittest.TestCase):
 
 
 class ReadEnumMatcherTests(unittest.TestCase):
-    def _enum_label_report(self, title: str, value: str) -> dict:
+    def _enum_label_report(
+        self,
+        title: str,
+        value: str,
+        *,
+        cloud_id: str = "sy_eybond_read_14",
+    ) -> dict:
         return {
             "bindings": [
                 {
-                    "cloud_id": "sy_eybond_read_14",
+                    "cloud_id": cloud_id,
                     "title": title,
                     "cloud_value": value,
                     "status": BIND_STATUS_ENUM_LABEL,
@@ -270,6 +277,125 @@ class ReadEnumMatcherTests(unittest.TestCase):
         )
 
         self.assertEqual(result["bindings"][0]["status"], ENUM_STATUS_NO_TABLE_MATCH)
+
+    def test_same_session_control_enum_bridges_provider_vocabulary(self) -> None:
+        evidence = ObservedControlEnumEvidence(
+            provider_id="smartess",
+            session_id="shadow-session-1",
+            semantic_key="charger_source_priority",
+            cloud_field_id="bat_eybond_ctrl_75",
+            enum_table="charge_source_priority",
+            provider_field_ordinal=75,
+            register=331,
+            devcode=2376,
+            devaddr=1,
+            value_labels=(
+                (0, "Utility charging is preferred"),
+                (3, "Only PV charging is allowed"),
+            ),
+        )
+
+        result = match_enum_bindings(
+            read_bindings=self._enum_label_report(
+                "Charger Source Priority",
+                "Only PV charging is allowed",
+                cloud_id="sy_eybond_read_75",
+            ),
+            registers={"331": [3]},
+            enum_tables={
+                "charge_source_priority": {
+                    "0": "Utility Priority",
+                    "3": "PV Only",
+                }
+            },
+            register_enum_tables={331: "charge_source_priority"},
+            control_enum_evidence=(evidence,),
+            session_id="shadow-session-1",
+        )
+
+        binding = result["bindings"][0]
+        self.assertEqual(binding["status"], ENUM_STATUS_UNIQUE)
+        self.assertEqual(binding["method"], "same_session_control_enum")
+        self.assertEqual(binding["value_source"], "seed_bank_and_observed_control")
+        self.assertEqual(binding["candidates"][0]["register"], 331)
+        self.assertEqual(binding["candidates"][0]["raw_value"], 3)
+        self.assertEqual(
+            binding["candidates"][0]["cloud_control_field_id"],
+            "bat_eybond_ctrl_75",
+        )
+
+    def test_control_enum_bridge_fails_closed_on_each_identity_axis(self) -> None:
+        base = {
+            "provider_id": "smartess",
+            "session_id": "shadow-session-1",
+            "semantic_key": "charger_source_priority",
+            "cloud_field_id": "bat_eybond_ctrl_75",
+            "enum_table": "charge_source_priority",
+            "provider_field_ordinal": 75,
+            "register": 331,
+            "devcode": 2376,
+            "devaddr": 1,
+            "value_labels": ((0, "Utility"), (3, "Only PV charging is allowed")),
+        }
+        cases = (
+            ({"session_id": "foreign-session"}, "shadow-session-1", "sy_eybond_read_75", "Charger Source Priority", {331: [3]}, {331: "charge_source_priority"}),
+            ({"provider_field_ordinal": 76}, "shadow-session-1", "sy_eybond_read_75", "Charger Source Priority", {331: [3]}, {331: "charge_source_priority"}),
+            ({"semantic_key": "output_priority"}, "shadow-session-1", "sy_eybond_read_75", "Charger Source Priority", {331: [3]}, {331: "charge_source_priority"}),
+            ({}, "shadow-session-1", "sy_eybond_read_75", "Charger Source Priority", {331: [2]}, {331: "charge_source_priority"}),
+            ({}, "shadow-session-1", "sy_eybond_read_75", "Charger Source Priority", {331: [3]}, {331: "mode_names"}),
+            ({}, "shadow-session-1", "sy_eybond_read_74", "Charger Source Priority", {331: [3]}, {331: "charge_source_priority"}),
+            ({}, "shadow-session-1", "sy_eybond_read_75", "Output priority", {331: [3]}, {331: "charge_source_priority"}),
+        )
+        for overrides, session_id, cloud_id, title, registers, authority in cases:
+            with self.subTest(overrides=overrides, cloud_id=cloud_id, title=title):
+                evidence = ObservedControlEnumEvidence(**{**base, **overrides})
+                result = match_enum_bindings(
+                    read_bindings=self._enum_label_report(
+                        title,
+                        "Only PV charging is allowed",
+                        cloud_id=cloud_id,
+                    ),
+                    registers=registers,
+                    enum_tables={
+                        "charge_source_priority": {
+                            "0": "Utility Priority",
+                            "3": "PV Only",
+                        },
+                        "mode_names": {"3": "Off-Grid"},
+                    },
+                    register_enum_tables=authority,
+                    control_enum_evidence=(evidence,),
+                    session_id=session_id,
+                )
+                self.assertEqual(
+                    result["bindings"][0]["status"],
+                    ENUM_STATUS_NO_TABLE_MATCH,
+                )
+
+    def test_control_enum_evidence_direct_constructor_is_strict(self) -> None:
+        valid = {
+            "provider_id": "smartess",
+            "session_id": "shadow-session-1",
+            "semantic_key": "charger_source_priority",
+            "cloud_field_id": "bat_eybond_ctrl_75",
+            "enum_table": "charge_source_priority",
+            "provider_field_ordinal": 75,
+            "register": 331,
+            "devcode": 2376,
+            "devaddr": 1,
+            "value_labels": ((0, "Utility"), (3, "PV only")),
+        }
+        for field, invalid in (
+            ("provider_id", " smartess"),
+            ("session_id", ""),
+            ("register", True),
+            ("provider_field_ordinal", 0),
+            ("value_labels", ((3, "PV only"),)),
+            ("value_labels", ((3, "PV only"), (3, "Duplicate"))),
+        ):
+            with self.subTest(field=field, invalid=invalid):
+                with self.assertRaises((TypeError, ValueError)):
+                    ObservedControlEnumEvidence(**{**valid, field: invalid})
 
     def test_numeric_bindings_are_ignored_by_enum_matcher(self) -> None:
         result = match_enum_bindings(
