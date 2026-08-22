@@ -81,14 +81,10 @@ class DessMonitorSession:
 
     token: str = field(repr=False)
     secret: str = field(repr=False)
-    uid: str = field(default="", repr=False)
-    usr: str = field(default="", repr=False)
 
     def __post_init__(self) -> None:
         _required_token(self.token, "dessmonitor_session_token_invalid")
         _required_token(self.secret, "dessmonitor_session_secret_invalid")
-        _optional_normalized(self.uid, "dessmonitor_session_uid_invalid")
-        _optional_normalized(self.usr, "dessmonitor_session_usr_invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,15 +313,14 @@ def _provider_session_text(
     value: object,
     *,
     reason: str,
-    required: bool,
 ) -> str:
-    """Validate one untrusted login field without coercion or disclosure."""
+    """Validate required signed-request material without coercion or disclosure."""
 
     if (
         type(value) is not str
         or value != value.strip()
         or len(value) > DEFAULT_MAX_TEXT_LENGTH
-        or (required and not value)
+        or not value
     ):
         raise DessMonitorCloudError(reason)
     return value
@@ -454,22 +449,10 @@ def login_with_password(
             token=_provider_session_text(
                 envelope.dat.get("token"),
                 reason="invalid_login_session_token",
-                required=True,
             ),
             secret=_provider_session_text(
                 envelope.dat.get("secret"),
                 reason="invalid_login_session_secret",
-                required=True,
-            ),
-            uid=_provider_session_text(
-                envelope.dat.get("uid", ""),
-                reason="invalid_login_session_uid",
-                required=False,
-            ),
-            usr=_provider_session_text(
-                envelope.dat.get("usr", ""),
-                reason="invalid_login_session_usr",
-                required=False,
             ),
         )
     except DessMonitorCloudError as exc:

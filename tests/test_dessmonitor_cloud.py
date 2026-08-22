@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import fields
 import hashlib
 import json
 from pathlib import Path
@@ -47,17 +48,12 @@ class DessMonitorModelTests(unittest.TestCase):
         session = DessMonitorSession(
             token="token-secret-value",
             secret="request-secret-value",
-            uid="private-user-id",
-            usr="private-account-name",
         )
 
         rendered = repr(session)
 
         self.assertNotIn("token-secret-value", rendered)
         self.assertNotIn("request-secret-value", rendered)
-        self.assertNotIn("private-user-id", rendered)
-        self.assertNotIn("private-account-name", rendered)
-
         envelope = DessMonitorApiEnvelope(
             err=0,
             desc="private provider detail",
@@ -222,11 +218,6 @@ class DessMonitorSigningTests(unittest.TestCase):
                 "invalid_login_session_token",
             ),
             ({"token": "token", "secret": b"secret"}, "invalid_login_session_secret"),
-            ({"token": "token", "secret": "secret", "uid": 9}, "invalid_login_session_uid"),
-            (
-                {"token": "token", "secret": "secret", "usr": " account "},
-                "invalid_login_session_usr",
-            ),
         )
         for dat, expected in cases:
             with self.subTest(expected=expected, value_type=type(next(iter(dat.values())))):
@@ -243,6 +234,32 @@ class DessMonitorSigningTests(unittest.TestCase):
 
                 self.assertEqual(str(raised.exception), expected)
                 self.assertNotIn(repr(dat), str(raised.exception))
+
+    def test_login_ignores_unneeded_provider_account_metadata(self) -> None:
+        provider_payload = {
+            "token": "token",
+            "secret": "secret",
+            "uid": 9,
+            "usr": {"unexpected": "shape"},
+            "role": 0,
+            "expire": 604800,
+        }
+        with patch.object(
+            dessmonitor_module,
+            "_http_get_json",
+            return_value=_ok(provider_payload),
+        ):
+            _envelope, session = dessmonitor_module.login_with_password(
+                username="account",
+                password="password",
+            )
+
+        self.assertEqual(session.token, "token")
+        self.assertEqual(session.secret, "secret")
+        self.assertEqual(
+            {item.name for item in fields(DessMonitorSession)},
+            {"token", "secret"},
+        )
 
     def test_network_error_never_discloses_provider_reason(self) -> None:
         sensitive_reason = "temporary failure for account@example.com"
