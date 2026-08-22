@@ -9,7 +9,6 @@ from .common import (
     CollectorListenerBindError,
     CollectorTransport,
     _BACKGROUND_TASKS,
-    _COLLECTOR_PN_PREFIX_MATCH_MIN_LEN,
     _WRITER_CLOSE_TIMEOUT,
     _collector_pn_from_initial_chunk,
     _finish_cleanup_on_cancel,

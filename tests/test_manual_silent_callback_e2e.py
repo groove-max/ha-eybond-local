@@ -409,15 +409,7 @@ class ManualSilentCallbackEndToEndTests(unittest.IsolatedAsyncioTestCase):
             done = await flow.async_step_manual_recovery_verify()
             self.assertEqual(done["type"], "progress_done")
 
-            async def _passthrough_enrich(_user_input, r):
-                return r
-
-            with patch.object(
-                flow,
-                "_async_enrich_manual_collector_profile",
-                side_effect=_passthrough_enrich,
-            ):
-                created = await flow.async_step_manual_recovery_result()
+            created = await flow.async_step_manual_recovery_result()
 
         self.assertEqual(
             created.get("type"), "create_entry", flow._manual_recovery_error

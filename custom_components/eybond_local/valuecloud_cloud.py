@@ -29,6 +29,19 @@ class ValueCloudError(RuntimeError):
     """Raised when one ValueCloud cloud request fails."""
 
 
+class ValueCloudActionRejectedError(ValueCloudError):
+    """A completed ValueCloud action request with a definitive rejection."""
+
+    def __init__(self, *, code: int | None, action: str, detail: str) -> None:
+        self.code = code
+        self.action = str(action)
+        self.detail = str(detail)
+        normalized_code: int | str = code if code is not None else "unknown"
+        super().__init__(
+            f"action_failed:{normalized_code}:{self.action}:{self.detail}"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ValueCloudEnvelope:
     """One parsed ValueCloud cloud response envelope."""
@@ -186,9 +199,12 @@ def _envelope_ok(envelope: ValueCloudEnvelope) -> bool:
 def _raise_for_envelope(envelope: ValueCloudEnvelope, *, action: str) -> None:
     if _envelope_ok(envelope):
         return
-    code = envelope.code if envelope.code is not None else "unknown"
     detail = envelope.error_message or envelope.message or "unknown"
-    raise ValueCloudError(f"action_failed:{code}:{action}:{detail}")
+    raise ValueCloudActionRejectedError(
+        code=envelope.code,
+        action=action,
+        detail=detail,
+    )
 
 
 def _maybe_int(value: Any) -> int | None:

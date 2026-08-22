@@ -14,6 +14,11 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.connection.models import EybondConnectionSpec
+from custom_components.eybond_local.connection.collector_endpoint_operation import (
+    COLLECTOR_ENDPOINT_OPERATION_AUTHORITY,
+    OPERATION_COLLECTOR_SYSTEM_ACTION,
+    OPERATION_RUNTIME_LINK_BAUD_SWEEP,
+)
 from custom_components.eybond_local.collector.at import CollectorAtResponse
 from custom_components.eybond_local.collector.management import (
     CollectorManagementUnsupportedError,
@@ -497,6 +502,7 @@ class _CollectorManagementTransport:
     def __init__(self) -> None:
         self.endpoint = "47.91.67.66,18899,TCP"
         self.reboot_required = "0"
+        self.uart = "2400,8,1,NONE"
         self.requests: list[tuple[int, bytes]] = []
 
     async def async_send_collector(
@@ -514,6 +520,8 @@ class _CollectorManagementTransport:
                 return (None, bytes((0, 21)) + self.endpoint.encode("ascii"))
             if parameter == 30:
                 return (None, bytes((0, 30)) + self.reboot_required.encode("ascii"))
+            if parameter == 34:
+                return (None, bytes((0, 34)) + self.uart.encode("ascii"))
             raise KeyError((fcode, payload))
         if fcode == 3:
             parameter = payload[0]
@@ -525,6 +533,9 @@ class _CollectorManagementTransport:
             if parameter == 29:
                 self.reboot_required = "0"
                 return (None, bytes((0, 29)))
+            if parameter == 34:
+                self.uart = f"{value},8,1,NONE"
+                return (None, bytes((0, 34)))
             raise KeyError((fcode, payload))
         raise KeyError((fcode, payload))
 
@@ -2735,6 +2746,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
             ),
         )
         hub._link_manager = _FakeLinkManager()
+        hub.set_callback_ownership(None, "entry-runtime-state-machine")
         return hub
 
     def _inverter(
@@ -3149,6 +3161,141 @@ class RuntimeStateMachineTests(unittest.TestCase):
             self.assertIsNone(second)
             channel.async_set_baud.assert_awaited_once_with(9600)
             detect.assert_awaited_once()
+
+        asyncio.run(_run())
+
+    def test_runtime_uart_sweep_skips_busy_authority_without_consuming_session(self) -> None:
+        async def _run() -> None:
+            hub = self._hub(full_scan=True)
+            hub._link_manager.owned_session_generation = 7
+            hub._link_manager.transport = SimpleNamespace(
+                async_send_collector=AsyncMock()
+            )
+            hub._collector_metadata_service.framed_values = {
+                "collector_hardware_version": "esp-collector/0.1.5/ESP32"
+            }
+            held = COLLECTOR_ENDPOINT_OPERATION_AUTHORITY.acquire(
+                "entry-runtime-state-machine",
+                OPERATION_COLLECTOR_SYSTEM_ACTION,
+            )
+            self.assertTrue(held.acquired)
+            try:
+                with patch(
+                    "custom_components.eybond_local.runtime.hub.detection."
+                    "RuntimeLinkBaudChannel",
+                ) as channel_type:
+                    result = await hub._async_attempt_runtime_link_baud_sweep(
+                        detection_generation=7
+                    )
+                self.assertIsNone(result)
+                self.assertEqual(hub._link_baud_sweep_generation, -1)
+                channel_type.assert_not_called()
+            finally:
+                self.assertTrue(
+                    COLLECTOR_ENDPOINT_OPERATION_AUTHORITY.release(
+                        "entry-runtime-state-machine",
+                        held.token,
+                    )
+                )
+
+        asyncio.run(_run())
+
+    def test_runtime_uart_sweep_holds_and_releases_shared_authority(self) -> None:
+        async def _run() -> None:
+            hub = self._hub(full_scan=True)
+            hub._link_manager.owned_session_generation = 7
+            hub._link_manager.transport = SimpleNamespace(
+                async_send_collector=AsyncMock()
+            )
+            hub._collector_metadata_service.framed_values = {
+                "collector_hardware_version": "esp-collector/0.1.5/ESP32"
+            }
+            entered = asyncio.Event()
+            finish = asyncio.Event()
+
+            async def blocked_sweep(**_kwargs):
+                entered.set()
+                await finish.wait()
+                return SimpleNamespace(matched=False)
+
+            with (
+                patch.object(
+                    hub,
+                    "_collector_management_adapter",
+                    return_value=object(),
+                ),
+                patch(
+                    "custom_components.eybond_local.runtime.hub.detection."
+                    "async_run_link_baud_sweep",
+                    side_effect=blocked_sweep,
+                ),
+            ):
+                task = asyncio.create_task(
+                    hub._async_attempt_runtime_link_baud_sweep(
+                        detection_generation=7
+                    )
+                )
+                await entered.wait()
+                self.assertEqual(
+                    COLLECTOR_ENDPOINT_OPERATION_AUTHORITY.active_operation(
+                        "entry-runtime-state-machine"
+                    ),
+                    OPERATION_RUNTIME_LINK_BAUD_SWEEP,
+                )
+                competing = COLLECTOR_ENDPOINT_OPERATION_AUTHORITY.acquire(
+                    "entry-runtime-state-machine",
+                    OPERATION_COLLECTOR_SYSTEM_ACTION,
+                )
+                self.assertFalse(competing.acquired)
+                self.assertEqual(
+                    competing.busy_operation,
+                    OPERATION_RUNTIME_LINK_BAUD_SWEEP,
+                )
+                finish.set()
+                self.assertIsNone(await task)
+
+            self.assertEqual(
+                COLLECTOR_ENDPOINT_OPERATION_AUTHORITY.active_operation(
+                    "entry-runtime-state-machine"
+                ),
+                "",
+            )
+
+        asyncio.run(_run())
+
+    def test_runtime_uart_sweep_releases_authority_when_cancelled(self) -> None:
+        async def _run() -> None:
+            hub = self._hub(full_scan=True)
+            hub._link_manager.owned_session_generation = 7
+            hub._link_manager.transport = SimpleNamespace(
+                async_send_collector=AsyncMock()
+            )
+            hub._collector_metadata_service.framed_values = {
+                "collector_hardware_version": "esp-collector/0.1.5/ESP32"
+            }
+            with (
+                patch.object(
+                    hub,
+                    "_collector_management_adapter",
+                    return_value=object(),
+                ),
+                patch(
+                    "custom_components.eybond_local.runtime.hub.detection."
+                    "async_run_link_baud_sweep",
+                    new=AsyncMock(side_effect=asyncio.CancelledError),
+                ),
+            ):
+                with self.assertRaises(asyncio.CancelledError):
+                    await hub._async_attempt_runtime_link_baud_sweep(
+                        detection_generation=7
+                    )
+
+            self.assertEqual(
+                COLLECTOR_ENDPOINT_OPERATION_AUTHORITY.active_operation(
+                    "entry-runtime-state-machine"
+                ),
+                "",
+            )
 
         asyncio.run(_run())
 
@@ -3716,6 +3863,24 @@ class HubCollectorManagementTests(unittest.TestCase):
             self.assertEqual(transport.values[7], "New SSID")
             self.assertEqual(transport.values[8], "new-password")
             self.assertIn((3, bytes((29,)) + b"1"), transport.requests)
+
+        asyncio.run(_run())
+
+    def test_uart_management_uses_the_exact_runtime_owned_framed_session(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            link = _FakeLinkManager()
+            transport = _CollectorManagementTransport()
+            link.transport = transport
+            link.active_transport = transport
+            hub._link_manager = link
+
+            before = await hub.async_query_collector_parameters((34,))
+            readback = await hub.async_set_collector_uart_baudrate("9600")
+
+            self.assertEqual(before, {34: "2400,8,1,NONE"})
+            self.assertEqual(readback, "9600,8,1,NONE")
+            self.assertEqual(transport.uart, "9600,8,1,NONE")
 
         asyncio.run(_run())
 

@@ -33,7 +33,7 @@ EXPECTED_MRO = [
 ]
 
 EXPECTED_METHOD_MULTISET_SHA256 = (
-    "da6ae9c5af040c6cec37edc9c9683bf7c0621405dc2e87db3c0925d75c9db39d"
+    "851ea953b55962c3616ab8ca660354da1cebd92598c1f11f4e2176b7c546ff9e"
 )
 
 
@@ -97,8 +97,8 @@ class HubCompositionBoundaryTests(unittest.TestCase):
         duplicates = {name: paths for name, paths in owners.items() if len(paths) != 1}
         self.assertEqual(duplicates, {})
         payload = "\n".join(f"{name}:{count}" for name, count in sorted(counts.items()))
-        self.assertEqual(sum(counts.values()), 106)
-        self.assertEqual(len(counts), 101)
+        self.assertEqual(sum(counts.values()), 107)
+        self.assertEqual(len(counts), 102)
         self.assertEqual(
             hashlib.sha256(payload.encode()).hexdigest(),
             EXPECTED_METHOD_MULTISET_SHA256,

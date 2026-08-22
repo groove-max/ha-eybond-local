@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 import json
+import logging
 import re
 import time
-from typing import Any
+from typing import Any, Callable, TypeVar
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -26,6 +27,11 @@ DEFAULT_COMPANY_KEY = "bnrl_frRFjEz8Mkn"
 DEFAULT_DEVICE_TYPE = 2304
 DEFAULT_TIMEOUT = 15.0
 DEFAULT_LEARN_NUMERIC_VALUE = "1"
+CONTROL_DISCOVERY_READ_ATTEMPTS = 3
+CONTROL_DISCOVERY_RETRY_DELAY_SECONDS = 0.5
+
+
+logger = logging.getLogger(__name__)
 
 
 _HINT_RANGE_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*(?:~|-|to)\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
@@ -47,6 +53,24 @@ class SmartEssCloudError(RuntimeError):
     """Raised when one SmartESS cloud request fails."""
 
 
+class SmartEssActionRejectedError(SmartEssCloudError):
+    """A completed SmartESS action request with a definitive rejection."""
+
+    def __init__(self, *, err: int, desc: str) -> None:
+        self.err = int(err)
+        self.desc = str(desc)
+        super().__init__(f"action_failed:{self.err}:{self.desc}")
+
+
+class SmartEssBundleStageError(SmartEssCloudError):
+    """A provider-bundle request failed at one closed, non-secret stage."""
+
+    def __init__(self, *, stage: str, cloud_error_code: str) -> None:
+        self.stage = stage
+        self.cloud_error_code = cloud_error_code
+        super().__init__(f"bundle_stage_failed:{stage}:{cloud_error_code}")
+
+
 CLOUD_ERROR_AUTH_FAILED = "auth_failed"
 CLOUD_ERROR_RATE_LIMITED = "rate_limited"
 CLOUD_ERROR_UNAVAILABLE = "unavailable"
@@ -63,6 +87,8 @@ def classify_smartess_cloud_error(exc: BaseException) -> str:
     parsing the raw English message string.
     """
 
+    if isinstance(exc, SmartEssBundleStageError):
+        return exc.cloud_error_code
     if isinstance(exc, TimeoutError):
         return CLOUD_ERROR_TIMEOUT
     if isinstance(exc, SmartEssCloudError):
@@ -84,6 +110,61 @@ def classify_smartess_cloud_error(exc: BaseException) -> str:
             return CLOUD_ERROR_UNAVAILABLE
         return CLOUD_ERROR_UNEXPECTED
     return CLOUD_ERROR_UNEXPECTED
+
+
+_BundleResult = TypeVar("_BundleResult")
+
+
+def _run_bundle_stage(
+    stage: str,
+    operation: Callable[[], _BundleResult],
+    *,
+    transient_attempts: int = 1,
+    retry_delay_seconds: float = 0.0,
+) -> _BundleResult:
+    """Run one read-only bundle stage and preserve its safe provenance."""
+
+    if type(transient_attempts) is not int:
+        raise TypeError("bundle_stage_attempts_invalid")
+    if transient_attempts < 1:
+        raise ValueError("bundle_stage_attempts_invalid")
+    if type(retry_delay_seconds) not in {int, float} or isinstance(
+        retry_delay_seconds, bool
+    ):
+        raise TypeError("bundle_stage_retry_delay_invalid")
+    if retry_delay_seconds < 0:
+        raise ValueError("bundle_stage_retry_delay_invalid")
+
+    for attempt in range(1, transient_attempts + 1):
+        try:
+            return operation()
+        except SmartEssBundleStageError:
+            raise
+        except Exception as exc:
+            cloud_error_code = classify_smartess_cloud_error(exc)
+            retryable = cloud_error_code in {
+                CLOUD_ERROR_NETWORK,
+                CLOUD_ERROR_TIMEOUT,
+                CLOUD_ERROR_UNAVAILABLE,
+            }
+            if retryable and attempt < transient_attempts:
+                logger.warning(
+                    "Retrying read-only SmartESS cloud stage stage=%s "
+                    "attempt=%s/%s error=%s",
+                    stage,
+                    attempt + 1,
+                    transient_attempts,
+                    cloud_error_code,
+                )
+                if retry_delay_seconds:
+                    time.sleep(retry_delay_seconds)
+                continue
+            raise SmartEssBundleStageError(
+                stage=stage,
+                cloud_error_code=cloud_error_code,
+            ) from exc
+
+    raise AssertionError("unreachable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,7 +394,7 @@ def fetch_signed_action(
         timeout=timeout,
     )
     if envelope.err != 0:
-        raise SmartEssCloudError(f"action_failed:{envelope.err}:{envelope.desc}")
+        raise SmartEssActionRejectedError(err=envelope.err, desc=envelope.desc)
     return envelope
 
 
@@ -837,7 +918,12 @@ def fetch_device_bundle_for_identity(
     app_id: str = DEFAULT_APP_ID,
     app_version: str = DEFAULT_APP_VERSION,
     timeout: float = DEFAULT_TIMEOUT,
+    include_energy_flow: bool = True,
+    transient_attempts: int = 1,
+    retry_delay_seconds: float = 0.0,
 ) -> dict[str, Any]:
+    if type(include_energy_flow) is not bool:
+        raise TypeError("include_energy_flow must be bool")
     list_action = build_device_list_action(pn=pn, pagesize=50)
     detail_action = build_device_detail_action(
         pn=pn,
@@ -851,62 +937,108 @@ def fetch_device_bundle_for_identity(
         devcode=devcode,
         devaddr=devaddr,
     )
-    energy_flow_action = build_device_energy_flow_action(
-        pn=pn,
-        sn=sn,
-        devcode=devcode,
-        devaddr=devaddr,
-    )
 
-    list_envelope = fetch_signed_action(
-        action=list_action,
-        session=session,
-        base_url=base_url,
-        language=language,
-        app_id=app_id,
-        app_version=app_version,
-        timeout=timeout,
+    list_envelope = _run_bundle_stage(
+        "bundle_device_list",
+        lambda: fetch_signed_action(
+            action=list_action,
+            session=session,
+            base_url=base_url,
+            language=language,
+            app_id=app_id,
+            app_version=app_version,
+            timeout=timeout,
+        ),
+        transient_attempts=transient_attempts,
+        retry_delay_seconds=retry_delay_seconds,
     )
-    detail_envelope = fetch_signed_action(
-        action=detail_action,
-        session=session,
-        base_url=base_url,
-        language=language,
-        app_id=app_id,
-        app_version=app_version,
-        timeout=timeout,
+    detail_envelope = _run_bundle_stage(
+        "device_detail",
+        lambda: fetch_signed_action(
+            action=detail_action,
+            session=session,
+            base_url=base_url,
+            language=language,
+            app_id=app_id,
+            app_version=app_version,
+            timeout=timeout,
+        ),
+        transient_attempts=transient_attempts,
+        retry_delay_seconds=retry_delay_seconds,
     )
-    settings_envelope = fetch_signed_action(
-        action=settings_action,
-        session=session,
-        base_url=base_url,
-        language=language,
-        app_id=app_id,
-        app_version=app_version,
-        timeout=timeout,
+    settings_envelope = _run_bundle_stage(
+        "device_settings",
+        lambda: fetch_signed_action(
+            action=settings_action,
+            session=session,
+            base_url=base_url,
+            language=language,
+            app_id=app_id,
+            app_version=app_version,
+            timeout=timeout,
+        ),
+        transient_attempts=transient_attempts,
+        retry_delay_seconds=retry_delay_seconds,
     )
-    energy_flow_envelope = fetch_signed_action(
-        action=energy_flow_action,
-        session=session,
-        base_url=base_url,
-        language=language,
-        app_id=app_id,
-        app_version=app_version,
-        timeout=timeout,
-    )
+    energy_flow_envelope: ApiEnvelope | None = None
+    if include_energy_flow:
+        energy_flow_action = build_device_energy_flow_action(
+            pn=pn,
+            sn=sn,
+            devcode=devcode,
+            devaddr=devaddr,
+        )
+        energy_flow_envelope = _run_bundle_stage(
+            "energy_flow",
+            lambda: fetch_signed_action(
+                action=energy_flow_action,
+                session=session,
+                base_url=base_url,
+                language=language,
+                app_id=app_id,
+                app_version=app_version,
+                timeout=timeout,
+            ),
+            transient_attempts=transient_attempts,
+            retry_delay_seconds=retry_delay_seconds,
+        )
 
     normalized_list = normalize_device_list(list_envelope.dat)
     normalized_detail = normalize_device_detail(detail_envelope.dat)
     normalized_settings = normalize_device_settings(settings_envelope.dat)
+    actions = {
+        "device_list": "webQueryDeviceEs",
+        "device_detail": "querySPDeviceLastData",
+        "device_settings": "webQueryDeviceCtrlField",
+    }
+    responses = {
+        "device_list": _build_response_block(
+            action="webQueryDeviceEs",
+            envelope=list_envelope,
+            normalized=normalized_list,
+        ),
+        "device_detail": _build_response_block(
+            action="querySPDeviceLastData",
+            envelope=detail_envelope,
+            normalized=normalized_detail,
+        ),
+        "device_settings": _build_response_block(
+            action="webQueryDeviceCtrlField",
+            envelope=settings_envelope,
+            normalized=normalized_settings,
+        ),
+    }
+    if energy_flow_envelope is not None:
+        actions["energy_flow"] = "webQueryDeviceEnergyFlowEs"
+        responses["energy_flow"] = _build_response_block(
+            action="webQueryDeviceEnergyFlowEs",
+            envelope=energy_flow_envelope,
+        )
+
     return {
         "request": {
             "command": "device-bundle",
-            "actions": {
-                "device_list": "webQueryDeviceEs",
-                "device_detail": "querySPDeviceLastData",
-                "device_settings": "webQueryDeviceCtrlField",
-                "energy_flow": "webQueryDeviceEnergyFlowEs",
-            },
+            "actions": actions,
             "params": {
                 "device_type": DEFAULT_DEVICE_TYPE,
                 "pn": pn,
@@ -923,27 +1055,7 @@ def fetch_device_bundle_for_identity(
             "session_source": session_source,
         },
         "session": session_preview(session),
-        "responses": {
-            "device_list": _build_response_block(
-                action="webQueryDeviceEs",
-                envelope=list_envelope,
-                normalized=normalized_list,
-            ),
-            "device_detail": _build_response_block(
-                action="querySPDeviceLastData",
-                envelope=detail_envelope,
-                normalized=normalized_detail,
-            ),
-            "device_settings": _build_response_block(
-                action="webQueryDeviceCtrlField",
-                envelope=settings_envelope,
-                normalized=normalized_settings,
-            ),
-            "energy_flow": _build_response_block(
-                action="webQueryDeviceEnergyFlowEs",
-                envelope=energy_flow_envelope,
-            ),
-        },
+        "responses": responses,
         "normalized": {
             "device_list": normalized_list,
             "device_detail": normalized_detail,
@@ -963,14 +1075,22 @@ def fetch_device_bundle_for_collector(
     app_id: str = DEFAULT_APP_ID,
     app_version: str = DEFAULT_APP_VERSION,
     timeout: float = DEFAULT_TIMEOUT,
+    include_energy_flow: bool = True,
+    transient_attempts: int = 1,
+    retry_delay_seconds: float = 0.0,
 ) -> dict[str, Any]:
-    _, session = login_with_password(
-        username=username,
-        password=password,
-        base_url=base_url,
-        company_key=company_key,
-        language=language,
-        timeout=timeout,
+    _, session = _run_bundle_stage(
+        "login",
+        lambda: login_with_password(
+            username=username,
+            password=password,
+            base_url=base_url,
+            company_key=company_key,
+            language=language,
+            timeout=timeout,
+        ),
+        transient_attempts=transient_attempts,
+        retry_delay_seconds=retry_delay_seconds,
     )
     return fetch_device_bundle_for_collector_with_session(
         session=session,
@@ -980,6 +1100,72 @@ def fetch_device_bundle_for_collector(
         app_id=app_id,
         app_version=app_version,
         timeout=timeout,
+        include_energy_flow=include_energy_flow,
+        transient_attempts=transient_attempts,
+        retry_delay_seconds=retry_delay_seconds,
+    )
+
+
+def fetch_control_discovery_bundle_for_collector(
+    *,
+    username: str,
+    password: str,
+    collector_pn: str,
+    base_url: str = DEFAULT_BASE_URL,
+    company_key: str = DEFAULT_COMPANY_KEY,
+    language: str = DEFAULT_LANGUAGE,
+    app_id: str = DEFAULT_APP_ID,
+    app_version: str = DEFAULT_APP_VERSION,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Fetch only metadata consumed by control discovery.
+
+    The diagnostic bundle also asks SmartESS for an energy-flow snapshot. That
+    read-only snapshot is useful evidence, but control discovery consumes none
+    of it. Keeping it out of this critical path prevents an unrelated provider
+    timeout from aborting learning after identity, detail and settings have all
+    completed.
+    """
+
+    return fetch_device_bundle_for_collector(
+        username=username,
+        password=password,
+        collector_pn=collector_pn,
+        base_url=base_url,
+        company_key=company_key,
+        language=language,
+        app_id=app_id,
+        app_version=app_version,
+        timeout=timeout,
+        include_energy_flow=False,
+        transient_attempts=CONTROL_DISCOVERY_READ_ATTEMPTS,
+        retry_delay_seconds=CONTROL_DISCOVERY_RETRY_DELAY_SECONDS,
+    )
+
+
+def login_for_control_discovery(
+    *,
+    username: str,
+    password: str,
+    base_url: str = DEFAULT_BASE_URL,
+    company_key: str = DEFAULT_COMPANY_KEY,
+    language: str = DEFAULT_LANGUAGE,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> tuple[ApiEnvelope, SessionCredentials]:
+    """Authenticate the read-only discovery session with bounded retries."""
+
+    return _run_bundle_stage(
+        "control_login",
+        lambda: login_with_password(
+            username=username,
+            password=password,
+            base_url=base_url,
+            company_key=company_key,
+            language=language,
+            timeout=timeout,
+        ),
+        transient_attempts=CONTROL_DISCOVERY_READ_ATTEMPTS,
+        retry_delay_seconds=CONTROL_DISCOVERY_RETRY_DELAY_SECONDS,
     )
 
 
@@ -992,6 +1178,9 @@ def fetch_device_bundle_for_collector_with_session(
     app_id: str = DEFAULT_APP_ID,
     app_version: str = DEFAULT_APP_VERSION,
     timeout: float = DEFAULT_TIMEOUT,
+    include_energy_flow: bool = True,
+    transient_attempts: int = 1,
+    retry_delay_seconds: float = 0.0,
 ) -> dict[str, Any]:
     """Fetch one SmartESS evidence bundle through an existing login session."""
 
@@ -999,14 +1188,19 @@ def fetch_device_bundle_for_collector_with_session(
         pn=collector_pn,
         pagesize=50,
     )
-    list_envelope = fetch_signed_action(
-        action=list_action,
-        session=session,
-        base_url=base_url,
-        language=language,
-        app_id=app_id,
-        app_version=app_version,
-        timeout=timeout,
+    list_envelope = _run_bundle_stage(
+        "identity_device_list",
+        lambda: fetch_signed_action(
+            action=list_action,
+            session=session,
+            base_url=base_url,
+            language=language,
+            app_id=app_id,
+            app_version=app_version,
+            timeout=timeout,
+        ),
+        transient_attempts=transient_attempts,
+        retry_delay_seconds=retry_delay_seconds,
     )
     normalized_list = normalize_device_list(list_envelope.dat) or {"devices": []}
     device = _resolve_bundle_device_identity(normalized_list, collector_pn=collector_pn)
@@ -1023,6 +1217,9 @@ def fetch_device_bundle_for_collector_with_session(
         app_id=app_id,
         app_version=app_version,
         timeout=timeout,
+        include_energy_flow=include_energy_flow,
+        transient_attempts=transient_attempts,
+        retry_delay_seconds=retry_delay_seconds,
     )
 
 

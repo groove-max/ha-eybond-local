@@ -56,6 +56,7 @@ class _FakeFramedTransport:
         self.calls: list[tuple[int, bytes]] = []
         self.endpoint = "old.host,18899,TCP"
         self.reboot_required = "1"
+        self.uart = "2400,8,1,NONE"
         self.set_status = 0
         self._echo_on_set = echo_on_set
 
@@ -67,6 +68,8 @@ class _FakeFramedTransport:
                 return object(), bytes((0, 21)) + self.endpoint.encode("ascii")
             if param == 30:  # QUERY_REBOOT_REQUIRED
                 return object(), bytes((0, 30)) + self.reboot_required.encode("ascii")
+            if param == 34:  # QUERY_SERIAL_BAUDRATE
+                return object(), bytes((0, 34)) + self.uart.encode("ascii")
             return object(), bytes((0, param))
         if fcode == FC_SET_COLLECTOR:
             param = payload[0]
@@ -75,6 +78,8 @@ class _FakeFramedTransport:
                 self.endpoint = value
             elif param == 21:  # collector does NOT echo the endpoint
                 self.endpoint = ""
+            elif param == 34:
+                self.uart = f"{value},8,1,NONE"
             return object(), bytes((self.set_status, param))
         raise AssertionError(f"unexpected fcode {fcode}")
 
@@ -174,6 +179,23 @@ class FramedCollectorManagementAdapterTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(CollectorManagementUnsupportedError):
             await FramedCollectorManagementAdapter(lambda: None).async_read_endpoint_state()
 
+    async def test_uart_baudrate_uses_param_34_and_requires_readback(self) -> None:
+        transport = _FakeFramedTransport()
+
+        readback = await self._adapter(transport).async_set_uart_baudrate("9600")
+
+        self.assertEqual(readback, "9600,8,1,NONE")
+        self.assertIn((FC_SET_COLLECTOR, bytes((34,)) + b"9600"), transport.calls)
+        self.assertIn((FC_QUERY_COLLECTOR, bytes((34,))), transport.calls)
+
+    async def test_uart_baudrate_rejects_malformed_value_before_wire(self) -> None:
+        transport = _FakeFramedTransport()
+        for malformed in ("", " 9600", "9600 ", "9k6", 9600, True, None):
+            with self.subTest(malformed=malformed):
+                with self.assertRaises(TypeError):
+                    await self._adapter(transport).async_set_uart_baudrate(malformed)
+        self.assertEqual(transport.calls, [])
+
     async def test_capabilities(self) -> None:
         caps = FramedCollectorManagementAdapter(lambda: None).capabilities
         self.assertTrue(caps.read_endpoint_state)
@@ -249,6 +271,10 @@ class AtTextCollectorManagementAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_reboot_unsupported(self) -> None:
         with self.assertRaises(CollectorManagementUnsupportedError):
             await self._adapter(_FakeAtTransport()).async_reboot()
+
+    async def test_uart_write_unsupported(self) -> None:
+        with self.assertRaises(CollectorManagementUnsupportedError):
+            await self._adapter(_FakeAtTransport()).async_set_uart_baudrate("9600")
 
     async def test_capabilities(self) -> None:
         caps = AtTextCollectorManagementAdapter(lambda: None).capabilities

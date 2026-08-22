@@ -228,6 +228,40 @@ class ReadEnumMatcherTests(unittest.TestCase):
 
         self.assertEqual(result["bindings"][0]["status"], ENUM_STATUS_AMBIGUOUS)
 
+    def test_schema_register_table_authority_rejects_foreign_same_raw_register(self) -> None:
+        result = match_enum_bindings(
+            read_bindings=self._enum_label_report("Operating mode", "Off-Grid Mode"),
+            registers={"201": [3], "331": [3]},
+            enum_tables={
+                "mode_names": {"3": "Off-Grid"},
+                "charge_source_priority": {"3": "PV Only"},
+            },
+            register_enum_tables={201: "mode_names", 331: "charge_source_priority"},
+        )
+
+        binding = result["bindings"][0]
+        self.assertEqual(binding["status"], ENUM_STATUS_UNIQUE)
+        self.assertEqual(
+            [candidate["register"] for candidate in binding["candidates"]], [201]
+        )
+
+    def test_generic_off_label_does_not_match_off_grid_mode(self) -> None:
+        result = match_enum_bindings(
+            read_bindings=self._enum_label_report("Operating mode", "Off-Grid Mode"),
+            registers={"201": [3], "300": [0]},
+            enum_tables={
+                "mode_names": {"3": "Off-Grid"},
+                "power_saving_mode": {"0": "Off", "1": "On"},
+            },
+            register_enum_tables={201: "mode_names", 300: "power_saving_mode"},
+        )
+
+        candidates = result["bindings"][0]["candidates"]
+        self.assertEqual([candidate["register"] for candidate in candidates], [201])
+        self.assertTrue(
+            all(candidate["enum_table"] == "mode_names" for candidate in candidates)
+        )
+
     def test_unknown_label_is_no_table_match(self) -> None:
         result = match_enum_bindings(
             read_bindings=self._enum_label_report("Operating mode", "Quantum Mode"),

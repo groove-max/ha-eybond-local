@@ -354,6 +354,22 @@ class CoordinatorManagementMixin:
                 password_parameter=password_parameter,
             )
 
+    async def async_set_collector_uart_baudrate(self, baudrate: str) -> str:
+        """Apply UART speed under the shared collector-operation authority."""
+
+        self._raise_if_high_level_collector_actions_disabled()
+        writer = getattr(self._runtime, "async_set_collector_uart_baudrate", None)
+        if not callable(writer):
+            raise RuntimeError("collector_local_management_not_supported")
+        from ...connection.collector_endpoint_operation import (
+            OPERATION_COLLECTOR_SYSTEM_ACTION,
+        )
+
+        async with self._collector_endpoint_operation(
+            OPERATION_COLLECTOR_SYSTEM_ACTION
+        ):
+            return await writer(baudrate)
+
     async def async_rollback_collector_server_endpoint(
         self,
         *,

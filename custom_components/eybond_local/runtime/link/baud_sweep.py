@@ -31,10 +31,9 @@ import logging
 from typing import Any, Awaitable, Callable
 
 from ...collector.collector_wire import (
-    CollectorWireManagementSession,
     QUERY_SERIAL_BAUDRATE,
-    SET_SERIAL_BAUDRATE,
 )
+from ...collector.management import CollectorManagementAdapter
 from ...metadata.device_catalog_loader import load_device_catalog
 
 logger = logging.getLogger(__name__)
@@ -45,39 +44,36 @@ ERROR_INVERTER_LINK_DOWN = "inverter_link_down"
 class RuntimeLinkBaudChannel:
     """Typed collector-management channel for runtime UART speed changes."""
 
-    def __init__(self, transport: object, *, request_timeout: float) -> None:
-        self._session = CollectorWireManagementSession(transport)
+    def __init__(
+        self,
+        adapter: CollectorManagementAdapter,
+        *,
+        request_timeout: float,
+    ) -> None:
+        self._adapter = adapter
         self._request_timeout = max(1.0, float(request_timeout))
 
     async def async_read_current_baud(self) -> int | None:
         try:
-            response = await asyncio.wait_for(
-                self._session.query_collector(QUERY_SERIAL_BAUDRATE),
+            values = await asyncio.wait_for(
+                self._adapter.async_query_parameters((QUERY_SERIAL_BAUDRATE,)),
                 timeout=self._request_timeout,
             )
         except Exception as exc:
             logger.debug("Runtime link baud current-speed read failed: %s", exc)
             return None
-        if (
-            getattr(response, "code", None) != 0
-            or getattr(response, "parameter", None) != QUERY_SERIAL_BAUDRATE
-        ):
-            return None
-        return parse_reported_baud(getattr(response, "text", ""))
+        return parse_reported_baud(values.get(QUERY_SERIAL_BAUDRATE, ""))
 
     async def async_set_baud(self, baud: int) -> bool:
         try:
-            response = await asyncio.wait_for(
-                self._session.set_collector(SET_SERIAL_BAUDRATE, str(baud)),
+            readback = await asyncio.wait_for(
+                self._adapter.async_set_uart_baudrate(str(baud)),
                 timeout=self._request_timeout,
             )
         except Exception as exc:
             logger.debug("Runtime link baud set %s failed: %s", baud, exc)
             raise
-        return bool(
-            getattr(response, "status", None) == 0
-            and getattr(response, "parameter", None) == SET_SERIAL_BAUDRATE
-        )
+        return parse_reported_baud(readback) == baud
 
 
 async def _await_critical(awaitable: Awaitable[Any]) -> Any:

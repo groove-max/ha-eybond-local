@@ -18,6 +18,7 @@ from custom_components.eybond_local.valuecloud_cloud import (  # noqa: E402
     LOGIN_PATH,
     VALUECLOUD_BATCH_SETUP_PATH,
     VALUECLOUD_CTRL_DEVICE_PATH,
+    ValueCloudActionRejectedError,
     ValueCloudEnvelope,
     ValueCloudSession,
     _headers_for_path,
@@ -42,6 +43,29 @@ def _envelope(data, *, code=200, success=True, headers=None) -> ValueCloudEnvelo
 
 
 class ValueCloudCloudTests(unittest.TestCase):
+    def test_action_rejection_is_typed(self) -> None:
+        session = ValueCloudSession(token="token", secret="secret")
+        with patch(
+            "custom_components.eybond_local.valuecloud_cloud._http_json",
+            return_value=_envelope({}, code=409, success=False),
+        ):
+            with self.assertRaises(ValueCloudActionRejectedError) as raised:
+                setup_batch_control_value(
+                    session=session,
+                    pn="I200",
+                    sn="DEV1",
+                    devcode=2506,
+                    devaddr=1,
+                    control_item_id=10,
+                    control_id="cltd_lcd_backlight",
+                    details_id=20,
+                    order=3,
+                    value="1",
+                )
+
+        self.assertEqual(raised.exception.code, 409)
+        self.assertEqual(raised.exception.action, "setUp")
+
     def test_authenticated_headers_sign_request_path_with_secret(self) -> None:
         session = ValueCloudSession(
             token="token-123",

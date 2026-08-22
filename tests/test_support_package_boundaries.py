@@ -66,6 +66,7 @@ class SupportPackageBoundaryTests(unittest.TestCase):
             {
                 "__init__.py",
                 "backend.py",
+                "cloud_dispatch.py",
                 "orchestrator.py",
                 "overlay_generator.py",
                 "protocol.py",

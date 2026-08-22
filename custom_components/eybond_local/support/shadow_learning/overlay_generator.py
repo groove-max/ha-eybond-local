@@ -129,16 +129,24 @@ def generate_shadow_learning_overlay_drafts(
         read_bindings=read_bindings,
         registers=(read_map or {}).get("registers", {}) if isinstance(read_map, dict) else {},
         enum_tables=dict(schema.enum_tables) if schema.enum_tables else {},
+        register_enum_tables=_register_enum_table_authority(schema),
     )
     learned_read = _build_learned_read_overlay(
         schema=schema,
         read_bindings=read_bindings,
         read_enum_bindings=read_enum_bindings,
     )
+    read_review_evidence = _build_read_review_evidence(
+        read_bindings=read_bindings,
+        read_enum_bindings=read_enum_bindings,
+        generated=list(learned_read["generated"]),
+        skipped=list(learned_read["skipped"]),
+    )
     review_model = attach_learned_read_review_model(
         build_learned_control_review_model(capabilities),
         learned_read_sensors=list(learned_read["generated"]),
         skipped_read_sensors=list(learned_read["skipped"]),
+        read_review_evidence=read_review_evidence,
     )
     generated_at = datetime.now(timezone.utc).isoformat()
     manifest = {
@@ -170,6 +178,10 @@ def generate_shadow_learning_overlay_drafts(
         # Read sensors materialized from unique value/enum correlations.
         "learned_read_sensors": list(learned_read["generated"]),
         "skipped_read_sensors": list(learned_read["skipped"]),
+        # One disposition for every cloud read field observed during this run.
+        # Inconclusive rows remain review/support evidence only and can never be
+        # activated as entities.
+        "read_review_evidence": read_review_evidence,
         "review_model": review_model,
         "output": {
             "profile_name": profile_output_name,
@@ -320,7 +332,14 @@ def _build_learned_read_overlay(
         spec_set_additions.setdefault(set_name, []).append(spec)
         measurements.append(measurement)
         generated.append(
-            {"key": spec["key"], "register": register, "title": title, "kind": kind, "spec_set": set_name}
+            {
+                "key": spec["key"],
+                "register": register,
+                "title": title,
+                "display_title": _canonical_read_title(title),
+                "kind": kind,
+                "spec_set": set_name,
+            }
         )
 
     for binding in _unique_read_bindings(read_bindings):
@@ -329,7 +348,15 @@ def _build_learned_read_overlay(
         title_key = _normalize_title(title)
         skip_reason = _read_skip_reason(register, title_key, existing_registers, existing_titles)
         if skip_reason is not None:
-            skipped.append({"register": register, "title": title, "kind": "numeric", "reason": skip_reason})
+            skipped.append(
+                {
+                    "register": register,
+                    "title": title,
+                    "display_title": _canonical_read_title(title),
+                    "kind": "numeric",
+                    "reason": skip_reason,
+                }
+            )
             continue
         key = _unique_read_key(f"learned_read_{register}", used_keys)
         existing_registers.add(register)
@@ -351,7 +378,15 @@ def _build_learned_read_overlay(
         title_key = _normalize_title(title)
         skip_reason = _read_skip_reason(register, title_key, existing_registers, existing_titles)
         if skip_reason is not None:
-            skipped.append({"register": register, "title": title, "kind": "enum", "reason": skip_reason})
+            skipped.append(
+                {
+                    "register": register,
+                    "title": title,
+                    "display_title": _canonical_read_title(title),
+                    "kind": "enum",
+                    "reason": skip_reason,
+                }
+            )
             continue
         key = _unique_read_key(f"learned_read_{register}", used_keys)
         existing_registers.add(register)
@@ -375,6 +410,146 @@ def _build_learned_read_overlay(
     return {"schema_fragment": fragment, "generated": generated, "skipped": skipped}
 
 
+_READ_DISPOSITION_NEW = "new_sensor"
+_READ_DISPOSITION_EXISTING = "already_in_home_assistant"
+_READ_DISPOSITION_INCONCLUSIVE = "inconclusive"
+
+
+def _canonical_read_title(title: Any) -> str:
+    """Return the catalog presentation while preserving raw evidence elsewhere."""
+
+    normalized = " ".join(str(title or "").split()).strip()
+    semantic = resolve_semantic_title(normalized)
+    if semantic is not None and semantic.canonical_title:
+        return semantic.canonical_title
+    return normalized
+
+
+def _build_read_review_evidence(
+    *,
+    read_bindings: dict[str, Any] | None,
+    read_enum_bindings: dict[str, Any] | None,
+    generated: list[dict[str, Any]],
+    skipped: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Classify every cloud read field without promoting uncertain evidence.
+
+    The entity generator still consumes only unique bindings. This parallel
+    review projection explains what happened to zero, ambiguous, enum and
+    unmatched fields instead of silently dropping them from the user review.
+    """
+
+    if not isinstance(read_bindings, dict):
+        return []
+
+    generated_keys = {
+        _read_review_key(item)
+        for item in generated
+        if isinstance(item, dict)
+    }
+    skipped_by_key = {
+        _read_review_key(item): item
+        for item in skipped
+        if isinstance(item, dict)
+    }
+    enum_by_identity: dict[tuple[str, str], dict[str, Any]] = {}
+    if isinstance(read_enum_bindings, dict):
+        for item in read_enum_bindings.get("bindings", []):
+            if not isinstance(item, dict):
+                continue
+            enum_by_identity[
+                (
+                    str(item.get("cloud_id") or ""),
+                    _normalize_title(str(item.get("title") or "")),
+                )
+            ] = item
+
+    evidence: list[dict[str, Any]] = []
+    for item in read_bindings.get("bindings", []):
+        if not isinstance(item, dict):
+            continue
+        cloud_id = str(item.get("cloud_id") or "")
+        title = " ".join(str(item.get("title") or "").split()).strip()
+        if not title:
+            continue
+        raw_status = str(item.get("status") or "").strip()
+        kind = "enum" if raw_status == "enum_label" else "numeric"
+        binding_status = raw_status
+        candidates = item.get("candidates") if isinstance(item.get("candidates"), list) else []
+        if kind == "enum":
+            enum_item = enum_by_identity.get((cloud_id, _normalize_title(title)), {})
+            enum_status = str(enum_item.get("status") or "no_table_match").strip()
+            binding_status = f"enum_{enum_status}"
+            candidates = (
+                enum_item.get("candidates")
+                if isinstance(enum_item.get("candidates"), list)
+                else []
+            )
+
+        candidate_registers = sorted(
+            {
+                int(candidate.get("register"))
+                for candidate in candidates
+                if isinstance(candidate, dict)
+                and type(candidate.get("register")) is int
+                and int(candidate["register"]) > 0
+            }
+        )
+        register = (
+            candidate_registers[0]
+            if binding_status in {"unique", "enum_unique"}
+            and len(candidate_registers) == 1
+            else 0
+        )
+        review_key = (kind, register, _normalize_title(title))
+        skipped_item = skipped_by_key.get(review_key)
+        if review_key in generated_keys:
+            disposition = _READ_DISPOSITION_NEW
+            reason = "generated"
+        elif skipped_item is not None:
+            disposition = _READ_DISPOSITION_EXISTING
+            reason = str(skipped_item.get("reason") or "already_supported")
+        else:
+            disposition = _READ_DISPOSITION_INCONCLUSIVE
+            reason = _inconclusive_read_reason(binding_status)
+
+        evidence.append(
+            {
+                "cloud_id": cloud_id,
+                "field_name": title,
+                "default_label": _canonical_read_title(title),
+                "cloud_value": str(item.get("cloud_value") or ""),
+                "unit": str(item.get("unit") or ""),
+                "kind": kind,
+                "binding_status": binding_status,
+                "disposition": disposition,
+                "reason": reason,
+                "register": register,
+                "candidate_registers": candidate_registers,
+            }
+        )
+    return evidence
+
+
+def _read_review_key(item: dict[str, Any]) -> tuple[str, int, str]:
+    return (
+        str(item.get("kind") or "numeric"),
+        int(item.get("register") or 0),
+        _normalize_title(str(item.get("title") or "")),
+    )
+
+
+def _inconclusive_read_reason(binding_status: str) -> str:
+    return {
+        "skipped_zero": "value_zero",
+        "ambiguous": "multiple_registers",
+        "no_match": "no_register_match",
+        "not_numeric": "not_numeric",
+        "enum_ambiguous": "enum_ambiguous",
+        "enum_no_table_match": "enum_no_match",
+    }.get(str(binding_status), "unresolved")
+
+
 def _polled_block_lookup(schema):
     ranges: list[tuple[int, int, str]] = []
     for block in schema.blocks:
@@ -388,6 +563,32 @@ def _polled_block_lookup(schema):
         return None
 
     return _lookup
+
+
+def _register_enum_table_authority(schema) -> dict[int, str]:
+    """Return the effective schema's exact register→enum-table assignments."""
+
+    authority: dict[int, str] = {}
+    enum_tables = {
+        str(name): dict(table)
+        for name, table in schema.enum_tables.items()
+        if isinstance(table, dict)
+    }
+    for specs in schema.spec_sets.values():
+        for spec in specs:
+            enum_map = getattr(spec, "enum_map", None)
+            if not isinstance(enum_map, dict) or not enum_map:
+                continue
+            matching_tables = [
+                name for name, table in enum_tables.items() if table == enum_map
+            ]
+            # Several schemas intentionally reuse identical On/Off maps under
+            # different semantic names. Their original table name cannot be
+            # reconstructed from the loaded spec, so leave those registers out
+            # instead of assigning an arbitrary authority.
+            if len(matching_tables) == 1:
+                authority[int(spec.register)] = matching_tables[0]
+    return authority
 
 
 def _read_skip_reason(

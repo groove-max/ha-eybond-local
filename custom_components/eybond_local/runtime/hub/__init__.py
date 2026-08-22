@@ -86,6 +86,10 @@ class EybondHub(
         self._inverter_protocol_candidates: tuple[RuntimeInverterCandidate, ...] = ()
         self._inverter_protocol_candidate_generation = -1
         self._link_baud_sweep_generation = -1
+        # Configured with the domain callback ownership context before runtime
+        # start.  Collector mutations fail closed without a real config-entry id;
+        # a standalone/bare hub may still poll, but it may not rewrite UART.
+        self._collector_operation_entry_id = ""
         self._inverter_binding_needs_live_detection_refresh = False
         self._inverter_binding_refresh_attempts = 0
         self._inverter_identity_conflict = ""

@@ -453,13 +453,10 @@ class ConfigNetworkFlowMixin:
     def _collector_connection_placeholders(self) -> dict[str, str]:
         if self._selected_result is None:
             return {}
-        placeholders = self._result_placeholders(self._selected_result)
-        placeholders.update(
-            {
-                "collector_callback_target_endpoint": self._collector_callback_target_endpoint(),
-            }
-        )
-        return placeholders
+        # First-add presents only facts already observed for the selected
+        # result.  A computed callback endpoint is neither scan evidence nor an
+        # earned route, and the confirmation text no longer consumes it.
+        return self._result_placeholders(self._selected_result)
 
     def _auto_description_placeholders(self, single_interface: bool) -> dict[str, str]:
         if single_interface and self._interface_options:

@@ -221,13 +221,16 @@ def build_learned_read_review_entry(sensor: Mapping[str, Any]) -> dict[str, Any]
     key = str(sensor.get("key") or "").strip()
     register = _to_int(sensor.get("register")) or 0
     title = " ".join(str(sensor.get("title") or "").split()).strip()
+    display_title = " ".join(
+        str(sensor.get("display_title") or title).split()
+    ).strip()
     kind = str(sensor.get("kind") or "").strip()
     spec_set = str(sensor.get("spec_set") or "").strip()
     return {
         "key": key,
         "register": register,
         "field_name": title,
-        "default_label": title or f"Discovered sensor {register}",
+        "default_label": display_title or title or f"Discovered sensor {register}",
         "kind": kind,
         "spec_set": spec_set,
         "enabled_by_default": True,
@@ -240,6 +243,7 @@ def attach_learned_read_review_model(
     *,
     learned_read_sensors: list[dict[str, Any]] | None = None,
     skipped_read_sensors: list[dict[str, Any]] | None = None,
+    read_review_evidence: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return ``review_model`` extended with read-sensor review evidence.
 
@@ -267,17 +271,60 @@ def attach_learned_read_review_model(
             continue
         register = _to_int(sensor.get("register")) or 0
         title = " ".join(str(sensor.get("title") or "").split()).strip()
+        display_title = " ".join(
+            str(sensor.get("display_title") or title).split()
+        ).strip()
         reason = str(sensor.get("reason") or "skipped").strip() or "skipped"
         read_excluded_by_policy.append(
             {
                 "register": register,
                 "field_name": title,
-                "default_label": title or f"Discovered sensor {register}",
+                "default_label": display_title or title or f"Discovered sensor {register}",
                 "kind": str(sensor.get("kind") or ""),
                 "reason": reason,
                 "reasons": [reason],
             }
         )
+
+    observed_read_all: list[dict[str, Any]] = []
+    read_inconclusive: list[dict[str, Any]] = []
+    for raw in list(read_review_evidence or []):
+        if not isinstance(raw, Mapping):
+            continue
+        disposition = str(raw.get("disposition") or "").strip()
+        if disposition not in {
+            "new_sensor",
+            "already_in_home_assistant",
+            "inconclusive",
+        }:
+            continue
+        field_name = " ".join(str(raw.get("field_name") or "").split()).strip()
+        default_label = " ".join(
+            str(raw.get("default_label") or field_name).split()
+        ).strip()
+        if not field_name:
+            continue
+        candidate_registers = [
+            register
+            for value in (raw.get("candidate_registers") or [])
+            if (register := _to_int(value)) is not None and register > 0
+        ]
+        entry = {
+            "cloud_id": str(raw.get("cloud_id") or ""),
+            "field_name": field_name,
+            "default_label": default_label or field_name,
+            "cloud_value": str(raw.get("cloud_value") or ""),
+            "unit": str(raw.get("unit") or ""),
+            "kind": str(raw.get("kind") or ""),
+            "binding_status": str(raw.get("binding_status") or ""),
+            "disposition": disposition,
+            "reason": str(raw.get("reason") or "unresolved"),
+            "register": _to_int(raw.get("register")) or 0,
+            "candidate_registers": sorted(dict.fromkeys(candidate_registers)),
+        }
+        observed_read_all.append(entry)
+        if disposition == "inconclusive":
+            read_inconclusive.append(entry)
 
     counts = dict(model.get("counts") if isinstance(model.get("counts"), Mapping) else {})
     counts.update(
@@ -285,12 +332,16 @@ def attach_learned_read_review_model(
             "learned_read_all": len(learned_read_all),
             "read_enabled_by_default": len(read_enabled_by_default),
             "read_excluded_by_policy": len(read_excluded_by_policy),
+            "observed_read_all": len(observed_read_all),
+            "read_inconclusive": len(read_inconclusive),
         }
     )
     model["counts"] = counts
     model["learned_read_all"] = learned_read_all
     model["read_enabled_by_default"] = read_enabled_by_default
     model["read_excluded_by_policy"] = read_excluded_by_policy
+    model["observed_read_all"] = observed_read_all
+    model["read_inconclusive"] = read_inconclusive
     return model
 
 

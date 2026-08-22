@@ -97,6 +97,7 @@ class ShadowLearningReviewMixin:
         already_controls = self._control_discovery_already_supported_controls()
         new_reads = self._control_discovery_review_read_sensors()
         already_reads = self._control_discovery_already_supported_read_sensors()
+        inconclusive_reads = self._control_discovery_inconclusive_read_sensors()
 
         # Nothing discovered at all (or discovery failed earlier): skip the
         # redundant "nothing found" page entirely and go straight to the detailed
@@ -107,6 +108,7 @@ class ShadowLearningReviewMixin:
             and not already_controls
             and not new_reads
             and not already_reads
+            and not inconclusive_reads
         ):
             return await self.async_step_shadow_learning_result()
 
@@ -121,6 +123,7 @@ class ShadowLearningReviewMixin:
             existing_count = len(already_controls)
             new_read_count = len(new_reads)
             existing_read_count = len(already_reads)
+            inconclusive_read_count = len(inconclusive_reads)
             on_count = sum(
                 1 for control in new_controls if bool(control.get("enabled_by_default"))
             )
@@ -135,12 +138,19 @@ class ShadowLearningReviewMixin:
                 "control_discovery_existing_count": str(existing_count),
                 "control_discovery_new_read_count": str(new_read_count),
                 "control_discovery_existing_read_count": str(existing_read_count),
+                "control_discovery_inconclusive_read_count": str(
+                    inconclusive_read_count
+                ),
                 "control_discovery_on_count": str(on_count),
                 "control_discovery_off_count": str(new_count - on_count),
                 "control_discovery_read_on_count": str(read_on_count),
                 "control_discovery_read_off_count": str(new_read_count - read_on_count),
                 "control_discovery_overview": self._control_discovery_overview_markdown(
-                    new_controls, already_controls, new_reads, already_reads
+                    new_controls,
+                    already_controls,
+                    new_reads,
+                    already_reads,
+                    inconclusive_reads,
                 ),
             }
             return self.async_show_form(
@@ -155,6 +165,8 @@ class ShadowLearningReviewMixin:
                     "{control_discovery_existing_count} existing control(s), "
                     "{control_discovery_new_read_count} new sensor(s), and "
                     "{control_discovery_existing_read_count} existing sensor(s). "
+                    "Another {control_discovery_inconclusive_read_count} cloud "
+                    "field(s) could not be linked safely in this run. "
                     "Continue to review the results.\n\n"
                     "{control_discovery_overview}",
                     hint_placeholders=overview_placeholders,
@@ -396,12 +408,27 @@ class ShadowLearningReviewMixin:
             return []
         return [dict(entry) for entry in skipped if isinstance(entry, dict)]
 
+    def _control_discovery_inconclusive_read_sensors(self) -> list[dict[str, Any]]:
+        """Return observed cloud fields that were not safe to bind this run."""
+
+        overlay = self._shadow_learning_state.get("overlay")
+        overlay = overlay if isinstance(overlay, dict) else {}
+        manifest = overlay.get("manifest")
+        manifest = manifest if isinstance(manifest, dict) else {}
+        review_model = manifest.get("review_model")
+        review_model = review_model if isinstance(review_model, dict) else {}
+        rows = review_model.get("read_inconclusive")
+        if not isinstance(rows, list):
+            return []
+        return [dict(entry) for entry in rows if isinstance(entry, dict)]
+
     def _control_discovery_overview_markdown(
         self,
         new_controls: list[dict[str, Any]],
         already_controls: list[dict[str, Any]],
         new_reads: list[dict[str, Any]] | None = None,
         already_reads: list[dict[str, Any]] | None = None,
+        inconclusive_reads: list[dict[str, Any]] | None = None,
     ) -> str:
         """Render a readable, non-technical overview of everything discovered.
 
@@ -416,6 +443,7 @@ class ShadowLearningReviewMixin:
         lines: list[str] = []
         new_reads = list(new_reads or [])
         already_reads = list(already_reads or [])
+        inconclusive_reads = list(inconclusive_reads or [])
         if new_controls:
             heading = self._tr(
                 "common.dynamic.control_discovery_overview_new_heading",
@@ -476,7 +504,62 @@ class ShadowLearningReviewMixin:
             for sensor in already_reads:
                 name = clean(self._control_discovery_read_sensor_label(sensor))
                 lines.append(f"- {name}")
+        if inconclusive_reads:
+            if lines:
+                lines.append("")
+            heading = self._tr(
+                "common.dynamic.control_discovery_overview_inconclusive_reads_heading",
+                "Cloud fields not linked in this run ({count})",
+                {"count": str(len(inconclusive_reads))},
+            )
+            lines.append(f"**{heading}**")
+            for sensor in inconclusive_reads:
+                name = clean(self._control_discovery_read_sensor_label(sensor))
+                reason = clean(
+                    self._control_discovery_inconclusive_read_reason(sensor)
+                )
+                lines.append(f"- {name} — {reason}")
         return "\n".join(lines)
+
+    def _control_discovery_inconclusive_read_reason(
+        self,
+        sensor: dict[str, Any],
+    ) -> str:
+        """Return a localized explanation for one non-promotable read field."""
+
+        reason = str(sensor.get("reason") or "unresolved").strip()
+        translations = {
+            "value_zero": (
+                "control_discovery_read_reason_value_zero",
+                "no active value during this check",
+            ),
+            "multiple_registers": (
+                "control_discovery_read_reason_multiple_registers",
+                "several registers had the same value",
+            ),
+            "enum_ambiguous": (
+                "control_discovery_read_reason_enum_ambiguous",
+                "the state could not be matched safely",
+            ),
+            "enum_no_match": (
+                "control_discovery_read_reason_enum_no_match",
+                "the state is not in the known value tables",
+            ),
+            "no_register_match": (
+                "control_discovery_read_reason_no_register_match",
+                "no matching register was observed",
+            ),
+            "not_numeric": (
+                "control_discovery_read_reason_not_numeric",
+                "the value needs a known state table",
+            ),
+            "unresolved": (
+                "control_discovery_read_reason_unresolved",
+                "not enough evidence in this check",
+            ),
+        }
+        key, default = translations.get(reason, translations["unresolved"])
+        return self._tr(f"common.dynamic.{key}", default)
 
     def _control_discovery_prior_selections(self) -> dict[str, dict[str, Any]]:
         """Return any previously stored per-control selections, keyed by control key."""

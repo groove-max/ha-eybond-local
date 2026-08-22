@@ -298,6 +298,11 @@ def _labels_match(cloud_label: str, table_label: str) -> str:
         return ""
     if cloud_label == table_label:
         return "exact"
+    # Generic binary labels are not evidence for a longer state. Without this
+    # guard "Off-Grid Mode" matched every unrelated enum table containing an
+    # "Off" row and made a known operating-mode register look ambiguous.
+    if cloud_label in {"on", "off"} or table_label in {"on", "off"}:
+        return ""
     if cloud_label in table_label or table_label in cloud_label:
         return "contains"
     return ""
@@ -308,8 +313,14 @@ def match_enum_bindings(
     read_bindings: dict[str, Any] | None,
     registers: dict[Any, Any],
     enum_tables: dict[str, Any] | None,
+    register_enum_tables: dict[int, str] | None = None,
 ) -> dict[str, Any]:
-    """Match enum-label binding verdicts against known schema enum tables."""
+    """Match enum labels against known tables and their authoritative registers.
+
+    ``register_enum_tables`` is optional for standalone/corpus callers. The
+    overlay generator always supplies it from the effective schema so a raw
+    value shared by unrelated registers cannot borrow the wrong enum table.
+    """
 
     register_values = _normalize_registers(registers)
     bindings = []
@@ -338,6 +349,10 @@ def match_enum_bindings(
                 except (TypeError, ValueError):
                     continue
                 for register, samples in register_values.items():
+                    if register_enum_tables is not None and (
+                        register_enum_tables.get(register) != str(table_name)
+                    ):
+                        continue
                     if expected in samples:
                         candidates.append(
                             {
@@ -375,4 +390,3 @@ def match_enum_bindings(
         "bindings": results,
         "unique_count": sum(1 for item in results if item["status"] == ENUM_STATUS_UNIQUE),
     }
-

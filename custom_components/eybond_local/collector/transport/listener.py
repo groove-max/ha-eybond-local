@@ -10,6 +10,7 @@ from typing import Callable
 
 from ...collector_identity import (
     identity_source_is_strong,
+    pn_is_same_identity,
     prefer_identity_source,
     reconcile_pn,
     validated_collector_pn,
@@ -18,7 +19,6 @@ from ..protocol import HEADER_SIZE, decode_header
 from .common import (
     CollectorListenerBindError,
     _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN,
-    _COLLECTOR_PN_PREFIX_MATCH_MIN_LEN,
     _classify_initial_protocol_shape,
     _close_writer_bounded,
     _collector_pn_from_initial_chunk,
@@ -1260,17 +1260,7 @@ class _SharedEybondListener:
             pass
 
     def _collector_pn_matches(self, expected_pn: str, observed_pn: str) -> bool:
-        expected = str(expected_pn or "").strip()
-        observed = str(observed_pn or "").strip()
-        if not expected or not observed:
-            return False
-        if expected == observed:
-            return True
-        if len(expected) < _COLLECTOR_PN_PREFIX_MATCH_MIN_LEN:
-            return False
-        if len(observed) < _COLLECTOR_PN_PREFIX_MATCH_MIN_LEN:
-            return False
-        return bool(expected.startswith(observed) or observed.startswith(expected))
+        return pn_is_same_identity(expected_pn, observed_pn)
 
     def _select_pending_socket(self, collector_ip: str) -> _PendingCollectorSocket | None:
         if collector_ip:
@@ -1293,16 +1283,13 @@ class _SharedEybondListener:
             unique_candidates = {id(candidate): candidate for candidate in candidates}
             if len(unique_candidates) == 1:
                 return next(iter(unique_candidates.values()))
+            # A broadcast address identifies a trigger route, never a physical
+            # collector.  With multiple fresh sockets there is no safe winner:
+            # arrival order / ``_last_pending_ip`` is timing, not causality or
+            # identity.  Exact-session admission may resolve them individually;
+            # the generic route selector must fail closed.
             if unique_candidates and _is_ipv4_broadcast_placeholder(collector_ip):
-                preferred = tuple(
-                    pending
-                    for pending in self._pending_sockets.values()
-                    if pending.remote_ip == self._last_pending_ip
-                    and id(pending) in unique_candidates
-                )
-                if len(preferred) == 1:
-                    return preferred[0]
-                return next(iter(unique_candidates.values()))
+                return None
             return None
 
         unique_candidates = tuple({id(pending): pending for pending in self._pending_sockets.values()}.values())

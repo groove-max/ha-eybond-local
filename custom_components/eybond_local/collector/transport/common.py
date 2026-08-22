@@ -44,7 +44,6 @@ from ..protocol import (
 
 logger = logging.getLogger(__name__)
 
-_COLLECTOR_PN_PREFIX_MATCH_MIN_LEN = 14
 class CollectorListenerBindError(RuntimeError):
     """Raised when the shared collector listener cannot bind its socket."""
 

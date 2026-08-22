@@ -319,7 +319,7 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         self.assertNotIn("COLLECTOR_OPERATION_HA_ONLY", source)
         self.assertNotIn("DEFAULT_COLLECTOR_OPERATION_MODE", source)
         self.assertNotIn("collector_operation_mode_note", source)
-        self.assertIn("self._collector_endpoint_bind_applied", source)
+        self.assertNotIn("self._collector_endpoint_bind_applied", source)
 
     def test_cloud_tools_share_one_profile_gate_without_blocking_cleanup(self) -> None:
         source = "\n".join(

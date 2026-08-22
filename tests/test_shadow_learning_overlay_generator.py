@@ -27,11 +27,14 @@ from custom_components.eybond_local.metadata.profile_loader import (
 from custom_components.eybond_local.metadata.register_schema_loader import (
     builtin_base_schema_name,
     clear_register_schema_loader_cache,
+    load_register_schema,
     set_external_register_schema_roots,
 )
 from custom_components.eybond_local.support.shadow_learning.overlay_generator import (
     _build_learned_read_overlay,
+    _build_read_review_evidence,
     _classify_learned_control,
+    _register_enum_table_authority,
     generate_shadow_learning_overlay_drafts,
 )
 from custom_components.eybond_local.support.shadow_learning.review_model import (
@@ -207,6 +210,12 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
         self.assertEqual(
             review_model["read_enabled_by_default"], ["learned_read_404"]
         )
+        self.assertEqual(len(result.manifest["read_review_evidence"]), 1)
+        self.assertEqual(
+            result.manifest["read_review_evidence"][0]["disposition"],
+            "new_sensor",
+        )
+        self.assertEqual(review_model["counts"]["observed_read_all"], 1)
 
     def test_manifest_read_map_empty_when_session_had_no_reads(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -221,6 +230,66 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
 
         self.assertEqual(result.manifest["read_map"], {})
         self.assertEqual(result.manifest["read_bindings"], {})
+
+    def test_effective_schema_preserves_unique_enum_register_authority(self) -> None:
+        schema = load_register_schema("builtin:modbus_smg/models/smg_6200.json")
+
+        authority = _register_enum_table_authority(schema)
+
+        self.assertEqual(authority[201], "mode_names")
+        self.assertEqual(authority[301], "output_source_priority")
+        self.assertEqual(authority[331], "charge_source_priority")
+        # Identical binary maps deliberately remain unassigned: the loaded
+        # schema no longer carries enough information to choose one table name.
+        self.assertNotIn(306, authority)
+
+    def test_manifest_enum_matching_uses_effective_schema_register_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = generate_shadow_learning_overlay_drafts(
+                config_dir=Path(temp_dir),
+                source_profile_name="smg_modbus.json",
+                source_schema_name="modbus_smg/models/smg_6200.json",
+                session_manifest=_sample_session_manifest(),
+                correlation=_sample_correlation_payload(),
+                read_map={
+                    "registers": {"201": [3], "301": [2], "331": [3]},
+                    "read_event_count": 3,
+                    "value_source": "seed_bank",
+                },
+                read_bindings={
+                    "bindings": [
+                        {
+                            "cloud_id": "operating_mode",
+                            "title": "Operating mode",
+                            "cloud_value": "Off-Grid Mode",
+                            "unit": "",
+                            "status": "enum_label",
+                            "candidates": [],
+                        },
+                        {
+                            "cloud_id": "output_priority",
+                            "title": "Output priority",
+                            "cloud_value": "SBU",
+                            "unit": "",
+                            "status": "enum_label",
+                            "candidates": [],
+                        },
+                    ]
+                },
+            )
+
+        enum_bindings = result.manifest["read_enum_bindings"]["bindings"]
+        self.assertEqual(
+            [(item["title"], item["status"]) for item in enum_bindings],
+            [("Operating mode", "unique"), ("Output priority", "unique")],
+        )
+        evidence = result.manifest["read_review_evidence"]
+        self.assertTrue(
+            all(
+                item["disposition"] == "already_in_home_assistant"
+                for item in evidence
+            )
+        )
 
     def test_generates_command_based_capability_for_eybond_g_ascii_learning(self) -> None:
         correlation = {
@@ -1225,6 +1294,98 @@ class LearnedReadOverlayTests(unittest.TestCase):
 
         self.assertEqual(result["generated"], [])
         self.assertEqual(result["schema_fragment"], {})
+
+    def test_read_review_evidence_keeps_every_cloud_field_and_canonicalizes_titles(self) -> None:
+        read_bindings = {
+            "bindings": [
+                {
+                    "cloud_id": "inv_temp",
+                    "title": "INV Module Termperature",
+                    "cloud_value": "32",
+                    "unit": "°C",
+                    "status": "unique",
+                    "candidates": [{"register": 227, "divisor": 1, "signed": False}],
+                },
+                {
+                    "cloud_id": "grid_voltage",
+                    "title": "Grid Voltage",
+                    "cloud_value": "0.0",
+                    "unit": "V",
+                    "status": "skipped_zero",
+                    "candidates": [],
+                },
+                {
+                    "cloud_id": "output_voltage",
+                    "title": "Output Voltage",
+                    "cloud_value": "233.1",
+                    "unit": "V",
+                    "status": "ambiguous",
+                    "candidates": [
+                        {"register": 205, "divisor": 10, "signed": False},
+                        {"register": 210, "divisor": 10, "signed": False},
+                    ],
+                },
+                {
+                    "cloud_id": "operating_mode",
+                    "title": "Operating mode",
+                    "cloud_value": "Off-Grid Mode",
+                    "unit": "",
+                    "status": "enum_label",
+                    "candidates": [],
+                },
+            ]
+        }
+        evidence = _build_read_review_evidence(
+            read_bindings=read_bindings,
+            read_enum_bindings={
+                "bindings": [
+                    {
+                        "cloud_id": "operating_mode",
+                        "title": "Operating mode",
+                        "status": "ambiguous",
+                        "candidates": [
+                            {"register": 201, "enum_table": "mode_names"},
+                            {"register": 331, "enum_table": "mode_names"},
+                        ],
+                    }
+                ]
+            },
+            generated=[],
+            skipped=[
+                {
+                    "register": 227,
+                    "title": "INV Module Termperature",
+                    "kind": "numeric",
+                    "reason": "register_already_decoded",
+                }
+            ],
+        )
+
+        self.assertEqual(len(evidence), 4)
+        by_id = {item["cloud_id"]: item for item in evidence}
+        self.assertEqual(
+            by_id["inv_temp"]["default_label"], "INV Module Temperature"
+        )
+        self.assertEqual(
+            by_id["inv_temp"]["disposition"], "already_in_home_assistant"
+        )
+        self.assertEqual(by_id["grid_voltage"]["reason"], "value_zero")
+        self.assertEqual(
+            by_id["output_voltage"]["candidate_registers"], [205, 210]
+        )
+        self.assertEqual(
+            by_id["output_voltage"]["reason"], "multiple_registers"
+        )
+        self.assertEqual(
+            by_id["operating_mode"]["binding_status"], "enum_ambiguous"
+        )
+        self.assertTrue(
+            all(
+                item["disposition"] == "inconclusive"
+                for cloud_id, item in by_id.items()
+                if cloud_id != "inv_temp"
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -77,12 +77,6 @@ class HubDetectionMixin:
             return None
 
         transport = self._link_manager.transport
-        if not hasattr(transport, "async_send_collector"):
-            return None
-
-        # Claim this physical-session generation before the first await. Two
-        # concurrent refreshes may not both rewrite the same collector UART.
-        self._link_baud_sweep_generation = detection_generation
         hardware = self._collector_metadata_service.merged_values().get(
             "collector_hardware_version"
         )
@@ -91,62 +85,89 @@ class HubDetectionMixin:
         if not collector_capability_profile_from_runtime(
             hardware_version=hardware
         ).uart_runtime_speed_change:
+            self._link_baud_sweep_generation = detection_generation
             return None
-        channel = RuntimeLinkBaudChannel(
-            transport,
-            request_timeout=self._connection.request_timeout,
+
+        # The automatic scan and every user-facing collector mutation share ONE
+        # per-entry authority.  Acquire before the first management read and hold
+        # it through a possible cancellation-safe restore.  A busy operation is
+        # skipped without consuming this session generation, so a later refresh
+        # can retry after the active owner finishes.
+        from ...connection.collector_endpoint_operation import (
+            COLLECTOR_ENDPOINT_OPERATION_AUTHORITY,
+            OPERATION_RUNTIME_LINK_BAUD_SWEEP,
         )
 
-        def same_session() -> bool:
-            return self._owned_session_generation() == detection_generation
-
-        async def read_baud() -> int | None:
-            if not same_session():
-                return None
-            return await channel.async_read_current_baud()
-
-        async def set_baud(baud: int) -> bool:
-            if not same_session():
-                return False
-            return await channel.async_set_baud(baud)
-
-        sweep_deadline = monotonic() + default_runtime_driver_sweep_seconds()
-
-        def remaining_seconds() -> float:
-            return max(0.0, sweep_deadline - monotonic())
-
-        async def run_sweep(baud: int):
-            if not same_session():
-                return None
-            allowed = driver_keys_for_link_baud(baud)
-            if not allowed:
-                return None
-            try:
-                return await async_detect_inverter_candidates(
-                    transport,
-                    driver_hint=DRIVER_HINT_AUTO,
-                    allowed_driver_keys=allowed,
-                    remaining_seconds=remaining_seconds,
-                )
-            except DriverSweepNoMatch:
-                return None
-
-        outcome = await async_run_link_baud_sweep(
-            candidate_bauds=catalog_link_baud_hints(),
-            read_baud=read_baud,
-            set_baud=set_baud,
-            run_sweep=run_sweep,
-            admit=lambda: same_session() and remaining_seconds() > 0,
+        entry_id = getattr(self, "_collector_operation_entry_id", "")
+        acquired = COLLECTOR_ENDPOINT_OPERATION_AUTHORITY.acquire(
+            entry_id,
+            OPERATION_RUNTIME_LINK_BAUD_SWEEP,
         )
-        if outcome.matched:
-            logger.info(
-                "Runtime full scan matched inverter after UART speed change "
-                "original=%s matched=%s",
-                outcome.original_baud,
-                outcome.matched_baud,
+        if not acquired.acquired:
+            return None
+        token = acquired.token
+        self._link_baud_sweep_generation = detection_generation
+
+        try:
+            adapter = self._collector_management_adapter(active_only=True)
+            channel = RuntimeLinkBaudChannel(
+                adapter,
+                request_timeout=self._connection.request_timeout,
             )
-            return outcome.scan
-        return None
+
+            def same_session() -> bool:
+                return self._owned_session_generation() == detection_generation
+
+            async def read_baud() -> int | None:
+                if not same_session():
+                    return None
+                return await channel.async_read_current_baud()
+
+            async def set_baud(baud: int) -> bool:
+                if not same_session():
+                    return False
+                return await channel.async_set_baud(baud)
+
+            sweep_deadline = monotonic() + default_runtime_driver_sweep_seconds()
+
+            def remaining_seconds() -> float:
+                return max(0.0, sweep_deadline - monotonic())
+
+            async def run_sweep(baud: int):
+                if not same_session():
+                    return None
+                allowed = driver_keys_for_link_baud(baud)
+                if not allowed:
+                    return None
+                try:
+                    return await async_detect_inverter_candidates(
+                        transport,
+                        driver_hint=DRIVER_HINT_AUTO,
+                        allowed_driver_keys=allowed,
+                        remaining_seconds=remaining_seconds,
+                    )
+                except DriverSweepNoMatch:
+                    return None
+
+            outcome = await async_run_link_baud_sweep(
+                candidate_bauds=catalog_link_baud_hints(),
+                read_baud=read_baud,
+                set_baud=set_baud,
+                run_sweep=run_sweep,
+                admit=lambda: same_session() and remaining_seconds() > 0,
+            )
+            if outcome.matched:
+                logger.info(
+                    "Runtime full scan matched inverter after UART speed change "
+                    "original=%s matched=%s",
+                    outcome.original_baud,
+                    outcome.matched_baud,
+                )
+                return outcome.scan
+            return None
+        finally:
+            if token is not None:
+                COLLECTOR_ENDPOINT_OPERATION_AUTHORITY.release(entry_id, token)
 
     async def _async_detect_driver(self) -> str:
         detection_generation = self._owned_session_generation()

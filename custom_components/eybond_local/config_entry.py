@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 import logging
-from contextlib import suppress
-from dataclasses import (
-    replace,
-)
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
@@ -15,18 +11,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.data_entry_flow import section
 
-from .collector.capabilities import (
-    parse_esp_collector_hardware_token,
-)
-from .collector.smartess_local import (
-    QUERY_HARDWARE_VERSION,
-    parse_query_collector_response,
-)
-from .collector.transport import (
-    SharedCollectorAtTransport,
-)
 from .flows.config.common import (
-    _async_timeout,
     _compute_broadcast_24,
     _sanitize_collector_route_hint,
 )
@@ -74,7 +59,6 @@ from .const import (
     CONF_POLL_INTERVAL,
     CONF_POLL_MODE,
     CONF_SERVER_IP,
-    CONF_TCP_PORT,
     CONNECTION_STRATEGIES,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
@@ -82,8 +66,6 @@ from .const import (
     DEFAULT_DRIVER_DETECTION_STRATEGY,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_POLL_MODE,
-    DEFAULT_REQUEST_TIMEOUT,
-    DEFAULT_TCP_PORT,
     DOMAIN,
     DRIVER_DETECTION_STRATEGIES,
     DRIVER_HINT_AUTO,
@@ -98,11 +80,7 @@ from .flows.common.presentation import (
 from .flows.common.translation import (
     with_translation_bundle as _with_translation_bundle,
 )
-from .models import (
-    CollectorCandidate,
-    CollectorInfo,
-    OnboardingResult,
-)
+from .models import OnboardingResult
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -345,13 +323,7 @@ class EntryCommitFlowMixin:
         )
         is_callback_listener = bool(
             not is_verified_callback_route
-            and (
-                is_passive_callback
-                or (
-                    self._collector_endpoint_bind_applied
-                    and collector_capabilities.ha_only_required
-                )
-            )
+            and is_passive_callback
         )
         durable_collector_ip = (
             ""
@@ -425,34 +397,11 @@ class EntryCommitFlowMixin:
             CONF_POLL_MODE: poll_mode,
         }
         _apply_collector_profile_metadata(options, result)
-        remembered_endpoint = str(
-            self._collector_original_server_endpoint or ""
-        ).strip()
-        target_endpoint = str(
-            self._collector_target_server_endpoint
-            or self._collector_callback_target_endpoint()
-        ).strip()
-        if (
-            self._collector_endpoint_bind_applied
-            and remembered_endpoint
-            and remembered_endpoint != target_endpoint
-        ):
-            original_endpoint_options = self._collector_original_endpoint_options(
-                remembered_endpoint
-            )
-            if not collector_capabilities.virtual_bridge:
-                options.update(original_endpoint_options)
-                with suppress(Exception):
-                    await self._async_remember_collector_original_endpoint_in_registry(
-                        collector_pn=collector_pn,
-                        endpoint=remembered_endpoint,
-                        options=original_endpoint_options,
-                    )
         # Stamp the explicit connection architecture axes onto the new entry so
         # its transport ownership / endpoint control is opaque state, not derived
-        # from hostnames at runtime. A passive-callback (inbound) entry resolves
-        # to inbound/external; an HA-only bind that wrote the endpoint resolves
-        # to integration_managed via its original-endpoint provenance.
+        # from hostnames at runtime. First-add never writes an endpoint, so fresh
+        # entries remain external until a later verified transition earns and
+        # atomically persists integration-managed endpoint provenance.
         from .connection.connection_policy import migrate_entry_axes
 
         self._apply_verified_connection_strategy(data)
@@ -573,10 +522,6 @@ class EntryCommitFlowMixin:
         result: OnboardingResult | None = None,
     ) -> ConfigFlowResult:
         result = result or self._manual_result
-        result = await self._async_enrich_manual_collector_profile(
-            user_input,
-            result,
-        )
         if result is not None:
             existing_entry = self._existing_entry_for_result(result)
             if existing_entry is not None:
@@ -792,113 +737,3 @@ class EntryCommitFlowMixin:
 
         if result.get("type") == "create_entry":
             self.context[FLOW_CONTEXT_ENTRY_COMMIT_IN_PROGRESS] = collector_pn
-
-    async def _async_enrich_manual_collector_profile(
-        self,
-        user_input: dict[str, Any],
-        result: OnboardingResult | None,
-    ) -> OnboardingResult | None:
-        """Resolve collector profile before creating a manual collector entry.
-
-        Manual probing may time out at inverter detection while the collector is
-        still reachable.  Entity platforms are created immediately after entry
-        creation, so collector kind must be resolved here instead of waiting for
-        runtime cleanup.  The only positive bridge signal accepted here is the
-        hardware-version token read via FC=2 parameter 6.
-        """
-
-        if _result_collector_capabilities(result).virtual_bridge:
-            return result
-
-        collector_ip = str(user_input.get(CONF_COLLECTOR_IP, "") or "").strip()
-        if result is not None and result.collector is not None:
-            collector_ip = str(result.collector.ip or collector_ip).strip()
-        collector_ip = _sanitize_collector_route_hint(
-            collector_ip,
-            server_ip=str(user_input.get(CONF_SERVER_IP, "")),
-            discovery_target=str(user_input.get(CONF_DISCOVERY_TARGET, "")),
-        )
-        if not collector_ip:
-            return result
-
-        request_timeout = min(
-            float(
-                user_input.get("request_timeout", DEFAULT_REQUEST_TIMEOUT)
-                or DEFAULT_REQUEST_TIMEOUT
-            ),
-            4.0,
-        )
-        transport = SharedCollectorAtTransport(
-            host="0.0.0.0",
-            port=int(
-                user_input.get(CONF_TCP_PORT, DEFAULT_TCP_PORT) or DEFAULT_TCP_PORT
-            ),
-            request_timeout=request_timeout,
-            collector_ip=collector_ip,
-            collector_pn=self._collector_pn_for_result(result)
-            if result is not None
-            else "",
-        )
-        try:
-            await transport.start()
-            async with _async_timeout(request_timeout + 1.0):
-                _header, payload = await transport.async_query_bridge_hardware_version()
-            response = parse_query_collector_response(payload)
-        except Exception as exc:
-            logger.debug(
-                "Manual collector profile probe failed collector_ip=%s error=%s",
-                collector_ip,
-                exc,
-            )
-            return result
-        finally:
-            with suppress(Exception):
-                await transport.stop()
-
-        if response.code != 0 or response.parameter != QUERY_HARDWARE_VERSION:
-            return result
-        hardware_version = str(response.text or "").strip().strip("\x00")
-        token = parse_esp_collector_hardware_token(hardware_version)
-        if not token.is_bridge:
-            return result
-
-        collector_candidate = result.collector if result is not None else None
-        if collector_candidate is None:
-            collector_candidate = CollectorCandidate(
-                target_ip=collector_ip,
-                source="manual_profile_probe",
-                ip=collector_ip,
-                connected=True,
-                collector=CollectorInfo(remote_ip=collector_ip),
-            )
-        collector_info = collector_candidate.collector
-        if collector_info is None:
-            collector_info = CollectorInfo(remote_ip=collector_ip)
-            collector_candidate.collector = collector_info
-        collector_info.collector_virtual_bridge = True
-        collector_info.collector_bridge_kind = "esp-collector"
-        if token.version:
-            collector_info.collector_bridge_version = token.version
-        if not collector_candidate.ip:
-            collector_candidate.ip = collector_ip
-        if not collector_candidate.target_ip:
-            collector_candidate.target_ip = collector_ip
-        collector_candidate.connected = True
-
-        if result is None:
-            result = OnboardingResult(
-                collector=collector_candidate,
-                connection_type=self._current_connection_type(),
-                connection_mode="manual",
-                next_action="create_entry",
-                last_error="manual_collector_profile_resolved",
-            )
-        elif result.collector is None:
-            result = replace(result, collector=collector_candidate)
-
-        logger.info(
-            "Resolved manual collector %s as ESP EyeBond bridge via hardware token %s",
-            collector_ip,
-            hardware_version,
-        )
-        return result

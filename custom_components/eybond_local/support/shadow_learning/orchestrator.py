@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import suppress
 from datetime import datetime
 import asyncio
+import logging
 import time
 from typing import Any, Awaitable, Callable
 
@@ -16,12 +17,17 @@ from ...smartess_cloud import (
     DEFAULT_LEARN_NUMERIC_VALUE,
     DEFAULT_TIMEOUT,
     SessionCredentials,
+    SmartEssActionRejectedError,
     SmartEssCloudError,
     build_device_control_action,
     build_learn_settings_plan,
     fetch_signed_action,
 )
 from . import ShadowWriteObservation, utc_now_iso
+from .cloud_dispatch import async_dispatch_cloud_action
+
+
+logger = logging.getLogger(__name__)
 
 
 _CONTROL_STATUS_PLANNED = "planned"
@@ -109,6 +115,7 @@ def orchestrate_shadow_learning_settings(
             attempts.append(attempt)
             continue
 
+        dispatch_started = time.monotonic()
         try:
             envelope = fetch_action(
                 action=action,
@@ -120,19 +127,32 @@ def orchestrate_shadow_learning_settings(
                 timeout=timeout,
             )
             attempt["status"] = _CONTROL_STATUS_SENT
+            attempt["delivery_outcome"] = "response"
+            attempt["cloud_duration_ms"] = _elapsed_ms(dispatch_started)
             response_err = int(getattr(envelope, "err", -1))
             attempt["response"] = {
                 "err": response_err,
                 "desc": str(getattr(envelope, "desc", "")),
             }
             attempt["dat"] = getattr(envelope, "dat", None)
-        except Exception as exc:  # pragma: no cover - exact cloud errors are caller-dependent
+        except SmartEssActionRejectedError as exc:
             attempt["status"] = _CONTROL_STATUS_ERROR
-            attempt["error"] = str(exc)
-            attempts.append(attempt)
-            if not continue_on_error:
-                break
-            continue
+            attempt["delivery_outcome"] = "definitive_rejection"
+            attempt["cloud_duration_ms"] = _elapsed_ms(dispatch_started)
+            attempt["cloud_rejection"] = {
+                "err": exc.err,
+                "desc": exc.desc,
+            }
+        except Exception as exc:
+            logger.warning(
+                "Shadow cloud action delivery indeterminate sequence=%s total=%s "
+                "duration_ms=%s exception_type=%s",
+                sequence_index,
+                len(plan),
+                _elapsed_ms(dispatch_started),
+                type(exc).__name__,
+            )
+            raise
 
         attempts.append(attempt)
         correlation = correlate_cloud_attempts_with_shadow_writes(
@@ -143,6 +163,11 @@ def orchestrate_shadow_learning_settings(
         if abort_on_unproxied_write and _attempt_is_unproxied_success_candidate(attempt):
             attempt["status"] = _CONTROL_STATUS_LEAKED
             attempt["reason"] = "control_leaked_unproxied"
+            break
+        if (
+            attempt.get("status") == _CONTROL_STATUS_ERROR
+            and not continue_on_error
+        ):
             break
         if delay_seconds > 0:
             time.sleep(delay_seconds)
@@ -275,8 +300,9 @@ async def async_orchestrate_shadow_learning_settings(
         )
         attempt["observation_cursor_start"] = cursor_start
         attempt["requested_at"] = utc_now_iso()
+        dispatch_started = time.monotonic()
         try:
-            envelope = await asyncio.to_thread(
+            envelope = await async_dispatch_cloud_action(
                 fetch_action,
                 action=action,
                 session=session,
@@ -287,23 +313,42 @@ async def async_orchestrate_shadow_learning_settings(
                 timeout=timeout,
             )
             attempt["status"] = _CONTROL_STATUS_SENT
+            attempt["delivery_outcome"] = "response"
+            attempt["cloud_duration_ms"] = _elapsed_ms(dispatch_started)
             response_err = int(getattr(envelope, "err", -1))
             attempt["response"] = {
                 "err": response_err,
                 "desc": str(getattr(envelope, "desc", "")),
             }
             attempt["dat"] = getattr(envelope, "dat", None)
-        except Exception as exc:  # pragma: no cover - exact cloud errors are caller-dependent
+        except SmartEssActionRejectedError as exc:
             # In observe-only (exception) mode SmartESS rejects every write with
             # an expected NACK, yet the Modbus write is still delivered to the
             # shadow and observed. Keep correlating that observation instead of
             # skipping the attempt, so the delivered write maps to its cloud
             # field. A genuine non-delivery simply yields no observation.
             attempt["status"] = _CONTROL_STATUS_ERROR
-            attempt["error"] = str(exc)
-            if not continue_on_error:
-                attempts.append(attempt)
-                break
+            attempt["delivery_outcome"] = "definitive_rejection"
+            attempt["cloud_duration_ms"] = _elapsed_ms(dispatch_started)
+            attempt["cloud_rejection"] = {
+                "err": exc.err,
+                "desc": exc.desc,
+            }
+        except Exception as exc:
+            # The request may have reached SmartESS even though its terminal
+            # result is unknown. Starting another action would allow a late
+            # collector write to be attributed to the wrong field. Abort this
+            # run and let the flow restore the endpoint while the exact request
+            # exception is still available for provider-owned classification.
+            logger.warning(
+                "Shadow cloud action delivery indeterminate sequence=%s total=%s "
+                "duration_ms=%s exception_type=%s",
+                sequence_index,
+                plan_total,
+                _elapsed_ms(dispatch_started),
+                type(exc).__name__,
+            )
+            raise
 
         observations = await _wait_for_attempt_observations(
             cursor_start=cursor_start,
@@ -338,6 +383,11 @@ async def async_orchestrate_shadow_learning_settings(
             run_observations.extend(observations)
 
         attempts.append(attempt)
+        if (
+            attempt.get("status") == _CONTROL_STATUS_ERROR
+            and not continue_on_error
+        ):
+            break
         if delay_seconds > 0:
             await asyncio.sleep(delay_seconds)
 
@@ -476,8 +526,9 @@ def correlate_cloud_attempts_with_shadow_writes(
 
     write_index = 0
     for attempt in normalized_attempts:
-        if attempt.get("status") == _CONTROL_STATUS_ERROR and not _is_expected_proxy_nack(
-            str(attempt.get("error") or "")
+        if (
+            attempt.get("status") == _CONTROL_STATUS_ERROR
+            and not isinstance(attempt.get("cloud_rejection"), dict)
         ):
             unmatched_attempts.append({**attempt, "reason": "control_error"})
             continue
@@ -694,6 +745,12 @@ def _attach_attempt_observation(
     attempt["reason"] = "timeout_no_observed_write"
 
 
+def _elapsed_ms(started_at: float) -> int:
+    """Return one non-negative monotonic duration for safe diagnostics."""
+
+    return max(0, int(round((time.monotonic() - started_at) * 1000.0)))
+
+
 def _normalize_captured_not_applied_status(attempt: dict[str, Any]) -> None:
     """Reclassify locally observed proxy writes that did not reach the inverter."""
 
@@ -714,13 +771,15 @@ def _normalize_captured_not_applied_status(attempt: dict[str, Any]) -> None:
         return
     if attempt.get("status") != _CONTROL_STATUS_ERROR:
         return
-    error = str(attempt.get("error") or "")
-    if not _is_expected_proxy_nack(error):
+    rejection = attempt.get("cloud_rejection")
+    if not isinstance(rejection, dict):
         return
     attempt["status"] = _CONTROL_STATUS_CAPTURED_NOT_APPLIED
     attempt["proxy_capture_result"] = "captured_not_applied"
-    attempt["cloud_nack"] = error
-    attempt.pop("error", None)
+    attempt["cloud_nack_response"] = {
+        "err": rejection.get("err"),
+        "desc": str(rejection.get("desc") or ""),
+    }
 
 
 def _attempt_has_success_response(attempt: dict[str, Any]) -> bool:
@@ -764,13 +823,6 @@ def _normalize_correlated_captured_not_applied_attempts(
             attempt["match_mode"] = "post_run_order"
             attempt["timestamp_delta_seconds"] = item.get("timestamp_delta_seconds")
         _normalize_captured_not_applied_status(attempt)
-
-
-def _is_expected_proxy_nack(error: str) -> bool:
-    normalized = str(error or "")
-    return "ERR_FAIL(Read-Only Register)" in normalized or (
-        "Read-Only Register" in normalized and "action_failed" in normalized
-    )
 
 
 def _resolve_live_observation_cursor(

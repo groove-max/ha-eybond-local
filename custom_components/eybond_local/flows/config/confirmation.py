@@ -28,7 +28,6 @@ from ...const import (
 )
 from ..common.presentation import (
     _driver_detection_strategy_selector,
-    _exception_detail,
     _flatten_sections,
     _poll_interval_selector,
     _poll_mode_selector,
@@ -154,17 +153,15 @@ class CollectorConfirmationFlowMixin:
         if self._selected_result is None:
             return await self.async_step_auto()
 
-        if not self._selected_result_is_passive_callback():
-            await self._async_refresh_selected_result_collector_capabilities()
-
         # First add is intentionally not the place to choose the collector
         # connection strategy.
         # Discovery evidence can be partial at this point, especially for local
         # bridges and collector-only candidates. Keep the confirm form stable:
         # only collect the poll interval here. Runtime/options flow owns the
         # runtime UX once the entry has had a chance to read endpoint and
-        # capability metadata. A detected virtual bridge is still forced to the
-        # inbound strategy because it connects to Home Assistant on its own.
+        # capability metadata. Collector kind is a capability fact, not proof of
+        # how this particular collector will reconnect, so it never selects a
+        # connection strategy here.
         selected_capabilities = _result_collector_capabilities(self._selected_result)
         is_bridge = selected_capabilities.virtual_bridge
 
@@ -189,36 +186,14 @@ class CollectorConfirmationFlowMixin:
                 or detection_strategy not in DRIVER_DETECTION_STRATEGIES
             ):
                 errors[CONF_DRIVER_DETECTION_STRATEGY] = "invalid_selection"
-            requires_ha_endpoint = (
-                self._selected_result_is_passive_callback() or is_bridge
-            )
             if errors:
                 pass
-            elif self._selected_result_is_passive_callback():
-                self._collector_endpoint_bind_applied = True
-                return await self._async_create_entry_from_result(flat_input)
-            if (
-                not errors
-                and requires_ha_endpoint
-                and not self._collector_endpoint_bind_applied
-            ):
-                self._reset_collector_endpoint_binding_state()
-                try:
-                    # For a bridge, writing the HA server endpoint is still how
-                    # the bridge is told where to connect — keep the bind.
-                    # Modern bridge firmware accepts and persists the FC=3
-                    # param-21 endpoint write. Older bridge firmware may refuse
-                    # it; keep that refusal non-fatal for bridge upgrades.
-                    await self._async_bind_selected_collector_to_home_assistant(
-                        allow_refused_endpoint_write=is_bridge,
-                    )
-                except Exception as exc:
-                    self._collector_endpoint_error = _exception_detail(exc)
-                    errors["base"] = "collector_endpoint_write_failed"
-                else:
-                    self._collector_endpoint_bind_applied = True
-                    return await self._async_create_entry_from_result(flat_input)
-            elif not errors:
+            else:
+                # First-add establishes collector identity/session ownership only.
+                # It never opens a second route-selected management transport and
+                # never rewrites endpoint 21. Runtime reads/persists the current
+                # endpoint on the handed-off exact session; an explicit strategy
+                # transition is the sole authority allowed to change it later.
                 return await self._async_create_entry_from_result(flat_input)
 
         description_placeholders = dict(self._collector_connection_placeholders())

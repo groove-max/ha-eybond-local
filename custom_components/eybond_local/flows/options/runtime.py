@@ -17,23 +17,18 @@ from homeassistant.helpers.selector import (
 )
 
 from ... import network_interfaces
-from ...collector.discovery import async_send_callback_trigger
 from ...collector.smartess_ble import SmartEssBleWifiNetwork, parse_wifi_scan_response
 from ...collector.smartess_local import (
     QUERY_HARDWARE_VERSION,
     QUERY_NETWORK_DIAGNOSTICS,
     QUERY_SERIAL_BAUDRATE,
     QUERY_WIFI_SCAN_LIST,
-    SET_SERIAL_BAUDRATE,
     SET_TARGET_PASSWORD,
     SET_TARGET_SSID,
-    SmartEssLocalSession,
 )
-from ...collector.transport import SharedEybondTransport
 from ...connection.branch_registry import get_connection_branch
 from ...connection.connection_policy import resolve_connection_strategy
 from ...connection.entry import build_runtime_option_settings
-from ...connection.spec_factory import build_connection_spec
 from ..common.connection_form import (
     DRIVER_DISPLAY_LABELS as _DRIVER_DISPLAY_LABELS,
 )
@@ -68,11 +63,7 @@ from ...const import (
     DEFAULT_CONTROL_MODE,
     DEFAULT_DISCOVERY_TARGET,
     DEFAULT_DRIVER_DETECTION_STRATEGY,
-    DEFAULT_HEARTBEAT_INTERVAL,
     DEFAULT_POLL_INTERVAL,
-    DEFAULT_REQUEST_TIMEOUT,
-    DEFAULT_TCP_PORT,
-    DEFAULT_UDP_PORT,
     DRIVER_DETECTION_STRATEGIES,
     DRIVER_HINT_AUTO,
     POLL_MODE_AUTO,
@@ -885,71 +876,6 @@ class RuntimeOptionsMixin:
     def _coordinator(self):
         return getattr(self._config_entry, "runtime_data", None)
 
-    async def _async_with_options_collector_session(self):
-        spec = build_connection_spec(
-            self._config_entry.data, self._config_entry.options
-        )
-        collector_ip = str(
-            getattr(spec, "collector_ip", "")
-            or self._config_entry.options.get(CONF_COLLECTOR_IP, "")
-            or self._config_entry.data.get(CONF_COLLECTOR_IP, "")
-            or ""
-        ).strip()
-        if not collector_ip:
-            raise RuntimeError("collector_ip_unavailable")
-
-        transport = SharedEybondTransport(
-            host=getattr(spec, "server_ip", self._config_entry.data[CONF_SERVER_IP]),
-            port=getattr(spec, "tcp_port", DEFAULT_TCP_PORT),
-            request_timeout=DEFAULT_REQUEST_TIMEOUT,
-            heartbeat_interval=float(
-                getattr(spec, "heartbeat_interval", DEFAULT_HEARTBEAT_INTERVAL)
-            ),
-            collector_ip=collector_ip,
-        )
-        await transport.start()
-        try:
-            with suppress(Exception):
-                await async_send_callback_trigger(
-                    source="options_flow_management_probe",
-                    bind_ip=getattr(
-                        spec, "server_ip", self._config_entry.data[CONF_SERVER_IP]
-                    ),
-                    advertised_server_ip=getattr(
-                        spec,
-                        "effective_advertised_server_ip",
-                        getattr(
-                            spec, "server_ip", self._config_entry.data[CONF_SERVER_IP]
-                        ),
-                    ),
-                    advertised_server_port=getattr(
-                        spec,
-                        "effective_advertised_tcp_port",
-                        getattr(spec, "tcp_port", DEFAULT_TCP_PORT),
-                    ),
-                    target_ip=collector_ip,
-                    udp_port=getattr(spec, "udp_port", DEFAULT_UDP_PORT),
-                    timeout=1.0,
-                )
-            connected = await transport.wait_until_connected(timeout=5.0)
-            if not connected:
-                raise ConnectionError("collector_not_connected")
-            await transport.wait_until_heartbeat(timeout=1.5)
-            return transport, SmartEssLocalSession(transport)
-        except Exception:
-            await transport.stop()
-            raise
-
-    async def _async_query_options_collector_text(
-        self,
-        session: SmartEssLocalSession,
-        parameter: int,
-    ) -> str:
-        response = await session.query_collector(parameter)
-        if response.code != 0:
-            return ""
-        return self._collector_query_response_text(response)
-
     async def _async_refresh_collector_wifi_status(self) -> None:
         coordinator = self._coordinator()
         query = getattr(coordinator, "async_query_collector_parameters", None)
@@ -990,18 +916,13 @@ class RuntimeOptionsMixin:
         )
 
     async def _async_refresh_collector_uart_status(self) -> None:
-        transport, session = await self._async_with_options_collector_session()
-        try:
-            hardware_version = await self._async_query_options_collector_text(
-                session,
-                QUERY_HARDWARE_VERSION,
-            )
-            current_settings = await self._async_query_options_collector_text(
-                session,
-                QUERY_SERIAL_BAUDRATE,
-            )
-        finally:
-            await transport.stop()
+        coordinator = self._coordinator()
+        query = getattr(coordinator, "async_query_collector_parameters", None)
+        if not callable(query):
+            raise RuntimeError("collector_local_management_not_supported")
+        values = await query((QUERY_HARDWARE_VERSION, QUERY_SERIAL_BAUDRATE))
+        hardware_version = str(values.get(QUERY_HARDWARE_VERSION) or "")
+        current_settings = str(values.get(QUERY_SERIAL_BAUDRATE) or "")
 
         if not hardware_version:
             hardware_version = self._runtime_collector_hardware_version()
@@ -1021,19 +942,11 @@ class RuntimeOptionsMixin:
         if baudrate not in COLLECTOR_UART_BAUDRATES:
             raise ValueError(f"unsupported_collector_uart_baudrate:{baudrate}")
 
-        transport, session = await self._async_with_options_collector_session()
-        try:
-            response = await session.set_collector(SET_SERIAL_BAUDRATE, baudrate)
-            if response.status != 0 or response.parameter != SET_SERIAL_BAUDRATE:
-                raise RuntimeError(
-                    f"collector_set_failed:parameter={SET_SERIAL_BAUDRATE}:status={response.status}"
-                )
-        finally:
-            await transport.stop()
-
         coordinator = self._coordinator()
-        if coordinator is None:
-            return
+        writer = getattr(coordinator, "async_set_collector_uart_baudrate", None)
+        if not callable(writer):
+            raise RuntimeError("collector_local_management_not_supported")
+        await writer(baudrate)
         invalidator = getattr(coordinator, "invalidate_collector_runtime_values", None)
         if callable(invalidator):
             invalidator()

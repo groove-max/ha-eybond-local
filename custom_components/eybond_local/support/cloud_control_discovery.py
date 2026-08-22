@@ -23,9 +23,9 @@ from .. import valuecloud_cloud as valuecloud_cloud_module
 from ..smartess_cloud import (
     build_device_detail_action,
     build_device_settings_action,
-    fetch_device_bundle_for_collector,
+    fetch_control_discovery_bundle_for_collector,
     fetch_signed_action,
-    login_with_password,
+    login_for_control_discovery,
 )
 from .read_learning_binder import bind_cloud_labels_to_registers
 from .shadow_learning.orchestrator import async_orchestrate_shadow_learning_settings
@@ -53,6 +53,28 @@ class ControlDiscoveryOutcome:
     identity: dict[str, Any]
     result: dict[str, Any]
     read_bindings: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ControlDiscoveryTimeoutPolicy:
+    """Separate long metadata sweeps from one control-action dispatch."""
+
+    # An E500 production sweep completed its final one of 23 Modbus reads at
+    # 14.55 s while the generic HTTP timeout was 15 s. The cloud still needs to
+    # consume that response and finish its envelope, so metadata gets a bounded
+    # operation budget independent from the short per-action causality window.
+    metadata_request: float = 30.0
+    action_request: float = 15.0
+
+    def __post_init__(self) -> None:
+        for value in (self.metadata_request, self.action_request):
+            if type(value) not in {int, float} or isinstance(value, bool):
+                raise TypeError("control_discovery_timeout_invalid")
+            if value <= 0:
+                raise ValueError("control_discovery_timeout_invalid")
+
+
+DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY = ControlDiscoveryTimeoutPolicy()
 
 
 def _coerce_int(value: Any) -> int | None:
@@ -125,6 +147,7 @@ class CloudControlDiscoveryRunner(ABC):
 
 class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
     provider_id = "smartess"
+    timeout_policy = DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY
 
     async def async_run(
         self,
@@ -145,10 +168,11 @@ class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
         await start_shadow_route()
         progress(0.18, "fetching")
         cloud_bundle = await executor(
-            lambda: fetch_device_bundle_for_collector(
+            lambda: fetch_control_discovery_bundle_for_collector(
                 username=username,
                 password=password,
                 collector_pn=str(collector_pn or ""),
+                timeout=self.timeout_policy.metadata_request,
             )
         )
         identity = _identity_from_bundle(cloud_bundle) or fallback_identity
@@ -162,7 +186,11 @@ class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
         # bundle -> control-login -> control sequence is pinned by the successful
         # production trace and must not be collapsed into one session.
         _control_login, control_session = await executor(
-            lambda: login_with_password(username=username, password=password)
+            lambda: login_for_control_discovery(
+                username=username,
+                password=password,
+                timeout=self.timeout_policy.action_request,
+            )
         )
 
         settings_dat = _settings_dat_from_bundle(cloud_bundle)
@@ -176,6 +204,7 @@ class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
                         devaddr=identity["devaddr"],
                     ),
                     session=control_session,
+                    timeout=self.timeout_policy.metadata_request,
                 )
             )
             settings_dat = settings_envelope.dat
@@ -198,6 +227,7 @@ class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
             max_fields=max_fields,
             continue_on_error=True,
             delay_seconds=0.0,
+            timeout=self.timeout_policy.action_request,
             **dict(orchestrator_callbacks),
         )
         if int(result.get("degraded_count") or 0) > 0:
@@ -283,6 +313,7 @@ class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
 
 class ValueCloudControlDiscoveryRunner(CloudControlDiscoveryRunner):
     provider_id = "valuecloud"
+    timeout_policy = DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY
 
     async def async_run(
         self,
@@ -302,7 +333,9 @@ class ValueCloudControlDiscoveryRunner(CloudControlDiscoveryRunner):
         progress(0.08, "fetching")
         _login_envelope, cloud_session = await executor(
             lambda: valuecloud_cloud_module.login_with_password(
-                username=username, password=password
+                username=username,
+                password=password,
+                timeout=self.timeout_policy.action_request,
             )
         )
         await start_shadow_route()
@@ -311,6 +344,7 @@ class ValueCloudControlDiscoveryRunner(CloudControlDiscoveryRunner):
             lambda: valuecloud_cloud_module.fetch_device_bundle_for_collector_with_session(
                 session=cloud_session,
                 collector_pn=str(collector_pn or ""),
+                timeout=self.timeout_policy.metadata_request,
             )
         )
         identity = _identity_from_bundle(cloud_bundle) or fallback_identity
@@ -361,6 +395,7 @@ class ValueCloudControlDiscoveryRunner(CloudControlDiscoveryRunner):
             max_fields=max_fields,
             continue_on_error=True,
             delay_seconds=0.0,
+            timeout=self.timeout_policy.action_request,
             **dict(orchestrator_callbacks),
         )
         return ControlDiscoveryOutcome(identity=identity, result=result, read_bindings=None)

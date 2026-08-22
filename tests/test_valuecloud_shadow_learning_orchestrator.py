@@ -19,6 +19,7 @@ from custom_components.eybond_local.support.shadow_learning.valuecloud_orchestra
     build_valuecloud_learning_plan,
 )
 from custom_components.eybond_local.valuecloud_cloud import (  # noqa: E402
+    ValueCloudActionRejectedError,
     ValueCloudEnvelope,
     ValueCloudSession,
 )
@@ -450,6 +451,131 @@ class ValueCloudShadowLearningOrchestratorTests(unittest.TestCase):
         self.assertEqual(calls[0]["datatype"], 3)
         self.assertEqual(result["plan"][0]["transport"], "legacy_ctrlDevice")
         self.assertEqual(result["captured_not_applied_count"], 1)
+
+    def test_definitive_rejection_still_correlates_observed_write(self) -> None:
+        observation = ShadowWriteObservation(
+            timestamp="2026-06-29T12:00:00+00:00",
+            source="shadow_learning",
+            unit=0,
+            function_code=0,
+            register=-1,
+            values=(),
+            devcode=None,
+            devaddr=None,
+            raw_payload_hex="50424c31",
+            protocol="eybond_g_ascii",
+            command="PBL",
+            value="1",
+        )
+
+        def _reject(**_kwargs):
+            raise ValueCloudActionRejectedError(
+                code=409,
+                action="batch_setUp",
+                detail="expected nack",
+            )
+
+        result = asyncio.run(
+            async_orchestrate_valuecloud_shadow_learning(
+                batch_control={
+                    "groups": [
+                        {
+                            "controlItemId": 10,
+                            "parameters": [
+                                {
+                                    "id": "cltd_lcd_backlight",
+                                    "detailsId": 20,
+                                    "order": 3,
+                                    "name": "LCD Backlight",
+                                    "readwrite": "RW",
+                                    "item": {"1": "On"},
+                                }
+                            ],
+                        }
+                    ]
+                },
+                session=ValueCloudSession(token="token", secret="secret"),
+                pn="I200",
+                sn="DEV1",
+                devcode=2506,
+                devaddr=1,
+                dry_run=False,
+                confirm_cloud_write=True,
+                shadow_session_state="ready",
+                field_ids=[],
+                observation_cursor=lambda: 0,
+                current_observations_since=lambda cursor: (observation,),
+                setup_action=_reject,
+            )
+        )
+
+        self.assertEqual(result["captured_not_applied_count"], 1)
+        self.assertEqual(
+            result["results"][0]["cloud_nack_response"]["code"],
+            409,
+        )
+        self.assertNotIn("error", result["results"][0])
+
+    def test_indeterminate_delivery_aborts_before_next_action(self) -> None:
+        calls = 0
+
+        def _timeout(**_kwargs):
+            nonlocal calls
+            calls += 1
+            raise TimeoutError("private valuecloud detail")
+
+        with self.assertLogs(
+            "custom_components.eybond_local.support.shadow_learning.valuecloud_orchestrator",
+            level="WARNING",
+        ) as captured_logs:
+            with self.assertRaisesRegex(TimeoutError, "private valuecloud detail"):
+                asyncio.run(
+                    async_orchestrate_valuecloud_shadow_learning(
+                        batch_control={
+                            "groups": [
+                                {
+                                    "controlItemId": 10,
+                                    "parameters": [
+                                        {
+                                            "id": "f1",
+                                            "detailsId": 20,
+                                            "order": 1,
+                                            "name": "F1",
+                                            "readwrite": "RW",
+                                            "item": {"0": "A"},
+                                        },
+                                        {
+                                            "id": "f2",
+                                            "detailsId": 21,
+                                            "order": 2,
+                                            "name": "F2",
+                                            "readwrite": "RW",
+                                            "item": {"0": "B"},
+                                        },
+                                    ],
+                                }
+                            ]
+                        },
+                        session=ValueCloudSession(token="token", secret="secret"),
+                        pn="I200",
+                        sn="DEV1",
+                        devcode=2506,
+                        devaddr=1,
+                        dry_run=False,
+                        confirm_cloud_write=True,
+                        shadow_session_state="ready",
+                        field_ids=[],
+                        continue_on_error=True,
+                        is_session_ready=lambda: True,
+                        setup_action=_timeout,
+                    )
+                )
+
+        self.assertEqual(calls, 1)
+        self.assertNotIn(
+            "private valuecloud detail",
+            "\n".join(captured_logs.output),
+        )
 
 
 if __name__ == "__main__":

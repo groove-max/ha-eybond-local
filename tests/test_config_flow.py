@@ -278,7 +278,6 @@ _install_homeassistant_stubs()
 
 import custom_components.eybond_local.flows.config.admission as config_admission_module
 import custom_components.eybond_local.flows.config.ble as config_ble_module
-import custom_components.eybond_local.flows.config.collector as config_collector_module
 import custom_components.eybond_local.flows.config.common as config_common_module
 import custom_components.eybond_local.flows.config.network as config_network_module
 import custom_components.eybond_local.flows.config.scan as config_scan_module
@@ -368,9 +367,6 @@ from custom_components.eybond_local.collector.smartess_ble import (
 from custom_components.eybond_local.collector.smartess_local import (
     QUERY_HARDWARE_VERSION,
     QUERY_SERIAL_BAUDRATE,
-    SET_REBOOT_OR_APPLY,
-    SET_SERVER_ENDPOINT,
-    SET_SERIAL_BAUDRATE,
     SET_TARGET_PASSWORD,
     SET_TARGET_SSID,
 )
@@ -381,6 +377,7 @@ from custom_components.eybond_local.collector.capabilities import (
 from custom_components.eybond_local.const import (
     COLLECTOR_OPERATION_HA_ONLY,
     CONF_COLLECTOR_CLOUD_FAMILY,
+    CONF_COLLECTOR_IP,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
@@ -2983,7 +2980,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Непідтверджений інвертор", placeholders["inverter_confirm_table"])
         self.assertEqual(placeholders["control_summary"], "")
 
-    async def test_confirm_step_passive_callback_does_not_probe_collector_capabilities(self) -> None:
+    async def test_confirm_step_has_no_pre_entry_capability_probe(self) -> None:
         flow = self._make_flow()
         selected = OnboardingResult(
             collector=CollectorCandidate(
@@ -2999,32 +2996,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._autodetect_results = {"0": selected}
         flow._selected_result = selected
 
-        with (
-            patch(
-                "custom_components.eybond_local.flows.config.collector.SharedEybondTransport",
-                side_effect=AssertionError("passive confirm must not start payload transport"),
-            ),
-            patch(
-                "custom_components.eybond_local.flows.config.collector.SharedCollectorAtTransport",
-                side_effect=AssertionError("passive confirm must not start AT transport"),
-            ),
-            patch(
-                "custom_components.eybond_local.flows.config.collector.query_runtime_collector_values",
-                new=AsyncMock(
-                    side_effect=AssertionError("passive confirm must not query FC values")
-                ),
-            ),
-            patch(
-                "custom_components.eybond_local.flows.config.collector.query_runtime_collector_at_values",
-                new=AsyncMock(
-                    side_effect=AssertionError("passive confirm must not query AT values")
-                ),
-            ),
-        ):
-            result = await flow.async_step_confirm()
+        result = await flow.async_step_confirm()
 
         self.assertEqual(result["type"], "form")
-        self.assertFalse(flow._selected_result_collector_capabilities_attempted)
+        self.assertFalse(
+            hasattr(flow, "_async_refresh_selected_result_collector_capabilities")
+        )
 
     async def test_confirm_step_passive_callback_submit_creates_ha_only_entry_without_binding(self) -> None:
         flow = self._make_flow()
@@ -3040,8 +3017,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             next_action="manual_driver_selection",
         )
         flow._selected_result = selected
-        bind = AsyncMock()
-        flow._async_bind_selected_collector_to_home_assistant = bind
 
         result = await flow.async_step_confirm({"poll_mode": "auto"})
 
@@ -3053,7 +3028,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result["data"][CONF_CONNECTION_STRATEGY], CONNECTION_STRATEGY_INBOUND
         )
-        bind.assert_not_awaited()
 
     async def test_confirm_step_does_not_present_missing_scan_time_inverter_fields(self) -> None:
         flow = self._make_flow()
@@ -3563,8 +3537,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["data"][CONF_SMARTESS_PROFILE_KEY], "smartess_0925")
         self.assertEqual(result["data"][CONF_SMARTESS_DEVICE_ADDRESS], 5)
 
-    async def test_confirm_step_remembers_original_endpoint_after_endpoint_binding(self) -> None:
+    async def test_confirm_step_ignores_stale_pre_entry_endpoint_state(self) -> None:
         flow = self._make_flow()
+        # Old flow-local state must not mint endpoint provenance. Runtime learns
+        # the real endpoint after the exact session handoff.
         flow._collector_endpoint_bind_applied = True
         flow._collector_original_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
         flow._collector_target_server_endpoint = "192.168.1.50,18899,TCP"
@@ -3593,19 +3569,19 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(
-            result["options"][CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT],
-            "collector-cloud.smartess.example,18899,TCP",
+        self.assertNotIn(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT, result["options"])
+        self.assertNotIn(
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
+            result["options"],
         )
-        self.assertEqual(
-            result["options"][CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY],
-            "smartess_at",
+        self.assertNotIn(
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
+            result["options"],
         )
-        self.assertEqual(
-            result["options"][CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE],
-            "config_flow_pre_bind",
+        self.assertNotIn(
+            CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
+            result["options"],
         )
-        self.assertTrue(result["options"][CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT])
 
     def _bridge_confirm_result(self, *, is_bridge: bool) -> OnboardingResult:
         details = {"collector_virtual_bridge": True} if is_bridge else {}
@@ -3708,175 +3684,25 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result["description_placeholders"]["collector_connection_note"].strip()
         )
 
-    async def test_confirm_step_refreshes_collector_only_bridge_capability_from_hardware_token(self) -> None:
-        flow = self._make_flow()
-        result = OnboardingResult(
-            collector=CollectorCandidate(
-                target_ip="192.168.1.51",
-                source="udp",
-                ip="192.168.1.51",
-                connected=True,
-                collector=CollectorInfo(collector_pn="ESP32COLLECTOR"),
-            ),
-            connection_mode="known_ip",
-            next_action="create_entry",
-        )
-        flow._auto_config = {
-            "server_ip": "192.168.1.50",
-            "tcp_port": 8899,
-            "udp_port": 58899,
-            "discovery_target": "192.168.1.255",
-            "discovery_interval": 3,
-            "heartbeat_interval": 60,
-            "driver_hint": "auto",
-        }
-        flow._autodetect_results = {"0": result}
-        flow._selected_result = result
-
-        class _FakeTransport:
-            def __init__(self, **kwargs) -> None:
-                self.kwargs = kwargs
-                self.started = False
-
-            async def start(self) -> None:
-                self.started = True
-
-            async def stop(self) -> None:
-                self.started = False
-
-        with (
-            patch(
-                "custom_components.eybond_local.flows.config.collector.SharedEybondTransport",
-                _FakeTransport,
-            ),
-            patch(
-                "custom_components.eybond_local.flows.config.collector.SharedCollectorAtTransport",
-                _FakeTransport,
-            ),
-            patch(
-                "custom_components.eybond_local.flows.config.collector.query_runtime_collector_values",
-                new=AsyncMock(
-                    return_value={
-                        "collector_hardware_version": "esp-collector/0.1.2/ESP32",
-                        "collector_server_endpoint": "192.168.1.50,8899,TCP",
-                    }
-                ),
-            ),
-            patch(
-                "custom_components.eybond_local.flows.config.collector.query_runtime_collector_at_values",
-                new=AsyncMock(
-                    return_value={}
-                ),
-            ),
-        ):
-            form = await flow.async_step_confirm()
-
-        self.assertEqual(form["type"], "form")
-        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, form["data_schema"].schema)
-        assert flow._selected_result is not None
-        assert flow._selected_result.collector is not None
-        assert flow._selected_result.collector.collector is not None
-        self.assertTrue(flow._selected_result.collector.collector.collector_virtual_bridge)
-
-    async def test_confirm_step_refreshes_bridge_capability_for_merged_auto_result(self) -> None:
-        flow = self._make_flow()
-        scanned_result = OnboardingResult(
-            collector=CollectorCandidate(
-                target_ip="192.168.1.51",
-                source="udp",
-                ip="192.168.1.51",
-                connected=True,
-                collector=CollectorInfo(collector_pn="ESP32COLLECTOR"),
-            ),
-            connection_mode="known_ip",
-            next_action="create_entry",
-        )
-        selected_result = OnboardingResult(
-            collector=CollectorCandidate(
-                target_ip="192.168.1.51",
-                source="udp",
-                ip="192.168.1.51",
-                connected=True,
-                collector=CollectorInfo(collector_pn="ESP32COLLECTOR"),
-            ),
-            connection_mode="known_ip",
-            next_action="create_entry",
-        )
-        flow._auto_config = {
-            "server_ip": "192.168.1.50",
-            "tcp_port": 8899,
-            "udp_port": 58899,
-            "discovery_target": "192.168.1.255",
-            "discovery_interval": 3,
-            "heartbeat_interval": 60,
-            "driver_hint": "auto",
-        }
-        flow._autodetect_results = {"0": scanned_result}
-        flow._selected_result = selected_result
-
-        class _FakeTransport:
-            def __init__(self, **kwargs) -> None:
-                self.kwargs = kwargs
-
-            async def start(self) -> None:
-                return None
-
-            async def stop(self) -> None:
-                return None
-
-        with (
-            patch(
-                "custom_components.eybond_local.flows.config.collector.SharedEybondTransport",
-                _FakeTransport,
-            ),
-            patch(
-                "custom_components.eybond_local.flows.config.collector.SharedCollectorAtTransport",
-                _FakeTransport,
-            ),
-            patch(
-                "custom_components.eybond_local.flows.config.collector.query_runtime_collector_values",
-                new=AsyncMock(
-                    return_value={
-                        "collector_hardware_version": "esp-collector/0.1.2/ESP32",
-                    }
-                ),
-            ),
-            patch(
-                "custom_components.eybond_local.flows.config.collector.query_runtime_collector_at_values",
-                new=AsyncMock(return_value={}),
-            ),
-        ):
-            form = await flow.async_step_confirm()
-
-        self.assertEqual(form["type"], "form")
-        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, form["data_schema"].schema)
-        assert flow._selected_result is not None
-        assert flow._selected_result.collector is not None
-        assert flow._selected_result.collector.collector is not None
-        self.assertTrue(flow._selected_result.collector.collector.collector_virtual_bridge)
-
-    async def test_confirm_step_persists_strategy_not_mode_for_collector_only_bridge(self) -> None:
+    async def test_confirm_step_does_not_infer_strategy_from_collector_kind(self) -> None:
         flow = self._make_flow()
         flow._selected_result = self._collector_only_bridge_result()
-        flow._collector_endpoint_bind_applied = True
 
         result = await flow.async_step_confirm({"poll_mode": "auto"})
 
         self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"]["connection_mode"], "callback_listener")
+        self.assertEqual(result["data"]["connection_mode"], "known_ip")
         self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data"])
         self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["options"])
         self.assertEqual(
-            result["data"][CONF_CONNECTION_STRATEGY], CONNECTION_STRATEGY_INBOUND
+            result["data"][CONF_CONNECTION_STRATEGY],
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
         )
         self.assertTrue(result["data"]["collector_virtual_bridge"])
 
     async def test_confirm_step_does_not_persist_original_endpoint_for_bridge(self) -> None:
         flow = self._make_flow()
         flow._selected_result = self._collector_only_bridge_result()
-        flow._collector_endpoint_bind_applied = True
-        flow._collector_original_server_endpoint = "ess.eybond.com"
-        flow._collector_target_server_endpoint = "192.168.1.50,8899,TCP"
 
         with tempfile.TemporaryDirectory() as tempdir:
             flow.hass.config.config_dir = tempdir
@@ -3898,8 +3724,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         selected.collector.source = "callback_listener"
         selected = replace(selected, connection_mode="callback_listener")
         flow._selected_result = selected
-        bind = AsyncMock()
-        flow._async_bind_selected_collector_to_home_assistant = bind
 
         result = await flow.async_step_confirm({"poll_mode": "auto"})
 
@@ -3909,7 +3733,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result["data"][CONF_CONNECTION_STRATEGY], CONNECTION_STRATEGY_INBOUND
         )
-        bind.assert_not_awaited()
 
     async def test_confirm_step_hides_operation_mode_selector_for_factory_collector(self) -> None:
         flow = self._make_flow()
@@ -3923,125 +3746,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result["description_placeholders"]["collector_connection_note"], ""
         )
 
-    async def test_confirm_step_bridge_refused_endpoint_write_does_not_hard_fail(self) -> None:
-        # Older bridge firmware may refuse the FC=3 param-21 endpoint write.
-        # For a detected bridge that refusal remains non-fatal — the flow forces
-        # HA-only and creates the entry instead of surfacing a hard error.
+    async def test_confirm_step_bridge_never_runs_pre_entry_endpoint_bind(self) -> None:
         flow = self._make_flow()
         flow._selected_result = self._bridge_confirm_result(is_bridge=True)
-
-        transport = AsyncMock()
-        session = AsyncMock()
-
-        async def set_collector(parameter: int, value: str):
-            # The bridge refuses the endpoint write with a non-zero status.
-            status = 1 if parameter == SET_SERVER_ENDPOINT else 0
-            return type("_SetResponse", (), {"status": status, "parameter": parameter})()
-
-        session.set_collector.side_effect = set_collector
-
-        async def with_session():
-            return transport, session
-
-        # The current endpoint differs from the HA target, so the explicit write
-        # path runs (skipping the early current==target return). The bind resets
-        # cached endpoint state first, so the differing value must come from the
-        # read, not a pre-set attribute.
-        async def read_endpoint():
-            flow._collector_current_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
-            return "collector-cloud.smartess.example,18899,TCP"
-
-        flow._async_with_selected_collector_session = with_session
-        flow._async_read_selected_collector_server_endpoint = read_endpoint
-
-        result = await flow.async_step_confirm(
-            {
-                CONF_COLLECTOR_OPERATION_MODE: COLLECTOR_OPERATION_HA_ONLY,
-                "poll_interval": 15,
-            }
-        )
-
-        self.assertEqual(result["type"], "create_entry")
-        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data"])
-        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["options"])
-        self.assertEqual(
-            result["data"][CONF_CONNECTION_STRATEGY], CONNECTION_STRATEGY_INBOUND
-        )
-        # The reboot/apply write must NOT run after a refused endpoint write.
-        applied_parameters = [
-            call.args[0] for call in session.set_collector.await_args_list
-        ]
-        self.assertEqual(applied_parameters, [SET_SERVER_ENDPOINT])
-
-    async def test_confirm_step_bridge_successful_endpoint_write_is_applied(self) -> None:
-        # Current bridge firmware accepts and persists the FC=3 param-21 endpoint
-        # write, followed by the standard FC=3 param-29 apply command.
-        flow = self._make_flow()
-        flow._selected_result = self._bridge_confirm_result(is_bridge=True)
-
-        transport = AsyncMock()
-        session = AsyncMock()
-
-        async def set_collector(parameter: int, value: str):
-            return type("_SetResponse", (), {"status": 0, "parameter": parameter})()
-
-        async def query_collector(parameter: int):
-            text = "192.168.1.50,18899,TCP" if parameter == SET_SERVER_ENDPOINT else "0"
-            return type("_QueryResponse", (), {"code": 0, "parameter": parameter, "text": text})()
-
-        session.set_collector.side_effect = set_collector
-        session.query_collector.side_effect = query_collector
-
-        async def with_session():
-            return transport, session
-
-        async def read_endpoint():
-            flow._collector_current_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
-            return "collector-cloud.smartess.example,18899,TCP"
-
-        flow._async_with_selected_collector_session = with_session
-        flow._async_read_selected_collector_server_endpoint = read_endpoint
-
-        result = await flow.async_step_confirm(
-            {
-                CONF_COLLECTOR_OPERATION_MODE: COLLECTOR_OPERATION_HA_ONLY,
-                "poll_interval": 15,
-            }
-        )
-
-        self.assertEqual(result["type"], "create_entry")
-        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data"])
-        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["options"])
-        self.assertEqual(
-            result["data"][CONF_CONNECTION_STRATEGY], CONNECTION_STRATEGY_INBOUND
-        )
-        self.assertEqual(
-            [call.args[0] for call in session.set_collector.await_args_list],
-            [SET_SERVER_ENDPOINT, SET_REBOOT_OR_APPLY],
-        )
-
-    async def test_confirm_step_ignores_stale_operation_mode_for_factory_collector(self) -> None:
-        flow = self._make_flow()
-        flow._selected_result = self._bridge_confirm_result(is_bridge=False)
-
-        transport = AsyncMock()
-        session = AsyncMock()
-
-        async def set_collector(parameter: int, value: str):
-            status = 1 if parameter == SET_SERVER_ENDPOINT else 0
-            return type("_SetResponse", (), {"status": status, "parameter": parameter})()
-
-        session.set_collector.side_effect = set_collector
-
-        async def with_session():
-            return transport, session
-
-        async def read_endpoint():
-            flow._collector_current_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
-            return "collector-cloud.smartess.example,18899,TCP"
-
-        flow._async_with_selected_collector_session = with_session
-        flow._async_read_selected_collector_server_endpoint = read_endpoint
 
         result = await flow.async_step_confirm(
             {
@@ -4057,51 +3764,36 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result["data"][CONF_CONNECTION_STRATEGY],
             CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
         )
-        session.set_collector.assert_not_awaited()
 
-    async def test_collector_callback_target_uses_listener_port_not_cloud_port(self) -> None:
-        # The HA-only callback target must point at OUR listener port. The
-        # collector's cloud endpoint port (18899) is the vendor cloud /
-        # proxy-capture port: mirroring it aimed collectors at the proxy
-        # listener while the runtime announcer advertised the real one, and
-        # the two endpoints then fought on every reconnect.
+    async def test_confirm_step_ignores_stale_operation_mode_for_factory_collector(self) -> None:
         flow = self._make_flow()
-        flow._collector_current_server_endpoint = "collector-cloud.smartess.example,18899,TCP"
+        flow._selected_result = self._bridge_confirm_result(is_bridge=False)
 
-        self.assertEqual(
-            flow._collector_callback_target_endpoint(),
-            "192.168.1.50,8899,TCP",
+        result = await flow.async_step_confirm(
+            {
+                CONF_COLLECTOR_OPERATION_MODE: COLLECTOR_OPERATION_HA_ONLY,
+                "poll_interval": 15,
+            }
         )
 
-    async def test_collector_callback_target_preserves_host_only_shape(self) -> None:
+        self.assertEqual(result["type"], "create_entry")
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["data"])
+        self.assertNotIn(CONF_COLLECTOR_OPERATION_MODE, result["options"])
+        self.assertEqual(
+            result["data"][CONF_CONNECTION_STRATEGY],
+            CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+        )
+
+    async def test_first_add_has_no_flow_local_endpoint_management_api(self) -> None:
         flow = self._make_flow()
-        flow._collector_current_server_endpoint = "ess.eybond.com"
-
-        self.assertEqual(
-            flow._collector_callback_target_endpoint(),
-            "192.168.1.50",
-        )
-
-    async def test_collector_callback_target_uses_listener_port_for_valuecloud_shape(self) -> None:
-        flow = self._make_flow()
-        flow._collector_current_server_endpoint = "iot.eybond.com,18899,TCP"
-
-        self.assertEqual(
-            flow._collector_callback_target_endpoint(),
-            "192.168.1.50,8899,TCP",
-        )
-
-    async def test_collector_original_endpoint_options_use_valuecloud_host_profile_before_18899_port_fallback(self) -> None:
-        flow = self._make_flow()
-
-        options = flow._collector_original_endpoint_options(
-            "iot.eybond.com,18899,TCP"
-        )
-
-        self.assertEqual(
-            options["collector_original_server_endpoint_profile_key"],
-            "valuecloud_at",
-        )
+        for name in (
+            "_async_with_selected_collector_session",
+            "_async_read_selected_collector_server_endpoint",
+            "_async_bind_selected_collector_to_home_assistant",
+            "_collector_original_endpoint_options",
+            "_collector_callback_target_endpoint",
+        ):
+            self.assertFalse(hasattr(flow, name), name)
 
     async def test_do_scan_keeps_matching_entries_loaded(self) -> None:
         matching = _FakeEntry("match", server_ip="192.168.1.50", tcp_port=8899)
@@ -5317,12 +5009,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             CONNECTION_STRATEGY_EVIDENCE_USER_CONFIRMED_SESSION
         )
 
-        with patch.object(
-            flow,
-            "_async_enrich_manual_collector_profile",
-            new=AsyncMock(return_value=flow._manual_result),
-        ):
-            result = await flow.async_step_manual_save()
+        result = await flow.async_step_manual_save()
 
         self.assertEqual(result["type"], "create_entry")
         # The legacy user-binding evidence remains (its own honest provenance)...
@@ -5398,15 +5085,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             connection_mode="manual",
         )
 
-        async def _passthrough_enrich(_user_input, result):
-            return result
-
-        with patch.object(
-            flow,
-            "_async_enrich_manual_collector_profile",
-            side_effect=_passthrough_enrich,
-        ):
-            result = await flow.async_step_manual_save()
+        result = await flow.async_step_manual_save()
 
         # A detected model/serial is NOT a session identity: no entry is made.
         self.assertEqual(result["type"], "menu")
@@ -5446,15 +5125,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             connection_mode="manual",
         )
 
-        async def _passthrough_enrich(_user_input, result):
-            return result
-
-        with patch.object(
-            flow,
-            "_async_enrich_manual_collector_profile",
-            side_effect=_passthrough_enrich,
-        ):
-            result = await flow.async_step_manual_save()
+        result = await flow.async_step_manual_save()
 
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(result["data"]["collector_pn"], "V001020SYN62344022")
@@ -6355,36 +6026,25 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_options_collector_uart_refresh_reads_parameter_34(self) -> None:
         options = self._make_options_flow()
-        transport = AsyncMock()
-        session = AsyncMock()
-        reads: list[int] = []
-
-        async def query_collector(parameter: int):
-            reads.append(parameter)
-            return type(
-                "_QueryResponse",
-                (),
-                {
-                    "code": 0,
-                    "parameter": parameter,
-                    "text": "ESP32" if parameter == QUERY_HARDWARE_VERSION else "9600",
-                    "data": b"ESP32" if parameter == QUERY_HARDWARE_VERSION else b"9600",
-                },
-            )()
-
-        async def with_session():
-            return transport, session
-
-        session.query_collector.side_effect = query_collector
-        options._async_with_options_collector_session = with_session
+        options._config_entry.data[CONF_COLLECTOR_IP] = ""
+        query = AsyncMock(
+            return_value={
+                QUERY_HARDWARE_VERSION: "ESP32",
+                QUERY_SERIAL_BAUDRATE: "9600,8,1,NONE",
+            }
+        )
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            async_query_collector_parameters=query
+        )
 
         await options._async_refresh_collector_uart_status()
 
-        self.assertEqual(reads, [QUERY_HARDWARE_VERSION, QUERY_SERIAL_BAUDRATE])
+        query.assert_awaited_once_with(
+            (QUERY_HARDWARE_VERSION, QUERY_SERIAL_BAUDRATE)
+        )
         self.assertEqual(options._collector_uart_hardware_version, "ESP32")
         self.assertEqual(options._collector_uart_current_baudrate, "9600")
-        self.assertEqual(options._collector_uart_current_settings, "9600")
-        transport.stop.assert_awaited_once()
+        self.assertEqual(options._collector_uart_current_settings, "9600,8,1,NONE")
 
     async def test_options_collector_uart_step_blocks_runtime_change_for_bk72xx(self) -> None:
         options = self._make_options_flow()
@@ -6424,39 +6084,32 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             data=snapshot,
             invalidate_collector_runtime_values=Mock(),
             async_request_refresh=AsyncMock(),
+            async_set_collector_uart_baudrate=AsyncMock(
+                return_value="9600,8,1,NONE"
+            ),
         )
         options._config_entry.runtime_data = coordinator
-        transport = AsyncMock()
-        session = AsyncMock()
-        writes: list[tuple[int, str]] = []
-
-        async def set_collector(parameter: int, value: str):
-            writes.append((parameter, value))
-            return type("_SetResponse", (), {"status": 0, "parameter": parameter})()
-
-        async def with_session():
-            return transport, session
-
-        session.set_collector.side_effect = set_collector
-        options._async_with_options_collector_session = with_session
+        options._config_entry.data[CONF_COLLECTOR_IP] = ""
 
         await options._async_apply_collector_uart_baudrate("9600")
 
-        self.assertEqual(writes, [(SET_SERIAL_BAUDRATE, "9600")])
+        coordinator.async_set_collector_uart_baudrate.assert_awaited_once_with("9600")
         self.assertEqual(snapshot.values["collector_serial_baudrate"], "2400,8,1,NONE")
         coordinator.invalidate_collector_runtime_values.assert_called_once_with()
         coordinator.async_request_refresh.assert_awaited_once_with()
-        transport.stop.assert_awaited_once()
 
     async def test_options_collector_uart_apply_refuses_bk72xx_runtime_change(self) -> None:
         options = self._make_options_flow()
         options._collector_uart_hardware_version = "BK72xx/RTL87xx"
-        options._async_with_options_collector_session = AsyncMock()
+        writer = AsyncMock()
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            async_set_collector_uart_baudrate=writer
+        )
 
         with self.assertRaisesRegex(RuntimeError, "collector_uart_runtime_unavailable"):
             await options._async_apply_collector_uart_baudrate("9600")
 
-        options._async_with_options_collector_session.assert_not_called()
+        writer.assert_not_called()
 
     async def test_options_collector_uart_apply_requires_confirmation(self) -> None:
         options = self._make_options_flow()
@@ -8467,6 +8120,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         skipped=None,
         learned_reads=None,
         skipped_reads=None,
+        read_evidence=None,
     ) -> dict[str, Any]:
         """Embed a real review model in flow state the way the runner would.
 
@@ -8481,6 +8135,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             ),
             learned_read_sensors=list(learned_reads or []),
             skipped_read_sensors=list(skipped_reads or []),
+            read_review_evidence=list(read_evidence or []),
         )
         manifest: dict[str, Any] = {"review_model": review_model}
         if skipped is not None:
@@ -8580,6 +8235,73 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Battery Voltage", overview)
         self.assertNotIn("register_already_decoded", overview)
         self.assertNotIn("title_already_mapped", overview)
+
+    async def test_control_discovery_review_lists_all_inconclusive_cloud_fields(self) -> None:
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(
+            options,
+            capabilities=[],
+            phase="overview",
+            read_evidence=[
+                {
+                    "cloud_id": "grid_voltage",
+                    "field_name": "Grid Voltage",
+                    "default_label": "Grid Voltage",
+                    "cloud_value": "0.0",
+                    "unit": "V",
+                    "kind": "numeric",
+                    "binding_status": "skipped_zero",
+                    "disposition": "inconclusive",
+                    "reason": "value_zero",
+                    "register": 0,
+                    "candidate_registers": [],
+                },
+                {
+                    "cloud_id": "dc_temperature",
+                    "field_name": "DC Module Termperature",
+                    "default_label": "DC Module Temperature",
+                    "cloud_value": "27",
+                    "unit": "°C",
+                    "kind": "numeric",
+                    "binding_status": "ambiguous",
+                    "disposition": "inconclusive",
+                    "reason": "multiple_registers",
+                    "register": 0,
+                    "candidate_registers": [206, 226],
+                },
+                {
+                    "cloud_id": "operating_mode",
+                    "field_name": "Operating mode",
+                    "default_label": "Operating mode",
+                    "cloud_value": "Off-Grid Mode",
+                    "unit": "",
+                    "kind": "enum",
+                    "binding_status": "enum_ambiguous",
+                    "disposition": "inconclusive",
+                    "reason": "enum_ambiguous",
+                    "register": 0,
+                    "candidate_registers": [201, 331],
+                },
+            ],
+        )
+
+        result = await options.async_step_shadow_learning_review()
+
+        placeholders = result["description_placeholders"]
+        self.assertEqual(
+            placeholders["control_discovery_inconclusive_read_count"], "3"
+        )
+        overview = placeholders["control_discovery_overview"]
+        self.assertIn("Cloud fields not linked in this run (3)", overview)
+        self.assertIn("Grid Voltage", overview)
+        self.assertIn("DC Module Temperature", overview)
+        self.assertNotIn("DC Module Termperature", overview)
+        self.assertIn("Operating mode", overview)
+        self.assertIn("no active value during this check", overview)
+        self.assertIn("several registers had the same value", overview)
+        self.assertIn("the state could not be matched safely", overview)
+        self.assertNotIn("skipped_zero", overview)
+        self.assertNotIn("enum_ambiguous", overview)
 
     async def test_control_discovery_review_overview_continues_to_edit(self) -> None:
         options = self._wizard_options_flow()
@@ -9294,6 +9016,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         *,
         captured: dict,
         fetch_side_effect=None,
+        orchestrate_side_effect=None,
         orchestration_override: dict | None = None,
     ):
         bundle = {
@@ -9331,10 +9054,18 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             fetch_kwargs["side_effect"] = fetch_side_effect
         else:
             fetch_kwargs["return_value"] = bundle
+        orchestrate_kwargs = (
+            {"side_effect": orchestrate_side_effect}
+            if orchestrate_side_effect is not None
+            else {
+                "side_effect": lambda **kwargs: captured.update(kwargs)
+                or dict(orchestration)
+            }
+        )
         return (
             patch.object(
                 cloud_control_discovery_module,
-                "login_with_password",
+                "login_for_control_discovery",
                 return_value=(
                     object(),
                     types.SimpleNamespace(
@@ -9349,13 +9080,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(
                 cloud_control_discovery_module,
-                "fetch_device_bundle_for_collector",
+                "fetch_control_discovery_bundle_for_collector",
                 **fetch_kwargs,
             ),
             patch.object(
                 cloud_control_discovery_module,
                 "async_orchestrate_shadow_learning_settings",
-                side_effect=lambda **kwargs: captured.update(kwargs) or dict(orchestration),
+                **orchestrate_kwargs,
             ),
             patch.object(
                 options_shadow_run_module,
@@ -9572,8 +9303,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         bundle_mock.assert_called_once()
         self.assertEqual(
             set(bundle_mock.call_args.kwargs),
-            {"username", "password", "collector_pn"},
+            {"username", "password", "collector_pn", "timeout"},
         )
+        self.assertEqual(bundle_mock.call_args.kwargs["timeout"], 30.0)
         self.assertEqual(
             bundle_mock.call_args.kwargs["collector_pn"],
             "E5000020000000",
@@ -9652,6 +9384,26 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(discovery["reason"], "control_discovery_cloud_timeout")
         self.assertNotIn("secret", str(discovery))
         self.assertEqual(len(coordinator.stopped), 1)
+
+    async def test_control_discovery_action_timeout_stops_and_restores(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=True)
+        options = self._runner_options_flow(coordinator)
+        captured: dict = {}
+        login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(
+            captured=captured,
+            orchestrate_side_effect=TimeoutError("private action detail"),
+        )
+
+        with login_p, fetch_p, orchestrate_p, overlay_p:
+            await options._async_run_control_discovery()
+
+        discovery = options._shadow_learning_state["discovery"]
+        self.assertEqual(discovery["status"], "error")
+        self.assertEqual(discovery["reason"], "control_discovery_cloud_timeout")
+        self.assertNotIn("private action detail", str(discovery))
+        self.assertEqual(len(coordinator.started), 1)
+        self.assertEqual(len(coordinator.stopped), 1)
+        self.assertFalse(coordinator.stopped[0].get("raise_when_not_running", True))
 
     def test_control_discovery_cloud_reason_boundary_is_closed(self) -> None:
         options = self._wizard_options_flow()
@@ -11819,14 +11571,23 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             async def async_close(self) -> None:
                 return None
 
-        probe = AsyncMock(side_effect=AssertionError("UDP trigger sent during inbound verification"))
-        with patch.object(admission_transaction_module, "ObservedSessionRestartChannel", _FakeChannel), patch.object(
-            config_collector_module, "async_send_callback_trigger", probe
+        from custom_components.eybond_local.connection.callback_ledger import (
+            get_callback_trigger_ledger,
+        )
+
+        generation_before = get_callback_trigger_ledger().snapshot_generation()
+        with patch.object(
+            admission_transaction_module,
+            "ObservedSessionRestartChannel",
+            _FakeChannel,
         ):
             await flow.async_step_verify_connection({})
             await flow._admission_task
 
-        probe.assert_not_called()
+        self.assertEqual(
+            get_callback_trigger_ledger().snapshot_generation(),
+            generation_before,
+        )
         result = flow._admission_transaction.outcome
         assert result is not None
         self.assertTrue(result.inbound_verified)
@@ -12187,17 +11948,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         # Create the REAL entry through the confirm submit path and check its
         # data -- not just the strategy stamping helper.
-        with (
-            patch(
-                "custom_components.eybond_local.flows.config.collector.SharedEybondTransport",
-                side_effect=AssertionError("passive confirm must not start payload transport"),
-            ),
-            patch(
-                "custom_components.eybond_local.flows.config.collector.SharedCollectorAtTransport",
-                side_effect=AssertionError("passive confirm must not start AT transport"),
-            ),
-        ):
-            created = await flow.async_step_confirm({"poll_mode": "auto"})
+        created = await flow.async_step_confirm({"poll_mode": "auto"})
 
         self.assertEqual(created["type"], "create_entry")
         data = created["data"]
@@ -12275,17 +12026,10 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
         registry = self._install_registry(flow, inventory)
 
-        async def _passthrough_enrich(_user_input, result):
-            return result
-
         with self._identity_wire(
             inventory,
             answers=[self._inventory_session(self.NEW_SESSION, self.FULL_PN)],
             read_pn=self.FULL_PN,
-        ), patch.object(
-            flow,
-            "_async_enrich_manual_collector_profile",
-            side_effect=_passthrough_enrich,
         ):
             result = await flow.async_step_manual(self._manual_input("192.168.1.60"))
             self.assertEqual(result["step_id"], "manual_recovery_confirm")
@@ -12489,12 +12233,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             results=(self._manual_result_with_pn(self.FULL_PN),), on_detect=_answers
         )
 
-        async def _passthrough_enrich(_user_input, result):
-            return result
-
         routed = await self._drive_generic_callback(flow, detector)
         self.assertEqual(routed["step_id"], "manual_recovery_confirm")
-        del _passthrough_enrich  # the recovery drive patches its own enrich
         registry = flow._callback_session_registry()
         created, _calls = await self._drive_recovery_verified(flow, registry)
 
@@ -12741,9 +12481,6 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             on_detect=_target_answers,
         )
 
-        async def _passthrough_enrich(_user_input, result):
-            return result
-
         routed = await self._drive_generic_callback(flow, detector)
         self.assertEqual(routed["step_id"], "manual_recovery_confirm")
         # Only the target identity was claimed ...
@@ -12754,7 +12491,6 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         # ... and the pre-existing stranger is untouched.
         self.assertEqual(registry.owner_for_pn(self.OTHER_FULL_PN), "")
 
-        del _passthrough_enrich  # the recovery drive patches its own enrich
         created, _calls = await self._drive_recovery_verified(flow, registry)
         self.assertEqual(created["type"], "create_entry")
         self.assertEqual(created["data"]["collector_pn"], self.FULL_PN)
@@ -12842,16 +12578,12 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             on_detect=_answers,
         )
 
-        async def _passthrough_enrich(_user_input, result):
-            return result
-
         routed = await self._drive_generic_callback(flow, detector)
         self.assertEqual(routed["step_id"], "manual_recovery_confirm")
 
         identity_owner = registry.owner_for_pn(self.FULL_PN)
         self.assertTrue(identity_owner.startswith("callback_verification:"))
 
-        del _passthrough_enrich  # the recovery drive patches its own enrich
         created, _calls = await self._drive_recovery_verified(flow, registry)
 
         self.assertEqual(created["type"], "create_entry")
@@ -12916,15 +12648,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         flow._callback_continuation._expected_pn = self.FULL_PN
         flow._callback_continuation._certified_pn = ""
 
-        async def _passthrough_enrich(_user_input, result):
-            return result
-
-        with patch.object(
-            flow,
-            "_async_enrich_manual_collector_profile",
-            side_effect=_passthrough_enrich,
-        ):
-            result = await flow.async_step_manual_save()
+        result = await flow.async_step_manual_save()
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "manual_confirm")
@@ -13188,17 +12912,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         owner = registry.owner_for_pn(self.FULL_PN)
         self.assertTrue(owner.startswith("strategy_verification:"))
 
-        with (
-            patch(
-                "custom_components.eybond_local.flows.config.collector.SharedEybondTransport",
-                side_effect=AssertionError("passive confirm must not start payload transport"),
-            ),
-            patch(
-                "custom_components.eybond_local.flows.config.collector.SharedCollectorAtTransport",
-                side_effect=AssertionError("passive confirm must not start AT transport"),
-            ),
-        ):
-            created = await flow.async_step_confirm({"poll_mode": "auto"})
+        created = await flow.async_step_confirm({"poll_mode": "auto"})
 
         self.assertEqual(created["type"], "create_entry")
         self.assertEqual(created["data"]["collector_pn"], self.FULL_PN)
@@ -13223,9 +12937,6 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         inventory = [self._inventory_session(self.OLD_SESSION, self.FULL_PN)]
         registry = self._install_registry(flow, inventory)
 
-        async def _passthrough_enrich(_user_input, result):
-            return result
-
         boom = RuntimeError("HA create failed")
 
         def _raise(*_a, **_k):
@@ -13235,10 +12946,6 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             inventory,
             answers=[self._inventory_session(self.NEW_SESSION, self.FULL_PN)],
             read_pn=self.FULL_PN,
-        ), patch.object(
-            flow,
-            "_async_enrich_manual_collector_profile",
-            side_effect=_passthrough_enrich,
         ):
             routed = await flow.async_step_manual(self._manual_input("192.168.1.60"))
             self.assertEqual(routed["step_id"], "manual_recovery_confirm")
@@ -13250,10 +12957,6 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             "custom_components.eybond_local.connection.admission_transaction."
             "async_run_callback_recovery_transaction",
             side_effect=tx,
-        ), patch.object(
-            flow,
-            "_async_enrich_manual_collector_profile",
-            side_effect=_passthrough_enrich,
         ):
             progress = await flow.async_step_manual_recovery_verify()
             self.assertEqual(progress["type"], "progress")
@@ -13374,17 +13077,10 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
         tx, calls = self._recovery_transaction_stub(registry, owner=owner)
 
-        async def _passthrough_enrich(_user_input, result):
-            return result
-
         with patch(
             "custom_components.eybond_local.connection.admission_transaction."
             "async_run_callback_recovery_transaction",
             side_effect=tx,
-        ), patch.object(
-            flow,
-            "_async_enrich_manual_collector_profile",
-            side_effect=_passthrough_enrich,
         ):
             progress = await flow.async_step_manual_recovery_verify()
             self.assertEqual(progress["type"], "progress")
@@ -13480,15 +13176,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(flow._callback_continuation._handed_off)
 
         # The stale identity cannot be turned into a normal entry for A.
-        async def _passthrough_enrich(_user_input, result):
-            return result
-
-        with patch.object(
-            flow,
-            "_async_enrich_manual_collector_profile",
-            side_effect=_passthrough_enrich,
-        ):
-            created = await flow.async_step_manual_save()
+        created = await flow.async_step_manual_save()
         self.assertNotEqual(created.get("data", {}).get("collector_pn", ""), self.FULL_PN)
         self.assertEqual(registry.owner_for_pn(self.FULL_PN), "")
 
@@ -13526,15 +13214,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registry.claimed_identity(owner_a), "")
         self.assertEqual(flow._callback_continuation._owner, "")
 
-        async def _passthrough_enrich(_user_input, result):
-            return result
-
-        with patch.object(
-            flow,
-            "_async_enrich_manual_collector_profile",
-            side_effect=_passthrough_enrich,
-        ):
-            created = await flow.async_step_manual_save()
+        created = await flow.async_step_manual_save()
         self.assertNotEqual(created.get("data", {}).get("collector_pn", ""), self.FULL_PN)
 
     async def test_probe_again_is_a_whole_new_attempt_with_its_own_baseline(self) -> None:
@@ -14178,15 +13858,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "manual_recovery_inbound_confirm")
 
-        async def _passthrough_enrich(_user_input, r):
-            return r
-
-        with patch.object(
-            flow,
-            "_async_enrich_manual_collector_profile",
-            side_effect=_passthrough_enrich,
-        ):
-            created = await flow.async_step_manual_recovery_accept_inbound()
+        created = await flow.async_step_manual_recovery_accept_inbound()
 
         self.assertEqual(created["type"], "create_entry")
         self.assertEqual(created["data"]["connection_strategy"], "inbound")

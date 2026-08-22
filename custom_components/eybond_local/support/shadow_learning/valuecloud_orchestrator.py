@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from contextlib import suppress
 import asyncio
+import logging
 import re
+import time
 from typing import Any, Awaitable, Callable
 
 from ...eybond_g_ascii_settings import G_ASCII_SETTINGS_BY_VALUECLOUD_FIELD
@@ -14,13 +16,18 @@ from ...valuecloud_cloud import (
     DEFAULT_BASE_URL,
     DEFAULT_LANGUAGE,
     DEFAULT_TIMEOUT,
+    ValueCloudActionRejectedError,
     ValueCloudEnvelope,
     ValueCloudError,
     ValueCloudSession,
     setup_batch_control_value,
 )
 from . import ShadowWriteObservation, utc_now_iso
+from .cloud_dispatch import async_dispatch_cloud_action
 from .orchestrator import summarize_shadow_learning_attempts
+
+
+logger = logging.getLogger(__name__)
 
 
 _CONTROL_STATUS_PLANNED = "planned"
@@ -189,9 +196,10 @@ async def async_orchestrate_valuecloud_shadow_learning(
         )
         attempt["observation_cursor_start"] = cursor_start
         attempt["requested_at"] = utc_now_iso()
+        dispatch_started = time.monotonic()
         try:
             if item.get("transport") == "legacy_ctrlDevice":
-                envelope = await asyncio.to_thread(
+                envelope = await async_dispatch_cloud_action(
                     legacy_setup_action,
                     session=session,
                     pn=pn,
@@ -207,7 +215,7 @@ async def async_orchestrate_valuecloud_shadow_learning(
                     timeout=timeout,
                 )
             else:
-                envelope = await asyncio.to_thread(
+                envelope = await async_dispatch_cloud_action(
                     setup_action,
                     session=session,
                     pn=pn,
@@ -225,18 +233,33 @@ async def async_orchestrate_valuecloud_shadow_learning(
                     timeout=timeout,
                 )
             attempt["status"] = _CONTROL_STATUS_SENT
+            attempt["delivery_outcome"] = "response"
+            attempt["cloud_duration_ms"] = _elapsed_ms(dispatch_started)
             attempt["response"] = {
                 "code": getattr(envelope, "code", None),
                 "success": getattr(envelope, "success", None),
                 "message": str(getattr(envelope, "message", "") or ""),
                 "errorMessage": str(getattr(envelope, "error_message", "") or ""),
             }
-        except Exception as exc:  # pragma: no cover - cloud failures are endpoint-dependent
+        except ValueCloudActionRejectedError as exc:
             attempt["status"] = _CONTROL_STATUS_ERROR
-            attempt["error"] = str(exc)
-            if not continue_on_error:
-                attempts.append(attempt)
-                break
+            attempt["delivery_outcome"] = "definitive_rejection"
+            attempt["cloud_duration_ms"] = _elapsed_ms(dispatch_started)
+            attempt["cloud_rejection"] = {
+                "code": exc.code,
+                "action": exc.action,
+                "detail": exc.detail,
+            }
+        except Exception as exc:
+            logger.warning(
+                "Shadow cloud action delivery indeterminate sequence=%s total=%s "
+                "duration_ms=%s exception_type=%s",
+                sequence_index,
+                plan_total,
+                _elapsed_ms(dispatch_started),
+                type(exc).__name__,
+            )
+            raise
 
         observations = await _wait_for_attempt_observations(
             cursor_start=cursor_start,
@@ -267,6 +290,11 @@ async def async_orchestrate_valuecloud_shadow_learning(
             run_observations.extend(observations)
 
         attempts.append(attempt)
+        if (
+            attempt.get("status") == _CONTROL_STATUS_ERROR
+            and not continue_on_error
+        ):
+            break
         if delay_seconds > 0:
             await asyncio.sleep(delay_seconds)
 
@@ -607,11 +635,17 @@ def _normalize_captured_not_applied_status(attempt: dict[str, Any]) -> None:
         attempt["proxy_capture_result"] = "captured_not_applied"
         attempt["cloud_ack_after_proxy_nack"] = True
         return
-    if attempt.get("status") == _CONTROL_STATUS_ERROR:
+    rejection = attempt.get("cloud_rejection")
+    if attempt.get("status") == _CONTROL_STATUS_ERROR and isinstance(
+        rejection, dict
+    ):
         attempt["status"] = _CONTROL_STATUS_CAPTURED_NOT_APPLIED
         attempt["proxy_capture_result"] = "captured_not_applied"
-        attempt["cloud_nack"] = str(attempt.get("error") or "")
-        attempt.pop("error", None)
+        attempt["cloud_nack_response"] = dict(rejection)
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, int(round((time.monotonic() - started_at) * 1000.0)))
 
 
 def _attempt_has_success_response(attempt: dict[str, Any]) -> bool:

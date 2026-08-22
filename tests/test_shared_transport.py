@@ -818,6 +818,12 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(
             listener._collector_pn_matches(
+                "V001020SYN",
+                "V001020SYN62344022",
+            )
+        )
+        self.assertTrue(
+            listener._collector_pn_matches(
                 "E5000020000000",
                 "E50000200000009777",
             )
@@ -1710,7 +1716,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(aliased)
         self.assertNotIn("192.168.1.1", listener._connections)
 
-    async def test_listener_pops_one_pending_socket_for_default_broadcast_placeholder_when_multiple_callbacks_arrive(self) -> None:
+    async def test_listener_rejects_ambiguous_pending_sockets_for_default_broadcast_placeholder(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         listener.ensure_connection(
             "192.168.1.255",
@@ -1733,9 +1739,9 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
 
         selected = listener.pop_pending_socket("192.168.1.255")
 
-        self.assertIs(selected, second)
+        self.assertIsNone(selected)
         self.assertIn(first.remote_ip, listener._pending_sockets)
-        self.assertNotIn(second.remote_ip, listener._pending_sockets)
+        self.assertIn(second.remote_ip, listener._pending_sockets)
 
     async def test_listener_matching_callback_ips_returns_connected_and_pending_broadcast_matches(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())

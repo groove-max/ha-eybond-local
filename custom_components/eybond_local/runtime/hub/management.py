@@ -554,6 +554,13 @@ class HubManagementMixin:
             password_parameter=password_parameter,
         )
 
+    async def async_set_collector_uart_baudrate(self, baudrate: str) -> str:
+        """Write UART speed through the exact runtime-owned live session."""
+
+        await self._async_ensure_connected(timeout=10.0, require_heartbeat=False)
+        adapter = self._collector_management_adapter(active_only=True)
+        return await adapter.async_set_uart_baudrate(baudrate)
+
     async def _async_execute_collector_system_action(self, *, action: str) -> dict[str, object]:
         """Run a standalone collector apply/reboot via the management adapter."""
 

@@ -42,7 +42,9 @@ from .collector_wire import (
     CollectorWireError,
     CollectorWireManagementSession,
     QUERY_REBOOT_REQUIRED,
+    QUERY_SERIAL_BAUDRATE,
     SET_REBOOT_OR_APPLY,
+    SET_SERIAL_BAUDRATE,
     SET_SERVER_ENDPOINT,
 )
 
@@ -220,6 +222,10 @@ class CollectorManagementAdapter(ABC):
         password_parameter: int,
     ) -> str:
         """Write and apply collector Wi-Fi credentials when supported."""
+
+    @abstractmethod
+    async def async_set_uart_baudrate(self, baudrate: str) -> str:
+        """Write and read back the collector UART baudrate when supported."""
 
 
 def _wrap_wire_call(exc: Exception) -> CollectorManagementError:
@@ -526,6 +532,33 @@ class FramedCollectorManagementAdapter(CollectorManagementAdapter):
         await self._apply(session)
         return ssid
 
+    async def async_set_uart_baudrate(self, baudrate: str) -> str:
+        if (
+            type(baudrate) is not str
+            or not baudrate
+            or baudrate != baudrate.strip()
+            or not baudrate.isdecimal()
+        ):
+            raise TypeError("collector_uart_baudrate_invalid")
+        session, _ = self._session()
+        try:
+            response = await session.set_collector(SET_SERIAL_BAUDRATE, baudrate)
+        except CollectorManagementError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise _wrap_wire_call(exc) from exc
+        if response.status != 0 or response.parameter != SET_SERIAL_BAUDRATE:
+            raise CollectorManagementConfirmationError(
+                f"collector_set_unconfirmed:parameter={SET_SERIAL_BAUDRATE}:"
+                f"status={response.status}"
+            )
+        readback = await self._query_confirmed(session, QUERY_SERIAL_BAUDRATE)
+        if readback.split(",", 1)[0].strip() != baudrate:
+            raise CollectorManagementConfirmationError(
+                "collector_uart_readback_mismatch"
+            )
+        return readback
+
 
 # ---------------------------------------------------------------------------
 # AT-text implementation
@@ -721,6 +754,12 @@ class AtTextCollectorManagementAdapter(CollectorManagementAdapter):
             "collector_wifi_write_unsupported_on_at_wire"
         )
 
+    async def async_set_uart_baudrate(self, baudrate: str) -> str:
+        del baudrate
+        raise CollectorManagementUnsupportedError(
+            "collector_uart_write_unsupported_on_at_wire"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Unavailable implementation (conflict / unknown / nothing negotiated)
@@ -771,6 +810,10 @@ class UnavailableCollectorManagementAdapter(CollectorManagementAdapter):
         password_parameter: int,
     ) -> str:
         del ssid, password, ssid_parameter, password_parameter
+        self._fail()
+
+    async def async_set_uart_baudrate(self, baudrate: str) -> str:
+        del baudrate
         self._fail()
 
 

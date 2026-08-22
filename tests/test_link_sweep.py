@@ -164,29 +164,17 @@ class ParseReportedBaudTests(unittest.TestCase):
 
 class RuntimeLinkBaudChannelTests(unittest.IsolatedAsyncioTestCase):
     async def test_channel_owns_parameter_34_read_and_write(self) -> None:
-        session = AsyncMock()
-        session.query_collector.return_value = SimpleNamespace(
-            code=0,
-            parameter=34,
-            text="9600,8,1,NONE",
-        )
-        session.set_collector.return_value = SimpleNamespace(
-            status=0,
-            parameter=34,
-        )
-        with patch(
-            "custom_components.eybond_local.runtime.link.baud_sweep."
-            "CollectorWireManagementSession",
-            return_value=session,
-        ):
-            channel = RuntimeLinkBaudChannel(object(), request_timeout=5.0)
-            current = await channel.async_read_current_baud()
-            changed = await channel.async_set_baud(2400)
+        adapter = AsyncMock()
+        adapter.async_query_parameters.return_value = {34: "9600,8,1,NONE"}
+        adapter.async_set_uart_baudrate.return_value = "2400,8,1,NONE"
+        channel = RuntimeLinkBaudChannel(adapter, request_timeout=5.0)
+        current = await channel.async_read_current_baud()
+        changed = await channel.async_set_baud(2400)
 
         self.assertEqual(current, 9600)
         self.assertTrue(changed)
-        session.query_collector.assert_awaited_once_with(34)
-        session.set_collector.assert_awaited_once_with(34, "2400")
+        adapter.async_query_parameters.assert_awaited_once_with((34,))
+        adapter.async_set_uart_baudrate.assert_awaited_once_with("2400")
 
 
 class BaudSweepTests(unittest.IsolatedAsyncioTestCase):

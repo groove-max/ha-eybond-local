@@ -83,7 +83,6 @@ class ConfigFlowBaseMixin:
         # not erase the address that actually answered this scan.
         self._scan_responded_addresses: set[str] = set()
         self._selected_result: OnboardingResult | None = None
-        self._selected_result_collector_capabilities_attempted = False
         self._scan_task: asyncio.Task | None = None
         self._scan_error: bool = False
         self._scan_timeout_seconds = _AUTO_SCAN_TIMEOUT
@@ -100,11 +99,6 @@ class ConfigFlowBaseMixin:
         self._ble_fw_version_by_address: dict[str, str] = {}
         self._ble_wifi_scan_attempted_addresses: set[str] = set()
         self._ble_wifi_scan_failed_addresses: set[str] = set()
-        self._collector_original_server_endpoint = ""
-        self._collector_current_server_endpoint = ""
-        self._collector_target_server_endpoint = ""
-        self._collector_endpoint_error = ""
-        self._collector_endpoint_bind_applied = False
         self._smartess_cloud_assist: _SmartEssCloudAssistState | None = None
         self._smartess_cloud_assist_mode = ""
         self._smartess_cloud_assist_last_error = ""

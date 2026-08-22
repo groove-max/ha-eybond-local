@@ -64,6 +64,10 @@ class RuntimeManager(Protocol):
         """Return all protocols proven on the current owned session."""
         ...
 
+    def set_callback_ownership(self, registry: object, entry_id: str) -> None:
+        """Bind the domain session registry and durable entry identity."""
+        ...
+
     async def async_start(self) -> None:
         ...
 
@@ -261,6 +265,9 @@ class RuntimeManager(Protocol):
         ssid_parameter: int,
         password_parameter: int,
     ) -> str:
+        ...
+
+    async def async_set_collector_uart_baudrate(self, baudrate: str) -> str:
         ...
 
     def collector_management_capabilities(self) -> Any:

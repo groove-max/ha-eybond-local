@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import threading
 import time
 import sys
 import unittest
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -13,9 +15,18 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.smartess_cloud import (
+    ApiEnvelope,
     SessionCredentials,
+    SmartEssActionRejectedError,
+    SmartEssBundleStageError,
     SmartEssCloudError,
     build_learn_settings_plan,
+    classify_smartess_cloud_error,
+    fetch_control_discovery_bundle_for_collector,
+    fetch_device_bundle_for_collector,
+    fetch_device_bundle_for_identity,
+    fetch_signed_action,
+    login_for_control_discovery,
 )
 from custom_components.eybond_local.support.shadow_learning import ShadowWriteObservation
 from custom_components.eybond_local.support.shadow_learning.orchestrator import (
@@ -27,6 +38,201 @@ from custom_components.eybond_local.support.shadow_learning.orchestrator import 
 
 
 class ShadowLearningOrchestratorTests(unittest.TestCase):
+    def test_control_discovery_bundle_excludes_unconsumed_energy_flow(self) -> None:
+        identity_dat = {
+            "device": [
+                {
+                    "pn": "E50000200000000001",
+                    "sn": "E50000200000000001000001",
+                    "devcode": 2376,
+                    "devaddr": 1,
+                }
+            ]
+        }
+        envelopes = [
+            ApiEnvelope(err=0, desc="", dat=identity_dat, raw={}),
+            ApiEnvelope(err=0, desc="", dat=identity_dat, raw={}),
+            ApiEnvelope(err=0, desc="", dat={"pars": {}}, raw={}),
+            ApiEnvelope(err=0, desc="", dat={"field": []}, raw={}),
+            TimeoutError("energy flow must not be called"),
+        ]
+        with patch(
+            "custom_components.eybond_local.smartess_cloud.login_with_password",
+            return_value=(
+                ApiEnvelope(err=0, desc="", dat={}, raw={}),
+                SessionCredentials(token="token", secret="secret"),
+            ),
+        ), patch(
+            "custom_components.eybond_local.smartess_cloud.fetch_signed_action",
+            side_effect=envelopes,
+        ) as fetch:
+            bundle = fetch_control_discovery_bundle_for_collector(
+                username="user",
+                password="password",
+                collector_pn="E50000200000000001",
+            )
+
+        self.assertEqual(fetch.call_count, 4)
+        self.assertNotIn("energy_flow", bundle["request"]["actions"])
+        self.assertNotIn("energy_flow", bundle["responses"])
+        self.assertIn("device_settings", bundle["responses"])
+
+    def test_diagnostic_identity_bundle_keeps_energy_flow_by_default(self) -> None:
+        envelopes = [
+            ApiEnvelope(err=0, desc="", dat={"device": []}, raw={}),
+            ApiEnvelope(err=0, desc="", dat={"pars": {}}, raw={}),
+            ApiEnvelope(err=0, desc="", dat={"field": []}, raw={}),
+            ApiEnvelope(err=0, desc="", dat={"flow": {}}, raw={}),
+        ]
+        with patch(
+            "custom_components.eybond_local.smartess_cloud.fetch_signed_action",
+            side_effect=envelopes,
+        ) as fetch:
+            bundle = fetch_device_bundle_for_identity(
+                session=SessionCredentials(token="token", secret="secret"),
+                session_source="test",
+                pn="E50000200000000001",
+                sn="E50000200000000001000001",
+                devcode=2376,
+                devaddr=1,
+            )
+
+        self.assertEqual(fetch.call_count, 4)
+        self.assertEqual(
+            bundle["request"]["actions"]["energy_flow"],
+            "webQueryDeviceEnergyFlowEs",
+        )
+        self.assertIn("energy_flow", bundle["responses"])
+
+    def test_bundle_failure_preserves_closed_request_stage(self) -> None:
+        with patch(
+            "custom_components.eybond_local.smartess_cloud.fetch_signed_action",
+            side_effect=[
+                ApiEnvelope(err=0, desc="", dat={}, raw={}),
+                TimeoutError("private detail"),
+            ],
+        ):
+            with self.assertRaises(SmartEssBundleStageError) as raised:
+                fetch_device_bundle_for_identity(
+                    session=SessionCredentials(token="token", secret="secret"),
+                    session_source="test",
+                    pn="E50000200000000001",
+                    sn="E50000200000000001000001",
+                    devcode=2376,
+                    devaddr=1,
+                )
+
+        self.assertEqual(raised.exception.stage, "device_detail")
+        self.assertEqual(raised.exception.cloud_error_code, "timeout")
+        self.assertEqual(classify_smartess_cloud_error(raised.exception), "timeout")
+        self.assertNotIn("private detail", str(raised.exception))
+
+    def test_bundle_login_failure_is_typed_without_leaking_detail(self) -> None:
+        with patch(
+            "custom_components.eybond_local.smartess_cloud.login_with_password",
+            side_effect=TimeoutError("private login"),
+        ):
+            with self.assertRaises(SmartEssBundleStageError) as raised:
+                fetch_device_bundle_for_collector(
+                    username="user",
+                    password="password",
+                    collector_pn="E50000200000000001",
+                )
+
+        self.assertEqual(raised.exception.stage, "login")
+        self.assertEqual(raised.exception.cloud_error_code, "timeout")
+        self.assertNotIn("private login", str(raised.exception))
+
+    def test_control_discovery_retries_only_the_failed_read_only_stage(self) -> None:
+        identity_dat = {
+            "device": [
+                {
+                    "pn": "E50000200000000001",
+                    "sn": "E50000200000000001000001",
+                    "devcode": 2376,
+                    "devaddr": 1,
+                }
+            ]
+        }
+        envelopes = [
+            ApiEnvelope(err=0, desc="", dat=identity_dat, raw={}),
+            ApiEnvelope(err=0, desc="", dat=identity_dat, raw={}),
+            TimeoutError("first transient detail timeout"),
+            TimeoutError("second transient detail timeout"),
+            ApiEnvelope(err=0, desc="", dat={"pars": {}}, raw={}),
+            ApiEnvelope(err=0, desc="", dat={"field": []}, raw={}),
+        ]
+        with patch(
+            "custom_components.eybond_local.smartess_cloud.login_with_password",
+            return_value=(
+                ApiEnvelope(err=0, desc="", dat={}, raw={}),
+                SessionCredentials(token="token", secret="secret"),
+            ),
+        ), patch(
+            "custom_components.eybond_local.smartess_cloud.fetch_signed_action",
+            side_effect=envelopes,
+        ) as fetch, patch(
+            "custom_components.eybond_local.smartess_cloud.time.sleep"
+        ) as sleep:
+            bundle = fetch_control_discovery_bundle_for_collector(
+                username="user",
+                password="password",
+                collector_pn="E50000200000000001",
+            )
+
+        self.assertEqual(fetch.call_count, 6)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertIn("device_settings", bundle["responses"])
+
+    def test_control_discovery_login_retries_transient_timeout(self) -> None:
+        session = SessionCredentials(token="token", secret="secret")
+        with patch(
+            "custom_components.eybond_local.smartess_cloud.login_with_password",
+            side_effect=[
+                TimeoutError("first"),
+                TimeoutError("second"),
+                (ApiEnvelope(err=0, desc="", dat={}, raw={}), session),
+            ],
+        ) as login, patch(
+            "custom_components.eybond_local.smartess_cloud.time.sleep"
+        ) as sleep:
+            _envelope, result = login_for_control_discovery(
+                username="user",
+                password="password",
+            )
+
+        self.assertIs(result, session)
+        self.assertEqual(login.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_control_discovery_does_not_retry_definitive_rejection(self) -> None:
+        with patch(
+            "custom_components.eybond_local.smartess_cloud.login_with_password",
+            side_effect=SmartEssCloudError("login_failed:1:bad credentials"),
+        ) as login, patch(
+            "custom_components.eybond_local.smartess_cloud.time.sleep"
+        ) as sleep:
+            with self.assertRaises(SmartEssBundleStageError) as raised:
+                login_for_control_discovery(username="user", password="bad")
+
+        self.assertEqual(raised.exception.stage, "control_login")
+        self.assertEqual(login.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_signed_action_uses_typed_definitive_rejection(self) -> None:
+        with patch(
+            "custom_components.eybond_local.smartess_cloud._http_get_json",
+            return_value=ApiEnvelope(err=1, desc="expected nack", dat={}, raw={}),
+        ):
+            with self.assertRaises(SmartEssActionRejectedError) as raised:
+                fetch_signed_action(
+                    action="&action=ctrlDevice",
+                    session=SessionCredentials(token="token", secret="secret"),
+                )
+
+        self.assertEqual(raised.exception.err, 1)
+        self.assertEqual(raised.exception.desc, "expected nack")
+
     def test_build_plan_is_deterministic_with_manual_enum_sweep_and_numeric_opt_in(self) -> None:
         settings_dat = {
             "field": [
@@ -217,7 +423,10 @@ class ShadowLearningOrchestratorTests(unittest.TestCase):
         }
 
         def _nacking_fetch(**_kwargs):
-            raise RuntimeError("action_failed:1:ERR_FAIL(Read-Only Register)")
+            raise SmartEssActionRejectedError(
+                err=1,
+                desc="ERR_FAIL(Read-Only Register)",
+            )
 
         result = orchestrate_shadow_learning_settings(
             settings_dat=settings_dat,
@@ -643,7 +852,10 @@ class ShadowLearningAsyncOrchestratorTests(unittest.IsolatedAsyncioTestCase):
                     timestamp="2026-06-05T12:00:00.050000+00:00",
                 ),
             )
-            raise RuntimeError("action_failed:1:ERR_FAIL(Read-Only Register)")
+            raise SmartEssActionRejectedError(
+                err=1,
+                desc="ERR_FAIL(Read-Only Register)",
+            )
 
         result = await async_orchestrate_shadow_learning_settings(
             settings_dat=settings_dat,
@@ -670,11 +882,113 @@ class ShadowLearningAsyncOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["results"][0]["status"], "captured_not_applied")
         self.assertEqual(result["captured_not_applied_count"], 1)
         self.assertEqual(result["error_count"], 0)
-        self.assertIn("ERR_FAIL", result["results"][0]["cloud_nack"])
+        self.assertIn(
+            "ERR_FAIL",
+            result["results"][0]["cloud_nack_response"]["desc"],
+        )
         self.assertNotIn("error", result["results"][0])
         self.assertEqual(result["correlation"]["matched_count"], 1)
         self.assertEqual(result["results"][0]["observation"]["raw_payload_hex"], "nacked-write")
         self.assertEqual(result["correlation"]["unmatched_write_count"], 0)
+
+    async def test_indeterminate_cloud_delivery_aborts_before_next_action(self) -> None:
+        settings_dat = {
+            "field": [
+                {
+                    "id": "f1",
+                    "name": "F1",
+                    "item": [{"key": "0", "val": "A"}],
+                },
+                {
+                    "id": "f2",
+                    "name": "F2",
+                    "item": [{"key": "0", "val": "B"}],
+                },
+            ]
+        }
+        calls = 0
+
+        def _timeout_fetch(**_kwargs):
+            nonlocal calls
+            calls += 1
+            raise TimeoutError("private cloud detail")
+
+        with self.assertLogs(
+            "custom_components.eybond_local.support.shadow_learning.orchestrator",
+            level="WARNING",
+        ) as captured_logs:
+            with self.assertRaisesRegex(TimeoutError, "private cloud detail"):
+                await async_orchestrate_shadow_learning_settings(
+                    settings_dat=settings_dat,
+                    session=SessionCredentials(token="token", secret="secret"),
+                    pn="E50000200000000001",
+                    sn="E50000200000000001000001",
+                    devcode=2376,
+                    devaddr=1,
+                    dry_run=False,
+                    confirm_cloud_write=True,
+                    shadow_session_state="ready",
+                    field_ids=[],
+                    include_numeric=False,
+                    all_choice_values=True,
+                    continue_on_error=True,
+                    is_session_ready=lambda: True,
+                    fetch_action=_timeout_fetch,
+                )
+
+        self.assertEqual(calls, 1)
+        self.assertNotIn("private cloud detail", "\n".join(captured_logs.output))
+
+    async def test_cancel_waits_for_inflight_cloud_action_under_proxy(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        calls = 0
+
+        def _blocking_fetch(**_kwargs):
+            nonlocal calls
+            calls += 1
+            started.set()
+            self.assertTrue(release.wait(timeout=2.0))
+            return type("_Envelope", (), {"err": 1, "desc": "nack", "dat": {}})()
+
+        task = asyncio.create_task(
+            async_orchestrate_shadow_learning_settings(
+                settings_dat={
+                    "field": [
+                        {
+                            "id": "f1",
+                            "name": "F1",
+                            "item": [{"key": "0", "val": "A"}],
+                        }
+                    ]
+                },
+                session=SessionCredentials(token="token", secret="secret"),
+                pn="E50000200000000001",
+                sn="E50000200000000001000001",
+                devcode=2376,
+                devaddr=1,
+                dry_run=False,
+                confirm_cloud_write=True,
+                shadow_session_state="ready",
+                field_ids=[],
+                include_numeric=False,
+                is_session_ready=lambda: True,
+                fetch_action=_blocking_fetch,
+            )
+        )
+        self.assertTrue(await asyncio.to_thread(started.wait, 1.0))
+
+        task.cancel()
+        await asyncio.sleep(0.02)
+        task.cancel()
+        await asyncio.sleep(0.02)
+        self.assertFalse(task.done())
+
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertTrue(task.cancelled())
+        self.assertEqual(calls, 1)
 
     async def test_async_cloud_success_with_proxy_observation_is_not_leak(self) -> None:
         # Some SmartESS server paths report success even when our proxy observed and NACKed the

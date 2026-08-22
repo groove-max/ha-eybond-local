@@ -1158,7 +1158,7 @@ class CloudRollbackSelectionAuthorityGuardTests(unittest.TestCase):
 
 
 class CollectorEndpointOperationAuthorityGuardTests(unittest.TestCase):
-    """CP2C: exactly ONE endpoint-operation authority; every writer owns it."""
+    """Exactly ONE collector-mutation authority; every writer owns it."""
 
     _AUTHORITY = _CC / "connection" / "collector_endpoint_operation.py"
     _STRATEGY = _CC / "connection" / "strategy_transition.py"
@@ -1209,6 +1209,8 @@ class CollectorEndpointOperationAuthorityGuardTests(unittest.TestCase):
             "async_reboot_collector",
             "async_trigger_reverse_discovery",
             "async_apply_collector_changes",
+            "async_set_collector_wifi_credentials",
+            "async_set_collector_uart_baudrate",
         }
     )
     # Owning the ONE authority == a body containing any of these call markers.
@@ -1256,6 +1258,18 @@ class CollectorEndpointOperationAuthorityGuardTests(unittest.TestCase):
                     and call.attr in cls._RUNTIME_WIRE_METHODS
                     and isinstance(call.value, ast.Attribute)
                     and call.value.attr == "_runtime"
+                ):
+                    writers.add(method.name)
+                    break
+                if (
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == "getattr"
+                    and len(call.args) >= 2
+                    and isinstance(call.args[0], ast.Attribute)
+                    and call.args[0].attr == "_runtime"
+                    and isinstance(call.args[1], ast.Constant)
+                    and call.args[1].value in cls._RUNTIME_WIRE_METHODS
                 ):
                     writers.add(method.name)
                     break
@@ -1342,6 +1356,8 @@ class CollectorEndpointOperationAuthorityGuardTests(unittest.TestCase):
         self.assertIn("async_reboot_collector", writers)
         self.assertIn("async_trigger_collector_rediscovery", writers)
         self.assertIn("_async_reconcile_managed_collector_endpoint", writers)
+        self.assertIn("async_set_collector_wifi_credentials", writers)
+        self.assertIn("async_set_collector_uart_baudrate", writers)
         # The transition facade maps a busy authority to the typed reason.
         facade = _coordinator_method_source("async_run_connection_strategy_transition")
         self.assertIn("COLLECTOR_ENDPOINT_OPERATION_BUSY", facade)
@@ -1367,10 +1383,55 @@ class CollectorEndpointOperationAuthorityGuardTests(unittest.TestCase):
                 *_COORDINATOR_MODULES,
                 self._STRATEGY,
                 _CC / "connection" / "strategy_transition_repair.py",
+                _CC / "runtime" / "hub" / "detection.py",
             )
         )
         dead = sorted(k for k in kinds if k not in production)
         self.assertEqual(dead, [], f"declared but never used operation kind(s): {dead}")
+
+    def test_raw_collector_configuration_writes_live_only_in_management_boundary(self) -> None:
+        """No flow/runtime helper may grow another raw ``set_collector`` path."""
+
+        allowed = {
+            Path("collector/collector_wire.py"),
+            Path("collector/management.py"),
+        }
+        offenders: list[str] = []
+        for path in _CC.rglob("*.py"):
+            relative = path.relative_to(_CC)
+            tree = ast.parse(_read(path))
+            if any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "set_collector"
+                for node in ast.walk(tree)
+            ) and relative not in allowed:
+                offenders.append(str(relative))
+        self.assertEqual(offenders, [])
+
+    def test_first_add_flow_has_no_collector_mutation_transport(self) -> None:
+        """First-add identifies/hands off; it never writes or triggers management."""
+
+        source = "\n".join(
+            _read(path) for path in sorted((_CC / "flows" / "config").glob("*.py"))
+        ) + _read(_CC / "config_entry.py")
+        for banned in (
+            "_async_with_selected_collector_session",
+            "_async_bind_selected_collector_to_home_assistant",
+            "_async_enrich_manual_collector_profile",
+            "config_flow_management_probe",
+            "async_send_callback_trigger",
+            "SharedEybondTransport",
+            "SharedCollectorAtTransport",
+        ):
+            self.assertNotIn(banned, source)
+
+    def test_listener_uses_the_central_collector_identity_rule(self) -> None:
+        source = _read(_CC / "collector" / "transport" / "listener.py")
+        method = self._method_source(source, "_collector_pn_matches")
+        self.assertIn("pn_is_same_identity", method)
+        self.assertNotIn("startswith", method)
+        self.assertNotIn("_COLLECTOR_PN_PREFIX_MATCH_MIN_LEN", source)
 
 
 if __name__ == "__main__":

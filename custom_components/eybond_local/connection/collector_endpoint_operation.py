@@ -1,11 +1,11 @@
-"""The ONE neutral authority for exclusive collector endpoint/route mutation.
+"""The ONE neutral authority for exclusive collector-configuration mutation.
 
-Every production path that writes the collector endpoint or restores its route --
-a connection-strategy transition, a degraded repair, proxy capture, shadow
-learning, a Full Control endpoint write, and bind/rollback -- must own this
-per-entry authority for the whole time it may mutate the endpoint. It ONLY
-coordinates: it never writes the wire, changes the strategy, touches the
-RecoveryContract, or inspects endpoint/IP/credentials.
+Every production path that writes persistent collector configuration or changes
+its connection lifecycle -- endpoint transitions/restores, proxy/shadow routes,
+Wi-Fi/UART writes, apply/reboot, and the automatic runtime UART sweep -- must own
+this per-entry authority for the whole transaction. It ONLY coordinates: it
+never writes the wire, changes the strategy, touches the RecoveryContract, or
+inspects endpoint/IP/credentials.
 
 Design (fail-closed, no wait, no queue, no ContextVar, no background release):
 
@@ -40,6 +40,11 @@ OPERATION_RECONCILE_ENDPOINT = "reconcile_endpoint"
 # The public Full Control collector system actions (apply / reboot / rediscovery
 # trigger). They typed-refuse BEFORE the apply/reboot/UDP when the entry is busy.
 OPERATION_COLLECTOR_SYSTEM_ACTION = "collector_system_action"
+# Runtime full detection may temporarily rewrite the collector UART speed and
+# later restore it.  That is a collector-configuration mutation just like an
+# explicit UART write, so it participates in the same per-entry authority for
+# the WHOLE read/change/probe/restore transaction.
+OPERATION_RUNTIME_LINK_BAUD_SWEEP = "runtime_link_baud_sweep"
 
 _OPERATION_KINDS = frozenset(
     {
@@ -52,6 +57,7 @@ _OPERATION_KINDS = frozenset(
         OPERATION_ENDPOINT_ROLLBACK,
         OPERATION_RECONCILE_ENDPOINT,
         OPERATION_COLLECTOR_SYSTEM_ACTION,
+        OPERATION_RUNTIME_LINK_BAUD_SWEEP,
     }
 )
 
@@ -252,6 +258,7 @@ __all__ = [
     "OPERATION_MANUAL_ENDPOINT_WRITE",
     "OPERATION_PROXY_CAPTURE",
     "OPERATION_RECONCILE_ENDPOINT",
+    "OPERATION_RUNTIME_LINK_BAUD_SWEEP",
     "OPERATION_SHADOW_LEARNING",
     "OPERATION_STRATEGY_REPAIR",
     "OPERATION_STRATEGY_TRANSITION",

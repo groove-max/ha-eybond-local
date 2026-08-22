@@ -19,7 +19,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.support import cloud_control_discovery as ccd  # noqa: E402
 from custom_components.eybond_local.support.cloud_control_discovery import (  # noqa: E402
+    DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY,
     ControlDiscoveryOutcome,
+    ControlDiscoveryTimeoutPolicy,
 )
 from custom_components.eybond_local.support.cloud_evidence_providers import (  # noqa: E402
     resolve_cloud_evidence_provider,
@@ -67,6 +69,18 @@ _ORCHESTRATION = {
 
 
 class RegistryTests(unittest.TestCase):
+    def test_timeout_policy_is_strict_and_separates_metadata_from_actions(self) -> None:
+        policy = DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY
+        self.assertGreater(policy.metadata_request, policy.action_request)
+        for malformed in (True, "15", None, object()):
+            with self.subTest(malformed=malformed):
+                with self.assertRaises(TypeError):
+                    ControlDiscoveryTimeoutPolicy(metadata_request=malformed)
+        for malformed in (0, -1.0):
+            with self.subTest(malformed=malformed):
+                with self.assertRaises(ValueError):
+                    ControlDiscoveryTimeoutPolicy(action_request=malformed)
+
     def test_supported_and_resolution(self) -> None:
         self.assertTrue(resolve_cloud_evidence_provider("smartess").control_discovery_available)
         self.assertTrue(resolve_cloud_evidence_provider("valuecloud").control_discovery_available)
@@ -87,10 +101,10 @@ class ProviderIsolationTests(unittest.TestCase):
         }
         control_session = object()
         with patch.object(
-            ccd, "fetch_device_bundle_for_collector", return_value=bundle
-        ), patch.object(
-            ccd, "login_with_password", return_value=(object(), control_session)
-        ), patch.object(
+            ccd, "fetch_control_discovery_bundle_for_collector", return_value=bundle
+        ) as bundle_fetch, patch.object(
+            ccd, "login_for_control_discovery", return_value=(object(), control_session)
+        ) as control_login, patch.object(
             ccd, "async_orchestrate_shadow_learning_settings",
             side_effect=lambda **kw: dict(_ORCHESTRATION),
         ) as smartess_orchestrate, patch.object(
@@ -103,6 +117,19 @@ class ProviderIsolationTests(unittest.TestCase):
         self.assertIs(
             smartess_orchestrate.call_args.kwargs["session"],
             control_session,
+        )
+        policy = DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY
+        self.assertEqual(
+            bundle_fetch.call_args.kwargs["timeout"],
+            policy.metadata_request,
+        )
+        self.assertEqual(
+            control_login.call_args.kwargs["timeout"],
+            policy.action_request,
+        )
+        self.assertEqual(
+            smartess_orchestrate.call_args.kwargs["timeout"],
+            policy.action_request,
         )
         vc_login.assert_not_called()
         vc_fetch.assert_not_called()
@@ -122,9 +149,9 @@ class ProviderIsolationTests(unittest.TestCase):
             ccd, "async_orchestrate_valuecloud_shadow_learning",
             side_effect=lambda **kw: dict(_ORCHESTRATION),
         ), patch.object(
-            ccd, "login_with_password"
+            ccd, "login_for_control_discovery"
         ) as smartess_login, patch.object(
-            ccd, "fetch_device_bundle_for_collector"
+            ccd, "fetch_control_discovery_bundle_for_collector"
         ) as smartess_fetch:
             outcome = _run(_runner("valuecloud"))
         self.assertIsInstance(outcome, ControlDiscoveryOutcome)
@@ -137,8 +164,8 @@ class ProviderIsolationTests(unittest.TestCase):
             "request": {"params": {"pn": "E1", "sn": "S1", "devcode": 1, "devaddr": 1}},
             "responses": {"device_settings": {"dat": {"fields": []}}},
         }
-        with patch.object(ccd, "fetch_device_bundle_for_collector", return_value=bundle), patch.object(
-            ccd, "login_with_password", return_value=(object(), object())
+        with patch.object(ccd, "fetch_control_discovery_bundle_for_collector", return_value=bundle), patch.object(
+            ccd, "login_for_control_discovery", return_value=(object(), object())
         ), patch.object(
             ccd, "async_orchestrate_shadow_learning_settings",
             side_effect=lambda **kw: dict(_ORCHESTRATION),
@@ -171,8 +198,8 @@ class ProviderIsolationTests(unittest.TestCase):
             events.append("orchestrate")
             return dict(_ORCHESTRATION)
 
-        with patch.object(ccd, "fetch_device_bundle_for_collector", side_effect=_fetch_bundle), patch.object(
-            ccd, "login_with_password", side_effect=_login
+        with patch.object(ccd, "fetch_control_discovery_bundle_for_collector", side_effect=_fetch_bundle), patch.object(
+            ccd, "login_for_control_discovery", side_effect=_login
         ), patch.object(
             ccd, "async_orchestrate_shadow_learning_settings",
             side_effect=_orchestrate,

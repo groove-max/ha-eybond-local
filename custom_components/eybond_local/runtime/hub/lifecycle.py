@@ -335,6 +335,13 @@ class HubLifecycleMixin:
         claimed-by-other callback diagnostics.
         """
 
+        self._collector_operation_entry_id = (
+            entry_id
+            if type(entry_id) is str
+            and bool(entry_id)
+            and entry_id == entry_id.strip()
+            else ""
+        )
         set_ownership = getattr(self._link_manager, "set_callback_ownership", None)
         if callable(set_ownership):
             set_ownership(registry, entry_id)
