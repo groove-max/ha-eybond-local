@@ -207,7 +207,7 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
         )
 
     def test_dessmonitor_metadata_archive_is_bounded_and_share_safe(self) -> None:
-        collector_pn = "E50000253884199645"
+        collector_pn = "E50000200000000001"
         serial_number = "92632511100118"
         username = "private-dess-account"
         password = "private-dess-password"

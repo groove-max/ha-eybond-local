@@ -31,7 +31,7 @@ from custom_components.eybond_local.dessmonitor_cloud import (  # noqa: E402
 )
 
 
-FULL_PN = "E50000253884199645"
+FULL_PN = "E50000200000000001"
 
 
 def _ok(dat) -> DessMonitorApiEnvelope:

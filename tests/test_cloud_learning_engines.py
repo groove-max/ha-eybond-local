@@ -36,13 +36,13 @@ from custom_components.eybond_local.support.cloud_learning_runner import (  # no
 
 class CloudLearningModelTests(unittest.TestCase):
     def test_outcome_direct_constructor_is_strict_and_detached(self) -> None:
-        identity = {"pn": "E50000253884199645"}
+        identity = {"pn": "E50000200000000001"}
         result = {"metadata_only": True}
         outcome = CloudLearningOutcome(identity=identity, result=result)
         identity["pn"] = "FOREIGN"
         result["metadata_only"] = False
 
-        self.assertEqual(outcome.identity["pn"], "E50000253884199645")
+        self.assertEqual(outcome.identity["pn"], "E50000200000000001")
         self.assertTrue(outcome.result["metadata_only"])
         for field, malformed in (
             ("identity", object()),

@@ -7908,7 +7908,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options._config_entry.runtime_data = types.SimpleNamespace(
             data=types.SimpleNamespace(values={}),
             cloud_evidence_provider="smartess",
-            smartess_collector_pn="E50000253884199645",
+            smartess_collector_pn="E50000200000000001",
         )
         return options
 

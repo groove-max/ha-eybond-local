@@ -26,7 +26,7 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_metadata_runner_never_opens_route_or_learning_writer(self) -> None:
         bundle = DessMonitorEvidenceBundle(
             identity=DessMonitorDeviceIdentity(
-                pn="E50000253884199645",
+                pn="E50000200000000001",
                 sn="92632511100118",
                 devcode=2376,
                 devaddr=1,
@@ -61,7 +61,7 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
         ) as fetch:
             outcome = await DessMonitorReadOnlyLearningRunner().async_run(
                 executor=executor,
-                collector_pn="E5000025388419",
+                collector_pn="E5000020000000",
                 username="account",
                 password="password",
                 fallback_identity={"pn": "FOREIGN"},
@@ -79,7 +79,7 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
         on_learning.assert_not_called()
         self.assertEqual(fetch.call_count, 1)
         self.assertEqual(fetch.call_args.kwargs["max_control_values"], 16)
-        self.assertEqual(identities[0]["pn"], "E50000253884199645")
+        self.assertEqual(identities[0]["pn"], "E50000200000000001")
         self.assertTrue(outcome.result["metadata_only"])
         self.assertEqual(outcome.result["planned_write_count"], 0)
         assert outcome.metadata_evidence is not None
