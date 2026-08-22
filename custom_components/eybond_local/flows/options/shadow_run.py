@@ -23,7 +23,7 @@ from .shared import (
     CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
 )
 from ...runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
-from ...support.cloud_evidence_providers import resolve_cloud_evidence_provider
+from ...support.cloud_learning_engines import resolve_cloud_learning_engine
 from ...support.shadow_learning.overlay_generator import (
     generate_shadow_learning_overlay_drafts,
 )
@@ -322,25 +322,23 @@ class ShadowLearningRunMixin:
             # Fail-closed cleanup: stop the shadow session and restore the
             # collector endpoint, then surface the failure in flow state.
             progress = dict(self._shadow_learning_state.get("progress") or {})
-            provider_id = str(
-                getattr(coordinator, "cloud_evidence_provider", "") or ""
-            ).strip()
+            source_id = self._control_discovery_learning_source(coordinator)
             cloud_error_code = ""
             if str(progress.get("stage") or "") in {"fetching", "testing"}:
-                cloud_error_code = resolve_cloud_evidence_provider(
-                    provider_id
-                ).classify_control_discovery_error(exc)
+                cloud_error_code = resolve_cloud_learning_engine(
+                    source_id
+                ).classify_error(exc)
             failure_reason = self._control_discovery_failure_reason(
                 exc,
                 cloud_error_code=cloud_error_code,
             )
             request_stage = str(getattr(exc, "stage", "") or "unknown")
             logger.error(
-                "Control discovery failed entry=%s provider=%s stage=%s "
+                "Control discovery failed entry=%s source=%s stage=%s "
                 "request_stage=%s exception_type=%s cloud_error_code=%s "
                 "failure_reason=%s",
                 getattr(self._config_entry, "entry_id", ""),
-                provider_id,
+                source_id,
                 str(progress.get("stage") or "unknown"),
                 request_stage,
                 type(exc).__name__,
@@ -401,9 +399,9 @@ class ShadowLearningRunMixin:
                 else "shadow_learning_preflight_blocked"
             )
 
-        provider = self._control_discovery_cloud_provider(coordinator)
-        provider_impl = resolve_cloud_evidence_provider(provider)
-        if not provider_impl.control_discovery_available:
+        source_id = self._control_discovery_learning_source(coordinator)
+        learning_engine = resolve_cloud_learning_engine(source_id)
+        if not learning_engine.available:
             raise RuntimeError(
                 self._tr(
                     "common.dynamic.control_discovery_provider_not_supported",
@@ -422,7 +420,7 @@ class ShadowLearningRunMixin:
         # the exact provider-specific ordering around the temporary route. The
         # flow only opens that route on request and renders normalized progress.
         shadow_runtime = self._shadow_learning_runtime(coordinator)
-        runner = provider_impl.control_discovery_runner()
+        runner = learning_engine.control_discovery_runner()
 
         async def _start_shadow_route() -> None:
             self._set_control_discovery_progress(0.10, "connecting")
@@ -458,7 +456,7 @@ class ShadowLearningRunMixin:
         plan = result.get("plan") if isinstance(result, dict) else None
         if isinstance(plan, list):
             self._shadow_learning_state["plan"] = {
-                "source": f"{provider}_orchestration_plan",
+                "source": f"{source_id}_orchestration_plan",
                 "items": plan,
                 "count": len(plan),
             }

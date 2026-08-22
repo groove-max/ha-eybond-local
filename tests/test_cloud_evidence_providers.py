@@ -30,6 +30,9 @@ from custom_components.eybond_local.support.cloud_evidence_providers import (  #
     supported_cloud_evidence_providers,
 )
 from custom_components.eybond_local.support.cloud_evidence import CloudEvidenceRecord  # noqa: E402
+from custom_components.eybond_local.support.cloud_learning_engines import (  # noqa: E402
+    resolve_cloud_learning_engine,
+)
 from custom_components.eybond_local.smartess_cloud import SmartEssCloudError  # noqa: E402
 
 
@@ -66,20 +69,20 @@ class RegistryTests(unittest.TestCase):
 
 class ProviderIsolationTests(unittest.TestCase):
     def test_control_discovery_classifier_accepts_only_provider_owned_errors(self) -> None:
-        provider = SmartEssCloudEvidenceProvider()
+        engine = resolve_cloud_learning_engine("smartess")
 
         self.assertEqual(
-            provider.classify_control_discovery_error(
+            engine.classify_error(
                 SmartEssCloudError("network_error:timed out")
             ),
             "timeout",
         )
         self.assertEqual(
-            provider.classify_control_discovery_error(TimeoutError()),
+            engine.classify_error(TimeoutError()),
             "timeout",
         )
         self.assertEqual(
-            provider.classify_control_discovery_error(
+            engine.classify_error(
                 RuntimeError("runtime_route_failed")
             ),
             "",

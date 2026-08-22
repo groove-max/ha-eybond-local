@@ -27,7 +27,7 @@ from ..metadata.smartess_draft import (
     create_smartess_known_family_draft,
     resolve_smartess_known_family_draft_plan,
 )
-from ..smartess_cloud import SmartEssCloudError, classify_smartess_cloud_error
+from ..smartess_cloud import classify_smartess_cloud_error
 from ..metadata.smartess_onboarding import (
     SMARTESS_ONBOARDING_SOURCE,
     build_smartess_onboarding_assist,
@@ -35,12 +35,6 @@ from ..metadata.smartess_onboarding import (
 from ..metadata.smartess_smg_bridge import (
     create_smartess_smg_bridge_draft,
     resolve_smartess_smg_bridge_plan,
-)
-from .cloud_control_discovery import (
-    CloudControlDiscoveryRunner,
-    SmartEssControlDiscoveryRunner,
-    UnavailableControlDiscoveryRunner,
-    ValueCloudControlDiscoveryRunner,
 )
 from .cloud_evidence import (
     CloudEvidenceRecord,
@@ -236,41 +230,13 @@ class CloudEvidenceProvider(ABC):
 
         return "unexpected"
 
-    def classify_control_discovery_error(self, exc: BaseException) -> str:
-        """Classify only an error owned by this provider's discovery runner.
-
-        An empty result means the exception belongs to flow/runtime orchestration,
-        not to the provider client. This keeps route and safety failures out of
-        the cloud-error UX while retaining ``classify_error`` as the broader
-        adapter used around direct provider calls.
-        """
-
-        return ""
-
     def diagnostics(self, context: CloudEvidenceContext) -> dict[str, object]:
         """Return SAFE diagnostics -- never credentials or raw cloud payloads."""
 
         return {
             "provider": self.provider_id,
             "export_available": self.export_available(context),
-            "control_discovery_available": self.control_discovery_available,
         }
-
-    @property
-    def control_discovery_available(self) -> bool:
-        """Return whether this provider implements cloud control discovery."""
-
-        return False
-
-    def control_discovery_runner(self) -> CloudControlDiscoveryRunner:
-        """Return this provider's runner, fail-closed by default.
-
-        The evidence-provider registry is the single provider-selection
-        authority.  Control discovery is a capability of that selected
-        provider, not a second registry with a duplicated provider allow-list.
-        """
-
-        return UnavailableControlDiscoveryRunner(self.provider_id)
 
 
 class SmartEssCloudEvidenceProvider(CloudEvidenceProvider):
@@ -279,22 +245,10 @@ class SmartEssCloudEvidenceProvider(CloudEvidenceProvider):
     provider_id = "smartess"
     export_status_label = "SmartESS cloud evidence exported"
 
-    @property
-    def control_discovery_available(self) -> bool:
-        return True
-
-    def control_discovery_runner(self) -> CloudControlDiscoveryRunner:
-        return SmartEssControlDiscoveryRunner()
-
     def export_available(self, context: CloudEvidenceContext) -> bool:
         return bool(str(context.collector_pn or "").strip())
 
     def classify_error(self, exc: BaseException) -> str:
-        return classify_smartess_cloud_error(exc)
-
-    def classify_control_discovery_error(self, exc: BaseException) -> str:
-        if not isinstance(exc, (SmartEssCloudError, TimeoutError)):
-            return ""
         return classify_smartess_cloud_error(exc)
 
     def export(
@@ -425,13 +379,6 @@ class ValueCloudCloudEvidenceProvider(CloudEvidenceProvider):
     provider_id = "valuecloud"
     export_status_label = "Cloud evidence exported"
 
-    @property
-    def control_discovery_available(self) -> bool:
-        return True
-
-    def control_discovery_runner(self) -> CloudControlDiscoveryRunner:
-        return ValueCloudControlDiscoveryRunner()
-
     def export_available(self, context: CloudEvidenceContext) -> bool:
         return bool(str(context.collector_pn or "").strip())
 
@@ -476,10 +423,6 @@ class UnavailableCloudEvidenceProvider(CloudEvidenceProvider):
         # An unsupported provider still cannot READ another provider's evidence
         # from a claim it does not own: fail closed.
         return None
-
-    def control_discovery_runner(self) -> CloudControlDiscoveryRunner:
-        return UnavailableControlDiscoveryRunner(self._requested)
-
 
 _PROVIDERS: dict[str, CloudEvidenceProvider] = {
     "smartess": SmartEssCloudEvidenceProvider(),

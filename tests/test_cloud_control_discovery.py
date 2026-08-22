@@ -23,13 +23,13 @@ from custom_components.eybond_local.support.cloud_control_discovery import (  # 
     ControlDiscoveryOutcome,
     ControlDiscoveryTimeoutPolicy,
 )
-from custom_components.eybond_local.support.cloud_evidence_providers import (  # noqa: E402
-    resolve_cloud_evidence_provider,
+from custom_components.eybond_local.support.cloud_learning_engines import (  # noqa: E402
+    resolve_cloud_learning_engine,
 )
 
 
-def _runner(provider_id: str):
-    return resolve_cloud_evidence_provider(provider_id).control_discovery_runner()
+def _runner(source_id: str):
+    return resolve_cloud_learning_engine(source_id).control_discovery_runner()
 
 
 async def _executor(fn, *args):
@@ -82,9 +82,9 @@ class RegistryTests(unittest.TestCase):
                     ControlDiscoveryTimeoutPolicy(action_request=malformed)
 
     def test_supported_and_resolution(self) -> None:
-        self.assertTrue(resolve_cloud_evidence_provider("smartess").control_discovery_available)
-        self.assertTrue(resolve_cloud_evidence_provider("valuecloud").control_discovery_available)
-        self.assertFalse(resolve_cloud_evidence_provider("nope").control_discovery_available)
+        self.assertTrue(resolve_cloud_learning_engine("smartess").available)
+        self.assertTrue(resolve_cloud_learning_engine("valuecloud").available)
+        self.assertFalse(resolve_cloud_learning_engine("nope").available)
         self.assertEqual(_runner("smartess").provider_id, "smartess")
 
     def test_unknown_provider_fails_closed(self) -> None:

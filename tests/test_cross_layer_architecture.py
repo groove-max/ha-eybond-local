@@ -31,8 +31,11 @@ from custom_components.eybond_local.support import (  # noqa: E402
     cloud_evidence_providers as providers_module,
 )
 from custom_components.eybond_local.support.cloud_evidence_providers import (  # noqa: E402
-    resolve_cloud_evidence_provider,
     supported_cloud_evidence_providers,
+)
+from custom_components.eybond_local.support.cloud_learning_engines import (  # noqa: E402
+    resolve_cloud_learning_engine,
+    supported_cloud_learning_sources,
 )
 from custom_components.eybond_local.collector import transport_profile  # noqa: E402
 
@@ -148,20 +151,20 @@ class ProviderAuthorityDriftGuardTests(unittest.TestCase):
 
 
 class ProviderControlDiscoveryIsolationGuardTests(unittest.TestCase):
-    def test_provider_returns_only_its_own_control_discovery_runner(self) -> None:
-        for provider_id in (*supported_cloud_evidence_providers(), "nope", ""):
-            provider = resolve_cloud_evidence_provider(provider_id)
-            runner = provider.control_discovery_runner()
-            # A provider never hands out a FOREIGN provider's runner: the runner
-            # is either its own or the fail-closed unavailable runner (id "").
+    def test_learning_engine_returns_only_its_own_provider_runner(self) -> None:
+        source_ids = tuple(source.source_id for source in supported_cloud_learning_sources())
+        for source_id in (*source_ids, "nope", ""):
+            engine = resolve_cloud_learning_engine(source_id)
+            runner = engine.control_discovery_runner()
+            # An engine never hands out a FOREIGN provider's runner: the runner
+            # is either owned by its source provider or fail-closed (id "").
             self.assertIn(
                 runner.provider_id,
-                {provider.provider_id, ""},
-                msg=f"{provider_id!r} returned foreign runner {runner.provider_id!r}",
+                {engine.source.provider_id, ""},
+                msg=f"{source_id!r} returned foreign runner {runner.provider_id!r}",
             )
-            # An unsupported provider must not expose a usable runner.
-            if not provider.provider_id:
-                self.assertFalse(provider.control_discovery_available)
+            if not engine.available:
+                self.assertEqual(runner.provider_id, "")
 
 
 class TransportProfileAuthorityGuardTests(unittest.TestCase):

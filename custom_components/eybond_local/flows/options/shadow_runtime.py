@@ -8,6 +8,7 @@ from contextlib import suppress
 from typing import Any
 
 from ...runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
+from ...support.cloud_learning_engines import default_cloud_learning_source
 from ...support.memory_guard import (
     read_available_memory_mib,
     shadow_learning_memory_blocker,
@@ -40,6 +41,17 @@ class ShadowLearningRuntimeMixin:
             str(getattr(coordinator, "cloud_evidence_provider", "") or "")
             .strip()
             .lower()
+        )
+
+    def _control_discovery_learning_source(self, coordinator) -> str:
+        """Return the API surface selected for this run.
+
+        Until the explicit source selector is rendered, the sole source owned
+        by the trusted evidence provider is selected. Ambiguity fails closed.
+        """
+
+        return default_cloud_learning_source(
+            self._control_discovery_cloud_provider(coordinator)
         )
 
     def _control_discovery_cloud_provider_label(self, coordinator) -> str:

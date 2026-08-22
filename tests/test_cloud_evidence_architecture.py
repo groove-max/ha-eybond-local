@@ -195,6 +195,7 @@ class ConfigFlowProviderBoundaryGuardTests(unittest.TestCase):
         options_identifiers = _code_identifiers(_read(_OPTIONS_SHADOW_RUN))
         self.assertIn("resolve_cloud_evidence_provider", config_identifiers)
         self.assertIn("build_onboarding_assist", config_identifiers)
+        self.assertIn("resolve_cloud_learning_engine", options_identifiers)
         self.assertIn("control_discovery_runner", options_identifiers)
 
     def test_control_discovery_provider_has_no_family_heuristic_or_default(self) -> None:
@@ -210,6 +211,17 @@ class ConfigFlowProviderBoundaryGuardTests(unittest.TestCase):
         self.assertNotIn("'smartess'", source)
         self.assertNotIn("'valuecloud'", source)
         self.assertIn("cloud_evidence_provider", source)
+
+        source_method = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_control_discovery_learning_source"
+        )
+        source_code = ast.unparse(source_method)
+        self.assertIn("default_cloud_learning_source", source_code)
+        self.assertNotIn("'smartess'", source_code)
+        self.assertNotIn("'valuecloud'", source_code)
 
 
 class NoUnscopedEvidenceReadGuardTests(unittest.TestCase):
