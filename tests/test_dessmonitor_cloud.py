@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import unittest
 from unittest.mock import patch
+from urllib.error import URLError
 from urllib.parse import parse_qs, urlparse
 
 
@@ -126,6 +127,12 @@ class DessMonitorModelTests(unittest.TestCase):
                 control_fields=(),
             )
 
+        with self.assertRaisesRegex(ValueError, "session_token_invalid"):
+            DessMonitorSession(
+                token="x" * (dessmonitor_module.DEFAULT_MAX_TEXT_LENGTH + 1),
+                secret="secret",
+            )
+
 
 class DessMonitorSigningTests(unittest.TestCase):
     def test_http_response_body_is_bounded_before_json_decode(self) -> None:
@@ -174,6 +181,56 @@ class DessMonitorSigningTests(unittest.TestCase):
         self.assertIn(f"sign={expected}", url)
         self.assertNotIn("android.shinemonitor.com", url)
         self.assertNotIn("secret", url)
+
+    def test_login_rejects_malformed_session_material_without_coercion(self) -> None:
+        cases = (
+            ({"token": 7, "secret": "secret"}, "invalid_login_session_token"),
+            ({"token": " token ", "secret": "secret"}, "invalid_login_session_token"),
+            (
+                {
+                    "token": "t" * (dessmonitor_module.DEFAULT_MAX_TEXT_LENGTH + 1),
+                    "secret": "secret",
+                },
+                "invalid_login_session_token",
+            ),
+            ({"token": "token", "secret": b"secret"}, "invalid_login_session_secret"),
+            ({"token": "token", "secret": "secret", "uid": 9}, "invalid_login_session_uid"),
+            (
+                {"token": "token", "secret": "secret", "usr": " account "},
+                "invalid_login_session_usr",
+            ),
+        )
+        for dat, expected in cases:
+            with self.subTest(expected=expected, value_type=type(next(iter(dat.values())))):
+                with patch.object(
+                    dessmonitor_module,
+                    "_http_get_json",
+                    return_value=_ok(dat),
+                ):
+                    with self.assertRaises(dessmonitor_module.DessMonitorCloudError) as raised:
+                        dessmonitor_module.login_with_password(
+                            username="account",
+                            password="password",
+                        )
+
+                self.assertEqual(str(raised.exception), expected)
+                self.assertNotIn(repr(dat), str(raised.exception))
+
+    def test_network_error_never_discloses_provider_reason(self) -> None:
+        sensitive_reason = "temporary failure for account@example.com"
+        with patch.object(
+            dessmonitor_module,
+            "urlopen",
+            side_effect=URLError(sensitive_reason),
+        ):
+            with self.assertRaises(dessmonitor_module.DessMonitorCloudError) as raised:
+                dessmonitor_module.login_with_password(
+                    username="account",
+                    password="password",
+                )
+
+        self.assertEqual(str(raised.exception), "network_error")
+        self.assertNotIn(sensitive_reason, str(raised.exception))
 
     def test_signed_read_url_is_exact_and_rejects_duck_session(self) -> None:
         session = DessMonitorSession(token="token-1", secret="secret-1")

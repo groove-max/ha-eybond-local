@@ -263,7 +263,11 @@ class DessMonitorEvidenceBundle:
 def _required_token(value: object, reason: str) -> str:
     if type(value) is not str:
         raise TypeError(reason)
-    if not value or value != value.strip():
+    if (
+        not value
+        or value != value.strip()
+        or len(value) > DEFAULT_MAX_TEXT_LENGTH
+    ):
         raise ValueError(reason)
     return value
 
@@ -271,8 +275,26 @@ def _required_token(value: object, reason: str) -> str:
 def _optional_normalized(value: object, reason: str) -> str:
     if type(value) is not str:
         raise TypeError(reason)
-    if value != value.strip():
+    if value != value.strip() or len(value) > DEFAULT_MAX_TEXT_LENGTH:
         raise ValueError(reason)
+    return value
+
+
+def _provider_session_text(
+    value: object,
+    *,
+    reason: str,
+    required: bool,
+) -> str:
+    """Validate one untrusted login field without coercion or disclosure."""
+
+    if (
+        type(value) is not str
+        or value != value.strip()
+        or len(value) > DEFAULT_MAX_TEXT_LENGTH
+        or (required and not value)
+    ):
+        raise DessMonitorCloudError(reason)
     return value
 
 
@@ -330,7 +352,7 @@ def _http_get_json(url: str, *, timeout: float) -> DessMonitorApiEnvelope:
     except HTTPError as exc:
         raise DessMonitorCloudError(f"http_error:{exc.code}") from exc
     except URLError as exc:
-        raise DessMonitorCloudError(f"network_error:{exc.reason}") from exc
+        raise DessMonitorCloudError("network_error") from exc
     try:
         raw = json.loads(payload)
     except json.JSONDecodeError as exc:
@@ -394,10 +416,26 @@ def login_with_password(
     if not isinstance(envelope.dat, dict):
         raise DessMonitorCloudError("login_failed:missing_dat")
     session = DessMonitorSession(
-        token=str(envelope.dat.get("token") or "").strip(),
-        secret=str(envelope.dat.get("secret") or "").strip(),
-        uid=str(envelope.dat.get("uid") or "").strip(),
-        usr=str(envelope.dat.get("usr") or "").strip(),
+        token=_provider_session_text(
+            envelope.dat.get("token"),
+            reason="invalid_login_session_token",
+            required=True,
+        ),
+        secret=_provider_session_text(
+            envelope.dat.get("secret"),
+            reason="invalid_login_session_secret",
+            required=True,
+        ),
+        uid=_provider_session_text(
+            envelope.dat.get("uid", ""),
+            reason="invalid_login_session_uid",
+            required=False,
+        ),
+        usr=_provider_session_text(
+            envelope.dat.get("usr", ""),
+            reason="invalid_login_session_usr",
+            required=False,
+        ),
     )
     return envelope, session
 
