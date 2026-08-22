@@ -4,8 +4,8 @@ This decision record explains how Graphify metrics are interpreted in this
 repository and where the decomposition boundary currently ends. It deliberately
 does not equate file length or raw graph degree with an architecture defect.
 
-Current structural graph (2026-08-22): 9,795 nodes and 23,445 edges; the latest
-navigation-only reclustering produced 305 communities. Community count can vary
+Current structural graph (2026-08-22): 10,254 nodes and 24,396 edges; the latest
+navigation-only reclustering produced 327 communities. Community count can vary
 between unchanged reclustering runs and is not treated as an architecture
 invariant. Graphify was incrementally refreshed in code-only mode after the
 config/options/runtime/transport/support decomposition described below. The
@@ -153,6 +153,38 @@ registry and options-flow orchestration, where capability guards are enforced.
 Static guards additionally reject endpoint/control writers in the DESSMonitor
 source and reject provider/runtime dependencies in the neutral contract.
 
+## DESSMonitor local-read evidence funnel
+
+The DESSMonitor path now ends in an explicitly inactive review artifact. It does
+not reuse the SmartESS active-learning path and does not promote temporal
+correlation into a proven register mapping. The stages are intentionally
+separate typed boundaries:
+
+1. provider metadata is normalized into semantic observations;
+2. bounded provider history and repeated local register snapshots are collected
+   independently, with exact identity, route and time-basis context;
+3. the correlator emits candidate locations only, never read bindings;
+4. representability is recomputed against the exact currently loaded driver,
+   probe target and register schema;
+5. only unique, non-colliding candidates enter `CloudLocalReadDraftPlan`;
+6. an explicit result-screen action may write one deterministic schema-only
+   artifact under `learned/dessmonitor_review/`.
+
+The artifact records `local_mapping_proven=false` and
+`activation_allowed=false`, creates no profile, changes no config entry and does
+not reload Home Assistant. A stale or forged plan, changed driver/schema/route,
+cross-series register collision, or mismatched existing file fails closed before
+activation can be considered. Rerunning the exact same plan is idempotent.
+
+The refreshed Graphify graph shows the expected one-hop call from
+`async_generate_inactive_read_draft` to
+`generate_inactive_cloud_local_read_schema_draft`, and from that writer to
+`local_register_schema_path`. It shows no directed path from the adapter, plan,
+representability review, writer or artifact to
+`async_activate_device_scoped_overlay`,
+`generate_shadow_learning_overlay_drafts` or `RuntimeManager`. Source guards and
+behavior tests remain authoritative for this non-activation boundary.
+
 ## Authorities intentionally kept whole
 
 ### CallbackSessionRegistry
@@ -229,6 +261,8 @@ The newer decompositions also removed implicit root dependencies:
 
 At this checkpoint:
 
+- latest affected selection after the DESSMonitor history/draft stage:
+  1,426/1,426 in 33 seconds;
 - affected architecture/runtime/cloud-learning suite: 856/856 in 29 seconds;
 - quality gate: 5/5 (full 3,897-test unit discovery included);
 - current HA 2026.7 / Python 3.14 lane: 57/57;
