@@ -1,10 +1,8 @@
 """SmartESS protocol-descriptor resolution over the neutral collector wire.
 
-The FC=2/FC=3 collector-management wire itself is provider-neutral and now lives
-in ``collector_wire``. This module keeps the SmartESS-specific protocol-asset
-catalog resolution (query 14 -> asset id) and re-exports the neutral wire names
-for backward compatibility. ``SmartEssLocalSession`` is the neutral wire session
-plus the SmartESS descriptor/catalog reads.
+The FC=2/FC=3 collector-management wire itself is provider-neutral and lives in
+``collector_wire``. This module owns only SmartESS-specific protocol-asset
+catalog resolution (query 14 -> asset id) and the specialized session facade.
 """
 
 from __future__ import annotations
@@ -12,38 +10,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .collector_wire import (
-    CollectorManagementUnsupportedError,
-    CollectorQueryResponse,
-    CollectorSetResponse,
-    CollectorWireError,
-    CollectorWireManagementSession,
-    QUERY_COLLECTOR_PN,
-    QUERY_COLLECTOR_VERSION,
-    QUERY_HARDWARE_VERSION,
-    QUERY_NETWORK_DIAGNOSTICS,
-    QUERY_PROTOCOL_DESCRIPTOR,
-    QUERY_REBOOT_REQUIRED,
-    QUERY_SERIAL_BAUDRATE,
-    QUERY_WIFI_SCAN_LIST,
-    SET_REBOOT_OR_APPLY,
-    SET_SERIAL_BAUDRATE,
-    SET_SERVER_ENDPOINT,
-    SET_TARGET_PASSWORD,
-    SET_TARGET_SSID,
-    async_send_collector_reboot_or_apply,
-    build_query_collector_payload,
-    build_set_collector_payload,
-    parse_query_collector_response,
-    parse_set_collector_response,
+    CollectorQueryResponse as _CollectorQueryResponse,
+    CollectorWireError as _CollectorWireError,
+    CollectorWireManagementSession as _CollectorWireManagementSession,
+    QUERY_PROTOCOL_DESCRIPTOR as _QUERY_PROTOCOL_DESCRIPTOR,
 )
 from ..metadata.smartess_protocol_catalog_loader import (
     SmartEssProtocolCatalogEntry,
     load_smartess_protocol_catalog,
 )
 
-# ``SmartEssLocalError`` is the historical name of the neutral wire error; keep
-# it as an alias so existing callers/tests keep working.
-SmartEssLocalError = CollectorWireError
+class SmartEssProtocolError(_CollectorWireError):
+    """A SmartESS protocol descriptor cannot be resolved."""
 
 _LEGACY_PROTOCOL_ASSET_ALIASES: dict[str, str] = {
     "0230": "0942",
@@ -62,11 +40,11 @@ class SmartEssProtocolDescriptor:
 
 
 def resolve_protocol_descriptor(
-    value: CollectorQueryResponse | str | bytes,
+    value: _CollectorQueryResponse | str | bytes,
 ) -> SmartEssProtocolDescriptor:
     """Resolve the SmartESS protocol asset descriptor returned by query 14."""
 
-    if isinstance(value, CollectorQueryResponse):
+    if isinstance(value, _CollectorQueryResponse):
         text = value.text
     elif isinstance(value, bytes):
         text = value.decode("ascii", errors="ignore")
@@ -75,18 +53,18 @@ def resolve_protocol_descriptor(
 
     descriptor = text.strip().strip("\x00")
     if not descriptor:
-        raise SmartEssLocalError("protocol_descriptor_empty")
+        raise SmartEssProtocolError("protocol_descriptor_empty")
 
     raw_id, _, suffix = descriptor.partition("#")
     raw_id = raw_id.strip()
     if not raw_id:
-        raise SmartEssLocalError("protocol_descriptor_missing_id")
+        raise SmartEssProtocolError("protocol_descriptor_missing_id")
 
     # Some collectors answer query 14 with a composite serial-protocol config
     # string ("02FF,0,0,#0#"); the protocol id is the first comma field.
     raw_id = raw_id.split(",", 1)[0].strip()
     if not raw_id:
-        raise SmartEssLocalError("protocol_descriptor_missing_id")
+        raise SmartEssProtocolError("protocol_descriptor_missing_id")
 
     asset_id = _LEGACY_PROTOCOL_ASSET_ALIASES.get(raw_id, raw_id)
     return SmartEssProtocolDescriptor(
@@ -98,15 +76,15 @@ def resolve_protocol_descriptor(
     )
 
 
-class SmartEssLocalSession(CollectorWireManagementSession):
+class SmartEssLocalSession(_CollectorWireManagementSession):
     """Neutral collector wire session plus SmartESS protocol-descriptor reads."""
 
     async def query_protocol_descriptor(self) -> SmartEssProtocolDescriptor:
         """Read and parse the SmartESS protocol asset descriptor using query 14."""
 
-        response = await self.query_collector(QUERY_PROTOCOL_DESCRIPTOR)
+        response = await self.query_collector(_QUERY_PROTOCOL_DESCRIPTOR)
         if response.code != 0:
-            raise SmartEssLocalError(
+            raise SmartEssProtocolError(
                 f"query_failed:parameter={response.parameter}:code={response.code}"
             )
         return resolve_protocol_descriptor(response)

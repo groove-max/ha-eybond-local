@@ -8,7 +8,10 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from ...collector.protocol import HEADER_SIZE, decode_header
-from ...collector.smartess_local import parse_query_collector_response, parse_set_collector_response
+from ...collector.collector_wire import (
+    parse_query_collector_response,
+    parse_set_collector_response,
+)
 from ..cloud_session_wire import consume_cloud_message
 from ..collector_cloud_proxy import JsonLineWriter
 from .backend import InProcessShadowLearningHandler, ShadowLearningSeed, utc_now_iso

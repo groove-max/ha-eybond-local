@@ -36,7 +36,7 @@ from custom_components.eybond_local.collector.at import (  # noqa: E402
     parse_at_command,
     parse_at_response,
 )
-from custom_components.eybond_local.collector.smartess_local import (  # noqa: E402
+from custom_components.eybond_local.collector.collector_wire import (  # noqa: E402
     SET_REBOOT_OR_APPLY,
     SET_SERVER_ENDPOINT,
     build_set_collector_payload,

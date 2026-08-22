@@ -14,7 +14,9 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.collector.protocol import HEADER_SIZE, build_collector_request, decode_header
-from custom_components.eybond_local.collector.smartess_local import build_set_collector_payload
+from custom_components.eybond_local.collector.collector_wire import (
+    build_set_collector_payload,
+)
 from custom_components.eybond_local.payload.modbus import build_write_multiple_request
 from custom_components.eybond_local.support.shadow_learning.backend import ShadowLearningSeed
 from custom_components.eybond_local.support.shadow_learning.proxy import InProcessFailClosedShadowProxyHandler

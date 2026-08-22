@@ -11,17 +11,20 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.collector.protocol import EybondHeader  # noqa: E402
-from custom_components.eybond_local.collector.smartess_local import (  # noqa: E402
+from custom_components.eybond_local.collector.collector_wire import (  # noqa: E402
     QUERY_COLLECTOR_VERSION,
     QUERY_PROTOCOL_DESCRIPTOR,
     SET_TARGET_SSID,
     CollectorQueryResponse,
-    SmartEssLocalError,
-    SmartEssLocalSession,
+    CollectorWireError,
     build_query_collector_payload,
     build_set_collector_payload,
     parse_query_collector_response,
     parse_set_collector_response,
+)
+from custom_components.eybond_local.collector.smartess_local import (  # noqa: E402
+    SmartEssLocalSession,
+    SmartEssProtocolError,
     resolve_protocol_descriptor,
 )
 
@@ -65,7 +68,7 @@ class SmartEssLocalHelperTests(unittest.TestCase):
         self.assertEqual(build_query_collector_payload(5, 14), b"\x05\x0e")
 
     def test_build_set_collector_payload_requires_ascii(self) -> None:
-        with self.assertRaisesRegex(SmartEssLocalError, "set_value_not_ascii"):
+        with self.assertRaisesRegex(CollectorWireError, "set_value_not_ascii"):
             build_set_collector_payload(41, "мережа")
 
     def test_parse_query_collector_response_decodes_ascii_tail(self) -> None:
@@ -77,7 +80,7 @@ class SmartEssLocalHelperTests(unittest.TestCase):
         self.assertEqual(response.data, b"0925#Hybrid")
 
     def test_parse_query_collector_response_rejects_short_payload(self) -> None:
-        with self.assertRaisesRegex(SmartEssLocalError, "query_response_too_short"):
+        with self.assertRaisesRegex(CollectorWireError, "query_response_too_short"):
             parse_query_collector_response(b"\x00")
 
     def test_parse_set_collector_response_requires_status_and_parameter(self) -> None:
@@ -94,6 +97,10 @@ class SmartEssLocalHelperTests(unittest.TestCase):
         self.assertEqual(descriptor.asset_name, "0925.json")
         self.assertEqual(descriptor.suffix, "SD-HYM-4862HWP")
         self.assertFalse(descriptor.uses_legacy_alias)
+
+    def test_resolve_protocol_descriptor_uses_typed_protocol_error(self) -> None:
+        with self.assertRaisesRegex(SmartEssProtocolError, "protocol_descriptor_empty"):
+            resolve_protocol_descriptor("")
 
     def test_resolve_protocol_descriptor_applies_legacy_0230_alias(self) -> None:
         descriptor = resolve_protocol_descriptor("0230#legacy")
@@ -189,7 +196,7 @@ class SmartEssLocalSessionTests(unittest.IsolatedAsyncioTestCase):
         )
         session = SmartEssLocalSession(transport)
 
-        with self.assertRaisesRegex(SmartEssLocalError, "query_failed"):
+        with self.assertRaisesRegex(CollectorWireError, "query_failed"):
             await session.query_collector_version()
 
 

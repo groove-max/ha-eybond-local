@@ -15,7 +15,7 @@ from custom_components.eybond_local.collector.parameter_registry import (
     COLLECTOR_PARAMETER_DEFINITION_BY_ID,
     RUNTIME_COLLECTOR_PARAMETERS,
     SENSITIVE_READ_PARAMETERS,
-    query_runtime_collector_values,
+    read_runtime_collector_values,
 )
 from custom_components.eybond_local.collector.protocol import EybondHeader
 from custom_components.eybond_local.collector.smartess_local import SmartEssLocalSession
@@ -54,7 +54,7 @@ class CollectorParameterRegistryTests(unittest.TestCase):
         self.assertIn(43, SENSITIVE_READ_PARAMETERS)
         self.assertNotIn(password_parameter, RUNTIME_COLLECTOR_PARAMETERS)
 
-    def test_query_runtime_collector_values_decodes_safe_metadata_set(self) -> None:
+    def test_runtime_collector_reader_decodes_safe_metadata_set(self) -> None:
         transport = _FakeCollectorTransport(
             {
                 (2, b"\x02"): b"\x00\x02Q0000000000001",
@@ -73,7 +73,9 @@ class CollectorParameterRegistryTests(unittest.TestCase):
             }
         )
 
-        values = asyncio.run(query_runtime_collector_values(SmartEssLocalSession(transport)))
+        values = asyncio.run(
+            read_runtime_collector_values(SmartEssLocalSession(transport))
+        ).values
 
         self.assertEqual(values["collector_pn"], "Q0000000000001")
         self.assertEqual(values["collector_protocol_version"], "1.11")
@@ -92,7 +94,7 @@ class CollectorParameterRegistryTests(unittest.TestCase):
         self.assertEqual(values["smartess_protocol_asset_id"], "0925")
         self.assertEqual(values["smartess_protocol_profile_key"], "smartess_0925")
 
-    def test_query_runtime_collector_values_tolerates_missing_signal_query(self) -> None:
+    def test_runtime_collector_reader_tolerates_missing_signal_query(self) -> None:
         transport = _FakeCollectorTransport(
             {
                 (2, b"\x04"): b"\x00\x041.11",
@@ -108,14 +110,16 @@ class CollectorParameterRegistryTests(unittest.TestCase):
             }
         )
 
-        values = asyncio.run(query_runtime_collector_values(SmartEssLocalSession(transport)))
+        values = asyncio.run(
+            read_runtime_collector_values(SmartEssLocalSession(transport))
+        ).values
 
         self.assertEqual(values["collector_network_diagnostics"], "STA:-67")
         self.assertEqual(values["collector_signal_strength"], -67)
         self.assertEqual(values["collector_signal_strength_source"], "wifi_rssi")
         self.assertNotIn("collector_signal_strength_raw", values)
 
-    def test_query_runtime_collector_values_normalizes_gprs_csq_when_rssi_missing(self) -> None:
+    def test_runtime_collector_reader_normalizes_gprs_csq_when_rssi_missing(self) -> None:
         transport = _FakeCollectorTransport(
             {
                 (2, b"\x04"): b"\x00\x041.11",
@@ -131,13 +135,15 @@ class CollectorParameterRegistryTests(unittest.TestCase):
             }
         )
 
-        values = asyncio.run(query_runtime_collector_values(SmartEssLocalSession(transport)))
+        values = asyncio.run(
+            read_runtime_collector_values(SmartEssLocalSession(transport))
+        ).values
 
         self.assertEqual(values["collector_signal_strength"], -111)
         self.assertEqual(values["collector_signal_strength_source"], "gprs_csq")
         self.assertEqual(values["collector_signal_strength_raw"], "1")
 
-    def test_query_runtime_collector_values_ignores_non_rssi_network_flags(self) -> None:
+    def test_runtime_collector_reader_ignores_non_rssi_network_flags(self) -> None:
         transport = _FakeCollectorTransport(
             {
                 (2, b"\x04"): b"\x00\x041.11",
@@ -154,7 +160,9 @@ class CollectorParameterRegistryTests(unittest.TestCase):
             }
         )
 
-        values = asyncio.run(query_runtime_collector_values(SmartEssLocalSession(transport)))
+        values = asyncio.run(
+            read_runtime_collector_values(SmartEssLocalSession(transport))
+        ).values
 
         self.assertEqual(values["collector_network_diagnostics"], "1,0,0")
         self.assertEqual(values["collector_signal_strength_raw"], "ON")
@@ -175,7 +183,7 @@ class ProtocolDescriptorParsingTests(unittest.TestCase):
         from custom_components.eybond_local.collector.parameter_registry import (
             _decode_protocol_descriptor,
         )
-        from custom_components.eybond_local.collector.smartess_local import (
+        from custom_components.eybond_local.collector.collector_wire import (
             CollectorQueryResponse,
         )
 
@@ -189,7 +197,7 @@ class ProtocolDescriptorParsingTests(unittest.TestCase):
         from custom_components.eybond_local.collector.parameter_registry import (
             _decode_protocol_descriptor,
         )
-        from custom_components.eybond_local.collector.smartess_local import (
+        from custom_components.eybond_local.collector.collector_wire import (
             CollectorQueryResponse,
         )
 

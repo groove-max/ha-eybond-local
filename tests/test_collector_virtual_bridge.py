@@ -14,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.collector.at import parse_at_response  # noqa: E402
 from custom_components.eybond_local.collector.at_runtime import (  # noqa: E402
-    query_runtime_collector_at_values,
+    read_runtime_collector_at_values,
 )
 from custom_components.eybond_local.collector.capabilities import (  # noqa: E402
     EspCollectorHardwareToken,
@@ -96,7 +96,7 @@ class RuntimeCollectorAtQueryTests(unittest.IsolatedAsyncioTestCase):
                 return parse_at_response(f"AT+{command}:")
 
         transport = _Transport()
-        await query_runtime_collector_at_values(transport)
+        await read_runtime_collector_at_values(transport)
 
         self.assertNotIn("VDTU", transport.commands)
 

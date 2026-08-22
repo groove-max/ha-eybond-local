@@ -6,7 +6,7 @@ the low-level payload build/parse so a provider-neutral collector-management
 adapter can use them without importing SmartESS-specific naming.
 
 The SmartESS-specific protocol-descriptor/catalog resolution stays in
-``smartess_local`` (which re-exports these neutral names for compatibility).
+``smartess_local``.
 """
 
 from __future__ import annotations

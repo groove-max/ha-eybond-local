@@ -366,7 +366,7 @@ from custom_components.eybond_local.collector.smartess_ble import (
     SmartEssBleProvisionResult,
     SmartEssBleWifiNetwork,
 )
-from custom_components.eybond_local.collector.smartess_local import (
+from custom_components.eybond_local.collector.collector_wire import (
     QUERY_HARDWARE_VERSION,
     QUERY_SERIAL_BAUDRATE,
     SET_TARGET_PASSWORD,

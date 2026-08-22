@@ -21,7 +21,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.collector.at import CollectorAtResponse  # noqa: E402
 from custom_components.eybond_local.collector.at_runtime import (  # noqa: E402
-    query_runtime_collector_at_values,
     read_runtime_collector_at_values,
 )
 from custom_components.eybond_local.collector.metadata import (  # noqa: E402
@@ -193,12 +192,6 @@ class AtReaderOutcomeTests(unittest.TestCase):
         self.assertEqual(result.outcome, OUTCOME_SUCCESS)
         self.assertTrue(result.is_fresh)
         self.assertEqual(result.values.get("collector_pn"), "E123")
-
-    def test_dict_wrapper_still_returns_values(self) -> None:
-        transport = _ProgrammableAtTransport({"DTUPN": "E123"})
-        values = asyncio.run(query_runtime_collector_at_values(transport))
-        self.assertEqual(values.get("collector_pn"), "E123")
-
 
 class FramedReaderOutcomeTests(unittest.TestCase):
     def test_delivery_failure_is_transport_error(self) -> None:

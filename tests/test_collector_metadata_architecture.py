@@ -57,6 +57,9 @@ _HUB_FAMILY = tuple(sorted((_CC / "runtime" / "hub").glob("*.py")))
 _MANAGEMENT = _CC / "collector" / "management.py"
 _SERVICE = _CC / "runtime" / "collector_metadata.py"
 _READERS = _CC / "collector" / "metadata.py"
+_FRAMED_READER = _CC / "collector" / "parameter_registry.py"
+_AT_READER = _CC / "collector" / "at_runtime.py"
+_SMARTESS_DESCRIPTOR = _CC / "collector" / "smartess_local.py"
 
 
 def _read(path: Path) -> str:
@@ -237,6 +240,35 @@ class MetadataReaderRunsNoActionsTests(unittest.TestCase):
                 identifiers,
                 msg=f"metadata reader must not run action token {token!r}",
             )
+
+
+class LegacyMetadataWrapperRemovalTests(unittest.TestCase):
+    def test_metadata_readers_expose_no_parallel_dict_wrapper(self) -> None:
+        definitions = {
+            node.name
+            for path in (_FRAMED_READER, _AT_READER)
+            for node in ast.parse(_read(path)).body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+        self.assertNotIn("query_runtime_collector_values", definitions)
+        self.assertNotIn("query_runtime_collector_at_values", definitions)
+
+    def test_smartess_descriptor_module_does_not_reexport_neutral_wire_names(self) -> None:
+        tree = ast.parse(_read(_SMARTESS_DESCRIPTOR))
+        collector_wire_imports = [
+            alias
+            for node in tree.body
+            if isinstance(node, ast.ImportFrom)
+            and node.module == "collector_wire"
+            for alias in node.names
+        ]
+
+        self.assertTrue(collector_wire_imports)
+        self.assertTrue(
+            all(alias.asname and alias.asname.startswith("_") for alias in collector_wire_imports),
+            collector_wire_imports,
+        )
 
 
 class PeerIpNotChannelOwnershipKeyTests(unittest.TestCase):

@@ -21,7 +21,9 @@ from custom_components.eybond_local.collector.at import (
     parse_at_command,
     parse_at_response,
 )
-from custom_components.eybond_local.collector.at_runtime import query_runtime_collector_at_values
+from custom_components.eybond_local.collector.at_runtime import (
+    read_runtime_collector_at_values,
+)
 
 
 class _FakeWriter:
@@ -98,7 +100,7 @@ class CollectorAtTests(unittest.TestCase):
                 return parse_at_response(f"AT+{command}:")
 
         async def _run() -> None:
-            values = await query_runtime_collector_at_values(_Transport())
+            values = (await read_runtime_collector_at_values(_Transport())).values
 
             self.assertEqual(values["collector_server_endpoint"], "iot.eybond.com,18899,TCP")
             self.assertEqual(values["collector_cloud_family"], "valuecloud_at")
@@ -124,7 +126,7 @@ class CollectorAtTests(unittest.TestCase):
 
         async def _run() -> None:
             transport = _Transport()
-            values = await query_runtime_collector_at_values(transport)
+            values = (await read_runtime_collector_at_values(transport)).values
 
             self.assertEqual(values["collector_cloud_family"], "valuecloud_at")
             self.assertNotIn("VDTU", transport.commands)
@@ -148,7 +150,7 @@ class CollectorAtTests(unittest.TestCase):
             # The AT reader takes no cloud-family argument: the sweep is a fixed
             # read-only set and cloud family never selects a command.
             transport = _Transport()
-            values = await query_runtime_collector_at_values(transport)
+            await read_runtime_collector_at_values(transport)
 
             self.assertNotIn("VDTU", transport.commands)
 
@@ -167,8 +169,8 @@ class AtSweepTimeoutAbortTests(unittest.TestCase):
 
         async def _run() -> None:
             transport = _DeadLinkTransport()
-            values = await query_runtime_collector_at_values(transport)
-            self.assertEqual(values, {})
+            result = await read_runtime_collector_at_values(transport)
+            self.assertEqual(result.values, {})
             # One strike ends the sweep instead of 12 consecutive timeouts.
             self.assertEqual(len(transport.commands), 1)
 
@@ -185,7 +187,7 @@ class AtSweepTimeoutAbortTests(unittest.TestCase):
 
         async def _run() -> None:
             transport = _ErroringTransport()
-            await query_runtime_collector_at_values(transport)
+            await read_runtime_collector_at_values(transport)
             self.assertGreater(len(transport.commands), 1)
 
         asyncio.run(_run())

@@ -217,15 +217,3 @@ async def read_runtime_collector_at_values(
         failed_commands=failed,
         timed_out=timed_out,
     )
-
-
-async def query_runtime_collector_at_values(
-    transport: CollectorAtQueryTransport,
-) -> dict[str, object]:
-    """Compatibility dict wrapper over :func:`read_runtime_collector_at_values`.
-
-    Kept for onboarding/config-flow/tests that only need the decoded values; the
-    runtime metadata service uses the structured reader.
-    """
-
-    return (await read_runtime_collector_at_values(transport)).values

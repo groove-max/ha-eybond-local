@@ -20,7 +20,7 @@ from custom_components.eybond_local.collector.protocol import (
     decode_header,
     encode_header,
 )
-from custom_components.eybond_local.collector.smartess_local import (
+from custom_components.eybond_local.collector.collector_wire import (
     build_query_collector_payload,
     build_set_collector_payload,
 )

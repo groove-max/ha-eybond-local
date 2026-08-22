@@ -18,7 +18,7 @@ from homeassistant.helpers.selector import (
 
 from ... import network_interfaces
 from ...collector.smartess_ble import SmartEssBleWifiNetwork, parse_wifi_scan_response
-from ...collector.smartess_local import (
+from ...collector.collector_wire import (
     QUERY_HARDWARE_VERSION,
     QUERY_NETWORK_DIAGNOSTICS,
     QUERY_SERIAL_BAUDRATE,

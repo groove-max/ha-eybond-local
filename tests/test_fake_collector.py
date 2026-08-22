@@ -22,7 +22,9 @@ from custom_components.eybond_local.collector.protocol import (
     decode_header,
     parse_heartbeat_pn,
 )
-from custom_components.eybond_local.collector.smartess_local import parse_query_collector_response
+from custom_components.eybond_local.collector.collector_wire import (
+    parse_query_collector_response,
+)
 from custom_components.eybond_local.collector.transport import SharedEybondTransport
 from custom_components.eybond_local.onboarding.eybond import DiscoveryTarget, OnboardingDetector
 from custom_components.eybond_local.payload.modbus import (

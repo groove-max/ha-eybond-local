@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Callable, Protocol
 
 from ..metadata.smartess_protocol_catalog_loader import load_smartess_protocol_catalog
-from .collector_wire import CollectorWireError
+from .collector_wire import CollectorQueryResponse, CollectorWireError
 from .metadata_result import (
     OUTCOME_COMMAND_ERROR,
     OUTCOME_EMPTY,
@@ -17,7 +17,7 @@ from .metadata_result import (
     CollectorMetadataChannelReadResult,
 )
 from .signal import merge_collector_signal_values, normalize_signal_strength
-from .smartess_local import CollectorQueryResponse, resolve_protocol_descriptor
+from .smartess_local import resolve_protocol_descriptor
 
 # Delivery failures (link unusable) vs. a malformed response (command error) vs.
 # a well-formed unsupported parameter (skipped): only the last two are collector
@@ -265,15 +265,3 @@ async def read_runtime_collector_values(
         successful_commands=successful,
         failed_commands=failed,
     )
-
-
-async def query_runtime_collector_values(
-    session: CollectorMetadataQuerySession,
-    *,
-    parameters: tuple[CollectorParameterDefinition, ...] = RUNTIME_COLLECTOR_PARAMETERS,
-) -> dict[str, object]:
-    """Compatibility dict wrapper over :func:`read_runtime_collector_values`."""
-
-    return (
-        await read_runtime_collector_values(session, parameters=parameters)
-    ).values
