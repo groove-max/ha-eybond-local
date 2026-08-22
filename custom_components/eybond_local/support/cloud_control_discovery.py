@@ -53,6 +53,7 @@ class ControlDiscoveryOutcome:
     identity: dict[str, Any]
     result: dict[str, Any]
     read_bindings: dict[str, Any] | None = None
+    metadata_evidence: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)

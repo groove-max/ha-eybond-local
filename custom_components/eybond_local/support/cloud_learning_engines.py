@@ -11,6 +11,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from ..dessmonitor_cloud import (
+    DessMonitorCloudError,
+)
 from ..smartess_cloud import SmartEssCloudError, classify_smartess_cloud_error
 from .cloud_control_discovery import (
     CloudControlDiscoveryRunner,
@@ -18,9 +21,11 @@ from .cloud_control_discovery import (
     UnavailableControlDiscoveryRunner,
     ValueCloudControlDiscoveryRunner,
 )
+from .dessmonitor_learning import DessMonitorReadOnlyLearningRunner
 
 
 LEARNING_SOURCE_SMARTESS = "smartess"
+LEARNING_SOURCE_DESSMONITOR = "dessmonitor"
 LEARNING_SOURCE_VALUECLOUD = "valuecloud"
 
 CREDENTIAL_REALM_EYBOND = "eybond"
@@ -72,6 +77,7 @@ class CloudLearningSource:
     credential_realm_id: str
     label: str
     capabilities: CloudLearningCapabilities
+    default_for_provider: bool = False
 
     def __post_init__(self) -> None:
         _required_token(self.source_id, reason="cloud_learning_source_id_invalid")
@@ -83,6 +89,8 @@ class CloudLearningSource:
         _required_token(self.label, reason="cloud_learning_label_invalid")
         if type(self.capabilities) is not CloudLearningCapabilities:
             raise TypeError("cloud_learning_capabilities_invalid")
+        if type(self.default_for_provider) is not bool:
+            raise TypeError("cloud_learning_default_invalid")
 
 
 class CloudLearningEngine(ABC):
@@ -118,6 +126,7 @@ class SmartEssCloudLearningEngine(CloudLearningEngine):
             requires_shadow_route=True,
             requires_control_consent=True,
         ),
+        default_for_provider=True,
     )
 
     def control_discovery_runner(self) -> CloudControlDiscoveryRunner:
@@ -143,10 +152,50 @@ class ValueCloudCloudLearningEngine(CloudLearningEngine):
             requires_shadow_route=True,
             requires_control_consent=True,
         ),
+        default_for_provider=True,
     )
 
     def control_discovery_runner(self) -> CloudControlDiscoveryRunner:
         return ValueCloudControlDiscoveryRunner()
+
+
+class DessMonitorCloudLearningEngine(CloudLearningEngine):
+    """DESSMonitor metadata learning; never redirects or writes the collector."""
+
+    source = CloudLearningSource(
+        source_id=LEARNING_SOURCE_DESSMONITOR,
+        provider_id="smartess",
+        credential_realm_id=CREDENTIAL_REALM_EYBOND,
+        label="DESSMonitor API (read-only)",
+        capabilities=CloudLearningCapabilities(
+            metadata=True,
+            control_actions=False,
+            raw_packets=True,
+            history=False,
+            requires_shadow_route=False,
+            requires_control_consent=False,
+        ),
+        default_for_provider=False,
+    )
+
+    def control_discovery_runner(self) -> CloudControlDiscoveryRunner:
+        return DessMonitorReadOnlyLearningRunner()
+
+    def classify_error(self, exc: BaseException) -> str:
+        if isinstance(exc, TimeoutError):
+            return "timeout"
+        if not isinstance(exc, DessMonitorCloudError):
+            return ""
+        message = str(exc)
+        if message.startswith("login_failed") or message.startswith("http_error:40"):
+            return "auth_failed"
+        if message.startswith("http_error:429"):
+            return "rate_limited"
+        if message.startswith("network_error"):
+            return "network"
+        if message.startswith("http_error:5") or message.startswith("invalid_"):
+            return "unavailable"
+        return "unexpected"
 
 
 class UnavailableCloudLearningEngine(CloudLearningEngine):
@@ -171,6 +220,7 @@ class UnavailableCloudLearningEngine(CloudLearningEngine):
                 requires_shadow_route=False,
                 requires_control_consent=False,
             ),
+            default_for_provider=False,
         )
 
     @property
@@ -182,6 +232,7 @@ class UnavailableCloudLearningEngine(CloudLearningEngine):
 
 
 _ENGINES: dict[str, CloudLearningEngine] = {
+    LEARNING_SOURCE_DESSMONITOR: DessMonitorCloudLearningEngine(),
     LEARNING_SOURCE_SMARTESS: SmartEssCloudLearningEngine(),
     LEARNING_SOURCE_VALUECLOUD: ValueCloudCloudLearningEngine(),
 }
@@ -206,10 +257,11 @@ def compatible_cloud_learning_sources(provider_id: object) -> tuple[CloudLearnin
 
 
 def default_cloud_learning_source(provider_id: object) -> str:
-    """Return the sole compatible source, fail closed when none/ambiguous."""
+    """Return the sole declared default, fail closed when none/ambiguous."""
 
     compatible = compatible_cloud_learning_sources(provider_id)
-    return compatible[0].source_id if len(compatible) == 1 else ""
+    defaults = tuple(source for source in compatible if source.default_for_provider)
+    return defaults[0].source_id if len(defaults) == 1 else ""
 
 
 def resolve_cloud_learning_engine(source_id: object) -> CloudLearningEngine:
@@ -223,11 +275,13 @@ def resolve_cloud_learning_engine(source_id: object) -> CloudLearningEngine:
 __all__ = [
     "CREDENTIAL_REALM_EYBOND",
     "CREDENTIAL_REALM_VALUECLOUD",
+    "LEARNING_SOURCE_DESSMONITOR",
     "LEARNING_SOURCE_SMARTESS",
     "LEARNING_SOURCE_VALUECLOUD",
     "CloudLearningCapabilities",
     "CloudLearningEngine",
     "CloudLearningSource",
+    "DessMonitorCloudLearningEngine",
     "SmartEssCloudLearningEngine",
     "UnavailableCloudLearningEngine",
     "ValueCloudCloudLearningEngine",

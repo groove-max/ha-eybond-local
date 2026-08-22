@@ -1,0 +1,76 @@
+"""Read-only DESSMonitor cloud-learning runner.
+
+Unlike SmartESS/ValueCloud active learning this runner opens no shadow route,
+sends no control action, and claims no local register binding.  It only returns
+typed provider metadata for review and support evidence.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ..dessmonitor_cloud import fetch_read_only_evidence
+from .cloud_control_discovery import (
+    CloudControlDiscoveryRunner,
+    ControlDiscoveryOutcome,
+)
+
+
+class DessMonitorReadOnlyLearningRunner(CloudControlDiscoveryRunner):
+    """Fetch DESSMonitor metadata without collector endpoint side effects."""
+
+    provider_id = "smartess"
+    source_id = "dessmonitor"
+
+    async def async_run(
+        self,
+        *,
+        executor,
+        collector_pn,
+        username,
+        password,
+        fallback_identity,
+        max_fields,
+        progress,
+        orchestrator_callbacks,
+        on_identity,
+        start_shadow_route,
+        on_learning,
+    ) -> ControlDiscoveryOutcome:
+        del fallback_identity
+        del orchestrator_callbacks
+        del start_shadow_route
+        del on_learning
+        progress(0.10, "fetching")
+        bundle = await executor(
+            lambda: fetch_read_only_evidence(
+                username=username,
+                password=password,
+                collector_pn=collector_pn,
+                max_control_values=max_fields,
+            )
+        )
+        identity = bundle.identity.to_record()
+        on_identity(identity)
+        progress(0.82, "building")
+        evidence = bundle.to_record()
+        result: dict[str, Any] = {
+            "source": self.source_id,
+            "metadata_only": True,
+            "metadata_field_count": bundle.metadata_field_count,
+            "plan": [],
+            "planned_write_count": 0,
+            "executed_result_count": 0,
+            "sent_count": 0,
+            "leaked_count": 0,
+            "degraded_count": 0,
+        }
+        return ControlDiscoveryOutcome(
+            identity=identity,
+            result=result,
+            read_bindings=None,
+            metadata_evidence=evidence,
+        )
+
+
+__all__ = ["DessMonitorReadOnlyLearningRunner"]

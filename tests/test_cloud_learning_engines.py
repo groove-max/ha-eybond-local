@@ -15,6 +15,7 @@ from custom_components.eybond_local.support.cloud_evidence_providers import (  #
 )
 from custom_components.eybond_local.support.cloud_learning_engines import (  # noqa: E402
     CREDENTIAL_REALM_EYBOND,
+    LEARNING_SOURCE_DESSMONITOR,
     LEARNING_SOURCE_SMARTESS,
     CloudLearningCapabilities,
     CloudLearningSource,
@@ -65,6 +66,15 @@ class CloudLearningModelTests(unittest.TestCase):
                 }
                 with self.assertRaises((TypeError, ValueError)):
                     CloudLearningSource(**values)
+        with self.assertRaises(TypeError):
+            CloudLearningSource(
+                source_id="source",
+                provider_id="provider",
+                credential_realm_id="realm",
+                label="Label",
+                capabilities=capabilities,
+                default_for_provider=1,  # type: ignore[arg-type]
+            )
 
         with self.assertRaises(TypeError):
             CloudLearningCapabilities(
@@ -89,14 +99,19 @@ class CloudLearningModelTests(unittest.TestCase):
         sources = supported_cloud_learning_sources()
         self.assertEqual(
             tuple(source.source_id for source in sources),
-            ("smartess", "valuecloud"),
+            ("dessmonitor", "smartess", "valuecloud"),
         )
         self.assertEqual(
             tuple(source.source_id for source in compatible_cloud_learning_sources("smartess")),
-            (LEARNING_SOURCE_SMARTESS,),
+            (LEARNING_SOURCE_DESSMONITOR, LEARNING_SOURCE_SMARTESS),
         )
         self.assertEqual(default_cloud_learning_source("smartess"), "smartess")
         self.assertEqual(default_cloud_learning_source("valuecloud"), "valuecloud")
+        dessmonitor = resolve_cloud_learning_engine(LEARNING_SOURCE_DESSMONITOR)
+        self.assertTrue(dessmonitor.available)
+        self.assertFalse(dessmonitor.source.capabilities.control_actions)
+        self.assertFalse(dessmonitor.source.capabilities.requires_shadow_route)
+        self.assertTrue(dessmonitor.source.capabilities.raw_packets)
         for malformed in (" smartess", "SMARTESS", b"smartess", None, object()):
             with self.subTest(malformed=malformed):
                 self.assertEqual(compatible_cloud_learning_sources(malformed), ())
