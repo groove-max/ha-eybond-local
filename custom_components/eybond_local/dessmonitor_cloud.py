@@ -34,10 +34,20 @@ DEFAULT_MAX_CONTROL_VALUES = 16
 DEFAULT_MAX_RESPONSE_BYTES = 2_000_000
 DEFAULT_MAX_METADATA_FIELDS = 512
 DEFAULT_MAX_TEXT_LENGTH = 512
+_ERROR_TOKEN_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
+)
 
 
 class DessMonitorCloudError(RuntimeError):
     """One safe, typed DESSMonitor request failure."""
+
+    def __init__(self, reason_code: str, *, stage: str = "") -> None:
+        _required_error_token(reason_code, "dessmonitor_error_reason_invalid")
+        _optional_error_token(stage, "dessmonitor_error_stage_invalid")
+        self.reason_code = reason_code
+        self.stage = stage
+        super().__init__(reason_code)
 
 
 class DessMonitorActionRejectedError(DessMonitorCloudError):
@@ -47,7 +57,7 @@ class DessMonitorActionRejectedError(DessMonitorCloudError):
         self.err = err
         self.action = action
         self.desc = _text(desc)
-        super().__init__(f"action_failed:{err}:{action}")
+        super().__init__(f"action_failed:{err}:{action}", stage=action)
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +282,29 @@ def _required_token(value: object, reason: str) -> str:
     return value
 
 
+def _required_error_token(value: object, reason: str) -> str:
+    if (
+        type(value) is not str
+        or not value
+        or value != value.strip()
+        or len(value) > DEFAULT_MAX_TEXT_LENGTH
+        or any(char not in _ERROR_TOKEN_CHARS for char in value)
+    ):
+        raise ValueError(reason)
+    return value
+
+
+def _optional_error_token(value: object, reason: str) -> str:
+    if (
+        type(value) is not str
+        or value != value.strip()
+        or len(value) > DEFAULT_MAX_TEXT_LENGTH
+        or any(char not in _ERROR_TOKEN_CHARS for char in value)
+    ):
+        raise ValueError(reason)
+    return value
+
+
 def _optional_normalized(value: object, reason: str) -> str:
     if type(value) is not str:
         raise TypeError(reason)
@@ -402,41 +435,47 @@ def login_with_password(
     company_key: str = DEFAULT_COMPANY_KEY,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> tuple[DessMonitorApiEnvelope, DessMonitorSession]:
-    envelope = _http_get_json(
-        build_login_url(
-            username=username,
-            password=password,
-            base_url=base_url,
-            company_key=company_key,
-        ),
-        timeout=timeout,
-    )
-    if envelope.err != 0:
-        raise DessMonitorCloudError(f"login_failed:{envelope.err}")
-    if not isinstance(envelope.dat, dict):
-        raise DessMonitorCloudError("login_failed:missing_dat")
-    session = DessMonitorSession(
-        token=_provider_session_text(
-            envelope.dat.get("token"),
-            reason="invalid_login_session_token",
-            required=True,
-        ),
-        secret=_provider_session_text(
-            envelope.dat.get("secret"),
-            reason="invalid_login_session_secret",
-            required=True,
-        ),
-        uid=_provider_session_text(
-            envelope.dat.get("uid", ""),
-            reason="invalid_login_session_uid",
-            required=False,
-        ),
-        usr=_provider_session_text(
-            envelope.dat.get("usr", ""),
-            reason="invalid_login_session_usr",
-            required=False,
-        ),
-    )
+    stage = "authSource"
+    try:
+        envelope = _http_get_json(
+            build_login_url(
+                username=username,
+                password=password,
+                base_url=base_url,
+                company_key=company_key,
+            ),
+            timeout=timeout,
+        )
+        if envelope.err != 0:
+            raise DessMonitorCloudError(f"login_failed:{envelope.err}")
+        if not isinstance(envelope.dat, dict):
+            raise DessMonitorCloudError("login_failed:missing_dat")
+        session = DessMonitorSession(
+            token=_provider_session_text(
+                envelope.dat.get("token"),
+                reason="invalid_login_session_token",
+                required=True,
+            ),
+            secret=_provider_session_text(
+                envelope.dat.get("secret"),
+                reason="invalid_login_session_secret",
+                required=True,
+            ),
+            uid=_provider_session_text(
+                envelope.dat.get("uid", ""),
+                reason="invalid_login_session_uid",
+                required=False,
+            ),
+            usr=_provider_session_text(
+                envelope.dat.get("usr", ""),
+                reason="invalid_login_session_usr",
+                required=False,
+            ),
+        )
+    except DessMonitorCloudError as exc:
+        if exc.stage:
+            raise
+        raise DessMonitorCloudError(exc.reason_code, stage=stage) from exc
     return envelope, session
 
 
@@ -494,19 +533,24 @@ def fetch_signed_action(
     language: str = DEFAULT_LANGUAGE,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> DessMonitorApiEnvelope:
-    envelope = _http_get_json(
-        build_signed_action_url(
-            action=action,
-            session=session,
-            base_url=base_url,
-            language=language,
-        ),
-        timeout=timeout,
-    )
+    stage = action.split("&", 2)[1].removeprefix("action=")
+    try:
+        envelope = _http_get_json(
+            build_signed_action_url(
+                action=action,
+                session=session,
+                base_url=base_url,
+                language=language,
+            ),
+            timeout=timeout,
+        )
+    except DessMonitorCloudError as exc:
+        if exc.stage:
+            raise
+        raise DessMonitorCloudError(exc.reason_code, stage=stage) from exc
     if envelope.err != 0:
-        name = action.split("&", 2)[1].removeprefix("action=")
         raise DessMonitorActionRejectedError(
-            err=envelope.err, action=name, desc=envelope.desc
+            err=envelope.err, action=stage, desc=envelope.desc
         )
     return envelope
 
@@ -786,7 +830,18 @@ def fetch_read_only_evidence_for_session(
             timeout=timeout,
         )
 
-    identity = _resolve_identity(fetch(_identity_action(collector_pn)).dat, collector_pn)
+    try:
+        identity = _resolve_identity(
+            fetch(_identity_action(collector_pn)).dat,
+            collector_pn,
+        )
+    except DessMonitorCloudError as exc:
+        if exc.stage:
+            raise
+        raise DessMonitorCloudError(
+            exc.reason_code,
+            stage="webQueryDeviceEs",
+        ) from exc
     last_data = fetch(_device_action("querySPDeviceLastData", identity))
     chart_fields = fetch(
         _action("queryDeviceChartField", (("devcode", identity.devcode),))

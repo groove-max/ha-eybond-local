@@ -490,14 +490,18 @@ class ShadowLearningRunMixin:
                 cloud_error_code=cloud_error_code,
             )
             request_stage = str(getattr(exc, "stage", "") or "unknown")
+            provider_reason = str(
+                getattr(exc, "reason_code", "") or "unknown"
+            )
             logger.error(
                 "Control discovery failed entry=%s source=%s stage=%s "
-                "request_stage=%s exception_type=%s cloud_error_code=%s "
-                "failure_reason=%s",
+                "request_stage=%s provider_reason=%s exception_type=%s "
+                "cloud_error_code=%s failure_reason=%s",
                 getattr(self._config_entry, "entry_id", ""),
                 source_id,
                 str(progress.get("stage") or "unknown"),
                 request_stage,
+                provider_reason,
                 type(exc).__name__,
                 cloud_error_code or "not_cloud_classified",
                 failure_reason,

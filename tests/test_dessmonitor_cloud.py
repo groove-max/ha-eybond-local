@@ -21,6 +21,7 @@ from custom_components.eybond_local.dessmonitor_cloud import (  # noqa: E402
     DEFAULT_MAX_METADATA_FIELDS,
     DEFAULT_MAX_RESPONSE_BYTES,
     DessMonitorApiEnvelope,
+    DessMonitorCloudError,
     DessMonitorControlField,
     DessMonitorDeviceIdentity,
     DessMonitorEvidenceBundle,
@@ -30,6 +31,7 @@ from custom_components.eybond_local.dessmonitor_cloud import (  # noqa: E402
     build_signed_action_url,
     fetch_read_only_evidence,
     fetch_read_only_evidence_for_session,
+    fetch_signed_action,
 )
 
 
@@ -134,6 +136,21 @@ class DessMonitorModelTests(unittest.TestCase):
                 token="x" * (dessmonitor_module.DEFAULT_MAX_TEXT_LENGTH + 1),
                 secret="secret",
             )
+
+        error = DessMonitorCloudError(
+            "http_error:503",
+            stage="querySPDeviceLastData",
+        )
+        self.assertEqual(error.reason_code, "http_error:503")
+        self.assertEqual(error.stage, "querySPDeviceLastData")
+        for reason, stage in (
+            ("private detail", "querySPDeviceLastData"),
+            ("network_error", " padded "),
+            ("network_error", "token=secret"),
+        ):
+            with self.subTest(reason=reason, stage=stage):
+                with self.assertRaises(ValueError):
+                    DessMonitorCloudError(reason, stage=stage)
 
     def test_session_bound_metadata_refuses_duck_before_any_request(self) -> None:
         with patch.object(dessmonitor_module, "fetch_signed_action") as fetch:
@@ -241,7 +258,27 @@ class DessMonitorSigningTests(unittest.TestCase):
                 )
 
         self.assertEqual(str(raised.exception), "network_error")
+        self.assertEqual(raised.exception.reason_code, "network_error")
+        self.assertEqual(raised.exception.stage, "authSource")
         self.assertNotIn(sensitive_reason, str(raised.exception))
+
+    def test_signed_request_failure_carries_only_its_action_stage(self) -> None:
+        session = DessMonitorSession(token="token-1", secret="secret-1")
+        with patch.object(
+            dessmonitor_module,
+            "_http_get_json",
+            side_effect=DessMonitorCloudError("invalid_json"),
+        ):
+            with self.assertRaises(DessMonitorCloudError) as raised:
+                fetch_signed_action(
+                    action="&action=queryDeviceLastRawData&pn=collector",
+                    session=session,
+                )
+
+        self.assertEqual(raised.exception.reason_code, "invalid_json")
+        self.assertEqual(raised.exception.stage, "queryDeviceLastRawData")
+        self.assertNotIn("token-1", repr(raised.exception))
+        self.assertNotIn("collector", repr(raised.exception))
 
     def test_signed_read_url_is_exact_and_rejects_duck_session(self) -> None:
         session = DessMonitorSession(token="token-1", secret="secret-1")
