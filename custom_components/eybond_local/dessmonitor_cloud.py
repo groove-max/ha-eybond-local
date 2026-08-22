@@ -31,6 +31,9 @@ DEFAULT_APP_VERSION = "3.6.2.1"
 DEFAULT_COMPANY_KEY = "bnrl_frRFjEz8Mkn"
 DEFAULT_TIMEOUT = 20.0
 DEFAULT_MAX_CONTROL_VALUES = 16
+DEFAULT_MAX_RESPONSE_BYTES = 2_000_000
+DEFAULT_MAX_METADATA_FIELDS = 512
+DEFAULT_MAX_TEXT_LENGTH = 512
 
 
 class DessMonitorCloudError(RuntimeError):
@@ -43,8 +46,8 @@ class DessMonitorActionRejectedError(DessMonitorCloudError):
     def __init__(self, *, err: int, action: str, desc: str) -> None:
         self.err = err
         self.action = action
-        self.desc = desc
-        super().__init__(f"action_failed:{err}:{action}:{desc}")
+        self.desc = _text(desc)
+        super().__init__(f"action_failed:{err}:{action}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,8 +55,8 @@ class DessMonitorApiEnvelope:
     """One parsed DESSMonitor response envelope."""
 
     err: int
-    desc: str
-    dat: Any
+    desc: str = field(repr=False)
+    dat: Any = field(repr=False)
 
     def __post_init__(self) -> None:
         if type(self.err) is not int:
@@ -68,8 +71,8 @@ class DessMonitorSession:
 
     token: str = field(repr=False)
     secret: str = field(repr=False)
-    uid: str = ""
-    usr: str = ""
+    uid: str = field(default="", repr=False)
+    usr: str = field(default="", repr=False)
 
     def __post_init__(self) -> None:
         _required_token(self.token, "dessmonitor_session_token_invalid")
@@ -229,6 +232,8 @@ class DessMonitorEvidenceBundle:
             raise ValueError("dessmonitor_bundle_raw_length_invalid")
         if bool(self.raw_packet_sha256) != (self.raw_packet_length > 0):
             raise ValueError("dessmonitor_bundle_raw_evidence_incomplete")
+        if self.metadata_field_count > DEFAULT_MAX_METADATA_FIELDS:
+            raise ValueError("dessmonitor_bundle_metadata_limit_exceeded")
 
     @property
     def metadata_field_count(self) -> int:
@@ -318,7 +323,10 @@ def _http_get_json(url: str, *, timeout: float) -> DessMonitorApiEnvelope:
     )
     try:
         with urlopen(request, timeout=_strict_timeout(timeout)) as response:
-            payload = _decode_response_body(response.read())
+            body = response.read(DEFAULT_MAX_RESPONSE_BYTES + 1)
+            if len(body) > DEFAULT_MAX_RESPONSE_BYTES:
+                raise DessMonitorCloudError("response_too_large")
+            payload = _decode_response_body(body)
     except HTTPError as exc:
         raise DessMonitorCloudError(f"http_error:{exc.code}") from exc
     except URLError as exc:
@@ -334,7 +342,7 @@ def _http_get_json(url: str, *, timeout: float) -> DessMonitorApiEnvelope:
         raise DessMonitorCloudError("invalid_envelope_err")
     return DessMonitorApiEnvelope(
         err=raw_err,
-        desc=str(raw.get("desc") or "").strip(),
+        desc=_text(raw.get("desc")),
         dat=raw.get("dat"),
     )
 
@@ -517,17 +525,29 @@ def _resolve_identity(dat: Any, collector_pn: str) -> DessMonitorDeviceIdentity:
 
 
 def _text(value: Any) -> str:
-    return str(value if value is not None else "").strip()
+    """Normalize one bounded scalar from an untrusted provider payload."""
+
+    if value is None:
+        return ""
+    if type(value) not in {str, int, float, bool}:
+        return ""
+    return str(value).strip()[:DEFAULT_MAX_TEXT_LENGTH]
 
 
-def _normalize_last_data(dat: Any) -> tuple[DessMonitorTelemetryField, ...]:
+def _normalize_last_data(
+    dat: Any, *, limit: int = DEFAULT_MAX_METADATA_FIELDS
+) -> tuple[DessMonitorTelemetryField, ...]:
     if not isinstance(dat, dict) or not isinstance(dat.get("pars"), dict):
         return ()
     output: list[DessMonitorTelemetryField] = []
     for section, rows in dat["pars"].items():
+        if len(output) >= limit:
+            break
         if type(section) is not str or not isinstance(rows, list):
             continue
         for row in rows:
+            if len(output) >= limit:
+                break
             if not isinstance(row, dict):
                 continue
             title = _text(row.get("par") or row.get("name"))
@@ -546,10 +566,12 @@ def _normalize_last_data(dat: Any) -> tuple[DessMonitorTelemetryField, ...]:
     return tuple(output)
 
 
-def _normalize_chart_fields(dat: Any) -> tuple[DessMonitorTelemetryField, ...]:
+def _normalize_chart_fields(
+    dat: Any, *, limit: int = DEFAULT_MAX_METADATA_FIELDS
+) -> tuple[DessMonitorTelemetryField, ...]:
     rows = dat if isinstance(dat, list) else []
     output: list[DessMonitorTelemetryField] = []
-    for row in rows:
+    for row in rows[:limit]:
         if not isinstance(row, dict):
             continue
         field_id = _text(row.get("e0") or row.get("id"))
@@ -569,7 +591,9 @@ def _normalize_chart_fields(dat: Any) -> tuple[DessMonitorTelemetryField, ...]:
     return tuple(output)
 
 
-def _normalize_key_parameters(dat: Any) -> tuple[DessMonitorTelemetryField, ...]:
+def _normalize_key_parameters(
+    dat: Any, *, limit: int = DEFAULT_MAX_METADATA_FIELDS
+) -> tuple[DessMonitorTelemetryField, ...]:
     rows: list[Any] = []
     if isinstance(dat, list):
         rows = dat
@@ -580,7 +604,7 @@ def _normalize_key_parameters(dat: Any) -> tuple[DessMonitorTelemetryField, ...]
                 rows = candidate
                 break
     output: list[DessMonitorTelemetryField] = []
-    for row in rows:
+    for row in rows[:limit]:
         if not isinstance(row, dict):
             continue
         field_id = _text(row.get("e0") or row.get("id") or row.get("field"))
@@ -600,11 +624,13 @@ def _normalize_key_parameters(dat: Any) -> tuple[DessMonitorTelemetryField, ...]
     return tuple(output)
 
 
-def _normalize_control_fields(dat: Any) -> tuple[DessMonitorControlField, ...]:
+def _normalize_control_fields(
+    dat: Any, *, limit: int = DEFAULT_MAX_METADATA_FIELDS
+) -> tuple[DessMonitorControlField, ...]:
     if not isinstance(dat, dict) or not isinstance(dat.get("field"), list):
         return ()
     output: list[DessMonitorControlField] = []
-    for row in dat["field"]:
+    for row in dat["field"][:limit]:
         if not isinstance(row, dict):
             continue
         field_id = _text(row.get("id"))
@@ -709,8 +735,19 @@ def fetch_read_only_evidence(
     )
     controls = fetch(_device_action("queryDeviceCtrlField", identity))
     raw_packet = fetch(_device_action("queryDeviceLastRawData", identity))
+    remaining = DEFAULT_MAX_METADATA_FIELDS
+    telemetry_fields = _normalize_last_data(last_data.dat, limit=remaining)
+    remaining -= len(telemetry_fields)
+    normalized_chart_fields = _normalize_chart_fields(
+        chart_fields.dat, limit=remaining
+    )
+    remaining -= len(normalized_chart_fields)
+    normalized_key_parameters = _normalize_key_parameters(
+        key_parameters.dat, limit=remaining
+    )
+    remaining -= len(normalized_key_parameters)
     normalized_controls = _with_control_values(
-        _normalize_control_fields(controls.dat),
+        _normalize_control_fields(controls.dat, limit=remaining),
         identity=identity,
         fetch=fetch,
         max_values=max_control_values,
@@ -718,9 +755,9 @@ def fetch_read_only_evidence(
     digest, length = _raw_digest(raw_packet.dat)
     return DessMonitorEvidenceBundle(
         identity=identity,
-        telemetry_fields=_normalize_last_data(last_data.dat),
-        chart_fields=_normalize_chart_fields(chart_fields.dat),
-        key_parameters=_normalize_key_parameters(key_parameters.dat),
+        telemetry_fields=telemetry_fields,
+        chart_fields=normalized_chart_fields,
+        key_parameters=normalized_key_parameters,
         control_fields=normalized_controls,
         raw_packet_sha256=digest,
         raw_packet_length=length,
@@ -729,7 +766,9 @@ def fetch_read_only_evidence(
 
 __all__ = [
     "DEFAULT_BASE_URL",
+    "DEFAULT_MAX_METADATA_FIELDS",
     "DEFAULT_MAX_CONTROL_VALUES",
+    "DEFAULT_MAX_RESPONSE_BYTES",
     "DessMonitorActionRejectedError",
     "DessMonitorApiEnvelope",
     "DessMonitorCloudError",

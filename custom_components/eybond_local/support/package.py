@@ -38,6 +38,15 @@ _SHADOW_CONTROL_DISCOVERY_MEMBER = f"{_SHADOW_ARCHIVE_ROOT}/control_discovery.js
 _DEVICE_SCOPED_OVERLAY_ACTIVATION_OPTION_KEY = "device_scoped_overlay_activation"
 
 _SENSITIVE_FIELD_PARTS = ("password", "secret", "token", "authorization")
+_SENSITIVE_FIELD_NAMES = {
+    "account",
+    "login",
+    "uid",
+    "user",
+    "user_name",
+    "username",
+    "usr",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -787,7 +796,9 @@ def _sanitize_payload(value: Any) -> Any:
         sanitized: dict[str, Any] = {}
         for key, item in value.items():
             normalized_key = str(key or "").lower()
-            if any(part in normalized_key for part in _SENSITIVE_FIELD_PARTS):
+            if normalized_key in _SENSITIVE_FIELD_NAMES or any(
+                part in normalized_key for part in _SENSITIVE_FIELD_PARTS
+            ):
                 continue
             sanitized[str(key)] = _sanitize_payload(item)
         return sanitized

@@ -14,8 +14,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+import custom_components.eybond_local.dessmonitor_cloud as dessmonitor_module  # noqa: E402
 from custom_components.eybond_local.dessmonitor_cloud import (  # noqa: E402
     DEFAULT_BASE_URL,
+    DEFAULT_MAX_METADATA_FIELDS,
+    DEFAULT_MAX_RESPONSE_BYTES,
     DessMonitorApiEnvelope,
     DessMonitorControlField,
     DessMonitorDeviceIdentity,
@@ -40,14 +43,24 @@ class DessMonitorModelTests(unittest.TestCase):
         session = DessMonitorSession(
             token="token-secret-value",
             secret="request-secret-value",
-            uid="user-1",
-            usr="account",
+            uid="private-user-id",
+            usr="private-account-name",
         )
 
         rendered = repr(session)
 
         self.assertNotIn("token-secret-value", rendered)
         self.assertNotIn("request-secret-value", rendered)
+        self.assertNotIn("private-user-id", rendered)
+        self.assertNotIn("private-account-name", rendered)
+
+        envelope = DessMonitorApiEnvelope(
+            err=0,
+            desc="private provider detail",
+            dat={"account": "private-account-name"},
+        )
+        self.assertNotIn("private provider detail", repr(envelope))
+        self.assertNotIn("private-account-name", repr(envelope))
 
     def test_direct_constructors_are_strict_and_json_safe(self) -> None:
         identity = DessMonitorDeviceIdentity(
@@ -104,9 +117,41 @@ class DessMonitorModelTests(unittest.TestCase):
                 title="Title",
                 choices=(("1", "One"), ("1", "Duplicate")),
             )
+        with self.assertRaisesRegex(ValueError, "metadata_limit"):
+            DessMonitorEvidenceBundle(
+                identity=identity,
+                telemetry_fields=(field,) * (DEFAULT_MAX_METADATA_FIELDS + 1),
+                chart_fields=(),
+                key_parameters=(),
+                control_fields=(),
+            )
 
 
 class DessMonitorSigningTests(unittest.TestCase):
+    def test_http_response_body_is_bounded_before_json_decode(self) -> None:
+        class _OversizedResponse:
+            read_limit = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, limit):
+                self.read_limit = limit
+                return b"x" * (limit + 1)
+
+        response = _OversizedResponse()
+        with patch.object(dessmonitor_module, "urlopen", return_value=response):
+            with self.assertRaisesRegex(Exception, "response_too_large"):
+                dessmonitor_module.login_with_password(
+                    username="account",
+                    password="password",
+                )
+
+        self.assertEqual(response.read_limit, DEFAULT_MAX_RESPONSE_BYTES + 1)
+
     def test_login_targets_dessmonitor_authority_and_signs_exact_action(self) -> None:
         with patch(
             "custom_components.eybond_local.dessmonitor_cloud._salt_millis",
@@ -148,6 +193,64 @@ class DessMonitorSigningTests(unittest.TestCase):
 
 
 class DessMonitorBundleTests(unittest.TestCase):
+    def test_metadata_arrays_and_scalar_values_are_bounded(self) -> None:
+        identity = {
+            "device": [
+                {
+                    "pn": FULL_PN,
+                    "sn": "92632511100118",
+                    "devcode": 2376,
+                    "devaddr": 1,
+                }
+            ]
+        }
+        oversized_rows = [
+            {
+                "id": f"field_{index}",
+                "par": "X" * 700,
+                "val": index,
+                "unit": "V",
+            }
+            for index in range(DEFAULT_MAX_METADATA_FIELDS + 100)
+        ]
+        responses = {
+            "webQueryDeviceEs": _ok(identity),
+            "querySPDeviceLastData": _ok({"pars": {"main": oversized_rows}}),
+            "queryDeviceChartField": _ok([]),
+            "querySPKeyParameters": _ok([]),
+            "queryDeviceCtrlField": _ok({"field": []}),
+            "queryDeviceLastRawData": _ok(None),
+        }
+
+        def fetch(*, action, **_kwargs):
+            action_name = parse_qs(action.removeprefix("&"))["action"][0]
+            return responses[action_name]
+
+        with (
+            patch.object(
+                dessmonitor_module,
+                "login_with_password",
+                return_value=(
+                    _ok({}),
+                    DessMonitorSession(token="token-1", secret="secret-1"),
+                ),
+            ),
+            patch.object(
+                dessmonitor_module,
+                "fetch_signed_action",
+                side_effect=fetch,
+            ),
+        ):
+            bundle = fetch_read_only_evidence(
+                username="account",
+                password="password",
+                collector_pn=FULL_PN,
+            )
+
+        self.assertEqual(bundle.metadata_field_count, DEFAULT_MAX_METADATA_FIELDS)
+        self.assertEqual(len(bundle.telemetry_fields), DEFAULT_MAX_METADATA_FIELDS)
+        self.assertLessEqual(len(bundle.telemetry_fields[0].title), 512)
+
     def test_read_only_bundle_is_identity_bound_and_uses_no_write_action(self) -> None:
         identity_list = _ok(
             {

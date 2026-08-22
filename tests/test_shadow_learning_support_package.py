@@ -206,6 +206,102 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
             "E50000200000000001000001",
         )
 
+    def test_dessmonitor_metadata_archive_is_bounded_and_share_safe(self) -> None:
+        collector_pn = "E50000253884199645"
+        serial_number = "92632511100118"
+        username = "private-dess-account"
+        password = "private-dess-password"
+        session_token = "private-dess-session-token"
+        runtime_values = build_shadow_learning_runtime_values(
+            orchestration={
+                "source": "dessmonitor",
+                "metadata_only": True,
+                "metadata_field_count": 1,
+                "username": username,
+                "password": password,
+                "session_token": session_token,
+                "metadata_evidence": {
+                    "source": "dessmonitor",
+                    "identity": {
+                        "pn": collector_pn,
+                        "sn": serial_number,
+                        "devcode": 2376,
+                        "devaddr": 1,
+                    },
+                    "telemetry_fields": [
+                        {
+                            "field_id": "pv_voltage",
+                            "title": "PV Voltage",
+                            "value": "230.1",
+                            "unit": "V",
+                            "source_action": "querySPDeviceLastData",
+                        }
+                    ],
+                    "chart_fields": [],
+                    "key_parameters": [],
+                    "control_fields": [],
+                    "raw_packet_sha256": "a" * 64,
+                    "raw_packet_length": 128,
+                    "metadata_field_count": 1,
+                },
+            },
+        )
+
+        serialized_runtime = json.dumps(runtime_values)
+        self.assertNotIn(username, serialized_runtime)
+        self.assertNotIn(password, serialized_runtime)
+        self.assertNotIn(session_token, serialized_runtime)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            support_bundle = build_support_bundle_payload(
+                entry_id="entry-dessmonitor",
+                entry_title="DESSMonitor Device",
+                connected=True,
+                collector={"collector_pn": collector_pn},
+                inverter={"serial_number": serial_number},
+                values=runtime_values,
+                data={"collector_pn": collector_pn},
+                options={},
+                profile_name="",
+                register_schema_name="",
+            )
+            result = export_support_package(
+                config_dir=config_dir,
+                entry_id="entry-dessmonitor",
+                entry_title="DESSMonitor Device",
+                support_bundle=support_bundle,
+                raw_capture=None,
+                fixture=None,
+                anonymized_fixture=None,
+            )
+
+            with zipfile.ZipFile(result.path) as archive:
+                orchestration = json.loads(
+                    archive.read(
+                        "evidence/shadow_learning/orchestration.json"
+                    ).decode("utf-8")
+                )
+                archive_text = "\n".join(
+                    archive.read(name).decode("utf-8", errors="replace")
+                    for name in archive.namelist()
+                )
+
+        self.assertEqual(orchestration["source"], "dessmonitor")
+        self.assertEqual(
+            orchestration["metadata_evidence"]["metadata_field_count"], 1
+        )
+        for private_value in (
+            collector_pn,
+            serial_number,
+            username,
+            password,
+            session_token,
+        ):
+            self.assertNotIn(private_value, archive_text)
+        self.assertIn("*", orchestration["metadata_evidence"]["identity"]["pn"])
+        self.assertIn("*", orchestration["metadata_evidence"]["identity"]["sn"])
+
     def test_exports_runtime_activation_manifest_when_entry_option_is_not_saved(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_dir = Path(temp_dir)
