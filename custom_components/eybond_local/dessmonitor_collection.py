@@ -456,30 +456,6 @@ def fetch_read_only_evidence_with_history(
     failed = 0
     budget_exhausted = False
 
-    history_timeout = remaining_timeout()
-    if history_timeout <= 0:
-        budget_exhausted = True
-    else:
-        attempted += 1
-        try:
-            chart = fetch_sole_chart_history(
-                session=session,
-                identity=bundle.identity,
-                requested_date=requested_date,
-                base_url=base_url,
-                timeout=history_timeout,
-            )
-            resolved_chart = resolve_dessmonitor_history_time_basis(
-                chart,
-                time_basis,
-            )
-        except (DessMonitorCloudError, TypeError, ValueError):
-            failed += 1
-            budget_exhausted = remaining_timeout() <= 0
-        else:
-            series.append(resolved_chart)
-        report("queryDeviceSoleChartEs")
-
     seen_parameters: set[str] = set()
     for field in bundle.key_parameters:
         if attempted >= max_history_series or budget_exhausted:
@@ -517,6 +493,36 @@ def fetch_read_only_evidence_with_history(
             continue
         series.append(resolved_parameter)
         report("queryDeviceKeyParameterOneDay")
+
+    # The current DESSMonitor web API publishes key-parameter history and no
+    # longer serves the legacy sole-chart route.  Keep the documented chart
+    # action only as a bounded fallback for accounts that expose no key list;
+    # it must never consume the first attempt or the whole budget ahead of the
+    # provider-advertised, working history series.
+    if not bundle.key_parameters and not budget_exhausted:
+        history_timeout = remaining_timeout()
+        if history_timeout <= 0:
+            budget_exhausted = True
+        else:
+            attempted += 1
+            try:
+                chart = fetch_sole_chart_history(
+                    session=session,
+                    identity=bundle.identity,
+                    requested_date=requested_date,
+                    base_url=base_url,
+                    timeout=history_timeout,
+                )
+                resolved_chart = resolve_dessmonitor_history_time_basis(
+                    chart,
+                    time_basis,
+                )
+            except (DessMonitorCloudError, TypeError, ValueError):
+                failed += 1
+                budget_exhausted = remaining_timeout() <= 0
+            else:
+                series.append(resolved_chart)
+            report("queryDeviceSoleChartEs")
 
     report("history_complete")
     return bundle, DessMonitorHistoryCollection(

@@ -121,7 +121,7 @@ class DessMonitorResolvedHistoryTests(unittest.TestCase):
         self.assertEqual(parsed.to_record(), record)
 
     def test_identity_mismatch_and_duck_inputs_fail_before_resolution(self) -> None:
-        foreign_identity = _identity(pn="V00102000000000001")
+        foreign_identity = _identity(pn="V0000000000001")
         with self.assertRaisesRegex(ValueError, "identity_mismatch"):
             resolve_dessmonitor_history_time_basis(
                 _series(),

@@ -47,6 +47,13 @@ _OPTIONAL_METADATA_ACTIONS = frozenset(
 _ERROR_TOKEN_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
 )
+_KEY_PARAMETER_TITLES = {
+    "PV_OUTPUT_POWER": "PV Power",
+    "LOAD_ACTIVE_POWER": "Load Active Power",
+    "GRID_ACTIVE_POWER": "Grid Power",
+    "BT_BATTERY_CAPACITY": "Battery Capacity",
+    "BATTERY_ACTIVE_POWER": "Battery Power",
+}
 
 
 class DessMonitorCloudError(RuntimeError):
@@ -685,16 +692,42 @@ def _normalize_key_parameters(
     dat: Any, *, limit: int = DEFAULT_MAX_METADATA_FIELDS
 ) -> tuple[DessMonitorTelemetryField, ...]:
     rows: list[Any] = []
+    live_keys: list[Any] = []
     if isinstance(dat, list):
         rows = dat
     elif isinstance(dat, dict):
+        if type(dat.get("keys")) is list:
+            live_keys = dat["keys"]
         for key in ("field", "pars", "parameters", "dat"):
             candidate = dat.get(key)
             if isinstance(candidate, list):
                 rows = candidate
                 break
     output: list[DessMonitorTelemetryField] = []
-    for row in rows[:limit]:
+    for raw_field_id in live_keys[:limit]:
+        if (
+            type(raw_field_id) is not str
+            or not raw_field_id
+            or raw_field_id != raw_field_id.strip()
+            or len(raw_field_id) > DEFAULT_MAX_TEXT_LENGTH
+        ):
+            continue
+        title = _KEY_PARAMETER_TITLES.get(
+            raw_field_id,
+            raw_field_id.replace("_", " ").title(),
+        )
+        output.append(
+            DessMonitorTelemetryField(
+                field_id=raw_field_id,
+                title=title,
+                value="",
+                unit="",
+                section="key_parameter",
+                source_action="querySPKeyParameters",
+            )
+        )
+    remaining = max(0, limit - len(output))
+    for row in rows[:remaining]:
         if not isinstance(row, dict):
             continue
         field_id = _text(row.get("e0") or row.get("id") or row.get("field"))
@@ -758,16 +791,28 @@ def _with_control_values(
         raise ValueError("dessmonitor_max_control_values_invalid")
     output: list[DessMonitorControlField] = []
     unavailable = False
+    transport_unavailable = False
     for index, item in enumerate(fields):
         current = ""
-        if index < max_values:
+        if index < max_values and not transport_unavailable:
             try:
                 envelope = fetch(
                     _device_action("queryDeviceCtrlValue", identity)
                     + f"&id={quote(item.field_id, safe='')}"
                 )
-            except DessMonitorCloudError:
+            except DessMonitorActionRejectedError:
+                # A provider rejection belongs to this exact field.  Other
+                # controls may still expose a readable current value.
                 unavailable = True
+            except DessMonitorCloudError:
+                # Network/HTTP/envelope failures are session/request-path
+                # failures, not per-field evidence.  Repeating the same full
+                # timeout for every remaining control used to hold the HA
+                # progress bar at 54% for several minutes.  Preserve the
+                # control metadata, mark values unavailable, and stop issuing
+                # requests on this failed path.
+                unavailable = True
+                transport_unavailable = True
             else:
                 if isinstance(envelope.dat, dict):
                     current = _text(envelope.dat.get("val"))

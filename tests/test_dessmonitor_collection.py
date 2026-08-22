@@ -214,7 +214,7 @@ class DessMonitorHistoryCollectionModelTests(unittest.TestCase):
 
 
 class DessMonitorHistoryCollectionFetchTests(unittest.TestCase):
-    def test_single_login_collects_chart_and_bounded_labeled_parameters(self) -> None:
+    def test_single_login_prefers_bounded_provider_key_parameters(self) -> None:
         session = DessMonitorSession(token="token", secret="secret")
         seen_sessions: list[DessMonitorSession] = []
 
@@ -263,7 +263,7 @@ class DessMonitorHistoryCollectionFetchTests(unittest.TestCase):
                 collection_module,
                 "fetch_sole_chart_history",
                 side_effect=chart,
-            ),
+            ) as chart_fetch,
             patch.object(
                 collection_module,
                 "fetch_key_parameter_history",
@@ -284,12 +284,13 @@ class DessMonitorHistoryCollectionFetchTests(unittest.TestCase):
         self.assertEqual(bundle, _bundle())
         self.assertEqual(collection.status, DESSMONITOR_COLLECTION_STATUS_COMPLETE)
         self.assertEqual(collection.requested_date, "2026-08-23")
-        self.assertEqual(collection.attempted_series_count, 3)
-        self.assertEqual(collection.collected_series_count, 3)
+        self.assertEqual(collection.attempted_series_count, 2)
+        self.assertEqual(collection.collected_series_count, 2)
         self.assertEqual(
-            [item.source_series.title for item in collection.series[1:]],
+            [item.source_series.title for item in collection.series],
             ["PV Voltage", "Battery Voltage"],
         )
+        chart_fetch.assert_not_called()
 
     def test_individual_history_failure_preserves_metadata_and_partial_result(self) -> None:
         session = DessMonitorSession(token="token", secret="secret")
@@ -351,9 +352,9 @@ class DessMonitorHistoryCollectionFetchTests(unittest.TestCase):
         self.assertEqual(bundle, _bundle())
         self.assertEqual(calls, 2)
         self.assertEqual(collection.status, DESSMONITOR_COLLECTION_STATUS_PARTIAL)
-        self.assertEqual(collection.attempted_series_count, 3)
+        self.assertEqual(collection.attempted_series_count, 2)
         self.assertEqual(collection.failed_series_count, 1)
-        self.assertEqual(collection.collected_series_count, 2)
+        self.assertEqual(collection.collected_series_count, 1)
 
     def test_time_basis_failure_skips_history_but_preserves_metadata(self) -> None:
         session = DessMonitorSession(token="token", secret="secret")
@@ -438,12 +439,13 @@ class DessMonitorHistoryCollectionFetchTests(unittest.TestCase):
 
     def test_malformed_resolution_is_supplemental_not_a_metadata_failure(self) -> None:
         session = DessMonitorSession(token="token", secret="secret")
-        real_resolver = resolve_dessmonitor_history_time_basis
-
-        def resolve(series, basis):
-            if series.source_action == DESSMONITOR_HISTORY_SOURCE_SOLE_CHART:
-                raise ValueError("malformed_resolved_series")
-            return real_resolver(series, basis)
+        bundle_without_keys = DessMonitorEvidenceBundle(
+            identity=_identity(),
+            telemetry_fields=(),
+            chart_fields=(),
+            key_parameters=(),
+            control_fields=(),
+        )
 
         with (
             patch.object(
@@ -457,7 +459,7 @@ class DessMonitorHistoryCollectionFetchTests(unittest.TestCase):
             patch.object(
                 collection_module,
                 "fetch_read_only_evidence_for_session",
-                return_value=_bundle(),
+                return_value=bundle_without_keys,
             ),
             patch.object(
                 collection_module,
@@ -485,7 +487,7 @@ class DessMonitorHistoryCollectionFetchTests(unittest.TestCase):
             patch.object(
                 collection_module,
                 "resolve_dessmonitor_history_time_basis",
-                side_effect=resolve,
+                side_effect=ValueError("malformed_resolved_series"),
             ),
         ):
             bundle, collection = fetch_read_only_evidence_with_history(
@@ -496,11 +498,11 @@ class DessMonitorHistoryCollectionFetchTests(unittest.TestCase):
                 utc_now=datetime(2026, 8, 23, tzinfo=timezone.utc),
             )
 
-        self.assertEqual(bundle, _bundle())
-        self.assertEqual(collection.status, DESSMONITOR_COLLECTION_STATUS_PARTIAL)
-        self.assertEqual(collection.attempted_series_count, 3)
+        self.assertEqual(bundle, bundle_without_keys)
+        self.assertEqual(collection.status, DESSMONITOR_COLLECTION_STATUS_UNAVAILABLE)
+        self.assertEqual(collection.attempted_series_count, 1)
         self.assertEqual(collection.failed_series_count, 1)
-        self.assertEqual(collection.collected_series_count, 2)
+        self.assertEqual(collection.collected_series_count, 0)
 
     def test_invalid_clock_fails_before_login(self) -> None:
         with patch.object(collection_module, "login_with_password") as login:

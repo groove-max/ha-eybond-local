@@ -343,7 +343,7 @@ class CloudLocalHistoryCorrelationTests(unittest.TestCase):
     def test_foreign_identity_or_unknown_semantic_fails_closed(self) -> None:
         with self.assertRaisesRegex(ValueError, "identity_mismatch"):
             build_cloud_local_history_correlation_report(
-                _cloud_history(pn="V00102000000000001"),
+                _cloud_history(pn="V0000000000001"),
                 _local_series(),
                 alignment_tolerance_seconds=30,
             )
@@ -438,7 +438,7 @@ class CloudLocalHistoryReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "identity_mismatch"):
             build_cloud_local_history_review(
                 _history_collection(
-                    _cloud_history(pn="V00102000000000001"),
+                    _cloud_history(pn="V0000000000001"),
                 ),
                 _local_series(),
             )
@@ -548,7 +548,7 @@ class CloudLocalHistoryRepresentabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "identity_mismatch"):
             build_cloud_local_history_representability_review(
                 review,
-                _overlay_context(pn="V00102000000000001"),
+                _overlay_context(pn="V0000000000001"),
             )
 
         result = build_cloud_local_history_representability_review(

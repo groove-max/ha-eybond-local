@@ -31,7 +31,7 @@ from custom_components.eybond_local.dessmonitor_time_basis import (  # noqa: E40
 
 
 FULL_PN = "E50000200000000001"
-FOREIGN_PN = "E50000200000000002"
+FOREIGN_PN = "E50000200000009777"
 SOURCE = (
     REPO_ROOT
     / "custom_components"
@@ -107,6 +107,39 @@ class DessMonitorTimeBasisModelTests(unittest.TestCase):
 
 
 class DessMonitorTimeBasisParserTests(unittest.TestCase):
+    def test_documented_and_live_web_payload_shapes_share_one_strict_gate(self) -> None:
+        documented = parse_device_time_basis(
+            {"device": [_row()]},
+            expected_identity=_identity(),
+        )
+        live_web = parse_device_time_basis(
+            [_row()],
+            expected_identity=_identity(),
+        )
+
+        self.assertEqual(documented, live_web)
+        self.assertEqual(live_web.offset_seconds, 28800)
+
+        class _DuckList(list):
+            pass
+
+        for malformed in (
+            _DuckList([_row()]),
+            {"device": _DuckList([_row()])},
+            (_row(),),
+            {"device": (_row(),)},
+            {"rows": [_row()]},
+        ):
+            with self.subTest(malformed=malformed):
+                with self.assertRaisesRegex(
+                    DessMonitorCloudError,
+                    "device_timezone_payload_invalid",
+                ):
+                    parse_device_time_basis(
+                        malformed,
+                        expected_identity=_identity(),
+                    )
+
     def test_exact_identity_row_is_required(self) -> None:
         basis = parse_device_time_basis(
             {"device": [_row()]},

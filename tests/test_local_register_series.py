@@ -118,7 +118,7 @@ class LocalRegisterSnapshotSeriesModelTests(unittest.TestCase):
                 sample_interval_seconds=120,
                 snapshots=(
                     _snapshot(0),
-                    _snapshot(1, collector_pn="V00102000000000001"),
+                    _snapshot(1, collector_pn="V0000000000001"),
                     _snapshot(2),
                 ),
             )
@@ -204,7 +204,7 @@ class LocalRegisterSnapshotSeriesCaptureTests(unittest.IsolatedAsyncioTestCase):
     async def test_capture_fails_immediately_on_identity_change(self) -> None:
         snapshots = [
             _snapshot(0),
-            _snapshot(1, collector_pn="V00102000000000001"),
+            _snapshot(1, collector_pn="V0000000000001"),
             _snapshot(2),
         ]
         calls = 0

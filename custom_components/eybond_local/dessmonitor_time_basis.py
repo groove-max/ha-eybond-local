@@ -145,10 +145,19 @@ def parse_device_time_basis(
 
     if type(expected_identity) is not DessMonitorDeviceIdentity:
         raise TypeError("dessmonitor_time_basis_identity_invalid")
-    if type(dat) is not dict or type(dat.get("device")) is not list:
+    # The published API contract wraps rows in ``dat.device``.  The live
+    # ``web.dessmonitor.com`` endpoint used by the official web application
+    # returns the same rows directly as ``dat``.  Both shapes carry identical
+    # provider fields and pass through the exact same identity/offset gate;
+    # no mapping, duck sequence or coercion is accepted here.
+    if type(dat) is dict and type(dat.get("device")) is list:
+        rows = dat["device"]
+    elif type(dat) is list:
+        rows = dat
+    else:
         raise DessMonitorCloudError("device_timezone_payload_invalid")
     candidates: list[int] = []
-    for row in dat["device"]:
+    for row in rows:
         if type(row) is not dict:
             continue
         pn = row.get("pn")

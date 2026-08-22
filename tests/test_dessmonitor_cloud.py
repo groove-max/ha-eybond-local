@@ -22,6 +22,7 @@ from custom_components.eybond_local.dessmonitor_cloud import (  # noqa: E402
     DEFAULT_MAX_METADATA_FIELDS,
     DEFAULT_MAX_RESPONSE_BYTES,
     DessMonitorApiEnvelope,
+    DessMonitorActionRejectedError,
     DessMonitorCloudError,
     DessMonitorControlField,
     DessMonitorDeviceIdentity,
@@ -339,6 +340,165 @@ class DessMonitorSigningTests(unittest.TestCase):
 
 
 class DessMonitorBundleTests(unittest.TestCase):
+    def test_live_key_parameter_shape_is_normalized_without_duck_coercion(self) -> None:
+        identity = _ok(
+            {
+                "device": [
+                    {
+                        "pn": FULL_PN,
+                        "sn": "92632511100118",
+                        "devcode": 2376,
+                        "devaddr": 1,
+                    }
+                ]
+            }
+        )
+
+        class _DuckString(str):
+            pass
+
+        def fetch(*, action, **_kwargs):
+            action_name = parse_qs(action.removeprefix("&"))["action"][0]
+            if action_name == "webQueryDeviceEs":
+                return identity
+            if action_name == "querySPKeyParameters":
+                return _ok(
+                    {
+                        "keys": [
+                            "PV_OUTPUT_POWER",
+                            "GRID_ACTIVE_POWER",
+                            "UNKNOWN_PROVIDER_FIELD",
+                            " padded ",
+                            _DuckString("DUCK_FIELD"),
+                            7,
+                        ]
+                    }
+                )
+            return _ok(None)
+
+        with patch.object(
+            dessmonitor_module,
+            "fetch_signed_action",
+            side_effect=fetch,
+        ):
+            bundle = fetch_read_only_evidence_for_session(
+                session=DessMonitorSession(token="token", secret="secret"),
+                collector_pn=FULL_PN,
+                max_control_values=0,
+            )
+
+        self.assertEqual(
+            [(field.field_id, field.title) for field in bundle.key_parameters],
+            [
+                ("PV_OUTPUT_POWER", "PV Power"),
+                ("GRID_ACTIVE_POWER", "Grid Power"),
+                ("UNKNOWN_PROVIDER_FIELD", "Unknown Provider Field"),
+            ],
+        )
+
+    def test_control_value_transport_failure_stops_repeated_timeouts(self) -> None:
+        identity = _ok(
+            {
+                "device": [
+                    {
+                        "pn": FULL_PN,
+                        "sn": "92632511100118",
+                        "devcode": 2376,
+                        "devaddr": 1,
+                    }
+                ]
+            }
+        )
+        controls = [
+            {"id": f"control_{index}", "name": f"Control {index}"}
+            for index in range(4)
+        ]
+        control_value_calls = 0
+
+        def fetch(*, action, **_kwargs):
+            nonlocal control_value_calls
+            action_name = parse_qs(action.removeprefix("&"))["action"][0]
+            if action_name == "webQueryDeviceEs":
+                return identity
+            if action_name == "queryDeviceCtrlField":
+                return _ok({"field": controls})
+            if action_name == "queryDeviceCtrlValue":
+                control_value_calls += 1
+                raise DessMonitorCloudError("network_error", stage=action_name)
+            return _ok(None)
+
+        with patch.object(
+            dessmonitor_module,
+            "fetch_signed_action",
+            side_effect=fetch,
+        ):
+            bundle = fetch_read_only_evidence_for_session(
+                session=DessMonitorSession(token="token", secret="secret"),
+                collector_pn=FULL_PN,
+            )
+
+        self.assertEqual(control_value_calls, 1)
+        self.assertEqual(len(bundle.control_fields), 4)
+        self.assertTrue(
+            all(not field.current_value for field in bundle.control_fields)
+        )
+        self.assertIn("queryDeviceCtrlValue", bundle.unavailable_actions)
+
+    def test_control_value_rejection_does_not_hide_later_field_values(self) -> None:
+        identity = _ok(
+            {
+                "device": [
+                    {
+                        "pn": FULL_PN,
+                        "sn": "92632511100118",
+                        "devcode": 2376,
+                        "devaddr": 1,
+                    }
+                ]
+            }
+        )
+        controls = [
+            {"id": "unsupported", "name": "Unsupported"},
+            {"id": "available", "name": "Available"},
+        ]
+        control_value_calls = 0
+
+        def fetch(*, action, **_kwargs):
+            nonlocal control_value_calls
+            query = parse_qs(action.removeprefix("&"))
+            action_name = query["action"][0]
+            if action_name == "webQueryDeviceEs":
+                return identity
+            if action_name == "queryDeviceCtrlField":
+                return _ok({"field": controls})
+            if action_name == "queryDeviceCtrlValue":
+                control_value_calls += 1
+                if query["id"][0] == "unsupported":
+                    raise DessMonitorActionRejectedError(
+                        err=7,
+                        action=action_name,
+                        desc="not available",
+                    )
+                return _ok({"val": "42"})
+            return _ok(None)
+
+        with patch.object(
+            dessmonitor_module,
+            "fetch_signed_action",
+            side_effect=fetch,
+        ):
+            bundle = fetch_read_only_evidence_for_session(
+                session=DessMonitorSession(token="token", secret="secret"),
+                collector_pn=FULL_PN,
+            )
+
+        self.assertEqual(control_value_calls, 2)
+        self.assertEqual(
+            [field.current_value for field in bundle.control_fields],
+            ["", "42"],
+        )
+        self.assertIn("queryDeviceCtrlValue", bundle.unavailable_actions)
+
     def test_optional_metadata_failure_preserves_independent_evidence(self) -> None:
         identity = _ok(
             {
