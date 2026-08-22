@@ -82,6 +82,62 @@ _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 
+# Foundational modules whose behavioral tests do not share the production file
+# name. Keep this table narrow: family mappings cover composition roots, while
+# these entries prevent a cheap ``affected`` run from silently missing a typed
+# boundary or neutral wire contract.
+_EXACT_TESTS: dict[str, tuple[str, ...]] = {
+    "custom_components/eybond_local/models.py": (
+        "test_runtime_snapshot.py",
+        "test_typed_telemetry.py",
+    ),
+    "custom_components/eybond_local/telemetry.py": (
+        "test_typed_telemetry.py",
+        "test_driver_read_contract.py",
+        "test_canonical_telemetry.py",
+        "test_support_bundle.py",
+    ),
+    "custom_components/eybond_local/canonical_telemetry.py": (
+        "test_canonical_telemetry.py",
+        "test_derived_energy.py",
+        "test_typed_telemetry.py",
+    ),
+    "custom_components/eybond_local/drivers/read_result.py": (
+        "test_driver_read_contract.py",
+        "test_typed_telemetry.py",
+    ),
+    "custom_components/eybond_local/collector/at_runtime.py": (
+        "test_collector_at.py",
+        "test_collector_metadata.py",
+        "test_collector_metadata_architecture.py",
+        "test_collector_virtual_bridge.py",
+    ),
+    "custom_components/eybond_local/collector/parameter_registry.py": (
+        "test_collector_parameter_registry.py",
+        "test_collector_metadata.py",
+        "test_collector_metadata_architecture.py",
+    ),
+    "custom_components/eybond_local/collector/collector_wire.py": (
+        "test_collector_management.py",
+        "test_smartess_local.py",
+        "test_shadow_learning_proxy.py",
+        "test_shadow_learning_proxy_e2e.py",
+        "test_fake_collector.py",
+        "test_config_flow.py",
+        "test_collector_metadata_architecture.py",
+    ),
+    "custom_components/eybond_local/collector/smartess_local.py": (
+        "test_smartess_local.py",
+        "test_collector_parameter_registry.py",
+    ),
+    "custom_components/eybond_local/dessmonitor_cloud.py": (
+        "test_dessmonitor_cloud.py",
+        "test_dessmonitor_learning.py",
+        "test_cloud_learning_engines.py",
+        "test_cloud_evidence_architecture.py",
+    ),
+}
+
 
 class ValidationError(RuntimeError):
     """A validation stage could not complete successfully."""
@@ -145,6 +201,9 @@ def affected_test_files(paths: tuple[Path, ...]) -> tuple[Path, ...]:
         direct = TEST_ROOT / f"test_{path.stem}.py"
         if direct.is_file():
             selected.add(direct)
+        selected.update(
+            TEST_ROOT / name for name in _EXACT_TESTS.get(value, ())
+        )
         for prefix, test_names in _FAMILY_TESTS:
             if value.startswith(prefix):
                 selected.update(TEST_ROOT / name for name in test_names)
@@ -153,6 +212,19 @@ def affected_test_files(paths: tuple[Path, ...]) -> tuple[Path, ...]:
         selected.add(TEST_ROOT / "test_cross_layer_architecture.py")
         selected.add(TEST_ROOT / "test_integration_module_boundaries.py")
     return tuple(sorted((path for path in selected if path.is_file()), key=str))
+
+
+def print_validation_plan(base: str) -> None:
+    """Print changed files and the affected test selection without running it."""
+
+    paths = changed_paths(base)
+    tests = affected_test_files(paths)
+    print(f"Changed files ({len(paths)}):")
+    for path in paths:
+        print(f"  {path.as_posix()}")
+    print(f"Affected unit files ({len(tests)}):")
+    for path in tests:
+        print(f"  {path.relative_to(REPO_ROOT).as_posix()}")
 
 
 def _validate_untracked_whitespace(paths: tuple[Path, ...]) -> None:
@@ -237,7 +309,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "mode",
-        choices=("fast", "affected", "unit", "ha", "release"),
+        choices=("plan", "fast", "affected", "unit", "ha", "release"),
         help="validation depth",
     )
     parser.add_argument(
@@ -261,7 +333,9 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        if args.mode == "fast":
+        if args.mode == "plan":
+            print_validation_plan(args.base)
+        elif args.mode == "fast":
             run_fast(args.base)
         elif args.mode == "affected":
             run_affected(args.base)

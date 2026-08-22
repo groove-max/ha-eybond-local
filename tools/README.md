@@ -13,6 +13,7 @@ All commands assume the repository root as the current working directory.
 Use the validation depth appropriate for the current change:
 
 ```bash
+python3 tools/validate.py plan
 python3 tools/validate.py fast
 python3 tools/validate.py affected
 python3 tools/validate.py unit

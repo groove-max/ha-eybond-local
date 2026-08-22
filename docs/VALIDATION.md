@@ -14,6 +14,9 @@ suite is not broad enough to replace the unit suite.
 Use the smallest mode that matches the change:
 
 ```bash
+# Inspect the exact changed-file and affected-test selection; run nothing.
+python3 tools/validate.py plan
+
 # Syntax, JSON, and whitespace for files changed from HEAD.
 python3 tools/validate.py fast
 
@@ -45,6 +48,19 @@ python3 tools/validate.py release \
 
 The same paths can be supplied through `EYBOND_HA_2026_2_PYTHON` and
 `EYBOND_HA_2026_7_PYTHON`.
+
+`affected` is intentionally explicit rather than pretending to be a complete
+dependency solver. Composition-root families select their architecture and
+behavior suites; foundational typed models, telemetry, collector wire and
+cloud-client boundaries have pinned mappings whose selection is itself tested.
+Use `plan` to review that mapping before a long run. A green affected run is a
+checkpoint, not a release substitute.
+
+Do not repeat the complete unit suite or both HA lanes after every corrective.
+Use `fast` after mechanical edits, focused files while diagnosing, `affected`
+once the batch stabilizes, the current HA lane for lifecycle changes, and the
+full unit/release gate once at the terminal boundary. This preserves both
+failure boundaries without multiplying the same wall-clock waits.
 
 ## CI cadence
 

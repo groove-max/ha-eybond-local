@@ -9,44 +9,73 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+
 from tools.validate import affected_test_files
 
 
-class AffectedValidationMappingTests(unittest.TestCase):
-    def _names(self, *paths: str) -> set[str]:
+class AffectedValidationSelectionTests(unittest.TestCase):
+    def _selected(self, production_path: str) -> set[str]:
         return {
             path.name
-            for path in affected_test_files(tuple(Path(value) for value in paths))
+            for path in affected_test_files((Path(production_path),))
         }
 
-    def test_runtime_coordinator_selects_behavior_and_boundary_tests(self) -> None:
-        selected = self._names(
-            "custom_components/eybond_local/runtime/coordinator/strategy.py"
-        )
-        self.assertIn("test_coordinator_device_hierarchy.py", selected)
-        self.assertIn("test_coordinator_module_boundaries.py", selected)
-        self.assertIn("test_cross_layer_architecture.py", selected)
+    def test_typed_telemetry_boundary_selects_behavior_and_projection_tests(self) -> None:
+        selected = self._selected("custom_components/eybond_local/telemetry.py")
 
-    def test_future_grouped_paths_use_the_same_family_mapping(self) -> None:
-        selected = self._names(
-            "custom_components/eybond_local/runtime/coordinator/strategy.py",
-            "custom_components/eybond_local/flows/options/proxy.py",
-            "custom_components/eybond_local/collector/transport/listener.py",
-            "custom_components/eybond_local/support/shadow_learning/backend.py",
-        )
-        self.assertIn("test_coordinator_device_hierarchy.py", selected)
-        self.assertIn("test_config_flow.py", selected)
-        self.assertIn("test_shared_transport.py", selected)
-        self.assertIn("test_support_package_boundaries.py", selected)
-
-    def test_changed_unit_test_selects_itself(self) -> None:
-        self.assertEqual(
-            self._names("tests/test_strategy_transition.py"),
-            {"test_strategy_transition.py"},
+        self.assertTrue(
+            {
+                "test_typed_telemetry.py",
+                "test_driver_read_contract.py",
+                "test_canonical_telemetry.py",
+                "test_support_bundle.py",
+            }.issubset(selected)
         )
 
-    def test_docs_only_change_selects_no_tests(self) -> None:
-        self.assertEqual(self._names("docs/VALIDATION.md"), set())
+    def test_neutral_wire_selects_every_direct_behavior_family(self) -> None:
+        selected = self._selected(
+            "custom_components/eybond_local/collector/collector_wire.py"
+        )
+
+        self.assertTrue(
+            {
+                "test_collector_management.py",
+                "test_smartess_local.py",
+                "test_shadow_learning_proxy.py",
+                "test_shadow_learning_proxy_e2e.py",
+                "test_fake_collector.py",
+                "test_config_flow.py",
+                "test_collector_metadata_architecture.py",
+            }.issubset(selected)
+        )
+
+    def test_metadata_reader_selects_structured_outcome_and_boundary_tests(self) -> None:
+        selected = self._selected(
+            "custom_components/eybond_local/collector/at_runtime.py"
+        )
+
+        self.assertTrue(
+            {
+                "test_collector_at.py",
+                "test_collector_metadata.py",
+                "test_collector_metadata_architecture.py",
+                "test_collector_virtual_bridge.py",
+            }.issubset(selected)
+        )
+
+    def test_dessmonitor_selects_client_runner_engine_and_architecture_tests(self) -> None:
+        selected = self._selected(
+            "custom_components/eybond_local/dessmonitor_cloud.py"
+        )
+
+        self.assertTrue(
+            {
+                "test_dessmonitor_cloud.py",
+                "test_dessmonitor_learning.py",
+                "test_cloud_learning_engines.py",
+                "test_cloud_evidence_architecture.py",
+            }.issubset(selected)
+        )
 
 
 if __name__ == "__main__":
