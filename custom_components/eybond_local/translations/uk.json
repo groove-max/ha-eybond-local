@@ -316,6 +316,7 @@
     "error": {
       "invalid_ip": "Некоректна IPv4-адреса.",
       "invalid_port": "Некоректний TCP-порт.",
+      "local_register_collection_unavailable": "Не вдалося почати фонове спостереження. Перевірте підключення пристрою та спробуйте ще раз.",
       "cannot_autodetect": "Автовиявлення не знайшло жодного пристрою. Перевірте мережевий інтерфейс і спробуйте ще раз або використайте ручне налаштування.",
       "ble_unavailable": "Bluetooth-налаштування недоступне на цьому хості Home Assistant. Якщо на хості немає локального BLE-адаптера, додайте поруч із колектором ESPHome Bluetooth Proxy і спробуйте ще раз.",
       "ble_scan_failed": "Не вдалося виконати Bluetooth-сканування на цьому хості Home Assistant. Якщо колектор видно лише зблизька, спробуйте ще раз через ESPHome Bluetooth Proxy поруч із ним.",
@@ -413,6 +414,7 @@
           "collector_endpoint": "Адреса підключення до Home Assistant",
           "runtime": "Опитування та визначення інвертора",
           "cloud_tools": "Інструменти хмарного трафіку",
+          "local_register_observation": "Фонове спостереження локальних даних",
           "collector_wifi": "Змінити Wi-Fi колектора",
           "collector_uart": "Змінити швидкість UART інвертора",
           "inverter_protocol": "Вибрати протокол інвертора",
@@ -428,6 +430,13 @@
         "menu_options": {
           "proxy_capture": "Записати трафік колектора",
           "shadow_learning": "Знайти додаткові функції пристрою"
+        }
+      },
+      "local_register_observation": {
+        "title": "Фонове спостереження локальних даних",
+        "description": "{local_register_observation_summary}",
+        "data": {
+          "local_register_observation_action": "Що ви хочете зробити?"
         }
       },
       "connection": {
@@ -570,7 +579,7 @@
           "learning_source": "Джерело інформації"
         },
         "data_description": {
-          "learning_source": "Виберіть активне локальне навчання або читання метаданих без змін пристрою."
+          "learning_source": "Виберіть активне локальне навчання або аналіз метаданих та історії без змін пристрою."
         }
       },
       "shadow_learning_consent": {
@@ -599,10 +608,12 @@
         "title": "Розширити підтримку цього пристрою",
         "description": "{control_discovery_hint}",
         "data": {
-          "enabled_controls": "Які додаткові елементи керування додати"
+          "enabled_controls": "Які додаткові елементи керування додати",
+          "start_local_register_observation": "Спостерігати за локальними показаннями у фоні"
         },
         "data_description": {
-          "enabled_controls": "Позначте додаткові елементи керування, які хочете бачити в Home Assistant. Ризиковані типово вимкнено."
+          "enabled_controls": "Позначте додаткові елементи керування, які хочете бачити в Home Assistant. Ризиковані типово вимкнено.",
+          "start_local_register_observation": "Зібрати п’ять локальних знімків лише для читання приблизно за 20 хвилин. Поки триває збір, вікно налаштувань можна закрити. Сутності та елементи керування автоматично не додаються."
         }
       },
       "shadow_learning_result": {

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ..models import RuntimeSnapshot
+from ..drivers.local_register_evidence import LocalRegisterSnapshot
 from ..support.shadow_learning import ShadowWriteObservation
 
 
@@ -280,4 +281,10 @@ class RuntimeManager(Protocol):
         ...
 
     async def async_capture_support_evidence(self) -> dict[str, object]:
+        ...
+
+    async def async_capture_local_register_snapshot(
+        self,
+    ) -> LocalRegisterSnapshot | None:
+        """Capture driver-owned live Modbus evidence when available."""
         ...

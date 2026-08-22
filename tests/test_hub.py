@@ -36,6 +36,11 @@ from custom_components.eybond_local.runtime.driver_detection import (
     DriverSweepNoMatch,
 )
 from custom_components.eybond_local.drivers.modbus_write_error import ModbusWriteErrorMixin
+from custom_components.eybond_local.drivers.local_register_evidence import (
+    LocalRegisterBlockObservation,
+    LocalRegisterReadPlan,
+    LocalRegisterSnapshot,
+)
 from custom_components.eybond_local.payload.modbus import ModbusError
 from custom_components.eybond_local.runtime.hub import EybondHub
 from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
@@ -1122,6 +1127,111 @@ class HubSnapshotTests(unittest.TestCase):
         self.assertEqual(evidence["capture_kind"], "collector_only")
         self.assertEqual(evidence["detection_error"], "smartess_local:probe_timeout")
         self.assertEqual(evidence["captures"], [])
+
+    def test_local_register_snapshot_uses_live_identity_and_exact_driver_result(self) -> None:
+        async def _run() -> tuple[LocalRegisterSnapshot, object]:
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            hub._link_manager = _FakeLinkManager()
+            hub._link_manager.collector_info.collector_pn = "E50000200000000001"
+            hub._inverter = DetectedInverter(
+                driver_key="smg",
+                protocol_family="modbus",
+                model_name="SMG",
+                serial_number="serial",
+                probe_target=ProbeTarget(
+                    devcode=2376,
+                    collector_addr=1,
+                    device_addr=1,
+                ),
+            )
+            snapshot = LocalRegisterSnapshot(
+                collector_pn="E50000200000000001",
+                driver_key="smg",
+                started_at="2026-08-22T10:00:00+00:00",
+                completed_at="2026-08-22T10:00:02+00:00",
+                planned_block_count=1,
+                failed_block_count=0,
+                blocks=(
+                    LocalRegisterBlockObservation(
+                        plan=LocalRegisterReadPlan(
+                            devcode=2376,
+                            collector_addr=1,
+                            device_addr=1,
+                            function=3,
+                            start=300,
+                            count=1,
+                        ),
+                        observed_at="2026-08-22T10:00:01+00:00",
+                        values=(2305,),
+                    ),
+                ),
+            )
+            driver = SimpleNamespace(
+                async_capture_local_register_snapshot=AsyncMock(
+                    return_value=snapshot
+                )
+            )
+            hub._driver = driver
+
+            captured = await hub.async_capture_local_register_snapshot()
+            return captured, driver
+
+        captured, driver = asyncio.run(_run())
+
+        self.assertEqual(captured.collector_pn, "E50000200000000001")
+        driver.async_capture_local_register_snapshot.assert_awaited_once()
+        self.assertEqual(
+            driver.async_capture_local_register_snapshot.await_args.kwargs,
+            {"collector_pn": "E50000200000000001"},
+        )
+
+    def test_local_register_snapshot_rejects_duck_driver_result(self) -> None:
+        async def _run() -> None:
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            hub._link_manager = _FakeLinkManager()
+            hub._link_manager.collector_info.collector_pn = "E50000200000000001"
+            hub._inverter = DetectedInverter(
+                driver_key="smg",
+                protocol_family="modbus",
+                model_name="SMG",
+                serial_number="serial",
+                probe_target=ProbeTarget(2376, 1, 1),
+            )
+            hub._driver = SimpleNamespace(
+                async_capture_local_register_snapshot=AsyncMock(
+                    return_value={"authority": "live_local_wire_observation"}
+                )
+            )
+
+            with self.assertRaisesRegex(
+                TypeError,
+                "driver_local_register_snapshot_invalid",
+            ):
+                await hub.async_capture_local_register_snapshot()
+
+        asyncio.run(_run())
 
     def test_generic_support_evidence_keeps_compiled_identity_point_reads(self) -> None:
         async def _run() -> tuple[dict[str, object], list[tuple[int, int]]]:

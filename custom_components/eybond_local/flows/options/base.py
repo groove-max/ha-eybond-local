@@ -344,6 +344,16 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
 
         if self._cloud_tools_menu_available():
             menu_options.insert(menu_options.index("diagnostics"), "cloud_tools")
+        local_observation_visible = getattr(
+            self,
+            "_local_register_observation_visible",
+            None,
+        )
+        if callable(local_observation_visible) and local_observation_visible():
+            menu_options.insert(
+                menu_options.index("diagnostics"),
+                "local_register_observation",
+            )
 
         # RECOVERY takes priority OVER the capability filter: a degraded entry
         # (recovery marker present) offers the repair FIRST -- even a virtual

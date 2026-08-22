@@ -63,6 +63,8 @@ class CloudLearningModelTests(unittest.TestCase):
             control_actions=True,
             raw_packets=False,
             history=False,
+            local_register_snapshot=False,
+            local_register_series=False,
             requires_shadow_route=True,
             requires_control_consent=True,
         )
@@ -109,6 +111,8 @@ class CloudLearningModelTests(unittest.TestCase):
                 control_actions=True,
                 raw_packets=False,
                 history=False,
+                local_register_snapshot=False,
+                local_register_series=False,
                 requires_shadow_route=True,
                 requires_control_consent=True,
             )
@@ -118,6 +122,8 @@ class CloudLearningModelTests(unittest.TestCase):
                 control_actions=False,
                 raw_packets=False,
                 history=False,
+                local_register_snapshot=False,
+                local_register_series=True,
                 requires_shadow_route=True,
                 requires_control_consent=False,
             )
@@ -139,6 +145,10 @@ class CloudLearningModelTests(unittest.TestCase):
         self.assertFalse(dessmonitor.source.capabilities.control_actions)
         self.assertFalse(dessmonitor.source.capabilities.requires_shadow_route)
         self.assertTrue(dessmonitor.source.capabilities.raw_packets)
+        self.assertTrue(dessmonitor.source.capabilities.local_register_snapshot)
+        # History is bounded, read-only provider evidence.  The separate local
+        # correlation/activation boundary remains disabled.
+        self.assertTrue(dessmonitor.source.capabilities.history)
         for malformed in (" smartess", "SMARTESS", b"smartess", None, object()):
             with self.subTest(malformed=malformed):
                 self.assertEqual(compatible_cloud_learning_sources(malformed), ())

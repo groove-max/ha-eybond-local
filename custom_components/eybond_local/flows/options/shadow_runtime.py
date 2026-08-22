@@ -86,7 +86,7 @@ class ShadowLearningRuntimeMixin:
             ),
             "dessmonitor": self._tr(
                 "common.dynamic.cloud_learning_source_dessmonitor",
-                "DESSMonitor API — read-only metadata",
+                "DESSMonitor API — read-only device analysis",
             ),
             "valuecloud": self._tr(
                 "common.dynamic.cloud_learning_source_valuecloud",

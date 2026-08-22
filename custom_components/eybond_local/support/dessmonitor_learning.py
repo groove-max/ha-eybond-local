@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..dessmonitor_cloud import DEFAULT_MAX_CONTROL_VALUES, fetch_read_only_evidence
+from ..dessmonitor_cloud import DEFAULT_MAX_CONTROL_VALUES
+from ..dessmonitor_collection import fetch_read_only_evidence_with_history
 from .cloud_learning_runner import CloudLearningOutcome, CloudLearningRunner
+from .dessmonitor_semantics import build_dessmonitor_semantic_report
 
 
 class DessMonitorReadOnlyLearningRunner(CloudLearningRunner):
@@ -44,8 +46,8 @@ class DessMonitorReadOnlyLearningRunner(CloudLearningRunner):
             else 0
         )
         progress(0.10, "fetching")
-        bundle = await executor(
-            lambda: fetch_read_only_evidence(
+        bundle, history_collection = await executor(
+            lambda: fetch_read_only_evidence_with_history(
                 username=username,
                 password=password,
                 collector_pn=collector_pn,
@@ -55,11 +57,22 @@ class DessMonitorReadOnlyLearningRunner(CloudLearningRunner):
         identity = bundle.identity.to_record()
         on_identity(identity)
         progress(0.82, "building")
+        semantic_report = build_dessmonitor_semantic_report(bundle)
         evidence = bundle.to_record()
+        evidence["semantic_report"] = semantic_report.to_record()
+        evidence["history_collection"] = history_collection.to_record()
         result: dict[str, Any] = {
             "source": self.source_id,
             "metadata_only": True,
             "metadata_field_count": bundle.metadata_field_count,
+            "semantic_candidate_count": semantic_report.read_candidate_count,
+            "semantic_unit_conflict_count": semantic_report.unit_conflict_count,
+            "semantic_unknown_count": semantic_report.unknown_count,
+            "control_metadata_count": semantic_report.control_metadata_count,
+            "history_status": history_collection.status,
+            "history_series_count": history_collection.collected_series_count,
+            "history_point_count": history_collection.point_count,
+            "history_failed_series_count": history_collection.failed_series_count,
             "plan": [],
             "planned_write_count": 0,
             "executed_result_count": 0,

@@ -755,6 +755,29 @@ def fetch_read_only_evidence(
         timeout=timeout,
     )
 
+    return fetch_read_only_evidence_for_session(
+        session=session,
+        collector_pn=collector_pn,
+        base_url=base_url,
+        timeout=timeout,
+        max_control_values=max_control_values,
+    )
+
+
+def fetch_read_only_evidence_for_session(
+    *,
+    session: DessMonitorSession,
+    collector_pn: str,
+    base_url: str = DEFAULT_BASE_URL,
+    timeout: float = DEFAULT_TIMEOUT,
+    max_control_values: int = DEFAULT_MAX_CONTROL_VALUES,
+) -> DessMonitorEvidenceBundle:
+    """Fetch metadata through one exact already-authenticated session."""
+
+    if type(session) is not DessMonitorSession:
+        raise TypeError("dessmonitor_session_invalid")
+    _required_token(collector_pn, "dessmonitor_collector_pn_invalid")
+
     def fetch(action: str) -> DessMonitorApiEnvelope:
         return fetch_signed_action(
             action=action,
@@ -818,6 +841,7 @@ __all__ = [
     "build_login_url",
     "build_signed_action_url",
     "fetch_read_only_evidence",
+    "fetch_read_only_evidence_for_session",
     "fetch_signed_action",
     "login_with_password",
 ]

@@ -32,11 +32,16 @@ from custom_components.eybond_local.metadata.register_schema_loader import (
 )
 from custom_components.eybond_local.support.shadow_learning.overlay_generator import (
     _build_observed_control_enum_evidence,
-    _build_learned_read_overlay,
+    _build_learned_read_overlay as _build_learned_read_overlay_impl,
     _build_read_review_evidence,
     _classify_learned_control,
     _register_enum_table_authority,
     generate_shadow_learning_overlay_drafts,
+)
+from custom_components.eybond_local.support.shadow_learning.read_evidence import (  # noqa: E402
+    LearnedReadActivationContext,
+    ShadowReadRoute,
+    validate_learned_read_activation,
 )
 from custom_components.eybond_local.support.shadow_learning.review_model import (
     RISK_HIGH,
@@ -58,6 +63,29 @@ def _sample_session_manifest() -> dict[str, object]:
         "devaddr": 1,
         "write_response_mode": "exception",
     }
+
+
+_READ_ROUTE = ShadowReadRoute(devcode=2376, collector_addr=1, device_addr=1)
+
+
+def _read_context() -> LearnedReadActivationContext:
+    return LearnedReadActivationContext(
+        collector_pn="E5000020000000",
+        driver_key="modbus_smg",
+        register_schema_name="modbus_smg/models/smg_6200.json",
+        route=_READ_ROUTE,
+    )
+
+
+def _route_candidate(**payload) -> dict[str, object]:
+    return {**_READ_ROUTE.to_record(), "function": 3, **payload}
+
+
+def _register_series(registers: dict[int, list[int]]) -> list[dict[str, object]]:
+    return [
+        _route_candidate(register=register, samples=samples)
+        for register, samples in sorted(registers.items())
+    ]
 
 
 def _sample_correlation_payload() -> dict[str, object]:
@@ -178,6 +206,7 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
                 read_map={
                     "read_blocks": [[200, 22, 79], [641, 5, 79]],
                     "registers": {"205": [2305], "643": [6200]},
+                    "register_series": _register_series({205: [2305], 643: [6200]}),
                     "read_event_count": 158,
                     "value_source": "seed_bank",
                 },
@@ -187,11 +216,19 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
                             "cloud_id": "bt_eybond_read_404",
                             "title": "Aux Learned Voltage",
                             "status": "unique",
-                            "candidates": [{"register": 404, "divisor": 10}],
+                            "candidates": [
+                                _route_candidate(
+                                    register=404,
+                                    divisor=10,
+                                    raw_value=2305,
+                                    signed=False,
+                                )
+                            ],
                         }
                     ],
                     "unique_count": 1,
                 },
+                learned_read_context=_read_context(),
             )
 
         read_map = result.manifest["read_map"]
@@ -206,10 +243,10 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
         review_model = result.manifest["review_model"]
         self.assertEqual(review_model["counts"]["learned_read_all"], 1)
         self.assertEqual(
-            review_model["learned_read_all"][0]["key"], "learned_read_404"
+            review_model["learned_read_all"][0]["key"], "learned_read_fc3_404"
         )
         self.assertEqual(
-            review_model["read_enabled_by_default"], ["learned_read_404"]
+            review_model["read_enabled_by_default"], ["learned_read_fc3_404"]
         )
         self.assertEqual(len(result.manifest["read_review_evidence"]), 1)
         self.assertEqual(
@@ -217,6 +254,58 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
             "new_sensor",
         )
         self.assertEqual(review_model["counts"]["observed_read_all"], 1)
+
+    def test_generated_profile_and_schema_pass_the_exact_activation_gate(self) -> None:
+        context = _read_context()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = generate_shadow_learning_overlay_drafts(
+                config_dir=Path(temp_dir),
+                source_profile_name="smg_modbus.json",
+                source_schema_name=context.register_schema_name,
+                session_manifest=_sample_session_manifest(),
+                correlation=_sample_correlation_payload(),
+                read_map={
+                    "registers": {"404": [2305]},
+                    "register_series": _register_series({404: [2305]}),
+                },
+                read_bindings={
+                    "bindings": [
+                        {
+                            "cloud_id": "bt_eybond_read_404",
+                            "title": "Aux Learned Voltage",
+                            "status": "unique",
+                            "candidates": [
+                                _route_candidate(
+                                    register=404,
+                                    divisor=10,
+                                    raw_value=2305,
+                                    signed=False,
+                                )
+                            ],
+                        }
+                    ],
+                    "unique_count": 1,
+                },
+                learned_read_context=context,
+            )
+            profile_raw = json.loads(result.profile_path.read_text(encoding="utf-8"))
+            schema_raw = json.loads(result.schema_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                validate_learned_read_activation(
+                    manifest=profile_raw["shadow_learning_overlay"],
+                    register_schema_record=schema_raw,
+                    profile_name=result.profile_path.relative_to(
+                        local_profiles_root(Path(temp_dir))
+                    ).as_posix(),
+                    register_schema_name=result.schema_path.relative_to(
+                        local_register_schemas_root(Path(temp_dir))
+                    ).as_posix(),
+                    selected_read_keys=("learned_read_fc3_404",),
+                    current_context=context,
+                ),
+                context,
+            )
 
     def test_same_session_control_evidence_resolves_charger_source_read(self) -> None:
         correlation = {
@@ -239,6 +328,7 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
                         "values": [value],
                         "devcode": 2376,
                         "devaddr": 1,
+                        "unit": 1,
                     },
                 }
                 for value, label in (
@@ -254,7 +344,7 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
         evidence = _build_observed_control_enum_evidence(
             correlation=correlation,
             session_manifest=session,
-            register_enum_tables={331: "charge_source_priority"},
+            register_enum_tables={(3, 331): "charge_source_priority"},
         )
         self.assertEqual(len(evidence), 1)
         self.assertEqual(evidence[0].register, 331)
@@ -267,7 +357,10 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
                 source_schema_name="modbus_smg/models/smg_6200.json",
                 session_manifest=session,
                 correlation=correlation,
-                read_map={"registers": {"331": [3]}},
+                read_map={
+                    "registers": {"331": [3]},
+                    "register_series": _register_series({331: [3]}),
+                },
                 read_bindings={
                     "bindings": [
                         {
@@ -280,6 +373,7 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
                         }
                     ]
                 },
+                learned_read_context=_read_context(),
             )
 
         enum_binding = result.manifest["read_enum_bindings"]["bindings"][0]
@@ -309,12 +403,12 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
 
         authority = _register_enum_table_authority(schema)
 
-        self.assertEqual(authority[201], "mode_names")
-        self.assertEqual(authority[301], "output_source_priority")
-        self.assertEqual(authority[331], "charge_source_priority")
+        self.assertEqual(authority[(3, 201)], "mode_names")
+        self.assertEqual(authority[(3, 301)], "output_source_priority")
+        self.assertEqual(authority[(3, 331)], "charge_source_priority")
         # Identical binary maps deliberately remain unassigned: the loaded
         # schema no longer carries enough information to choose one table name.
-        self.assertNotIn(306, authority)
+        self.assertNotIn((3, 306), authority)
 
     def test_manifest_enum_matching_uses_effective_schema_register_authority(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -326,6 +420,9 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
                 correlation=_sample_correlation_payload(),
                 read_map={
                     "registers": {"201": [3], "301": [2], "331": [3]},
+                    "register_series": _register_series(
+                        {201: [3], 301: [2], 331: [3]}
+                    ),
                     "read_event_count": 3,
                     "value_source": "seed_bank",
                 },
@@ -349,6 +446,7 @@ class ShadowLearningOverlayGeneratorTests(unittest.TestCase):
                         },
                     ]
                 },
+                learned_read_context=_read_context(),
             )
 
         enum_bindings = result.manifest["read_enum_bindings"]["bindings"]
@@ -1149,13 +1247,14 @@ def _fake_schema(*, specs=None, measurements=None, enum_tables=None):
     spec_sets = {}
     for set_name, registers in (specs or {}).items():
         spec_sets[set_name] = tuple(
-            SimpleNamespace(register=reg, key=f"{set_name}_{reg}") for reg in registers
+            SimpleNamespace(register=reg, function=3, key=f"{set_name}_{reg}")
+            for reg in registers
         )
     return SimpleNamespace(
         blocks=(
-            SimpleNamespace(key="status", start=100, count=10),
-            SimpleNamespace(key="live", start=201, count=34),
-            SimpleNamespace(key="config", start=300, count=44),
+            SimpleNamespace(key="status", start=100, count=10, function=3),
+            SimpleNamespace(key="live", start=201, count=34, function=3),
+            SimpleNamespace(key="config", start=300, count=44, function=3),
         ),
         spec_sets=spec_sets,
         measurement_descriptions=tuple(
@@ -1171,8 +1270,20 @@ def _numeric_binding(register, title, *, unit="V", divisor=10, decimals=1, signe
         "unit": unit,
         "status": "unique",
         "decimals": decimals,
-        "candidates": [{"register": register, "divisor": divisor, "signed": signed}],
+        "candidates": [
+            _route_candidate(
+                register=register,
+                divisor=divisor,
+                raw_value=123,
+                signed=signed,
+            )
+        ],
     }
+
+
+def _build_learned_read_overlay(**kwargs):
+    kwargs.setdefault("learned_read_context", _read_context())
+    return _build_learned_read_overlay_impl(**kwargs)
 
 
 class LearnedReadOverlayTests(unittest.TestCase):
@@ -1196,13 +1307,55 @@ class LearnedReadOverlayTests(unittest.TestCase):
         self.assertEqual(result["generated"][0]["spec_set"], "aux_config")
         fragment = result["schema_fragment"]
         spec = fragment["spec_sets"]["aux_config"][0]
-        self.assertEqual(spec, {"key": "learned_read_404", "register": 404, "divisor": 10, "decimals": 1})
+        self.assertEqual(
+            spec,
+            {
+                "key": "learned_read_fc3_404",
+                "function": 3,
+                "register": 404,
+                "divisor": 10,
+                "decimals": 1,
+            },
+        )
         measurement = fragment["measurement_descriptions"][0]
         self.assertEqual(measurement["unit"], "V")
         self.assertEqual(measurement["device_class"], "voltage")
         self.assertEqual(measurement["suggested_display_precision"], 1)
         self.assertEqual(measurement["state_class"], "measurement")
         self.assertEqual(fragment["learned_read_registers"], [404])
+
+    def test_fc4_binding_preserves_function_in_key_schema_and_manifest_row(self) -> None:
+        binding = _numeric_binding(404, "Input Voltage")
+        binding["candidates"][0]["function"] = 4
+
+        result = _build_learned_read_overlay(
+            schema=_fake_schema(specs={"live": []}),
+            read_bindings={"bindings": [binding]},
+            read_enum_bindings={"bindings": []},
+        )
+
+        self.assertEqual(result["generated"][0]["function"], 4)
+        self.assertEqual(result["generated"][0]["key"], "learned_read_fc4_404")
+        self.assertEqual(
+            result["schema_fragment"]["spec_sets"]["aux_config"][0]["function"],
+            4,
+        )
+
+    def test_foreign_route_and_malformed_candidate_never_generate_reads(self) -> None:
+        foreign = _numeric_binding(404, "Foreign Voltage")
+        foreign["candidates"][0]["device_addr"] = 2
+        malformed = _numeric_binding(405, "Duck Voltage")
+        malformed["candidates"][0]["function"] = True
+
+        result = _build_learned_read_overlay(
+            schema=_fake_schema(specs={"live": []}),
+            read_bindings={"bindings": [foreign, malformed]},
+            read_enum_bindings={"bindings": []},
+        )
+
+        self.assertEqual(result["generated"], [])
+        self.assertEqual(result["schema_fragment"], {})
+        self.assertEqual(result["skipped"][0]["reason"], "read_route_unproven")
 
     def test_in_block_register_routes_to_its_polled_spec_set(self) -> None:
         result = _build_learned_read_overlay(
@@ -1250,8 +1403,8 @@ class LearnedReadOverlayTests(unittest.TestCase):
         self.assertEqual(specs[404]["divisor"], 10)
         self.assertNotIn("divisor", specs[405])  # divisor 1 omitted
         measurements = {m["key"]: m for m in result["schema_fragment"]["measurement_descriptions"]}
-        self.assertEqual(measurements["learned_read_405"]["unit"], "%")
-        self.assertNotIn("device_class", measurements["learned_read_405"])  # % has no device class
+        self.assertEqual(measurements["learned_read_fc3_405"]["unit"], "%")
+        self.assertNotIn("device_class", measurements["learned_read_fc3_405"])  # % has no device class
 
     def test_unique_enum_binding_emits_enum_spec_and_text_measurement(self) -> None:
         result = _build_learned_read_overlay(
@@ -1262,14 +1415,28 @@ class LearnedReadOverlayTests(unittest.TestCase):
                     {
                         "title": "Working State",
                         "status": "unique",
-                        "candidates": [{"register": 460, "enum_table": "mode_names"}],
+                        "candidates": [
+                            _route_candidate(
+                                register=460,
+                                raw_value=3,
+                                enum_table="mode_names",
+                            )
+                        ],
                     }
                 ]
             },
         )
 
         spec = result["schema_fragment"]["spec_sets"]["aux_config"][0]
-        self.assertEqual(spec, {"key": "learned_read_460", "register": 460, "enum_table": "mode_names"})
+        self.assertEqual(
+            spec,
+            {
+                "key": "learned_read_fc3_460",
+                "function": 3,
+                "register": 460,
+                "enum_table": "mode_names",
+            },
+        )
         measurement = result["schema_fragment"]["measurement_descriptions"][0]
         self.assertEqual(measurement["name"], "Working State")
         self.assertNotIn("unit", measurement)
@@ -1286,7 +1453,14 @@ class LearnedReadOverlayTests(unittest.TestCase):
                         "unit": "",
                         "status": "unique",
                         "decimals": 1,
-                        "candidates": [{"register": 460, "divisor": 10, "signed": False}],
+                        "candidates": [
+                            _route_candidate(
+                                register=460,
+                                divisor=10,
+                                raw_value=531,
+                                signed=False,
+                            )
+                        ],
                     }
                 ]
             },
@@ -1308,7 +1482,14 @@ class LearnedReadOverlayTests(unittest.TestCase):
                         "unit": "A",
                         "status": "unique",
                         "decimals": 1,
-                        "candidates": [{"register": 460, "divisor": 10, "signed": False}],
+                        "candidates": [
+                            _route_candidate(
+                                register=460,
+                                divisor=10,
+                                raw_value=123,
+                                signed=False,
+                            )
+                        ],
                     }
                 ]
             },
@@ -1328,7 +1509,14 @@ class LearnedReadOverlayTests(unittest.TestCase):
             "unit": "V",
             "status": "unique",
             "decimals": 1,
-            "candidates": [{"register": 215, "divisor": 10, "signed": False}],
+            "candidates": [
+                _route_candidate(
+                    register=215,
+                    divisor=10,
+                    raw_value=531,
+                    signed=False,
+                )
+            ],
         }
         schema = _fake_schema(specs={"live": [215]})  # 215 already decoded
 

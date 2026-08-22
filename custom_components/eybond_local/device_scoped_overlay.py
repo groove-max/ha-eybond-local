@@ -15,12 +15,12 @@ _T = TypeVar("_T")
 def selected_read_sensor_keys_from_activation(
     entry_data: Mapping[str, Any] | None,
     entry_options: Mapping[str, Any] | None,
-) -> frozenset[str] | None:
+) -> frozenset[str]:
     """Return selected learned read sensor keys from activation state.
 
-    ``None`` means a legacy activation with no read selection, so all learned read
-    sensors stay visible for backward compatibility. A frozenset, including an
-    empty one, is an explicit selection.
+    Missing legacy selection is fail-closed to an empty set. Learned reads are
+    route-sensitive and may only be exposed after an explicit, context-checked
+    activation.
     """
 
     activation = device_scoped_overlay_activation(entry_data, entry_options)
@@ -28,12 +28,12 @@ def selected_read_sensor_keys_from_activation(
     if raw_keys is None:
         selected_sensors = activation.get("selected_read_sensors")
         if not isinstance(selected_sensors, (list, tuple)):
-            return None
+            return frozenset()
         raw_keys = [
             sensor.get("key") for sensor in selected_sensors if isinstance(sensor, Mapping)
         ]
     if not isinstance(raw_keys, (list, tuple, set, frozenset)):
-        return None
+        return frozenset()
     return frozenset(str(key).strip() for key in raw_keys if str(key or "").strip())
 
 
@@ -49,8 +49,6 @@ def learned_read_sensor_allowed(
     if not normalized_key.startswith(LEARNED_READ_SENSOR_KEY_PREFIX):
         return True
     selected_keys = selected_read_sensor_keys_from_activation(entry_data, entry_options)
-    if selected_keys is None:
-        return True
     return normalized_key in selected_keys
 
 
@@ -86,4 +84,3 @@ def device_scoped_overlay_activation(
         if isinstance(raw, Mapping):
             return raw
     return {}
-

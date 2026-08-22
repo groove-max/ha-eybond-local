@@ -47,6 +47,24 @@ def _manifest() -> dict:
                 "190": [12592],  # serial word — must be dropped
                 "404": [5],
             },
+            "register_series": [
+                {
+                    "devcode": 6514,
+                    "collector_addr": 1,
+                    "device_addr": 1,
+                    "function": 3,
+                    "register": 215,
+                    "samples": [531],
+                },
+                {
+                    "devcode": 6514,
+                    "collector_addr": 1,
+                    "device_addr": 1,
+                    "function": 4,
+                    "register": 186,
+                    "samples": [14642],
+                },
+            ],
             "value_source": "seed_bank",
         },
         "read_bindings": {
@@ -93,6 +111,19 @@ class ContributionRecordTests(unittest.TestCase):
         self.assertIn("404", registers)
         self.assertNotIn("186", registers)  # serial word
         self.assertNotIn("190", registers)  # serial word
+        self.assertEqual(
+            record["read_map_register_series"],
+            [
+                {
+                    "devcode": 6514,
+                    "collector_addr": 1,
+                    "device_addr": 1,
+                    "function": 3,
+                    "register": 215,
+                    "samples": [531],
+                }
+            ],
+        )
 
     def test_label_evidence_carries_bindings(self) -> None:
         record = build_contribution_record(fingerprint=_fingerprint(), manifest=_manifest())
@@ -136,6 +167,7 @@ class ContributionRecordTests(unittest.TestCase):
         self.assertEqual(record["record_version"], RECORD_VERSION)
         self.assertEqual(record["register_coverage"], [])
         self.assertEqual(record["read_map_registers"], {})
+        self.assertEqual(record["read_map_register_series"], [])
         self.assertFalse(record_contains_identifier(record))
 
 

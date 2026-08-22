@@ -316,6 +316,7 @@
     "error": {
       "invalid_ip": "Invalid IPv4 address.",
       "invalid_port": "Invalid TCP port.",
+      "local_register_collection_unavailable": "The local read-only observation could not be started. Check that the device is connected and try again.",
       "cannot_autodetect": "Auto-detection did not find any devices. Check the network interface and try again, or use manual setup.",
       "ble_unavailable": "Bluetooth provisioning is not available on this Home Assistant host. If the host has no local BLE adapter, add an ESPHome Bluetooth Proxy near the collector and try again.",
       "ble_scan_failed": "Bluetooth scan failed on this Home Assistant host. If the collector is only reachable from nearby, try again with an ESPHome Bluetooth Proxy close to it.",
@@ -413,6 +414,7 @@
           "collector_endpoint": "Home Assistant connection address",
           "runtime": "Polling and inverter detection",
           "cloud_tools": "Cloud traffic tools",
+          "local_register_observation": "Local read-only observation",
           "collector_wifi": "Change collector Wi-Fi",
           "collector_uart": "Change inverter UART speed",
           "inverter_protocol": "Choose inverter protocol",
@@ -428,6 +430,13 @@
         "menu_options": {
           "proxy_capture": "Capture collector traffic",
           "shadow_learning": "Discover additional device controls"
+        }
+      },
+      "local_register_observation": {
+        "title": "Local read-only observation",
+        "description": "{local_register_observation_summary}",
+        "data": {
+          "local_register_observation_action": "What would you like to do?"
         }
       },
       "connection": {
@@ -570,7 +579,7 @@
           "learning_source": "Information source"
         },
         "data_description": {
-          "learning_source": "Choose active local learning or a read-only metadata check."
+          "learning_source": "Choose active local learning or read-only metadata and history analysis."
         }
       },
       "shadow_learning_consent": {
@@ -599,10 +608,12 @@
         "title": "Expand support for this device",
         "description": "{control_discovery_hint}",
         "data": {
-          "enabled_controls": "Extra controls to add"
+          "enabled_controls": "Extra controls to add",
+          "start_local_register_observation": "Observe local readings in the background"
         },
         "data_description": {
-          "enabled_controls": "Tick the extra controls you want in Home Assistant. Risky ones are left off by default."
+          "enabled_controls": "Tick the extra controls you want in Home Assistant. Risky ones are left off by default.",
+          "start_local_register_observation": "Collect five read-only local snapshots over about 20 minutes. The options dialog can be closed while this runs. No entity or control is added automatically."
         }
       },
       "shadow_learning_result": {

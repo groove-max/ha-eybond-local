@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .shadow_learning.read_evidence import read_register_evidence_from_map
+
 
 RECORD_VERSION = 1
 
@@ -59,6 +61,7 @@ def build_contribution_record(
         "fingerprint": _clean_fingerprint(fingerprint),
         "register_coverage": [list(block[:2]) for block in read_map.get("read_blocks", [])],
         "read_map_registers": read_map.get("registers", {}),
+        "read_map_register_series": read_map.get("register_series", []),
         "ascii_command_coverage": read_map.get("ascii_commands", []),
         "read_map_ascii_fields": read_map.get("ascii_fields", {}),
         "label_evidence": _label_evidence(manifest),
@@ -133,7 +136,7 @@ def _cloud_hints(fingerprint: dict[str, Any], manifest: dict[str, Any]) -> dict[
 
 def _scrub_read_map(read_map: Any) -> dict[str, Any]:
     if not isinstance(read_map, dict):
-        return {"read_blocks": [], "registers": {}}
+        return {"read_blocks": [], "registers": {}, "register_series": []}
     registers = {}
     for key, samples in (read_map.get("registers") or {}).items():
         try:
@@ -146,6 +149,11 @@ def _scrub_read_map(read_map: Any) -> dict[str, Any]:
     return {
         "read_blocks": list(read_map.get("read_blocks") or []),
         "registers": registers,
+        "register_series": [
+            item.to_record()
+            for item in read_register_evidence_from_map(read_map)
+            if item.register not in _SERIAL_REGISTER_RANGE
+        ],
         "ascii_commands": _scrub(read_map.get("ascii_commands") or []),
         "ascii_fields": _scrub(read_map.get("ascii_fields") or {}),
     }

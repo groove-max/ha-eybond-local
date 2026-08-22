@@ -220,6 +220,7 @@ def build_learned_read_review_entry(sensor: Mapping[str, Any]) -> dict[str, Any]
 
     key = str(sensor.get("key") or "").strip()
     register = _to_int(sensor.get("register")) or 0
+    function = _to_int(sensor.get("function")) or 0
     title = " ".join(str(sensor.get("title") or "").split()).strip()
     display_title = " ".join(
         str(sensor.get("display_title") or title).split()
@@ -229,6 +230,7 @@ def build_learned_read_review_entry(sensor: Mapping[str, Any]) -> dict[str, Any]
     return {
         "key": key,
         "register": register,
+        "function": function,
         "field_name": title,
         "default_label": display_title or title or f"Discovered sensor {register}",
         "kind": kind,
@@ -270,6 +272,7 @@ def attach_learned_read_review_model(
         if not isinstance(sensor, Mapping):
             continue
         register = _to_int(sensor.get("register")) or 0
+        function = _to_int(sensor.get("function")) or 0
         title = " ".join(str(sensor.get("title") or "").split()).strip()
         display_title = " ".join(
             str(sensor.get("display_title") or title).split()
@@ -278,6 +281,7 @@ def attach_learned_read_review_model(
         read_excluded_by_policy.append(
             {
                 "register": register,
+                "function": function,
                 "field_name": title,
                 "default_label": display_title or title or f"Discovered sensor {register}",
                 "kind": str(sensor.get("kind") or ""),
@@ -412,6 +416,7 @@ def build_activation_selection(
             "key": key,
             "label": label,
             "register": _to_int(entry.get("register")) or 0,
+            "function": _to_int(entry.get("function")) or 0,
             "value_kind": str(entry.get("value_kind") or ""),
             "risk_level": str(entry.get("risk_level") or ""),
         }
@@ -671,6 +676,7 @@ def _discovered_control_evidence(entry: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "key": str(entry.get("key") or "").strip(),
         "register": _to_int(entry.get("register")) or 0,
+        "function": _to_int(entry.get("function")) or 0,
         "field_id": str(entry.get("field_id") or ""),
         "field_name": str(entry.get("field_name") or ""),
         "default_label": _entry_default_label(entry),
@@ -740,6 +746,7 @@ def _read_policy_default_split(
             "key": sensor["key"],
             "label": sensor["default_label"],
             "register": sensor["register"],
+            "function": sensor["function"],
             "kind": sensor["kind"],
             "spec_set": sensor["spec_set"],
         }
@@ -821,6 +828,7 @@ def _coerce_activation_control(
         "key": key,
         "label": str(raw.get("label") or "").strip(),
         "register": _to_int(raw.get("register")) or 0,
+        "function": _to_int(raw.get("function")) or 0,
         "value_kind": str(raw.get("value_kind") or ""),
         "risk_level": str(raw.get("risk_level") or ""),
     }

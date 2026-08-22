@@ -186,6 +186,7 @@ class CoordinatorLifecycleMixin:
                 )
             await self._async_cancel_diagnostic_run()
             await self._support_package_flight.cancel()
+            await self._local_register_collection.async_shutdown()
             self._cancel_proxy_capture_deadline_refresh()
             set_snapshot_observer = getattr(
                 self._runtime,

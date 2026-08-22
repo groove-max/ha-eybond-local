@@ -26,6 +26,10 @@ from typing import Any
 
 from ..metadata.semantic_titles_loader import resolve_semantic_title
 from ..payload.modbus import to_signed_16
+from .shadow_learning.read_evidence import (
+    ShadowReadRegisterEvidence,
+    ShadowReadRoute,
+)
 
 
 _SCALES = (1, 10, 100, 1000)
@@ -63,7 +67,8 @@ class ObservedControlEnumEvidence:
     provider_field_ordinal: int
     register: int
     devcode: int
-    devaddr: int
+    collector_addr: int
+    device_addr: int
     value_labels: tuple[tuple[int, str], ...]
 
     def __post_init__(self) -> None:
@@ -82,7 +87,8 @@ class ObservedControlEnumEvidence:
             self.provider_field_ordinal,
             self.register,
             self.devcode,
-            self.devaddr,
+            self.collector_addr,
+            self.device_addr,
         ):
             if type(value) is not int:
                 raise TypeError("control_enum_evidence_integer_invalid")
@@ -104,15 +110,40 @@ class ObservedControlEnumEvidence:
 
 @dataclass(frozen=True, slots=True)
 class ReadBindingCandidate:
-    """One register that can render the labeled cloud value."""
+    """One full local register address that can render the cloud value."""
 
+    route: ShadowReadRoute
+    function: int
     register: int
     divisor: int
     raw_value: int
     signed: bool
 
+    def __post_init__(self) -> None:
+        if type(self.route) is not ShadowReadRoute:
+            raise TypeError("read_binding_route_invalid")
+        if type(self.function) is not int:
+            raise TypeError("read_binding_function_invalid")
+        if self.function not in {3, 4}:
+            raise ValueError("read_binding_function_invalid")
+        for value, reason, minimum, maximum in (
+            (self.register, "read_binding_register_invalid", 0, 0xFFFF),
+            (self.divisor, "read_binding_divisor_invalid", 1, 1000),
+            (self.raw_value, "read_binding_raw_value_invalid", 0, 0xFFFF),
+        ):
+            if type(value) is not int:
+                raise TypeError(reason)
+            if value < minimum or value > maximum:
+                raise ValueError(reason)
+        if self.divisor not in _SCALES:
+            raise ValueError("read_binding_divisor_invalid")
+        if type(self.signed) is not bool:
+            raise TypeError("read_binding_signed_invalid")
+
     def to_json_dict(self) -> dict[str, Any]:
         return {
+            **self.route.to_record(),
+            "function": self.function,
             "register": self.register,
             "divisor": self.divisor,
             "raw_value": self.raw_value,
@@ -180,16 +211,19 @@ class ReadBindingReport:
 def bind_cloud_labels_to_registers(
     *,
     sensors: list[dict[str, Any]] | tuple[dict[str, Any], ...],
-    registers: dict[Any, Any],
+    register_evidence: tuple[ShadowReadRegisterEvidence, ...],
 ) -> ReadBindingReport:
-    """Correlate labeled cloud sensors against a register→samples map.
+    """Correlate labels against exact route/function/register evidence.
 
     ``sensors``: items shaped like the cloud ``device_detail`` entries
-    (``{"id", "par", "val", "unit"}``). ``registers``: the session read-map
-    ``registers`` dict (``{"205": [2305], ...}`` — keys may be str or int).
+    (``{"id", "par", "val", "unit"}``).  Address-only maps are deliberately
+    not accepted: they cannot distinguish FC3/FC4 or another local route.
     """
 
-    register_values = _normalize_registers(registers)
+    if type(register_evidence) is not tuple or any(
+        type(item) is not ShadowReadRegisterEvidence for item in register_evidence
+    ):
+        raise TypeError("read_binding_evidence_invalid")
     bindings: list[ReadLabelBinding] = []
 
     for sensor in sensors:
@@ -240,7 +274,7 @@ def bind_cloud_labels_to_registers(
             )
             continue
 
-        candidates = _match_candidates(target, register_values)
+        candidates = _match_candidates(target, register_evidence)
         decimals = _decimals_from_text(raw_value)
         if len(candidates) == 1:
             status = BIND_STATUS_UNIQUE
@@ -262,38 +296,20 @@ def bind_cloud_labels_to_registers(
 
     return ReadBindingReport(
         bindings=tuple(bindings),
-        register_count=len(register_values),
+        register_count=len(register_evidence),
         sensor_count=len(bindings),
     )
 
 
-def _normalize_registers(registers: dict[Any, Any]) -> dict[int, tuple[int, ...]]:
-    normalized: dict[int, tuple[int, ...]] = {}
-    if not isinstance(registers, dict):
-        return normalized
-    for key, samples in registers.items():
-        try:
-            register = int(key)
-        except (TypeError, ValueError):
-            continue
-        if isinstance(samples, (list, tuple)):
-            values = tuple(int(value) for value in samples if isinstance(value, int))
-        elif isinstance(samples, int):
-            values = (samples,)
-        else:
-            continue
-        if values:
-            normalized[register] = values
-    return normalized
-
-
 def _match_candidates(
     target: float,
-    register_values: dict[int, tuple[int, ...]],
+    register_evidence: tuple[ShadowReadRegisterEvidence, ...],
 ) -> list[ReadBindingCandidate]:
-    """Exact-match candidates, smallest divisor preferred per register."""
+    """Exact candidates, smallest divisor preferred per full address."""
 
-    best_per_register: dict[int, ReadBindingCandidate] = {}
+    best_per_location: dict[
+        tuple[ShadowReadRoute, int, int], ReadBindingCandidate
+    ] = {}
     for divisor in _SCALES:
         scaled = target * divisor
         rounded = round(scaled)
@@ -301,27 +317,40 @@ def _match_candidates(
         # reconstructions count (a half-LSB tolerance covers float formatting).
         if abs(scaled - rounded) > 1e-6:
             continue
-        for register, samples in register_values.items():
-            if register in best_per_register:
+        for evidence in register_evidence:
+            location = (evidence.route, evidence.function, evidence.register)
+            if location in best_per_location:
                 continue
-            for raw in samples:
+            for raw in evidence.samples:
                 if raw == rounded and rounded >= 0:
-                    best_per_register[register] = ReadBindingCandidate(
-                        register=register,
+                    best_per_location[location] = ReadBindingCandidate(
+                        route=evidence.route,
+                        function=evidence.function,
+                        register=evidence.register,
                         divisor=divisor,
                         raw_value=raw,
                         signed=False,
                     )
                     break
                 if to_signed_16(raw) == rounded and rounded < 0:
-                    best_per_register[register] = ReadBindingCandidate(
-                        register=register,
+                    best_per_location[location] = ReadBindingCandidate(
+                        route=evidence.route,
+                        function=evidence.function,
+                        register=evidence.register,
                         divisor=divisor,
                         raw_value=raw,
                         signed=True,
                     )
                     break
-    return sorted(best_per_register.values(), key=lambda item: (item.divisor, item.register))
+    return sorted(
+        best_per_location.values(),
+        key=lambda item: (
+            item.divisor,
+            item.route,
+            item.function,
+            item.register,
+        ),
+    )
 
 
 def _decimals_from_text(value: str) -> int:
@@ -386,9 +415,9 @@ def _labels_match(cloud_label: str, table_label: str) -> str:
 def match_enum_bindings(
     *,
     read_bindings: dict[str, Any] | None,
-    registers: dict[Any, Any],
+    register_evidence: tuple[ShadowReadRegisterEvidence, ...],
     enum_tables: dict[str, Any] | None,
-    register_enum_tables: dict[int, str] | None = None,
+    register_enum_tables: dict[tuple[int, int], str] | None = None,
     control_enum_evidence: tuple[ObservedControlEnumEvidence, ...] = (),
     session_id: str = "",
 ) -> dict[str, Any]:
@@ -399,7 +428,10 @@ def match_enum_bindings(
     value shared by unrelated registers cannot borrow the wrong enum table.
     """
 
-    register_values = _normalize_registers(registers)
+    if type(register_evidence) is not tuple or any(
+        type(item) is not ShadowReadRegisterEvidence for item in register_evidence
+    ):
+        return {"bindings": [], "unique_count": 0}
     bindings = []
     if isinstance(read_bindings, dict):
         bindings = [
@@ -407,7 +439,7 @@ def match_enum_bindings(
             for item in read_bindings.get("bindings", [])
             if isinstance(item, dict) and item.get("status") == BIND_STATUS_ENUM_LABEL
         ]
-    if not bindings or not register_values or not isinstance(enum_tables, dict):
+    if not bindings or not register_evidence or not isinstance(enum_tables, dict):
         return {"bindings": [], "unique_count": 0}
 
     trusted_control_evidence = (
@@ -434,15 +466,20 @@ def match_enum_bindings(
                     expected = int(raw_key)
                 except (TypeError, ValueError):
                     continue
-                for register, samples in register_values.items():
+                for evidence_item in register_evidence:
                     if register_enum_tables is not None and (
-                        register_enum_tables.get(register) != str(table_name)
+                        register_enum_tables.get(
+                            (evidence_item.function, evidence_item.register)
+                        )
+                        != str(table_name)
                     ):
                         continue
-                    if expected in samples:
+                    if expected in evidence_item.samples:
                         candidates.append(
                             {
-                                "register": register,
+                                **evidence_item.route.to_record(),
+                                "function": evidence_item.function,
+                                "register": evidence_item.register,
                                 "raw_value": expected,
                                 "enum_table": str(table_name),
                                 "table_label": str(table_label),
@@ -462,42 +499,51 @@ def match_enum_bindings(
                     or evidence.provider_field_ordinal != read_ordinal
                 ):
                     continue
-                table_name = (
-                    register_enum_tables.get(evidence.register)
-                    if isinstance(register_enum_tables, dict)
-                    else None
+                matching_registers = tuple(
+                    item
+                    for item in register_evidence
+                    if item.register == evidence.register
+                    and item.route.devcode == evidence.devcode
+                    and item.route.collector_addr == evidence.collector_addr
+                    and item.route.device_addr == evidence.device_addr
                 )
-                table = enum_tables.get(table_name) if table_name else None
-                if (
-                    not isinstance(table, dict)
-                    or evidence.enum_table != table_name
-                ):
-                    continue
-                samples = register_values.get(evidence.register, ())
-                for raw_value, control_label in evidence.value_labels:
-                    if normalize_enum_label(control_label) != cloud_label:
-                        continue
-                    table_key: object
-                    if raw_value in table:
-                        table_key = raw_value
-                    elif str(raw_value) in table:
-                        table_key = str(raw_value)
-                    else:
-                        continue
-                    if raw_value not in samples:
-                        continue
-                    candidates.append(
-                        {
-                            "register": evidence.register,
-                            "raw_value": raw_value,
-                            "enum_table": str(table_name),
-                            "table_label": str(table[table_key]),
-                            "cloud_control_label": control_label,
-                            "cloud_control_field_id": evidence.cloud_field_id,
-                            "match_kind": "control_exact",
-                            "evidence_method": "same_session_control_enum",
-                        }
+                for register_item in matching_registers:
+                    table_name = (
+                        register_enum_tables.get(
+                            (register_item.function, register_item.register)
+                        )
+                        if isinstance(register_enum_tables, dict)
+                        else None
                     )
+                    table = enum_tables.get(table_name) if table_name else None
+                    if not isinstance(table, dict) or evidence.enum_table != table_name:
+                        continue
+                    for raw_value, control_label in evidence.value_labels:
+                        if normalize_enum_label(control_label) != cloud_label:
+                            continue
+                        table_key: object
+                        if raw_value in table:
+                            table_key = raw_value
+                        elif str(raw_value) in table:
+                            table_key = str(raw_value)
+                        else:
+                            continue
+                        if raw_value not in register_item.samples:
+                            continue
+                        candidates.append(
+                            {
+                                **register_item.route.to_record(),
+                                "function": register_item.function,
+                                "register": evidence.register,
+                                "raw_value": raw_value,
+                                "enum_table": str(table_name),
+                                "table_label": str(table[table_key]),
+                                "cloud_control_label": control_label,
+                                "cloud_control_field_id": evidence.cloud_field_id,
+                                "match_kind": "control_exact",
+                                "evidence_method": "same_session_control_enum",
+                            }
+                        )
         # Prefer exact label matches; containment only fills in when nothing
         # exact exists (keeps "Off-Grid Mode" from also matching "Grid Mode").
         exact = [
@@ -506,9 +552,15 @@ def match_enum_bindings(
             if candidate["match_kind"] in {"exact", "control_exact"}
         ]
         effective = exact if exact else candidates
-        deduplicated: dict[tuple[int, int, str], dict[str, Any]] = {}
+        deduplicated: dict[
+            tuple[int, int, int, int, int, int, str], dict[str, Any]
+        ] = {}
         for candidate in effective:
             key = (
+                int(candidate["devcode"]),
+                int(candidate["collector_addr"]),
+                int(candidate["device_addr"]),
+                int(candidate["function"]),
                 int(candidate["register"]),
                 int(candidate["raw_value"]),
                 str(candidate["enum_table"]),
@@ -517,10 +569,19 @@ def match_enum_bindings(
             if existing is None or candidate["match_kind"] == "control_exact":
                 deduplicated[key] = candidate
         effective = list(deduplicated.values())
-        distinct_registers = sorted({candidate["register"] for candidate in effective})
-        if len(distinct_registers) == 1:
+        distinct_locations = {
+            (
+                candidate["devcode"],
+                candidate["collector_addr"],
+                candidate["device_addr"],
+                candidate["function"],
+                candidate["register"],
+            )
+            for candidate in effective
+        }
+        if len(distinct_locations) == 1:
             status = ENUM_STATUS_UNIQUE
-        elif distinct_registers:
+        elif distinct_locations:
             status = ENUM_STATUS_AMBIGUOUS
         else:
             status = ENUM_STATUS_NO_TABLE_MATCH

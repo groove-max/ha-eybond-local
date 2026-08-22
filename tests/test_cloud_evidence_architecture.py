@@ -59,12 +59,51 @@ _CONST = _CC / "const.py"
 _CONFIG_FLOW = _CC / "config_flow.py"
 _CONFIG_LIFECYCLE = tuple(sorted((_CC / "flows" / "config").glob("*.py")))
 _OPTIONS_SHADOW_RUN = _CC / "flows" / "options" / "shadow_run.py"
+_OPTIONS_SHADOW_METADATA_REVIEW = (
+    _CC / "flows" / "options" / "shadow_metadata_review.py"
+)
+_OPTIONS_SHADOW_INACTIVE_DRAFT = (
+    _CC / "flows" / "options" / "shadow_inactive_draft.py"
+)
 _OPTIONS_SHADOW_RUNTIME = _CC / "flows" / "options" / "shadow_runtime.py"
 _OPTIONS_LIFECYCLE = tuple(sorted((_CC / "flows" / "options").glob("*.py")))
 _CLOUD_LEARNING_RUNNER = _CC / "support" / "cloud_learning_runner.py"
 _ACTIVE_CLOUD_LEARNING = _CC / "support" / "cloud_control_discovery.py"
+_ACTIVE_READ_BINDER = _CC / "support" / "read_learning_binder.py"
+_SHADOW_READ_EVIDENCE = (
+    _CC / "support" / "shadow_learning" / "read_evidence.py"
+)
+_SHADOW_BACKEND = _CC / "support" / "shadow_learning" / "backend.py"
+_SHADOW_OVERLAY_GENERATOR = (
+    _CC / "support" / "shadow_learning" / "overlay_generator.py"
+)
 _DESSMONITOR_LEARNING = _CC / "support" / "dessmonitor_learning.py"
 _DESSMONITOR_CLIENT = _CC / "dessmonitor_cloud.py"
+_DESSMONITOR_COLLECTION = _CC / "dessmonitor_collection.py"
+_DESSMONITOR_HISTORY = _CC / "dessmonitor_history.py"
+_DESSMONITOR_TIME_BASIS = _CC / "dessmonitor_time_basis.py"
+_DESSMONITOR_HISTORY_RESOLUTION = _CC / "dessmonitor_history_resolution.py"
+_DESSMONITOR_SEMANTICS = _CC / "support" / "dessmonitor_semantics.py"
+_CLOUD_SEMANTIC_EVIDENCE = _CC / "support" / "cloud_semantic_evidence.py"
+_CLOUD_LOCAL_COVERAGE = _CC / "support" / "cloud_local_coverage.py"
+_CLOUD_LOCAL_HISTORY_CORRELATION = (
+    _CC / "support" / "cloud_local_history_correlation.py"
+)
+_CLOUD_LOCAL_HISTORY_REPRESENTABILITY = (
+    _CC / "support" / "cloud_local_history_representability.py"
+)
+_CLOUD_LOCAL_HISTORY_DRAFT = (
+    _CC / "support" / "cloud_local_history_draft.py"
+)
+_CLOUD_LOCAL_HISTORY_DRAFT_WRITER = (
+    _CC / "support" / "cloud_local_history_draft_writer.py"
+)
+_LOCAL_REGISTER_EVIDENCE = _CC / "drivers" / "local_register_evidence.py"
+_LOCAL_REGISTER_SERIES = _CC / "drivers" / "local_register_series.py"
+_LOCAL_REGISTER_COLLECTION = _CC / "support" / "local_register_collection.py"
+_LOCAL_REGISTER_OBSERVATION_FLOW = (
+    _CC / "flows" / "options" / "local_register_observation.py"
+)
 
 
 def _read(path: Path) -> str:
@@ -246,7 +285,15 @@ class CloudLearningBoundaryGuardTests(unittest.TestCase):
 
     def test_dessmonitor_source_has_no_endpoint_or_control_writer(self) -> None:
         identifiers = _code_identifiers(
-            _read(_DESSMONITOR_LEARNING) + "\n" + _read(_DESSMONITOR_CLIENT)
+            "\n".join(
+                _read(path)
+                for path in (
+                    _DESSMONITOR_LEARNING,
+                    _DESSMONITOR_CLIENT,
+                    _DESSMONITOR_SEMANTICS,
+                    _CLOUD_SEMANTIC_EVIDENCE,
+                )
+            )
         )
         for forbidden in (
             "async_start_shadow_learning",
@@ -258,6 +305,403 @@ class CloudLearningBoundaryGuardTests(unittest.TestCase):
             "set_collector",
         ):
             self.assertNotIn(forbidden, identifiers)
+
+    def test_dessmonitor_semantics_cannot_mint_local_bindings_or_overlays(self) -> None:
+        identifiers = _code_identifiers(
+            _read(_DESSMONITOR_LEARNING)
+            + "\n"
+            + _read(_DESSMONITOR_SEMANTICS)
+            + "\n"
+            + _read(_CLOUD_SEMANTIC_EVIDENCE)
+        )
+        for forbidden in (
+            "bind_cloud_labels_to_registers",
+            "generate_shadow_learning_overlay_drafts",
+            "ReadLabelBinding",
+            "ReadBindingCandidate",
+            "async_activate_device_scoped_overlay",
+            "driver_key",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+        runner = _read(_DESSMONITOR_LEARNING)
+        self.assertIn("read_bindings=None", runner)
+        self.assertIn("local_mapping_proven", _read(_CLOUD_SEMANTIC_EVIDENCE))
+
+    def test_local_coverage_is_presence_only_not_a_binding_authority(self) -> None:
+        identifiers = _code_identifiers(_read(_CLOUD_LOCAL_COVERAGE))
+        for forbidden in (
+            "bind_cloud_labels_to_registers",
+            "generate_shadow_learning_overlay_drafts",
+            "ReadLabelBinding",
+            "ReadBindingCandidate",
+            "async_activate_device_scoped_overlay",
+            "register",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+        source = _read(_CLOUD_LOCAL_COVERAGE)
+        self.assertIn("runtime_semantic_presence_only", source)
+        self.assertIn('"local_mapping_proven": False', source)
+
+    def test_local_register_evidence_is_driver_owned_not_support_dict_derived(self) -> None:
+        source = _read(_LOCAL_REGISTER_EVIDENCE)
+        identifiers = _code_identifiers(source)
+        for forbidden in (
+            "config_flow",
+            "runtime",
+            "support",
+            "dessmonitor",
+            "cloud",
+            "bind_cloud_labels_to_registers",
+            "generate_shadow_learning_overlay_drafts",
+            "fixture_ranges",
+            "captured_ranges",
+            "raw_capture",
+            "async_capture_support_evidence",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+        self.assertIn("LocalRegisterReadPlan", identifiers)
+        self.assertIn("observed_at", identifiers)
+        self.assertIn('"cloud_mapping_proven": False', source)
+
+    def test_local_register_series_is_repeated_driver_owned_evidence(self) -> None:
+        source = _read(_LOCAL_REGISTER_SERIES)
+        identifiers = _code_identifiers(source)
+        self.assertIn("LocalRegisterSnapshot", identifiers)
+        self.assertIn("repeated_live_local_wire_observation", source)
+        self.assertIn("aware_utc_snapshot_timestamps", source)
+        self.assertIn('"cloud_mapping_proven": False', source)
+        for forbidden in (
+            "dessmonitor",
+            "cloud",
+            "runtime",
+            "config_flow",
+            "read_learning_binder",
+            "generate_shadow_learning_overlay_drafts",
+            "async_activate_device_scoped_overlay",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+
+    def test_background_local_collection_is_coordinator_owned_and_read_only(
+        self,
+    ) -> None:
+        manager = _read(_LOCAL_REGISTER_COLLECTION)
+        identifiers = _code_identifiers(manager)
+        self.assertIn("LocalRegisterSnapshotSeries", identifiers)
+        self.assertIn("coordinator_lifetime_read_only_collection", manager)
+        self.assertIn('"cloud_mapping_proven": False', manager)
+        self.assertIn('"activation_allowed": False', manager)
+        for forbidden in (
+            "dessmonitor",
+            "cloud_local_history_correlation",
+            "async_activate_device_scoped_overlay",
+            "read_bindings",
+            "write_capability",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+
+        coordinator = _coordinator_source()
+        self.assertIn("LocalRegisterCollectionManager", coordinator)
+        self.assertIn(
+            "await self._local_register_collection.async_shutdown()",
+            _read(_CC / "runtime" / "coordinator" / "lifecycle.py"),
+        )
+        flow = _read(_LOCAL_REGISTER_OBSERVATION_FLOW)
+        self.assertIn("start_local_register_collection", flow)
+        self.assertIn("async_cancel_local_register_collection", flow)
+        for forbidden in (
+            "cloud_local_history_correlation",
+            "async_activate_device_scoped_overlay",
+            "generate_shadow_learning_overlay_drafts",
+        ):
+            self.assertNotIn(forbidden, flow)
+
+    def test_dessmonitor_local_snapshot_is_capability_gated_and_never_bound(self) -> None:
+        flow = _read(_OPTIONS_SHADOW_RUN)
+        self.assertIn(
+            "learning_engine.source.capabilities.local_register_snapshot",
+            flow,
+        )
+        self.assertIn("async_capture_local_register_snapshot", flow)
+        self.assertIn("pn_is_same_identity", flow)
+        self.assertNotIn("read_bindings=local_register_snapshot", flow)
+
+        runner = _read(_DESSMONITOR_LEARNING)
+        self.assertIn("read_bindings=None", runner)
+        self.assertNotIn("LocalRegisterSnapshot", runner)
+
+    def test_dessmonitor_history_is_bounded_read_only_and_not_a_mapping(self) -> None:
+        history = _read(_DESSMONITOR_HISTORY)
+        identifiers = _code_identifiers(history)
+        for forbidden in (
+            "astimezone",
+            "fromtimestamp",
+            "bind_cloud_labels_to_registers",
+            "generate_shadow_learning_overlay_drafts",
+            "ReadLabelBinding",
+            "async_activate_device_scoped_overlay",
+            "driver_key",
+            "register_address",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+        self.assertIn("device_local_timezone_unresolved", history)
+        self.assertIn('"local_mapping_proven": False', history)
+
+        engines = _read(_CC / "support" / "cloud_learning_engines.py")
+        dessmonitor_class = engines.split(
+            "class DessMonitorCloudLearningEngine",
+            1,
+        )[1].split("class UnavailableCloudLearningEngine", 1)[0]
+        self.assertIn("history=True", dessmonitor_class)
+
+        collection = _read(_DESSMONITOR_COLLECTION)
+        collection_identifiers = _code_identifiers(collection)
+        for required in (
+            "fetch_read_only_evidence_for_session",
+            "fetch_device_time_basis",
+            "fetch_key_parameter_history",
+            "fetch_sole_chart_history",
+            "resolve_dessmonitor_history_time_basis",
+        ):
+            self.assertIn(required, collection_identifiers)
+        self.assertIn('"read_only": True', collection)
+        self.assertIn('"local_mapping_proven": False', collection)
+        self.assertIn('"activation_allowed": False', collection)
+        for forbidden in (
+            "runtime",
+            "config_flow",
+            "generate_shadow_learning_overlay_drafts",
+            "async_activate_device_scoped_overlay",
+            "read_bindings",
+            "write_capability",
+            "cloud_local_history_correlation",
+            "LocalRegisterSnapshotSeries",
+        ):
+            self.assertNotIn(forbidden, collection_identifiers)
+
+        runner = _read(_DESSMONITOR_LEARNING)
+        self.assertIn("fetch_read_only_evidence_with_history", runner)
+        self.assertNotIn("cloud_local_history_correlation", runner)
+        self.assertNotIn("LocalRegisterSnapshotSeries", runner)
+
+    def test_metadata_review_helper_has_no_lifecycle_or_activation_authority(
+        self,
+    ) -> None:
+        source = _read(_OPTIONS_SHADOW_METADATA_REVIEW)
+        identifiers = _code_identifiers(source)
+        self.assertIn("DessMonitorHistoryCollection", identifiers)
+        self.assertIn("CloudSemanticEvidenceReport", identifiers)
+        self.assertIn("CloudLocalCoverageReport", identifiers)
+        self.assertIn("CloudLocalHistoryReview", identifiers)
+        self.assertIn("build_cloud_local_history_review", identifiers)
+        for forbidden in (
+            "config_flow",
+            "runtime",
+            "coordinator",
+            "async_show_form",
+            "async_activate_device_scoped_overlay",
+            "generate_shadow_learning_overlay_drafts",
+            "read_bindings",
+            "write_capability",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+
+    def test_dessmonitor_time_basis_is_exact_identity_provider_evidence(self) -> None:
+        source = _read(_DESSMONITOR_TIME_BASIS)
+        identifiers = _code_identifiers(source)
+        self.assertIn("queryDeviceInfo", source)
+        self.assertIn("pn_is_same_identity", identifiers)
+        self.assertIn("provider_exact_device_timezone_offset", source)
+        for forbidden in (
+            "datetime.now",
+            "time.time",
+            "bind_cloud_labels_to_registers",
+            "generate_shadow_learning_overlay_drafts",
+            "async_activate_device_scoped_overlay",
+            "driver_key",
+            "register_address",
+        ):
+            self.assertNotIn(forbidden, source)
+
+    def test_dessmonitor_history_resolution_is_neutral_and_unproven(self) -> None:
+        source = _read(_DESSMONITOR_HISTORY_RESOLUTION)
+        identifiers = _code_identifiers(source)
+        self.assertIn("DessMonitorHistorySeries", identifiers)
+        self.assertIn("DessMonitorDeviceTimeBasis", identifiers)
+        self.assertIn("provider_identity_bound_time_resolution", source)
+        self.assertIn('"local_mapping_proven": False', source)
+        for forbidden in (
+            "bind_cloud_labels_to_registers",
+            "generate_shadow_learning_overlay_drafts",
+            "async_activate_device_scoped_overlay",
+            "driver_key",
+            "register_address",
+            "read_bindings",
+            "write_capability",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+
+    def test_history_correlator_is_review_only_and_flow_composed(self) -> None:
+        source = _read(_CLOUD_LOCAL_HISTORY_CORRELATION)
+        identifiers = _code_identifiers(source)
+        self.assertIn("DessMonitorResolvedHistorySeries", identifiers)
+        self.assertIn("LocalRegisterSnapshotSeries", identifiers)
+        self.assertIn("review_candidate_only", source)
+        self.assertIn("candidate_not_proven", source)
+        self.assertIn("review_composition_only", source)
+        self.assertIn('"local_mapping_proven": False', source)
+        self.assertIn('"activation_allowed": False', source)
+        for forbidden in (
+            "runtime",
+            "config_flow",
+            "generate_shadow_learning_overlay_drafts",
+            "async_activate_device_scoped_overlay",
+            "read_bindings",
+            "write_capability",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+        self.assertNotIn(
+            "cloud_local_history_correlation",
+            _read(_OPTIONS_SHADOW_RUN),
+        )
+        self.assertIn(
+            "metadata_with_cloud_local_history_review",
+            _read(_OPTIONS_SHADOW_RUN),
+        )
+        self.assertNotIn(
+            "cloud_local_history_correlation",
+            _coordinator_source(),
+        )
+        self.assertNotIn(
+            "cloud_local_history_correlation",
+            _read(_DESSMONITOR_LEARNING),
+        )
+
+    def test_full_route_representability_is_review_only_and_publicly_projected(
+        self,
+    ) -> None:
+        source = _read(_CLOUD_LOCAL_HISTORY_REPRESENTABILITY)
+        identifiers = _code_identifiers(source)
+        for required in (
+            "ProbeTarget",
+            "RegisterSchemaMetadata",
+            "CloudLocalHistoryReview",
+            "current_context_review_only",
+            '"draft_generation_allowed": False',
+            '"activation_allowed": False',
+        ):
+            self.assertIn(required, source)
+        for forbidden in (
+            "runtime",
+            "config_flow",
+            "generate_shadow_learning_overlay_drafts",
+            "async_activate_device_scoped_overlay",
+            "write_text",
+            "async_update_entry",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+
+        coordinator = _read(_COORDINATOR_SUPPORT)
+        self.assertIn("local_register_overlay_context", coordinator)
+        self.assertIn("build_local_register_overlay_context", coordinator)
+        self.assertNotIn(
+            "build_cloud_local_history_representability_review",
+            coordinator,
+        )
+        flow = _read(_OPTIONS_SHADOW_RUN)
+        self.assertIn(
+            "metadata_with_cloud_local_history_representability",
+            flow,
+        )
+        self.assertNotIn("support.cloud_local_history_representability", flow)
+        helper = _read(_OPTIONS_SHADOW_METADATA_REVIEW)
+        self.assertIn(
+            "build_cloud_local_history_representability_review",
+            helper,
+        )
+        self.assertNotIn("generate_shadow_learning_overlay_drafts", helper)
+
+    def test_history_draft_plan_is_inactive_recomputed_and_writer_free(self) -> None:
+        source = _read(_CLOUD_LOCAL_HISTORY_DRAFT)
+        identifiers = _code_identifiers(source)
+        for required in (
+            "CloudLocalHistoryRepresentabilityReview",
+            "CloudLocalHistoryCandidate",
+            "inactive_review_draft_plan_only",
+            '"local_mapping_proven": False',
+            '"draft_generation_allowed": self.draft_generation_allowed',
+            '"activation_allowed": False',
+        ):
+            self.assertIn(required, source)
+        for forbidden in (
+            "runtime",
+            "config_flow",
+            "generate_shadow_learning_overlay_drafts",
+            "async_activate_device_scoped_overlay",
+            "write_text",
+            "async_update_entry",
+            "local_metadata",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+
+        flow = _read(_OPTIONS_SHADOW_RUN)
+        self.assertIn("metadata_with_cloud_local_history_draft_plan", flow)
+        helper = _read(_OPTIONS_SHADOW_METADATA_REVIEW)
+        self.assertIn("build_cloud_local_read_draft_plan", helper)
+        self.assertNotIn("generate_shadow_learning_overlay_drafts", helper)
+
+    def test_history_draft_writer_creates_only_an_inactive_schema_artifact(
+        self,
+    ) -> None:
+        source = _read(_CLOUD_LOCAL_HISTORY_DRAFT_WRITER)
+        identifiers = _code_identifiers(source)
+        for required in (
+            "CloudLocalReadDraftPlan",
+            "build_local_register_overlay_context",
+            "draft_activates_automatically",
+            "inactive_review_artifact_only",
+            '"local_mapping_proven": False',
+            '"activation_allowed": False',
+            "temporary.replace",
+        ):
+            self.assertIn(required, source)
+        for forbidden in (
+            "runtime",
+            "config_flow",
+            "async_update_entry",
+            "async_reload",
+            "async_activate_device_scoped_overlay",
+            "generate_shadow_learning_overlay_drafts",
+            "create_local_profile_draft",
+            "local_profile_path",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+
+        adapter = _read(_OPTIONS_SHADOW_INACTIVE_DRAFT)
+        tree = ast.parse(adapter)
+        function = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "async_generate_inactive_read_draft"
+        )
+        function_source = ast.unparse(function)
+        self.assertIn(
+            "generate_inactive_cloud_local_read_schema_draft",
+            function_source,
+        )
+        self.assertIn("async_add_executor_job", function_source)
+        self.assertIn("LocalRegisterOverlayContext", function_source)
+        for forbidden in (
+            "async_activate_device_scoped_overlay",
+            "async_reload",
+            "async_update_entry",
+            "generate_shadow_learning_overlay_drafts",
+        ):
+            self.assertNotIn(forbidden, function_source)
+
+        review = _read(_CC / "flows" / "options" / "shadow_review.py")
+        self.assertIn("async_generate_inactive_read_draft", review)
+        self.assertNotIn("generate_inactive_cloud_local_read_schema_draft", review)
 
     def test_active_and_metadata_implementations_share_only_neutral_contract(self) -> None:
         active = _read(_ACTIVE_CLOUD_LEARNING)
@@ -389,6 +833,54 @@ class ProviderIsolationGuardTests(unittest.TestCase):
         source = _read(_PROVIDERS)
         for token in ("runtime.link", "collector.transport", "session_handle", "session_registry"):
             self.assertNotIn(token, source, msg=f"provider module must not import {token}")
+
+
+class ActiveLearnedReadRouteGuards(unittest.TestCase):
+    def test_active_read_binding_never_consumes_address_only_register_projection(self) -> None:
+        runner = _read(_ACTIVE_CLOUD_LEARNING)
+        self.assertIn("read_register_evidence_from_map(read_map)", runner)
+        self.assertIn("register_evidence=register_evidence", runner)
+        self.assertNotIn('read_map.get("registers")', runner)
+
+        binder = _read(_ACTIVE_READ_BINDER)
+        self.assertIn("ShadowReadRegisterEvidence", binder)
+        self.assertIn("ShadowReadRoute", binder)
+        self.assertNotIn("def _normalize_registers", binder)
+
+    def test_backend_records_every_local_read_address_axis(self) -> None:
+        source = _read(_SHADOW_BACKEND)
+        for token in (
+            "devcode=header.devcode",
+            "collector_addr=header.devaddr",
+            "device_addr=read_request.unit",
+            "function=read_request.function_code",
+            '"register_series"',
+        ):
+            self.assertIn(token, source)
+
+    def test_overlay_and_activation_require_typed_read_context(self) -> None:
+        generator = _read(_SHADOW_OVERLAY_GENERATOR)
+        self.assertIn("LearnedReadActivationContext", generator)
+        self.assertIn('"function": function', generator)
+        self.assertIn('"learned_read_context"', generator)
+        self.assertIn("binding[\"route\"] != learned_read_context.route", generator)
+
+        coordinator = _read(_COORDINATOR_SUPPORT)
+        self.assertIn("validate_learned_read_activation", coordinator)
+        self.assertIn("load_register_schema_raw", coordinator)
+        self.assertIn('activation["learned_read_context"]', coordinator)
+
+    def test_read_evidence_model_has_no_overlay_or_activation_side_effects(self) -> None:
+        source = _read(_SHADOW_READ_EVIDENCE)
+        for forbidden in (
+            "async_update_entry",
+            "async_reload",
+            "write_text",
+            "generate_shadow_learning_overlay_drafts",
+            "load_driver_profile",
+            "load_register_schema",
+        ):
+            self.assertNotIn(forbidden, source)
 
 
 class CredentialAndPayloadSafetyGuardTests(unittest.TestCase):

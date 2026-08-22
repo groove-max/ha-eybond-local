@@ -21,6 +21,11 @@ from ..models import (
 from ..payload.modbus import ModbusSession, to_signed_16
 from ..payload.register_decode import decode_block as shared_decode_block
 from .base import InverterDriver
+from .local_register_evidence import (
+    LocalRegisterReadPlan,
+    LocalRegisterSnapshot,
+    async_capture_modbus_snapshot,
+)
 from .modbus_write_error import ModbusWriteErrorMixin
 from .command_support import (
     command_skipped_as_unsupported,
@@ -467,6 +472,62 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
                 for item in captured_ranges
             ],
         }
+
+    async def async_capture_local_register_snapshot(
+        self,
+        transport,
+        inverter: DetectedInverter,
+        *,
+        collector_pn: str,
+    ) -> LocalRegisterSnapshot:
+        """Capture raw 0925 wire words without support-payload normalization."""
+
+        schema = load_register_schema(
+            inverter.register_schema_name or self.register_schema_name
+        )
+        plans: list[LocalRegisterReadPlan] = []
+        for block in schema.blocks:
+            if block.count <= 0:
+                continue
+            if block.key in _SMARTESS_0925_CONFIG_BLOCKS:
+                block_end = block.start + block.count
+                for capability in self.write_capabilities:
+                    if capability.value_kind == "action":
+                        continue
+                    register = int(capability.register)
+                    if not block.start <= register < block_end:
+                        continue
+                    target = _target_for_register(
+                        inverter.probe_target,
+                        register,
+                    )
+                    plans.append(
+                        LocalRegisterReadPlan.for_target(
+                            target,
+                            function=3,
+                            start=register,
+                            count=1,
+                        )
+                    )
+                continue
+            target = _target_for_block(inverter.probe_target, block.key)
+            plans.append(
+                LocalRegisterReadPlan.for_target(
+                    target,
+                    function=3,
+                    start=block.start,
+                    count=block.count,
+                )
+            )
+        # Several bitfield capabilities may share one physical register. One
+        # wire read is sufficient and keeps the evidence plan deterministic.
+        unique_plans = tuple(dict.fromkeys(plans))
+        return await async_capture_modbus_snapshot(
+            collector_pn=collector_pn,
+            driver_key=self.key,
+            plans=unique_plans,
+            session_factory=lambda target: self._session(transport, target),
+        )
 
     @staticmethod
     def _session(transport, target: ProbeTarget) -> ModbusSession:

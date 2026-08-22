@@ -13,7 +13,8 @@ from ..const import (
     CONF_SMARTESS_PROFILE_KEY,
     CONF_SMARTESS_PROTOCOL_ASSET_ID,
 )
-from ..models import CollectorInfo
+from ..collector_identity import pn_is_same_identity
+from ..models import CollectorInfo, ProbeTarget
 from ..runtime_labels import runtime_path_label
 from .profile_loader import (
     DriverProfileMetadata,
@@ -27,6 +28,10 @@ from .effective_metadata_snapshot import EffectiveMetadataSnapshot
 from .smartess_protocol_catalog_loader import (
     SmartEssProtocolCatalogEntry,
     resolve_smartess_protocol_catalog_entry,
+)
+from ..support.shadow_learning.read_evidence import (
+    LearnedReadActivationContext,
+    ShadowReadRoute,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -306,6 +311,48 @@ def _device_scope_matches_runtime(
 ) -> bool:
     if _normalized_name(manifest.get("scope", "")) not in {"", "device"}:
         return False
+
+    selected_read_keys = activation.get("selected_read_sensor_keys")
+    if isinstance(selected_read_keys, (list, tuple)) and selected_read_keys:
+        manifest_read_context = LearnedReadActivationContext.from_record(
+            manifest.get("learned_read_context")
+        )
+        activation_read_context = LearnedReadActivationContext.from_record(
+            activation.get("learned_read_context")
+        )
+        if (
+            manifest_read_context is None
+            or activation_read_context is None
+            or manifest_read_context.driver_key != activation_read_context.driver_key
+            or manifest_read_context.register_schema_name
+            != activation_read_context.register_schema_name
+            or manifest_read_context.route != activation_read_context.route
+            or not pn_is_same_identity(
+                manifest_read_context.collector_pn,
+                activation_read_context.collector_pn,
+            )
+        ):
+            return False
+        if manifest_read_context.register_schema_name != _normalized_name(
+            builtin_base_schema_name(base_register_schema_name)
+        ):
+            return False
+        runtime_target = getattr(inverter, "probe_target", None)
+        if runtime_target is not None:
+            if type(runtime_target) is not ProbeTarget:
+                return False
+            try:
+                runtime_route = ShadowReadRoute.for_probe_target(runtime_target)
+            except (TypeError, ValueError):
+                return False
+            if runtime_route != manifest_read_context.route:
+                return False
+            runtime_driver_key = _normalized_name(getattr(inverter, "driver_key", ""))
+            if (
+                runtime_driver_key
+                and runtime_driver_key != manifest_read_context.driver_key
+            ):
+                return False
 
     source_profile_name = _normalized_name(manifest.get("source_profile_name", ""))
     if source_profile_name and source_profile_name != _normalized_name(base_profile_name):

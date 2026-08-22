@@ -34,6 +34,11 @@ from ..payload.register_decode import (
     read_spec_set_values,
 )
 from .base import InverterDriver
+from .local_register_evidence import (
+    LocalRegisterReadPlan,
+    LocalRegisterSnapshot,
+    async_capture_modbus_snapshot,
+)
 from .read_result import DriverReadMode, DriverReadResult
 from .modbus_write_error import ModbusWriteErrorMixin
 from .capability_codec import (
@@ -302,6 +307,32 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
                 for item in captured_ranges
             ],
         }
+
+    async def async_capture_local_register_snapshot(
+        self,
+        transport,
+        inverter: DetectedInverter,
+        *,
+        collector_pn: str,
+    ) -> LocalRegisterSnapshot:
+        schema = load_register_schema(
+            inverter.register_schema_name or self.register_schema_name
+        )
+        plans = tuple(
+            LocalRegisterReadPlan.for_target(
+                inverter.probe_target,
+                function=block.function,
+                start=block.start,
+                count=block.count,
+            )
+            for block in schema.blocks
+        )
+        return await async_capture_modbus_snapshot(
+            collector_pn=collector_pn,
+            driver_key=self.key,
+            plans=plans,
+            session_factory=lambda target: self._session(transport, target),
+        )
 
     @staticmethod
     def _protocol():

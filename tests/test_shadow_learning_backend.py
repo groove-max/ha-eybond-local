@@ -21,6 +21,7 @@ from custom_components.eybond_local.metadata.effective_metadata_snapshot import 
 )
 from custom_components.eybond_local.payload.modbus import (
     build_read_holding_request,
+    build_read_request,
     build_write_multiple_request,
 )
 from custom_components.eybond_local.runtime.link import EybondRuntimeLinkManager
@@ -582,6 +583,113 @@ class ShadowLearningBackendTests(unittest.TestCase):
             self.assertEqual(read_map["registers"]["302"], [560])
             self.assertEqual(read_map["read_event_count"], 2)
             self.assertEqual(read_map["value_source"], "seed_bank")
+            self.assertEqual(
+                read_map["register_series"],
+                [
+                    {
+                        "devcode": 2376,
+                        "collector_addr": 1,
+                        "device_addr": 1,
+                        "function": 3,
+                        "register": register,
+                        "samples": [value],
+                    }
+                    for register, value in ((300, 1), (301, 2), (302, 560))
+                ],
+            )
+
+    def test_read_map_keeps_function_and_full_route_separate(self) -> None:
+        seed = ShadowLearningSeed(
+            session_id="entry-1_20260822T120000Z",
+            entry_id="entry-1",
+            collector_pn="E5000020000000",
+            collector_cloud_profile_key="smartess_at",
+            collector_cloud_profile_label="SmartESS AT",
+            collector_cloud_profile_source="runtime_observed",
+            collector_cloud_profile_confidence="high",
+            collector_callback_endpoint="192.168.1.50,18899,TCP",
+            effective_metadata_snapshot=_sample_snapshot().as_dict(),
+            command_responses={"CLDSRVHOST1": "192.168.1.50,18899,TCP"},
+            register_bank={300: 7},
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handler = InProcessShadowLearningHandler(
+                seed=seed,
+                output_path=Path(temp_dir) / "shadow.jsonl",
+            )
+
+            async def _run() -> None:
+                await handler.start()
+                for function, devcode, collector_addr, unit in (
+                    (3, 2376, 1, 1),
+                    (4, 2377, 2, 2),
+                ):
+                    await handler._handle_frame(
+                        build_collector_request(
+                            function,
+                            build_read_request(
+                                unit,
+                                300,
+                                1,
+                                function=function,
+                            ),
+                            devcode=devcode,
+                            collector_addr=collector_addr,
+                            fcode=4,
+                        ),
+                        remote="192.168.1.15:50000",
+                    )
+                await handler.stop()
+
+            asyncio.run(_run())
+
+            self.assertEqual(handler.read_map["read_blocks"], [[300, 1, 2]])
+            self.assertEqual(
+                [
+                    (
+                        item["devcode"],
+                        item["collector_addr"],
+                        item["device_addr"],
+                        item["function"],
+                        item["register"],
+                    )
+                    for item in handler.read_map["register_series"]
+                ],
+                [(2376, 1, 1, 3, 300), (2377, 2, 2, 4, 300)],
+            )
+
+    def test_unwrapped_read_stays_diagnostic_only_not_active_route_evidence(self) -> None:
+        seed = ShadowLearningSeed(
+            session_id="entry-1_raw",
+            entry_id="entry-1",
+            collector_pn="E5000020000000",
+            collector_cloud_profile_key="smartess_at",
+            collector_cloud_profile_label="SmartESS AT",
+            collector_cloud_profile_source="runtime_observed",
+            collector_cloud_profile_confidence="high",
+            collector_callback_endpoint="192.168.1.50,18899,TCP",
+            effective_metadata_snapshot=_sample_snapshot().as_dict(),
+            command_responses={},
+            register_bank={300: 7},
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            handler = InProcessShadowLearningHandler(
+                seed=seed,
+                output_path=Path(temp_dir) / "shadow.jsonl",
+            )
+            handler._record_read_observation(
+                devcode=None,
+                collector_addr=None,
+                device_addr=1,
+                function=3,
+                address=300,
+                count=1,
+                values=[7],
+            )
+
+            self.assertEqual(handler.read_map["registers"], {"300": [7]})
+            self.assertEqual(handler.read_map["register_series"], [])
 
     def test_eybond_g_ascii_reads_and_writes_are_handled_fail_closed(self) -> None:
         seed = ShadowLearningSeed(

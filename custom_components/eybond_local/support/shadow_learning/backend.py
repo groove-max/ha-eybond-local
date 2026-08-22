@@ -25,6 +25,7 @@ from . import (
     utc_now_iso,
 )
 from .protocol import resolve_shadow_learning_protocol_adapter
+from .read_evidence import ShadowReadRegisterEvidence, ShadowReadRoute
 
 
 _SHADOW_TRACE_DIR = "shadow_learning_traces"
@@ -258,8 +259,12 @@ class InProcessShadowLearningHandler:
         )
         self._write_observations: list[ShadowWriteObservation] = []
         self._observation_condition = asyncio.Condition()
-        self._read_block_counts: dict[tuple[int, int], int] = {}
-        self._read_register_samples: dict[int, list[int]] = {}
+        self._read_block_counts: dict[
+            tuple[int | None, int | None, int, int, int, int], int
+        ] = {}
+        self._read_register_samples: dict[
+            tuple[int | None, int | None, int, int, int], list[int]
+        ] = {}
         self._ascii_command_counts: dict[str, int] = {}
         self._ascii_field_samples: dict[str, list[str]] = {}
         self._read_event_count = 0
@@ -292,15 +297,57 @@ class InProcessShadowLearningHandler:
         downstream labeling never mistakes them for multi-snapshot evidence.
         """
 
+        # Keep the historical address-only projection for diagnostics and
+        # contribution compatibility.  Active read learning MUST consume only
+        # ``register_series`` below: this projection deliberately cannot prove
+        # FC3-vs-FC4, wrapper route, or Modbus unit identity.
+        legacy_blocks: dict[tuple[int, int], int] = {}
+        for (*_route, address, count), occurrences in self._read_block_counts.items():
+            key = (address, count)
+            legacy_blocks[key] = legacy_blocks.get(key, 0) + occurrences
+        legacy_registers: dict[int, list[int]] = {}
+        register_series: list[dict[str, Any]] = []
+        for (
+            devcode,
+            collector_addr,
+            device_addr,
+            function,
+            register,
+        ), samples in sorted(
+            self._read_register_samples.items(),
+            key=lambda item: tuple(-1 if value is None else value for value in item[0]),
+        ):
+            legacy_samples = legacy_registers.setdefault(register, [])
+            for sample in samples:
+                if sample not in legacy_samples and len(legacy_samples) < _READ_SAMPLE_LIMIT:
+                    legacy_samples.append(sample)
+            if devcode is None or collector_addr is None:
+                continue
+            try:
+                evidence = ShadowReadRegisterEvidence(
+                    route=ShadowReadRoute(
+                        devcode=devcode,
+                        collector_addr=collector_addr,
+                        device_addr=device_addr,
+                    ),
+                    function=function,
+                    register=register,
+                    samples=tuple(samples),
+                )
+            except (TypeError, ValueError):
+                continue
+            register_series.append(evidence.to_record())
+
         payload = {
             "read_blocks": [
                 [address, count, occurrences]
-                for (address, count), occurrences in sorted(self._read_block_counts.items())
+                for (address, count), occurrences in sorted(legacy_blocks.items())
             ],
             "registers": {
                 str(register): list(samples)
-                for register, samples in sorted(self._read_register_samples.items())
+                for register, samples in sorted(legacy_registers.items())
             },
+            "register_series": register_series,
             "read_event_count": self._read_event_count,
             "value_source": "seed_bank",
         }
@@ -316,12 +363,36 @@ class InProcessShadowLearningHandler:
             payload["value_source"] = "seed_command_responses"
         return payload
 
-    def _record_read_observation(self, address: int, count: int, values: list[int]) -> None:
+    def _record_read_observation(
+        self,
+        *,
+        devcode: int | None,
+        collector_addr: int | None,
+        device_addr: int,
+        function: int,
+        address: int,
+        count: int,
+        values: list[int],
+    ) -> None:
         self._read_event_count += 1
-        block_key = (int(address), int(count))
+        block_key = (
+            devcode if type(devcode) is int else None,
+            collector_addr if type(collector_addr) is int else None,
+            int(device_addr),
+            int(function),
+            int(address),
+            int(count),
+        )
         self._read_block_counts[block_key] = self._read_block_counts.get(block_key, 0) + 1
         for offset, value in enumerate(values):
-            samples = self._read_register_samples.setdefault(int(address) + offset, [])
+            register_key = (
+                block_key[0],
+                block_key[1],
+                block_key[2],
+                block_key[3],
+                int(address) + offset,
+            )
+            samples = self._read_register_samples.setdefault(register_key, [])
             if value not in samples and len(samples) < _READ_SAMPLE_LIMIT:
                 samples.append(int(value))
 
@@ -605,7 +676,15 @@ class InProcessShadowLearningHandler:
             if read_request.command:
                 self._record_ascii_read_observation(read_request.command, response_payload)
             else:
-                self._record_read_observation(read_request.address, read_request.count, values)
+                self._record_read_observation(
+                    devcode=header.devcode,
+                    collector_addr=header.devaddr,
+                    device_addr=read_request.unit,
+                    function=read_request.function_code,
+                    address=read_request.address,
+                    count=read_request.count,
+                    values=values,
+                )
             await self._append_event(
                 self._protocol_event_kind("read_request"),
                 "cloud_to_shadow",
@@ -743,7 +822,15 @@ class InProcessShadowLearningHandler:
         read_request = self._protocol_adapter.decode_read_request(frame)
         if read_request is not None:
             values = self._read_register_values(read_request.address, read_request.count)
-            self._record_read_observation(read_request.address, read_request.count, values)
+            self._record_read_observation(
+                devcode=None,
+                collector_addr=None,
+                device_addr=read_request.unit,
+                function=read_request.function_code,
+                address=read_request.address,
+                count=read_request.count,
+                values=values,
+            )
             await self._append_event(
                 self._protocol_event_kind("read_request"),
                 "cloud_to_shadow",

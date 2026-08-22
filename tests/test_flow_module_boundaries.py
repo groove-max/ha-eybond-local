@@ -32,6 +32,9 @@ OPTIONS_MODULES = {
     "flows/options/base.py": "OptionsFlowBase",
     "flows/options/runtime.py": "RuntimeOptionsMixin",
     "flows/options/strategy.py": "StrategyTransitionOptionsMixin",
+    "flows/options/local_register_observation.py": (
+        "LocalRegisterObservationOptionsMixin"
+    ),
     "flows/options/shadow_run.py": "ShadowLearningRunMixin",
     "flows/options/shadow_review.py": "ShadowLearningReviewMixin",
     "flows/options/shadow_runtime.py": "ShadowLearningRuntimeMixin",
@@ -389,6 +392,7 @@ class OptionsFlowDecompositionBoundaryTests(unittest.TestCase):
     EXPECTED_MRO = [
         "StrategyTransitionOptionsMixin",
         "RuntimeOptionsMixin",
+        "LocalRegisterObservationOptionsMixin",
         "ShadowLearningRunMixin",
         "ShadowLearningReviewMixin",
         "ShadowLearningRuntimeMixin",
@@ -406,6 +410,7 @@ class OptionsFlowDecompositionBoundaryTests(unittest.TestCase):
         "async_step_runtime",
         "async_step_diagnostics",
         "async_step_runtime_poll_interval",
+        "async_step_local_register_observation",
         "async_step_strategy_transition",
         "async_step_strategy_transition_rollback",
         "async_step_strategy_transition_result",

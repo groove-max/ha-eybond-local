@@ -774,7 +774,7 @@ class LearnedReadRuntimeFilterTests(unittest.TestCase):
             ["battery_voltage", "learned_read_344"],
         )
 
-    def test_filter_is_fail_open_for_legacy_activation_without_read_selection(self) -> None:
+    def test_filter_fails_closed_for_legacy_activation_without_read_selection(self) -> None:
         descriptions = [
             types.SimpleNamespace(key="learned_read_344"),
             types.SimpleNamespace(key="learned_read_239"),
@@ -786,7 +786,7 @@ class LearnedReadRuntimeFilterTests(unittest.TestCase):
             entry_options={"device_scoped_overlay_activation": {}},
         )
 
-        self.assertEqual([description.key for description in filtered], ["learned_read_344", "learned_read_239"])
+        self.assertEqual([description.key for description in filtered], [])
 
 
 def _write_local_overlay_files(root: Path) -> tuple[str, str]:

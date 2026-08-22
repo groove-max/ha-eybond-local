@@ -1546,6 +1546,145 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_local_register_snapshot_serializes_against_runtime_refresh(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(
+                self.coordinator_module.EybondLocalCoordinator
+            )
+            coordinator._runtime_operation_lock = asyncio.Lock()
+            capture_started = asyncio.Event()
+
+            async def _capture():
+                self.assertTrue(coordinator._runtime_operation_lock.locked())
+                capture_started.set()
+                return None
+
+            coordinator._runtime = types.SimpleNamespace(
+                async_capture_local_register_snapshot=_capture
+            )
+            await coordinator._runtime_operation_lock.acquire()
+            task = asyncio.create_task(
+                coordinator.async_capture_local_register_snapshot()
+            )
+            await asyncio.sleep(0)
+            self.assertFalse(capture_started.is_set())
+
+            coordinator._runtime_operation_lock.release()
+            self.assertIsNone(await task)
+            self.assertTrue(capture_started.is_set())
+
+        asyncio.run(_run())
+
+    def test_local_register_collection_uses_public_capture_and_publishes_typed_series(
+        self,
+    ) -> None:
+        async def _run() -> None:
+            from custom_components.eybond_local.drivers.local_register_evidence import (
+                LocalRegisterBlockObservation,
+                LocalRegisterReadPlan,
+                LocalRegisterSnapshot,
+            )
+            from custom_components.eybond_local.drivers.local_register_series import (
+                LocalRegisterSeriesPlan,
+                LocalRegisterSnapshotSeries,
+            )
+            import custom_components.eybond_local.support.local_register_collection as collection_module
+            from custom_components.eybond_local.support.local_register_collection import (
+                LocalRegisterCollectionManager,
+            )
+
+            coordinator = object.__new__(
+                self.coordinator_module.EybondLocalCoordinator
+            )
+            coordinator._runtime_operation_lock = asyncio.Lock()
+            coordinator._shutdown_complete = False
+            coordinator._tooling_values = {}
+            coordinator.data = self.RuntimeSnapshot(values={})
+            snapshots: list[LocalRegisterSnapshot] = []
+            plan = LocalRegisterReadPlan(
+                devcode=2376,
+                collector_addr=1,
+                device_addr=1,
+                function=3,
+                start=100,
+                count=1,
+            )
+            for index in range(3):
+                snapshots.append(
+                    LocalRegisterSnapshot(
+                        collector_pn="E50000200000000001",
+                        driver_key="smg_modbus",
+                        started_at=f"2026-08-22T10:00:{index * 10:02d}+00:00",
+                        completed_at=f"2026-08-22T10:00:{index * 10 + 1:02d}+00:00",
+                        planned_block_count=1,
+                        failed_block_count=0,
+                        blocks=(
+                            LocalRegisterBlockObservation(
+                                plan=plan,
+                                observed_at=(
+                                    f"2026-08-22T10:00:{index * 10 + 1:02d}+00:00"
+                                ),
+                                values=(2300 + index,),
+                            ),
+                        ),
+                    )
+                )
+
+            async def _capture():
+                self.assertTrue(coordinator._runtime_operation_lock.locked())
+                return snapshots.pop(0)
+
+            coordinator._runtime = types.SimpleNamespace(
+                async_capture_local_register_snapshot=_capture
+            )
+            coordinator._local_register_collection = LocalRegisterCollectionManager(
+                capture_snapshot=coordinator.async_capture_local_register_snapshot,
+                on_update=coordinator._publish_local_register_collection_update,
+            )
+
+            async def _immediate_series(**kwargs):
+                captured = [
+                    await kwargs["capture_snapshot"]() for _ in range(3)
+                ]
+                return LocalRegisterSnapshotSeries(
+                    collector_pn="E50000200000000001",
+                    driver_key="smg_modbus",
+                    sample_interval_seconds=kwargs["sample_interval_seconds"],
+                    snapshots=tuple(captured),
+                )
+
+            with patch.object(
+                collection_module,
+                "async_capture_local_register_series",
+                side_effect=_immediate_series,
+            ):
+                started = coordinator.start_local_register_collection(
+                    LocalRegisterSeriesPlan(3, 1)
+                )
+                self.assertTrue(started.active)
+                await asyncio.sleep(0)
+
+            self.assertTrue(coordinator.local_register_collection_status.series_available)
+            self.assertIs(
+                type(coordinator.latest_local_register_series),
+                LocalRegisterSnapshotSeries,
+            )
+            status_record = coordinator.data.values["local_register_collection"]
+            series_record = coordinator.data.values[
+                "local_register_series_evidence"
+            ]
+            self.assertIs(status_record["read_only"], True)
+            self.assertIs(status_record["activation_allowed"], False)
+            self.assertIs(series_record["cloud_mapping_proven"], False)
+            self.assertEqual(series_record["snapshot_count"], 3)
+
+            previous = coordinator.local_register_collection_status
+            with self.assertRaises(TypeError):
+                coordinator.start_local_register_collection(object())
+            self.assertIs(coordinator.local_register_collection_status, previous)
+
+        asyncio.run(_run())
+
     def test_proxy_capture_notification_body_without_link_uses_saved_path(self) -> None:
         hass = types.SimpleNamespace(config=types.SimpleNamespace(language="uk"))
 

@@ -29,6 +29,7 @@ from ...const import (
 from ...drivers.registry import get_driver, poll_policy_for_driver_key
 from ...models import ProbeTarget, RuntimeSnapshot
 from ...support.diagnostic_runner import DiagnosticSingleFlight
+from ...support.local_register_collection import LocalRegisterCollectionManager
 from ...timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
 from .cloud_tools import CoordinatorCloudToolsMixin
 from .collector_profile import CoordinatorCollectorProfileMixin
@@ -303,6 +304,15 @@ class EybondLocalCoordinator(
             busy_error="support_package_export_in_progress"
         )
         self._runtime_operation_lock = asyncio.Lock()
+        # Repeated local-register evidence outlives the options-flow dialog that
+        # starts it, but never outlives this coordinator/runtime transport.  The
+        # manager owns only the retained read task; cloud credentials, history,
+        # correlation, entities, and writes stay outside this boundary.
+        self._local_register_collection = LocalRegisterCollectionManager(
+            capture_snapshot=self.async_capture_local_register_snapshot,
+            create_task=getattr(self.hass, "async_create_task", asyncio.create_task),
+            on_update=self._publish_local_register_collection_update,
+        )
         # Proxy capture and shadow learning share one endpoint-mutation
         # authority.  Their terminal paths must also be single-flight per
         # coordinator: two same-owner stop/recovery calls may legitimately

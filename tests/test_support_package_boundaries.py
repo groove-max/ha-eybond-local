@@ -71,6 +71,7 @@ class SupportPackageBoundaryTests(unittest.TestCase):
                 "overlay_generator.py",
                 "protocol.py",
                 "proxy.py",
+                "read_evidence.py",
                 "review_model.py",
                 "runtime.py",
                 "session.py",

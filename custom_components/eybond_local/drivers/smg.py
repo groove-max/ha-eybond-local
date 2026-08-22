@@ -42,6 +42,11 @@ from ..metadata.device_catalog_loader import (
     resolve_support_capture_policy,
 )
 from .base import InverterDriver
+from .local_register_evidence import (
+    LocalRegisterReadPlan,
+    LocalRegisterSnapshot,
+    async_capture_modbus_snapshot,
+)
 from .read_result import DriverReadMode, DriverReadResult
 from .modbus_write_error import ModbusWriteErrorMixin
 from .support_marker import DriverSupportMarker, DriverSupportWorkflow
@@ -659,6 +664,33 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
             "range_failures": failures,
             "fixture_ranges": fixture_ranges,
         }
+
+    async def async_capture_local_register_snapshot(
+        self,
+        transport,
+        inverter: DetectedInverter,
+        *,
+        collector_pn: str,
+    ) -> LocalRegisterSnapshot:
+        """Capture raw SMG words with exact tunnel/function provenance."""
+
+        plans = tuple(
+            LocalRegisterReadPlan.for_target(
+                inverter.probe_target,
+                function=3,
+                start=start,
+                count=count,
+            )
+            for start, count in _support_capture_ranges(
+                inverter.register_schema_name or self.register_schema_name
+            )
+        )
+        return await async_capture_modbus_snapshot(
+            collector_pn=collector_pn,
+            driver_key=self.key,
+            plans=plans,
+            session_factory=lambda target: self._session(transport, target),
+        )
 
     @staticmethod
     def _session(transport, target: ProbeTarget) -> ModbusSession:

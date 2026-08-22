@@ -18,6 +18,11 @@ from ...const import (
     DOMAIN,
 )
 from ...fixtures.utils import anonymize_fixture_json
+from ...drivers.local_register_evidence import LocalRegisterSnapshot
+from ...drivers.local_register_series import (
+    LocalRegisterSeriesPlan,
+    LocalRegisterSnapshotSeries,
+)
 from ...metadata.effective_metadata import resolve_effective_metadata_selection
 from ...metadata.local_metadata import (
     clear_local_metadata_loader_caches,
@@ -25,14 +30,26 @@ from ...metadata.local_metadata import (
     create_local_schema_draft,
     rollback_local_metadata_overrides,
 )
-from ...metadata.profile_loader import builtin_base_profile_name
-from ...metadata.register_schema_loader import builtin_base_schema_name
+from ...metadata.profile_loader import (
+    builtin_base_profile_name,
+    load_driver_profile_raw,
+)
+from ...metadata.register_schema_loader import (
+    builtin_base_schema_name,
+    load_register_schema_raw,
+)
 from ...metadata.smartess_draft import SmartEssKnownFamilyDraftPlan
 from ...metadata.smartess_smg_bridge import SmartEssSmgBridgePlan
+from ...models import DetectedInverter
 from ...support.bundle import export_support_bundle
+from ...support.cloud_local_history_representability import (
+    LocalRegisterOverlayContext,
+    build_local_register_overlay_context,
+)
 from ...support.cloud_evidence_providers import DRAFT_KIND_KNOWN_FAMILY, DRAFT_KIND_SMG_BRIDGE
 from ...support.collector_registry import get_collector_registry_record
 from ...support.download import sign_support_package_download_url
+from ...support.local_register_collection import LocalRegisterCollectionStatus
 from ...support.package import export_support_package
 from ...support.runtime_projection import (
     build_collector_support_payload,
@@ -40,6 +57,11 @@ from ...support.runtime_projection import (
     metadata_source_payload,
 )
 from ...support.shadow_learning.review_model import normalize_activation_selection
+from ...support.shadow_learning.read_evidence import (
+    LearnedReadActivationContext,
+    ShadowReadRoute,
+    validate_learned_read_activation,
+)
 from .tooling_projection import (
     integration_build_runtime_values as _integration_build_runtime_values,
     localized_runtime_text as _localized_runtime_text,
@@ -63,6 +85,120 @@ class CoordinatorSupportMixin:
 
         candidate = self._cloud_evidence_draft_candidate(DRAFT_KIND_KNOWN_FAMILY)
         return candidate.plan if candidate is not None else None
+
+    async def async_capture_local_register_snapshot(
+        self,
+    ) -> LocalRegisterSnapshot | None:
+        """Expose typed local wire evidence without leaking the runtime driver."""
+
+        # Polling, writes, diagnostics and evidence reads share one physical
+        # collector transport. Never interleave a DESS evidence block with a
+        # normal poll or write/read-back transaction.
+        async with self._runtime_operation_lock:
+            snapshot = await self._runtime.async_capture_local_register_snapshot()
+        if snapshot is not None and type(snapshot) is not LocalRegisterSnapshot:
+            raise TypeError("runtime_local_register_snapshot_invalid")
+        return snapshot
+
+    def start_local_register_collection(
+        self,
+        plan: LocalRegisterSeriesPlan,
+    ) -> LocalRegisterCollectionStatus:
+        """Start one coordinator-owned repeated local-read observation."""
+
+        if type(plan) is not LocalRegisterSeriesPlan:
+            raise TypeError("local_register_collection_plan_invalid")
+        return self._local_register_collection.start(plan)
+
+    async def async_cancel_local_register_collection(
+        self,
+    ) -> LocalRegisterCollectionStatus:
+        """Cancel and await the exact retained local-read task."""
+
+        return await self._local_register_collection.async_cancel()
+
+    @property
+    def local_register_collection_status(self) -> LocalRegisterCollectionStatus:
+        """Return an immutable read-only lifecycle view."""
+
+        return self._local_register_collection.status
+
+    @property
+    def latest_local_register_series(
+        self,
+    ) -> LocalRegisterSnapshotSeries | None:
+        """Return completed typed evidence, never a partial series."""
+
+        return self._local_register_collection.latest_series
+
+    @property
+    def local_register_overlay_context(
+        self,
+    ) -> LocalRegisterOverlayContext | None:
+        """Project the exact current route/schema context for review only.
+
+        This seam deliberately returns no runtime driver and grants no draft or
+        activation authority.  Any drift or partially typed state fails closed
+        so historical candidates cannot be rebound to a replacement inverter.
+        """
+
+        inverter = self.identified_inverter
+        if type(inverter) is not DetectedInverter:
+            return None
+        try:
+            return build_local_register_overlay_context(
+                collector_pn=self._preferred_collector_pn(self.data),
+                driver_key=inverter.driver_key,
+                probe_target=inverter.probe_target,
+                register_schema_name=self.effective_register_schema_name,
+                register_schema=self.effective_register_schema_metadata,
+            )
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def shadow_learning_read_context(
+        self,
+    ) -> LearnedReadActivationContext | None:
+        """Return the exact current route allowed to receive learned reads."""
+
+        inverter = self.identified_inverter
+        if type(inverter) is not DetectedInverter:
+            return None
+        try:
+            return LearnedReadActivationContext(
+                collector_pn=self._preferred_collector_pn(self.data),
+                driver_key=inverter.driver_key,
+                register_schema_name=builtin_base_schema_name(
+                    self.effective_register_schema_name
+                ),
+                route=ShadowReadRoute.for_probe_target(inverter.probe_target),
+            )
+        except (TypeError, ValueError):
+            return None
+
+    def _publish_local_register_collection_update(
+        self,
+        status: LocalRegisterCollectionStatus,
+        series: LocalRegisterSnapshotSeries | None,
+    ) -> None:
+        """Project bounded evidence/status into support-facing runtime values."""
+
+        if type(status) is not LocalRegisterCollectionStatus:
+            raise TypeError("local_register_collection_status_invalid")
+        if series is not None and type(series) is not LocalRegisterSnapshotSeries:
+            raise TypeError("local_register_collection_series_invalid")
+        if series is None:
+            self._tooling_values.pop("local_register_series_evidence", None)
+            self.data.values.pop("local_register_series_evidence", None)
+        self._publish_tooling_values(
+            local_register_collection=status.to_record(),
+            **(
+                {"local_register_series_evidence": series.to_record()}
+                if series is not None
+                else {}
+            ),
+        )
 
     @property
     def smartess_smg_bridge_plan(self) -> SmartEssSmgBridgePlan | None:
@@ -453,14 +589,39 @@ class CoordinatorSupportMixin:
         review screen via ``build_activation_selection``). When provided, the activation
         records ``selected_controls`` (with user labels), ``excluded_controls`` (with
         retained reasons), and ``selected_control_keys`` so runtime exposes only the
-        selected learned controls. When omitted, the activation declares no selection and
-        runtime keeps exposing every learned control (legacy behavior).
+        selected learned controls. When omitted, legacy learned controls keep their
+        existing behavior, while route-sensitive learned reads fail closed to none.
         """
 
         normalized_profile_name = str(profile_name or "").strip()
         normalized_schema_name = str(register_schema_name or "").strip()
         if not normalized_profile_name or not normalized_schema_name:
             raise ValueError("device_scoped_overlay_activation_requires_profile_and_schema")
+
+        normalized_selection = (
+            normalize_activation_selection(selection)
+            if selection is not None
+            else None
+        )
+        selected_read_keys = (
+            tuple(normalized_selection["selected_read_sensor_keys"])
+            if normalized_selection is not None
+            else ()
+        )
+        learned_read_context: LearnedReadActivationContext | None = None
+        if selected_read_keys:
+            profile_raw = load_driver_profile_raw(normalized_profile_name)
+            current_read_context = self.shadow_learning_read_context
+            learned_read_context = validate_learned_read_activation(
+                manifest=profile_raw.get("shadow_learning_overlay"),
+                register_schema_record=load_register_schema_raw(
+                    normalized_schema_name
+                ),
+                profile_name=normalized_profile_name,
+                register_schema_name=normalized_schema_name,
+                selected_read_keys=selected_read_keys,
+                current_context=current_read_context,
+            )
 
         collector = self.data.collector
         inverter = self.identified_inverter
@@ -510,8 +671,16 @@ class CoordinatorSupportMixin:
             "activated_at": datetime.now(timezone.utc).isoformat(),
             "activation_scope": activation_scope,
         }
-        if selection is not None:
-            activation.update(normalize_activation_selection(selection))
+        if normalized_selection is not None:
+            activation.update(normalized_selection)
+        else:
+            # A missing legacy selection may keep learned controls visible, but
+            # it must never implicitly activate route-sensitive read sensors.
+            activation["selected_read_sensors"] = []
+            activation["excluded_read_sensors"] = []
+            activation["selected_read_sensor_keys"] = []
+        if learned_read_context is not None:
+            activation["learned_read_context"] = learned_read_context.to_record()
 
         options = dict(self.config_entry.options)
         options[_DEVICE_SCOPED_OVERLAY_ACTIVATION_OPTION_KEY] = activation

@@ -29,6 +29,7 @@ from custom_components.eybond_local.dessmonitor_cloud import (  # noqa: E402
     build_login_url,
     build_signed_action_url,
     fetch_read_only_evidence,
+    fetch_read_only_evidence_for_session,
 )
 
 
@@ -118,6 +119,7 @@ class DessMonitorModelTests(unittest.TestCase):
                 title="Title",
                 choices=(("1", "One"), ("1", "Duplicate")),
             )
+
         with self.assertRaisesRegex(ValueError, "metadata_limit"):
             DessMonitorEvidenceBundle(
                 identity=identity,
@@ -132,6 +134,15 @@ class DessMonitorModelTests(unittest.TestCase):
                 token="x" * (dessmonitor_module.DEFAULT_MAX_TEXT_LENGTH + 1),
                 secret="secret",
             )
+
+    def test_session_bound_metadata_refuses_duck_before_any_request(self) -> None:
+        with patch.object(dessmonitor_module, "fetch_signed_action") as fetch:
+            with self.assertRaises(TypeError):
+                fetch_read_only_evidence_for_session(  # type: ignore[arg-type]
+                    session=object(),
+                    collector_pn=FULL_PN,
+                )
+        fetch.assert_not_called()
 
 
 class DessMonitorSigningTests(unittest.TestCase):

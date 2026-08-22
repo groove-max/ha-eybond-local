@@ -27,6 +27,7 @@ from ..smartess_cloud import (
 )
 from .cloud_learning_runner import CloudLearningOutcome, CloudLearningRunner
 from .read_learning_binder import bind_cloud_labels_to_registers
+from .shadow_learning.read_evidence import read_register_evidence_from_map
 from .shadow_learning.orchestrator import async_orchestrate_shadow_learning_settings
 from .shadow_learning.valuecloud_orchestrator import (
     async_orchestrate_valuecloud_shadow_learning,
@@ -212,7 +213,7 @@ class SmartEssActiveLearningRunner(CloudLearningRunner):
 
         read_bindings: dict[str, Any] | None = None
         read_map = result.get("read_map")
-        if isinstance(read_map, dict) and read_map.get("registers"):
+        if read_register_evidence_from_map(read_map):
             read_bindings = await self._async_bind_read_labels(
                 executor=executor,
                 cloud_session=control_session,
@@ -237,8 +238,8 @@ class SmartEssActiveLearningRunner(CloudLearningRunner):
         sweep already succeeded.
         """
 
-        registers = read_map.get("registers")
-        if not isinstance(registers, dict) or not registers:
+        register_evidence = read_register_evidence_from_map(read_map)
+        if not register_evidence:
             return None
         try:
             envelope = await executor(
@@ -260,7 +261,10 @@ class SmartEssActiveLearningRunner(CloudLearningRunner):
                     sensors.extend(item for item in items if isinstance(item, dict))
             if not sensors:
                 return None
-            report = bind_cloud_labels_to_registers(sensors=sensors, registers=registers)
+            report = bind_cloud_labels_to_registers(
+                sensors=sensors,
+                register_evidence=register_evidence,
+            )
             return report.to_json_dict()
         except Exception as exc:  # noqa: BLE001 - best-effort supplemental step
             logger.debug("Read-label binding failed during learning session: %s", exc)

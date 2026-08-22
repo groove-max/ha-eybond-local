@@ -69,6 +69,16 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                             "collector_pn": "E5000020000000",
                             "secret_token": "must_not_be_archived",
                         },
+                        "learned_read_context": {
+                            "collector_pn": "E5000020000000",
+                            "driver_key": "modbus_smg",
+                            "register_schema_name": "modbus_smg/models/smg_6200.json",
+                            "probe_target": {
+                                "devcode": 6514,
+                                "collector_addr": 1,
+                                "device_addr": 1,
+                            },
+                        },
                     }
                 },
                 profile_name="smg_modbus.json",
@@ -120,6 +130,10 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
             )
 
             self.assertNotIn("secret_token", json.dumps(activation))
+            self.assertNotEqual(
+                activation["learned_read_context"]["collector_pn"],
+                "E5000020000000",
+            )
             parsed_write = json.loads(writes_lines[0])
             self.assertNotIn("session_token", parsed_write)
             parsed_trace = [json.loads(line) for line in trace_lines]
@@ -220,15 +234,156 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
                 "username": username,
                 "password": password,
                 "session_token": session_token,
-                "metadata_evidence": {
-                    "source": "dessmonitor",
-                    "identity": {
+                    "metadata_evidence": {
+                        "source": "dessmonitor",
+                        "identity": {
                         "pn": collector_pn,
                         "sn": serial_number,
                         "devcode": 2376,
-                        "devaddr": 1,
-                    },
-                    "telemetry_fields": [
+                            "devaddr": 1,
+                        },
+                        "history_collection": {
+                            "schema_version": 1,
+                            "authority": "bounded_read_only_history_collection",
+                            "provider_id": "smartess",
+                            "source_id": "dessmonitor",
+                            "read_only": True,
+                            "local_mapping_proven": False,
+                            "activation_allowed": False,
+                            "identity": {
+                                "pn": collector_pn,
+                                "sn": serial_number,
+                                "devcode": 2376,
+                                "devaddr": 1,
+                            },
+                            "time_basis": None,
+                            "requested_date": "",
+                            "attempted_series_count": 0,
+                            "failed_series_count": 0,
+                            "budget_exhausted": False,
+                            "series": [],
+                            "status": "time_basis_unavailable",
+                            "collected_series_count": 0,
+                            "point_count": 0,
+                        },
+                        "semantic_report": {
+                            "schema_version": 1,
+                            "authority": "semantic_hint_only",
+                            "local_mapping_proven": False,
+                            "provider_id": "smartess",
+                            "source_id": "dessmonitor",
+                            "recognized_count": 1,
+                            "read_candidate_count": 1,
+                            "unit_conflict_count": 0,
+                            "unknown_count": 0,
+                            "control_metadata_count": 0,
+                            "observations": [
+                                {
+                                    "field_kind": "reading",
+                                    "field_id": "pv_voltage",
+                                    "title": "PV Voltage",
+                                    "value": "230.1",
+                                    "observed_unit": "V",
+                                    "source_action": "querySPDeviceLastData",
+                                    "status": "recognized",
+                                    "semantic_key": "pv_voltage",
+                                    "canonical_title": "PV Voltage",
+                                    "semantic_kind": "read",
+                                    "expected_unit": "V",
+                                    "device_class": "voltage",
+                                    "state_class": "measurement",
+                                    "local_mapping": "unproven",
+                                }
+                            ],
+                        },
+                        "local_coverage": {
+                            "schema_version": 1,
+                            "authority": "runtime_semantic_presence_only",
+                            "local_mapping_proven": False,
+                            "driver_key": "smg",
+                            "items": [
+                                {
+                                    "semantic_key": "pv_voltage",
+                                    "cloud_field_count": 1,
+                                    "status": "available_fresh",
+                                    "local_freshness": "fresh",
+                                    "local_origin": "driver",
+                                    "local_value_kind": "number",
+                                }
+                            ],
+                            "available_count": 1,
+                            "unknown_value_count": 0,
+                            "not_observed_count": 0,
+                        },
+                        "local_register_snapshot": {
+                            "schema_version": 1,
+                            "authority": "live_local_wire_observation",
+                            "source": "driver_modbus_read",
+                            "cloud_mapping_proven": False,
+                            "collector_pn": collector_pn,
+                            "driver_key": "smg",
+                            "started_at": "2026-08-22T10:00:00+00:00",
+                            "completed_at": "2026-08-22T10:00:02+00:00",
+                            "planned_block_count": 1,
+                            "failed_block_count": 0,
+                            "observed_register_count": 2,
+                            "blocks": [
+                                {
+                                    "plan": {
+                                        "devcode": 2376,
+                                        "collector_addr": 1,
+                                        "device_addr": 1,
+                                        "function": 3,
+                                        "start": 300,
+                                        "count": 2,
+                                    },
+                                    "observed_at": "2026-08-22T10:00:01+00:00",
+                                    "values": [2305, 500],
+                                }
+                            ],
+                        },
+                        "local_history_review": {
+                            "schema_version": 1,
+                            "authority": "review_composition_only",
+                            "read_only": True,
+                            "local_mapping": "candidate_not_proven",
+                            "local_mapping_proven": False,
+                            "activation_allowed": False,
+                            "local_series": {
+                                "collector_pn": collector_pn,
+                            },
+                            "verdicts": [
+                                {
+                                    "series_key": "pv_voltage",
+                                    "status": "unique_exact_candidate",
+                                    "candidate_count": 1,
+                                }
+                            ],
+                            "status": "review_candidates_available",
+                            "unique_candidate_count": 1,
+                        },
+                        "local_history_representability": {
+                            "schema_version": 1,
+                            "authority": "current_context_review_only",
+                            "read_only": True,
+                            "local_mapping": "candidate_not_proven",
+                            "local_mapping_proven": False,
+                            "draft_generation_allowed": False,
+                            "activation_allowed": False,
+                            "context": {
+                                "collector_pn": collector_pn,
+                                "driver_key": "smg",
+                                "register_schema_name": "modbus_smg/base.json",
+                            },
+                            "decisions": [
+                                {
+                                    "semantic_key": "pv_voltage",
+                                    "status": "representable_current_context",
+                                }
+                            ],
+                            "representable_count": 1,
+                        },
+                        "telemetry_fields": [
                         {
                             "field_id": "pv_voltage",
                             "title": "PV Voltage",
@@ -291,6 +446,62 @@ class ShadowLearningSupportPackageTests(unittest.TestCase):
         self.assertEqual(
             orchestration["metadata_evidence"]["metadata_field_count"], 1
         )
+        semantic_report = orchestration["metadata_evidence"]["semantic_report"]
+        self.assertEqual(semantic_report["authority"], "semantic_hint_only")
+        self.assertIs(semantic_report["local_mapping_proven"], False)
+        self.assertEqual(
+            semantic_report["observations"][0]["local_mapping"],
+            "unproven",
+        )
+        history_collection = orchestration["metadata_evidence"][
+            "history_collection"
+        ]
+        self.assertEqual(
+            history_collection["authority"],
+            "bounded_read_only_history_collection",
+        )
+        self.assertIs(history_collection["read_only"], True)
+        self.assertIs(history_collection["local_mapping_proven"], False)
+        self.assertIs(history_collection["activation_allowed"], False)
+        self.assertIn("*", history_collection["identity"]["pn"])
+        self.assertIn("*", history_collection["identity"]["sn"])
+        local_coverage = orchestration["metadata_evidence"]["local_coverage"]
+        self.assertEqual(
+            local_coverage["authority"],
+            "runtime_semantic_presence_only",
+        )
+        self.assertIs(local_coverage["local_mapping_proven"], False)
+        self.assertEqual(local_coverage["available_count"], 1)
+        self.assertNotIn("230.1", str(local_coverage))
+        self.assertNotIn("register", str(local_coverage).casefold())
+        local_snapshot = orchestration["metadata_evidence"][
+            "local_register_snapshot"
+        ]
+        self.assertEqual(
+            local_snapshot["authority"],
+            "live_local_wire_observation",
+        )
+        self.assertIs(local_snapshot["cloud_mapping_proven"], False)
+        self.assertEqual(local_snapshot["blocks"][0]["values"], [2305, 500])
+        self.assertIn("*", local_snapshot["collector_pn"])
+        local_review = orchestration["metadata_evidence"][
+            "local_history_review"
+        ]
+        self.assertEqual(local_review["authority"], "review_composition_only")
+        self.assertIs(local_review["read_only"], True)
+        self.assertIs(local_review["local_mapping_proven"], False)
+        self.assertIs(local_review["activation_allowed"], False)
+        self.assertIn("*", local_review["local_series"]["collector_pn"])
+        representability = orchestration["metadata_evidence"][
+            "local_history_representability"
+        ]
+        self.assertEqual(
+            representability["authority"],
+            "current_context_review_only",
+        )
+        self.assertIs(representability["draft_generation_allowed"], False)
+        self.assertIs(representability["activation_allowed"], False)
+        self.assertIn("*", representability["context"]["collector_pn"])
         for private_value in (
             collector_pn,
             serial_number,

@@ -20,6 +20,8 @@ from homeassistant.helpers.selector import (
 )
 
 from ...collector.transport import _finish_cleanup_on_cancel
+from ...collector_identity import pn_is_same_identity, validated_collector_pn
+from ...drivers.local_register_evidence import LocalRegisterSnapshot
 from ..common.presentation import _smartess_credential_schema_fields
 from ..common.translation import with_translation_bundle as _with_translation_bundle
 from .shared import (
@@ -29,15 +31,70 @@ from .shared import (
     CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
 )
 from ...runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
+from ...support.cloud_local_coverage import build_cloud_local_coverage_report
 from ...support.cloud_learning_engines import resolve_cloud_learning_engine
+from ...support.cloud_semantic_evidence import CloudSemanticEvidenceReport
 from ...support.shadow_learning.overlay_generator import (
     generate_shadow_learning_overlay_drafts,
+)
+from ...telemetry import TypedTelemetryFrame
+from .shadow_metadata_review import (
+    metadata_with_cloud_local_history_draft_plan,
+    metadata_with_cloud_local_history_representability,
+    metadata_with_cloud_local_history_review,
 )
 
 logger = logging.getLogger(__name__)
 
 
 CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS = 40
+
+
+def _metadata_with_local_coverage(
+    metadata_evidence: dict[str, Any],
+    telemetry: object,
+    *,
+    local_register_snapshot: object = None,
+    local_register_series: object = None,
+    local_register_context: object = None,
+    expected_collector_pn: object = "",
+) -> dict[str, Any]:
+    """Attach exact typed local evidence without minting cloud bindings."""
+
+    detached = dict(metadata_evidence)
+    if (
+        type(local_register_snapshot) is LocalRegisterSnapshot
+        and type(expected_collector_pn) is str
+        and bool(expected_collector_pn)
+        and validated_collector_pn(expected_collector_pn)
+        == expected_collector_pn
+        and pn_is_same_identity(
+            expected_collector_pn,
+            local_register_snapshot.collector_pn,
+        )
+    ):
+        detached["local_register_snapshot"] = (
+            local_register_snapshot.to_record()
+        )
+    detached = metadata_with_cloud_local_history_review(
+        detached,
+        local_register_series,
+    )
+    detached = metadata_with_cloud_local_history_representability(
+        detached,
+        local_register_context,
+    )
+    detached = metadata_with_cloud_local_history_draft_plan(detached)
+    semantic_report = CloudSemanticEvidenceReport.from_record(
+        detached.get("semantic_report")
+    )
+    if semantic_report is None or type(telemetry) is not TypedTelemetryFrame:
+        return detached
+    detached["local_coverage"] = build_cloud_local_coverage_report(
+        semantic_report,
+        telemetry,
+    ).to_record()
+    return detached
 
 
 class ShadowLearningRunMixin:
@@ -133,7 +190,8 @@ class ShadowLearningRunMixin:
                 "common.dynamic.cloud_learning_source_intro",
                 "Choose how Home Assistant should collect device information. "
                 "SmartESS active learning can discover local controls; DESSMonitor "
-                "collects broader read-only metadata without changing the device.",
+                "collects read-only metadata and bounded history without changing "
+                "the device.",
             ),
         )
 
@@ -145,7 +203,7 @@ class ShadowLearningRunMixin:
             ),
             "dessmonitor": self._tr(
                 "common.dynamic.cloud_learning_source_dessmonitor",
-                "DESSMonitor API — read-only metadata",
+                "DESSMonitor API — read-only device analysis",
             ),
             "valuecloud": self._tr(
                 "common.dynamic.cloud_learning_source_valuecloud",
@@ -497,7 +555,7 @@ class ShadowLearningRunMixin:
             trusted_pn = (
                 type(collector_pn) is str
                 and bool(collector_pn)
-                and collector_pn == collector_pn.strip()
+                and validated_collector_pn(collector_pn) == collector_pn
             )
             preflight = {
                 "can_start": trusted_pn,
@@ -518,6 +576,13 @@ class ShadowLearningRunMixin:
                 if blockers
                 else "shadow_learning_preflight_blocked"
             )
+        run_collector_pn = preflight.get("collector_pn")
+        if (
+            type(run_collector_pn) is not str
+            or not run_collector_pn
+            or validated_collector_pn(run_collector_pn) != run_collector_pn
+        ):
+            raise RuntimeError("shadow_learning_collector_identity_invalid")
 
         # The engine owns login/fetch/parse and, only when declared, the exact
         # provider-specific ordering around a temporary route.  Metadata-only
@@ -532,6 +597,36 @@ class ShadowLearningRunMixin:
             else None
         )
         runner = learning_engine.learning_runner()
+        local_register_snapshot: LocalRegisterSnapshot | None = None
+        if learning_engine.source.capabilities.local_register_snapshot:
+            capture_local = getattr(
+                coordinator,
+                "async_capture_local_register_snapshot",
+                None,
+            )
+            if callable(capture_local):
+                self._set_control_discovery_progress(0.06, "capturing_local")
+                try:
+                    candidate_snapshot = await capture_local()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # supplemental read-only evidence
+                    logger.debug(
+                        "Local register snapshot unavailable for cloud learning: %s",
+                        type(exc).__name__,
+                    )
+                else:
+                    if type(candidate_snapshot) is LocalRegisterSnapshot:
+                        local_register_snapshot = candidate_snapshot
+
+        current_collector_pn = getattr(coordinator, "smartess_collector_pn", "")
+        if (
+            type(current_collector_pn) is not str
+            or validated_collector_pn(current_collector_pn)
+            != current_collector_pn
+            or not pn_is_same_identity(run_collector_pn, current_collector_pn)
+        ):
+            raise RuntimeError("shadow_learning_collector_identity_changed")
 
         async def _start_shadow_route() -> None:
             if not requires_shadow_route:
@@ -545,7 +640,7 @@ class ShadowLearningRunMixin:
 
         outcome = await runner.async_run(
             executor=self.hass.async_add_executor_job,
-            collector_pn=str(coordinator.smartess_collector_pn or ""),
+            collector_pn=run_collector_pn,
             username=username,
             password=password,
             fallback_identity=(
@@ -573,12 +668,49 @@ class ShadowLearningRunMixin:
                 else self._forbid_metadata_only_learning
             ),
         )
+        current_collector_pn = getattr(coordinator, "smartess_collector_pn", "")
+        if (
+            type(current_collector_pn) is not str
+            or validated_collector_pn(current_collector_pn)
+            != current_collector_pn
+            or not pn_is_same_identity(run_collector_pn, current_collector_pn)
+        ):
+            raise RuntimeError("shadow_learning_collector_identity_changed")
         identity = outcome.identity
-        result = outcome.result
+        result = dict(outcome.result)
         read_bindings = outcome.read_bindings
         metadata_evidence = outcome.metadata_evidence
         if isinstance(metadata_evidence, dict):
-            self._shadow_learning_state["cloud_metadata"] = dict(metadata_evidence)
+            try:
+                local_register_series = getattr(
+                    coordinator,
+                    "latest_local_register_series",
+                    None,
+                )
+            except Exception:  # supplemental review evidence
+                local_register_series = None
+            try:
+                local_register_context = getattr(
+                    coordinator,
+                    "local_register_overlay_context",
+                    None,
+                )
+            except Exception:  # supplemental current-context review
+                local_register_context = None
+            metadata_evidence = _metadata_with_local_coverage(
+                metadata_evidence,
+                getattr(getattr(coordinator, "data", None), "telemetry", None),
+                local_register_snapshot=local_register_snapshot,
+                local_register_series=local_register_series,
+                local_register_context=local_register_context,
+                expected_collector_pn=run_collector_pn,
+            )
+            self._shadow_learning_state["cloud_metadata"] = metadata_evidence
+            # The published runtime/support artifact is the orchestration
+            # record, so replace its provider-owned evidence with the detached,
+            # locally enriched record.  This keeps the review and exported
+            # evidence on one exact snapshot without mutating the outcome.
+            result["metadata_evidence"] = metadata_evidence
 
         self._shadow_learning_state["orchestration"] = result
         plan = result.get("plan") if isinstance(result, dict) else None
@@ -645,7 +777,7 @@ class ShadowLearningRunMixin:
         else:
             self._shadow_learning_state["status"] = self._tr(
                 "common.dynamic.cloud_learning_metadata_done",
-                "The read-only cloud metadata check finished.",
+                "The read-only device analysis finished.",
             )
         found_controls = int(
             dict(self._shadow_learning_state.get("overlay") or {}).get(
@@ -788,6 +920,10 @@ class ShadowLearningRunMixin:
             "devcode": identity.get("devcode"),
             "devaddr": identity.get("devaddr"),
         }
+        try:
+            learned_read_context = coordinator.shadow_learning_read_context
+        except Exception:  # active read learning must fail closed on context drift
+            learned_read_context = None
         result = await self.hass.async_add_executor_job(
             lambda: generate_shadow_learning_overlay_drafts(
                 config_dir=Path(self.hass.config.config_dir),
@@ -799,6 +935,7 @@ class ShadowLearningRunMixin:
                 correlation=correlation,
                 read_map=read_map,
                 read_bindings=read_bindings,
+                learned_read_context=learned_read_context,
                 overwrite=False,
             )
         )

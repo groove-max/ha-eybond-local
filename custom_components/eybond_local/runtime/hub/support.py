@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from ...drivers.local_register_evidence import LocalRegisterSnapshot
+from ...collector_identity import validated_collector_pn
+
 from .common import (
     Any,
     DRIVER_HINT_AUTO,
@@ -60,6 +63,33 @@ class HubSupportMixin:
                 raise
 
         return evidence
+
+    async def async_capture_local_register_snapshot(
+        self,
+    ) -> LocalRegisterSnapshot | None:
+        """Capture exact driver-owned register observations from the live link."""
+
+        await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
+        if self._driver is None or self._inverter is None:
+            await self._async_detect_driver()
+        if self._driver is None or self._inverter is None:
+            return None
+        collector = self._link_manager.collector_info
+        collector_pn = getattr(collector, "collector_pn", "")
+        if (
+            type(collector_pn) is not str
+            or not collector_pn
+            or validated_collector_pn(collector_pn) != collector_pn
+        ):
+            return None
+        snapshot = await self._driver.async_capture_local_register_snapshot(
+            self._link_manager.transport,
+            self._inverter,
+            collector_pn=collector_pn,
+        )
+        if snapshot is not None and type(snapshot) is not LocalRegisterSnapshot:
+            raise TypeError("driver_local_register_snapshot_invalid")
+        return snapshot
 
     def _collector_capabilities(self):
         """Return collector capabilities from current hub runtime evidence."""

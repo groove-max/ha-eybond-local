@@ -285,13 +285,55 @@ import custom_components.eybond_local.connection.admission_transaction as admiss
 import custom_components.eybond_local.const as const_module
 import custom_components.eybond_local.options_flow as options_flow_module
 import custom_components.eybond_local.flows.options.proxy as options_proxy_module
+import custom_components.eybond_local.flows.options.shadow_inactive_draft as options_shadow_inactive_draft_module
 import custom_components.eybond_local.flows.options.shadow_review as options_shadow_review_module
 import custom_components.eybond_local.flows.options.shadow_run as options_shadow_run_module
 import custom_components.eybond_local.flows.options.shadow_runtime as options_shadow_runtime_module
 import custom_components.eybond_local.flows.options.shared as options_shared_module
 import custom_components.eybond_local.support.cloud_control_discovery as cloud_control_discovery_module
 import custom_components.eybond_local.support.dessmonitor_learning as dessmonitor_learning_module
+from custom_components.eybond_local.dessmonitor_cloud import (
+    DessMonitorDeviceIdentity,
+)
+from custom_components.eybond_local.dessmonitor_collection import (
+    DessMonitorHistoryCollection,
+)
+from custom_components.eybond_local.dessmonitor_history import (
+    DESSMONITOR_HISTORY_SOURCE_SOLE_CHART,
+    DessMonitorHistoryPoint,
+    DessMonitorHistorySeries,
+)
+from custom_components.eybond_local.dessmonitor_history_resolution import (
+    resolve_dessmonitor_history_time_basis,
+)
+from custom_components.eybond_local.dessmonitor_time_basis import (
+    DessMonitorDeviceTimeBasis,
+)
+from custom_components.eybond_local.support.cloud_local_history_draft_writer import (
+    CloudLocalReadDraftArtifact,
+)
+from custom_components.eybond_local.drivers.local_register_evidence import (
+    LocalRegisterBlockObservation,
+    LocalRegisterReadPlan,
+    LocalRegisterSnapshot,
+)
+from custom_components.eybond_local.drivers.local_register_series import (
+    LocalRegisterSeriesPlan,
+    LocalRegisterSnapshotSeries,
+)
+from custom_components.eybond_local.support.local_register_collection import (
+    LOCAL_REGISTER_COLLECTION_STATE_RUNNING,
+    LocalRegisterCollectionStatus,
+)
+from custom_components.eybond_local.support.cloud_local_history_representability import (
+    LocalRegisterOverlayContext,
+)
 from custom_components.eybond_local.support.cloud_learning_runner import CloudLearningOutcome
+from custom_components.eybond_local.telemetry import (
+    TelemetryFreshness,
+    TelemetryPoint,
+    TypedTelemetryFrame,
+)
 from custom_components.eybond_local.flows.config.ble import (
     BLE_ACTION_APPLY,
     BLE_ACTION_RESCAN,
@@ -7905,11 +7947,30 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "endpoint_control_policy": "external",
             }
         )
-        options._config_entry.runtime_data = types.SimpleNamespace(
+        coordinator = types.SimpleNamespace(
             data=types.SimpleNamespace(values={}),
             cloud_evidence_provider="smartess",
             smartess_collector_pn="E50000200000000001",
+            local_register_collection_status=LocalRegisterCollectionStatus.idle(),
         )
+
+        def _start_local_collection(plan):
+            coordinator.local_register_collection_status = (
+                LocalRegisterCollectionStatus(
+                    state=LOCAL_REGISTER_COLLECTION_STATE_RUNNING,
+                    plan=plan,
+                    started_at="2026-08-22T10:00:00+00:00",
+                    completed_at="",
+                    completed_sample_count=0,
+                    failure_reason="",
+                )
+            )
+            return coordinator.local_register_collection_status
+
+        coordinator.start_local_register_collection = Mock(
+            side_effect=_start_local_collection
+        )
+        options._config_entry.runtime_data = coordinator
         return options
 
     async def test_control_discovery_ha_only_profile_routes_to_profile_choice(
@@ -9004,6 +9065,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             self.started: list[dict] = []
             self.stopped: list[dict] = []
             self.published: list[dict] = []
+            self.local_register_snapshot: LocalRegisterSnapshot | None = None
+            self.latest_local_register_series: LocalRegisterSnapshotSeries | None = None
+            self.local_register_overlay_context: LocalRegisterOverlayContext | None = None
+            self.local_register_capture_calls = 0
 
         @property
         def shadow_learning_runtime(self) -> ShadowLearningRuntimeFacade:
@@ -9031,6 +9096,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             self.stopped.append(kwargs)
             return {"status": "stopped", "restore_confirmed": True}
 
+        async def async_capture_local_register_snapshot(self):
+            self.local_register_capture_calls += 1
+            return self.local_register_snapshot
+
         def publish_shadow_learning_artifacts(self, **kwargs):
             self.published.append(kwargs)
             return {}
@@ -9047,7 +9116,11 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options._config_entry.runtime_data = coordinator
 
         async def _fake_preflight(_coordinator):
-            return {"can_start": True, "blockers": []}
+            return {
+                "can_start": True,
+                "blockers": [],
+                "collector_pn": coordinator.smartess_collector_pn,
+            }
 
         options._build_shadow_learning_preflight_snapshot = _fake_preflight
         options._shadow_learning_cloud_identity = lambda _coordinator: {
@@ -9320,6 +9393,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         # drafted, session stopped — with no preview-plan/action step in between.
         self.assertEqual(len(coordinator.started), 1)
         self.assertEqual(coordinator.started[0].get("allow_ack_writes"), False)
+        self.assertEqual(coordinator.local_register_capture_calls, 0)
         orchestrate_mock.assert_called_once()
         overlay_mock.assert_called_once()
         self.assertEqual(len(coordinator.stopped), 1)
@@ -9410,6 +9484,637 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             {"status": "ok", "found_controls": 0, "found_metadata": 2},
         )
 
+    async def test_dessmonitor_runner_records_typed_local_semantic_coverage(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=False)
+        coordinator.data.telemetry = TypedTelemetryFrame(
+            driver_key="smg",
+            points=(
+                TelemetryPoint(
+                    key="pv_voltage",
+                    value=230.1,
+                    freshness=TelemetryFreshness.FRESH,
+                ),
+            ),
+        )
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_state["wizard_source"] = "dessmonitor"
+        semantic_report = {
+            "schema_version": 1,
+            "authority": "semantic_hint_only",
+            "local_mapping_proven": False,
+            "provider_id": "smartess",
+            "source_id": "dessmonitor",
+            "recognized_count": 1,
+            "read_candidate_count": 1,
+            "unit_conflict_count": 0,
+            "unknown_count": 0,
+            "control_metadata_count": 0,
+            "observations": [
+                {
+                    "field_kind": "reading",
+                    "field_id": "pv_voltage",
+                    "title": "PV Voltage",
+                    "value": "230.1",
+                    "observed_unit": "V",
+                    "source_action": "querySPDeviceLastData",
+                    "status": "recognized",
+                    "semantic_key": "pv_voltage",
+                    "canonical_title": "PV Voltage",
+                    "semantic_kind": "read",
+                    "expected_unit": "V",
+                    "device_class": "voltage",
+                    "state_class": "measurement",
+                    "local_mapping": "unproven",
+                }
+            ],
+        }
+        evidence = {
+            "source": "dessmonitor",
+            "metadata_field_count": 1,
+            "semantic_report": semantic_report,
+        }
+        outcome = CloudLearningOutcome(
+            identity={"pn": coordinator.smartess_collector_pn},
+            result={
+                "source": "dessmonitor",
+                "metadata_only": True,
+                "metadata_field_count": 1,
+                "planned_write_count": 0,
+                "executed_result_count": 0,
+                "sent_count": 0,
+                "leaked_count": 0,
+                "degraded_count": 0,
+            },
+            metadata_evidence=evidence,
+        )
+
+        with patch.object(
+            dessmonitor_learning_module.DessMonitorReadOnlyLearningRunner,
+            "async_run",
+            new=AsyncMock(return_value=outcome),
+        ):
+            await options._async_run_control_discovery()
+
+        stored = options._shadow_learning_state["cloud_metadata"]
+        coverage = stored["local_coverage"]
+        self.assertEqual(coverage["authority"], "runtime_semantic_presence_only")
+        self.assertIs(coverage["local_mapping_proven"], False)
+        self.assertEqual(coverage["driver_key"], "smg")
+        self.assertEqual(coverage["available_count"], 1)
+        self.assertEqual(coverage["items"][0]["status"], "available_fresh")
+        self.assertNotIn("230.1", str(coverage))
+        self.assertNotIn("register", str(coverage).casefold())
+        self.assertEqual(coordinator.started, [])
+        self.assertEqual(coordinator.stopped, [])
+
+    async def test_dessmonitor_records_exact_pn_local_register_snapshot(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=False)
+        coordinator.local_register_snapshot = LocalRegisterSnapshot(
+            collector_pn=coordinator.smartess_collector_pn,
+            driver_key="smg",
+            started_at="2026-08-22T10:00:00+00:00",
+            completed_at="2026-08-22T10:00:02+00:00",
+            planned_block_count=1,
+            failed_block_count=0,
+            blocks=(
+                LocalRegisterBlockObservation(
+                    plan=LocalRegisterReadPlan(
+                        devcode=2376,
+                        collector_addr=1,
+                        device_addr=1,
+                        function=3,
+                        start=300,
+                        count=2,
+                    ),
+                    observed_at="2026-08-22T10:00:01+00:00",
+                    values=(2305, 500),
+                ),
+            ),
+        )
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_state["wizard_source"] = "dessmonitor"
+        evidence = {"source": "dessmonitor", "metadata_field_count": 1}
+        outcome = CloudLearningOutcome(
+            identity={"pn": coordinator.smartess_collector_pn},
+            result={
+                "source": "dessmonitor",
+                "metadata_only": True,
+                "metadata_field_count": 1,
+                "planned_write_count": 0,
+                "executed_result_count": 0,
+                "sent_count": 0,
+                "leaked_count": 0,
+                "degraded_count": 0,
+            },
+            read_bindings=None,
+            metadata_evidence=evidence,
+        )
+
+        with patch.object(
+            dessmonitor_learning_module.DessMonitorReadOnlyLearningRunner,
+            "async_run",
+            new=AsyncMock(return_value=outcome),
+        ):
+            await options._async_run_control_discovery()
+
+        self.assertEqual(coordinator.local_register_capture_calls, 1)
+        stored = options._shadow_learning_state["cloud_metadata"]
+        snapshot = stored["local_register_snapshot"]
+        self.assertEqual(snapshot["authority"], "live_local_wire_observation")
+        self.assertIs(snapshot["cloud_mapping_proven"], False)
+        self.assertEqual(snapshot["blocks"][0]["plan"]["function"], 3)
+        self.assertEqual(snapshot["blocks"][0]["values"], [2305, 500])
+        self.assertNotIn("read_bindings", stored)
+        published = coordinator.published[-1]["orchestration"]
+        self.assertEqual(
+            published["metadata_evidence"]["local_register_snapshot"],
+            snapshot,
+        )
+        self.assertEqual(coordinator.started, [])
+        self.assertEqual(coordinator.stopped, [])
+
+    async def test_dessmonitor_composes_completed_local_series_for_review_only(
+        self,
+    ) -> None:
+        coordinator = self._RunnerCoordinator(ready=False)
+        identity = DessMonitorDeviceIdentity(
+            pn=coordinator.smartess_collector_pn,
+            sn="92632511100118",
+            devcode=2376,
+            devaddr=1,
+        )
+        source = DessMonitorHistorySeries(
+            identity=identity,
+            source_action=DESSMONITOR_HISTORY_SOURCE_SOLE_CHART,
+            series_key="pv_voltage",
+            title="PV Voltage",
+            unit="V",
+            requested_date="2026-08-22",
+            precision_minutes=5,
+            points=tuple(
+                DessMonitorHistoryPoint(
+                    device_local_timestamp=(
+                        f"2026-08-22 10:{index * 5:02d}:00"
+                    ),
+                    value=f"{230 + index}.0",
+                )
+                for index in range(5)
+            ),
+        )
+        time_basis = DessMonitorDeviceTimeBasis(
+            identity=identity,
+            offset_seconds=0,
+        )
+        history = resolve_dessmonitor_history_time_basis(source, time_basis)
+        collection = DessMonitorHistoryCollection(
+            identity=identity,
+            time_basis=time_basis,
+            requested_date="2026-08-22",
+            attempted_series_count=1,
+            failed_series_count=0,
+            budget_exhausted=False,
+            series=(history,),
+        )
+        plan = LocalRegisterReadPlan(
+            devcode=2376,
+            collector_addr=1,
+            device_addr=1,
+            function=3,
+            start=300,
+            count=1,
+        )
+        snapshots = tuple(
+            LocalRegisterSnapshot(
+                collector_pn=coordinator.smartess_collector_pn,
+                driver_key="smg",
+                started_at=f"2026-08-22T10:{index * 5:02d}:05+00:00",
+                completed_at=f"2026-08-22T10:{index * 5:02d}:15+00:00",
+                planned_block_count=1,
+                failed_block_count=0,
+                blocks=(
+                    LocalRegisterBlockObservation(
+                        plan=plan,
+                        observed_at=(
+                            f"2026-08-22T10:{index * 5:02d}:10+00:00"
+                        ),
+                        values=((230 + index) * 10,),
+                    ),
+                ),
+            )
+            for index in range(5)
+        )
+        coordinator.latest_local_register_series = LocalRegisterSnapshotSeries(
+            collector_pn=coordinator.smartess_collector_pn,
+            driver_key="smg",
+            sample_interval_seconds=300,
+            snapshots=snapshots,
+        )
+        coordinator.local_register_overlay_context = LocalRegisterOverlayContext(
+            collector_pn=coordinator.smartess_collector_pn,
+            driver_key="smg",
+            register_schema_name="modbus_smg/models/smg_6200.json",
+            devcode=2376,
+            collector_addr=1,
+            device_addr=1,
+            claimed_locations=(),
+            existing_semantic_keys=(),
+        )
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_state["wizard_source"] = "dessmonitor"
+        evidence = {
+            "source": "dessmonitor",
+            "metadata_field_count": 1,
+            "telemetry_fields": [
+                {
+                    "field_id": "pv_voltage",
+                    "title": "PV Voltage",
+                    "value": "234.0",
+                    "unit": "V",
+                }
+            ],
+            "history_collection": collection.to_record(),
+        }
+        outcome = CloudLearningOutcome(
+            identity={"pn": coordinator.smartess_collector_pn},
+            result={
+                "source": "dessmonitor",
+                "metadata_only": True,
+                "metadata_field_count": 1,
+                "planned_write_count": 0,
+                "executed_result_count": 0,
+                "sent_count": 0,
+                "leaked_count": 0,
+                "degraded_count": 0,
+            },
+            metadata_evidence=evidence,
+        )
+
+        with patch.object(
+            dessmonitor_learning_module.DessMonitorReadOnlyLearningRunner,
+            "async_run",
+            new=AsyncMock(return_value=outcome),
+        ):
+            await options._async_run_control_discovery()
+
+        stored = options._shadow_learning_state["cloud_metadata"]
+        review = stored["local_history_review"]
+        self.assertEqual(review["authority"], "review_composition_only")
+        self.assertIs(review["read_only"], True)
+        self.assertIs(review["local_mapping_proven"], False)
+        self.assertIs(review["activation_allowed"], False)
+        self.assertEqual(review["status"], "review_candidates_available")
+        self.assertEqual(review["unique_candidate_count"], 1)
+        self.assertEqual(
+            review["verdicts"][0]["alignment_tolerance_seconds"],
+            150,
+        )
+        representability = stored["local_history_representability"]
+        self.assertEqual(
+            representability["authority"],
+            "current_context_review_only",
+        )
+        self.assertEqual(representability["representable_count"], 1)
+        self.assertIs(representability["draft_generation_allowed"], False)
+        self.assertIs(representability["activation_allowed"], False)
+        draft_plan = stored["local_history_draft_plan"]
+        self.assertEqual(
+            draft_plan["authority"],
+            "inactive_review_draft_plan_only",
+        )
+        self.assertEqual(draft_plan["item_count"], 1)
+        self.assertIs(draft_plan["local_mapping_proven"], False)
+        self.assertIs(draft_plan["draft_generation_allowed"], True)
+        self.assertIs(draft_plan["activation_allowed"], False)
+        self.assertEqual(
+            draft_plan["items"][0]["candidate"]["location"],
+            {
+                "devcode": 2376,
+                "collector_addr": 1,
+                "device_addr": 1,
+                "function": 3,
+                "register": 300,
+            },
+        )
+        self.assertNotIn("read_bindings", stored)
+        self.assertNotIn("overlay", options._shadow_learning_state)
+        self.assertIn(
+            "review hints only",
+            options._control_discovery_local_history_review_summary(),
+        )
+        review_markdown = options._control_discovery_metadata_markdown(
+            options._control_discovery_metadata_fields()
+        )
+        self.assertIn("Local comparison candidates", review_markdown)
+        self.assertIn("FC3", review_markdown)
+        self.assertIn("register 300", review_markdown)
+        self.assertIn("scale ÷10", review_markdown)
+        self.assertIn("Current local-context compatibility", review_markdown)
+        self.assertIn("exact current route", review_markdown)
+        self.assertEqual(
+            coordinator.published[-1]["orchestration"]["metadata_evidence"]
+            ["local_history_review"],
+            review,
+        )
+        self.assertEqual(
+            coordinator.published[-1]["orchestration"]["metadata_evidence"]
+            ["local_history_draft_plan"],
+            draft_plan,
+        )
+
+        result = await options.async_step_shadow_learning_result()
+        self.assertEqual(
+            _schema_select_options(result["data_schema"], "result_action"),
+            [
+                "create_inactive_read_draft",
+                "create_support_package",
+                "done",
+            ],
+        )
+        self.assertIn(
+            "does not add entities",
+            result["description_placeholders"]["control_discovery_hint"],
+        )
+        with patch.object(
+            options_shadow_inactive_draft_module,
+            "generate_inactive_cloud_local_read_schema_draft",
+        ) as invalid_generate:
+            invalid = await options.async_step_shadow_learning_result(
+                {"result_action": object()}
+            )
+        invalid_generate.assert_not_called()
+        self.assertEqual(invalid["type"], "form")
+        self.assertEqual(invalid["errors"], {"result_action": "invalid_selection"})
+
+        artifact = CloudLocalReadDraftArtifact(
+            schema_name="learned/dessmonitor_review/device/review.json",
+            schema_path=Path(
+                "/config/eybond_local/register_schemas/learned/"
+                "dessmonitor_review/device/review.json"
+            ),
+            generated_read_count=1,
+            evidence_sha256="a" * 64,
+            manifest={},
+        )
+        with patch.object(
+            options_shadow_inactive_draft_module,
+            "generate_inactive_cloud_local_read_schema_draft",
+            return_value=artifact,
+        ) as generate:
+            generated = await options.async_step_shadow_learning_result(
+                {"result_action": "create_inactive_read_draft"}
+            )
+
+        generate.assert_called_once()
+        self.assertEqual(
+            options._shadow_learning_state["inactive_read_draft"],
+            {
+                "schema_name": artifact.schema_name,
+                "schema_path": str(artifact.schema_path),
+                "generated_read_count": 1,
+                "evidence_sha256": "a" * 64,
+                "status": "inactive_review_required",
+                "activation_allowed": False,
+            },
+        )
+        self.assertIn(
+            "Nothing was added",
+            generated["description_placeholders"]["control_discovery_hint"],
+        )
+
+    async def test_dessmonitor_drops_untrusted_stale_local_history_review(
+        self,
+    ) -> None:
+        coordinator = self._RunnerCoordinator(ready=False)
+        coordinator.latest_local_register_series = object()
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_state["wizard_source"] = "dessmonitor"
+        outcome = CloudLearningOutcome(
+            identity={"pn": coordinator.smartess_collector_pn},
+            result={
+                "source": "dessmonitor",
+                "metadata_only": True,
+                "metadata_field_count": 1,
+                "planned_write_count": 0,
+                "executed_result_count": 0,
+                "sent_count": 0,
+                "leaked_count": 0,
+                "degraded_count": 0,
+            },
+            metadata_evidence={
+                "source": "dessmonitor",
+                "metadata_field_count": 1,
+                "local_history_review": {
+                    "authority": "forged_mapping_authority",
+                },
+                "local_history_representability": {
+                    "authority": "forged_activation_authority",
+                },
+                "local_history_draft_plan": {
+                    "authority": "forged_draft_authority",
+                },
+            },
+        )
+
+        with patch.object(
+            dessmonitor_learning_module.DessMonitorReadOnlyLearningRunner,
+            "async_run",
+            new=AsyncMock(return_value=outcome),
+        ):
+            await options._async_run_control_discovery()
+
+        self.assertNotIn(
+            "local_history_review",
+            options._shadow_learning_state["cloud_metadata"],
+        )
+        self.assertNotIn(
+            "local_history_representability",
+            options._shadow_learning_state["cloud_metadata"],
+        )
+        self.assertNotIn(
+            "local_history_draft_plan",
+            options._shadow_learning_state["cloud_metadata"],
+        )
+        self.assertNotIn("overlay", options._shadow_learning_state)
+
+    async def test_dessmonitor_rejects_foreign_local_register_snapshot(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=False)
+        coordinator.local_register_snapshot = LocalRegisterSnapshot(
+            collector_pn="V0000000000001",
+            driver_key="smg",
+            started_at="2026-08-22T10:00:00+00:00",
+            completed_at="2026-08-22T10:00:02+00:00",
+            planned_block_count=1,
+            failed_block_count=0,
+            blocks=(
+                LocalRegisterBlockObservation(
+                    plan=LocalRegisterReadPlan(
+                        devcode=2376,
+                        collector_addr=1,
+                        device_addr=1,
+                        function=3,
+                        start=300,
+                        count=1,
+                    ),
+                    observed_at="2026-08-22T10:00:01+00:00",
+                    values=(2305,),
+                ),
+            ),
+        )
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_state["wizard_source"] = "dessmonitor"
+        evidence = {"source": "dessmonitor", "metadata_field_count": 1}
+        outcome = CloudLearningOutcome(
+            identity={"pn": coordinator.smartess_collector_pn},
+            result={
+                "source": "dessmonitor",
+                "metadata_only": True,
+                "metadata_field_count": 1,
+                "planned_write_count": 0,
+                "executed_result_count": 0,
+                "sent_count": 0,
+                "leaked_count": 0,
+                "degraded_count": 0,
+            },
+            metadata_evidence=evidence,
+        )
+
+        with patch.object(
+            dessmonitor_learning_module.DessMonitorReadOnlyLearningRunner,
+            "async_run",
+            new=AsyncMock(return_value=outcome),
+        ):
+            await options._async_run_control_discovery()
+
+        self.assertEqual(coordinator.local_register_capture_calls, 1)
+        self.assertNotIn(
+            "local_register_snapshot",
+            options._shadow_learning_state["cloud_metadata"],
+        )
+        self.assertNotIn(
+            "local_register_snapshot",
+            coordinator.published[-1]["orchestration"]["metadata_evidence"],
+        )
+
+    async def test_dessmonitor_local_snapshot_failure_is_supplemental(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=False)
+        coordinator.async_capture_local_register_snapshot = AsyncMock(
+            side_effect=ConnectionError("private local wire detail")
+        )
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_state["wizard_source"] = "dessmonitor"
+        evidence = {"source": "dessmonitor", "metadata_field_count": 1}
+        outcome = CloudLearningOutcome(
+            identity={"pn": coordinator.smartess_collector_pn},
+            result={
+                "source": "dessmonitor",
+                "metadata_only": True,
+                "metadata_field_count": 1,
+                "planned_write_count": 0,
+                "executed_result_count": 0,
+                "sent_count": 0,
+                "leaked_count": 0,
+                "degraded_count": 0,
+            },
+            metadata_evidence=evidence,
+        )
+
+        with patch.object(
+            dessmonitor_learning_module.DessMonitorReadOnlyLearningRunner,
+            "async_run",
+            new=AsyncMock(return_value=outcome),
+        ) as run_mock:
+            await options._async_run_control_discovery()
+
+        coordinator.async_capture_local_register_snapshot.assert_awaited_once()
+        run_mock.assert_awaited_once()
+        self.assertEqual(
+            options._shadow_learning_state["cloud_metadata"],
+            evidence,
+        )
+        self.assertNotIn(
+            "private local wire detail",
+            str(options._shadow_learning_state),
+        )
+        self.assertEqual(coordinator.started, [])
+        self.assertEqual(coordinator.stopped, [])
+
+    async def test_dessmonitor_local_snapshot_cancellation_propagates(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=False)
+        entered = asyncio.Event()
+        never = asyncio.Event()
+
+        async def _capture():
+            entered.set()
+            await never.wait()
+
+        coordinator.async_capture_local_register_snapshot = _capture
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_state["wizard_source"] = "dessmonitor"
+
+        with (
+            patch.object(asyncio, "sleep", new=AsyncMock()),
+            patch.object(
+                dessmonitor_learning_module.DessMonitorReadOnlyLearningRunner,
+                "async_run",
+                new=AsyncMock(),
+            ) as run_mock,
+        ):
+            task = asyncio.create_task(options._async_run_control_discovery())
+            await entered.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        run_mock.assert_not_awaited()
+        self.assertEqual(
+            options._shadow_learning_state["discovery"],
+            {
+                "status": "cancelled",
+                "reason": "control_discovery_cancelled",
+            },
+        )
+        self.assertEqual(coordinator.started, [])
+        self.assertEqual(coordinator.stopped, [])
+
+    async def test_dessmonitor_identity_change_after_snapshot_fails_before_cloud(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=False)
+        original_pn = coordinator.smartess_collector_pn
+
+        async def _capture():
+            coordinator.smartess_collector_pn = "V0000000000001"
+            return LocalRegisterSnapshot(
+                collector_pn=original_pn,
+                driver_key="smg",
+                started_at="2026-08-22T10:00:00+00:00",
+                completed_at="2026-08-22T10:00:00+00:00",
+                planned_block_count=1,
+                failed_block_count=1,
+                blocks=(),
+            )
+
+        coordinator.async_capture_local_register_snapshot = _capture
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_state["wizard_source"] = "dessmonitor"
+
+        with (
+            patch.object(asyncio, "sleep", new=AsyncMock()),
+            patch.object(
+                dessmonitor_learning_module.DessMonitorReadOnlyLearningRunner,
+                "async_run",
+                new=AsyncMock(),
+            ) as run_mock,
+        ):
+            await options._async_run_control_discovery()
+
+        run_mock.assert_not_awaited()
+        self.assertEqual(
+            options._shadow_learning_state["discovery"]["status"],
+            "error",
+        )
+        self.assertNotIn("local_register_snapshot", str(options._shadow_learning_state))
+        self.assertEqual(coordinator.started, [])
+        self.assertEqual(coordinator.stopped, [])
+
     async def test_dessmonitor_cancellation_never_runs_shadow_cleanup(self) -> None:
         coordinator = self._RunnerCoordinator(ready=False)
         options = self._runner_options_flow(coordinator)
@@ -9474,6 +10179,95 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 },
                 "cloud_metadata": {
                     "metadata_field_count": 2,
+                    "history_collection": {
+                        "schema_version": 1,
+                        "authority": "bounded_read_only_history_collection",
+                        "provider_id": "smartess",
+                        "source_id": "dessmonitor",
+                        "read_only": True,
+                        "local_mapping_proven": False,
+                        "activation_allowed": False,
+                        "identity": {
+                            "pn": "E50000200000000001",
+                            "sn": "92632511100118",
+                            "devcode": 2376,
+                            "devaddr": 1,
+                        },
+                        "time_basis": None,
+                        "requested_date": "",
+                        "attempted_series_count": 0,
+                        "failed_series_count": 0,
+                        "budget_exhausted": False,
+                        "series": [],
+                        "status": "time_basis_unavailable",
+                        "collected_series_count": 0,
+                        "point_count": 0,
+                    },
+                    "semantic_report": {
+                        "schema_version": 1,
+                        "authority": "semantic_hint_only",
+                        "local_mapping_proven": False,
+                        "provider_id": "smartess",
+                        "source_id": "dessmonitor",
+                        "recognized_count": 2,
+                        "read_candidate_count": 1,
+                        "unit_conflict_count": 0,
+                        "unknown_count": 0,
+                        "control_metadata_count": 1,
+                        "observations": [
+                            {
+                                "field_kind": "reading",
+                                "field_id": "pv_voltage",
+                                "title": "PV Voltage",
+                                "value": "230.1",
+                                "observed_unit": "V",
+                                "source_action": "querySPDeviceLastData",
+                                "status": "recognized",
+                                "semantic_key": "pv_voltage",
+                                "canonical_title": "PV Voltage",
+                                "semantic_kind": "read",
+                                "expected_unit": "V",
+                                "device_class": "voltage",
+                                "state_class": "measurement",
+                                "local_mapping": "unproven",
+                            },
+                            {
+                                "field_kind": "setting",
+                                "field_id": "charger_priority",
+                                "title": "Charger Source Priority",
+                                "value": "Solar first",
+                                "observed_unit": "",
+                                "source_action": "queryDeviceCtrlField",
+                                "status": "recognized",
+                                "semantic_key": "charger_source_priority",
+                                "canonical_title": "Charger Source Priority",
+                                "semantic_kind": "both",
+                                "expected_unit": "",
+                                "device_class": "",
+                                "state_class": "",
+                                "local_mapping": "unproven",
+                            },
+                        ],
+                    },
+                    "local_coverage": {
+                        "schema_version": 1,
+                        "authority": "runtime_semantic_presence_only",
+                        "local_mapping_proven": False,
+                        "driver_key": "smg",
+                        "items": [
+                            {
+                                "semantic_key": "pv_voltage",
+                                "cloud_field_count": 1,
+                                "status": "available_fresh",
+                                "local_freshness": "fresh",
+                                "local_origin": "driver",
+                                "local_value_kind": "number",
+                            }
+                        ],
+                        "available_count": 1,
+                        "unknown_value_count": 0,
+                        "not_observed_count": 0,
+                    },
                     "telemetry_fields": [
                         {
                             "field_id": "pv_voltage",
@@ -9497,18 +10291,102 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         review = await options.async_step_shadow_learning_review()
         self.assertEqual(review["step_id"], "shadow_learning_review")
         hint = review["description_placeholders"]["control_discovery_hint"]
+        self.assertIn("Already available locally", hint)
+        self.assertIn("Cloud setting descriptions", hint)
         self.assertIn("PV Voltage", hint)
         self.assertIn("Charger Source Priority", hint)
+        self.assertIn("1 are already available locally", hint)
+        self.assertIn("device time zone could not be confirmed", hint)
+        self.assertIn("about 20 minutes", hint)
+        self.assertNotIn("local register", hint)
         self.assertNotIn("Apply", hint)
+        self.assertIn(
+            "start_local_register_observation",
+            review["data_schema"].schema,
+        )
 
-        result = await options.async_step_shadow_learning_review({})
+        result = await options.async_step_shadow_learning_review(
+            {"start_local_register_observation": True}
+        )
         self.assertEqual(result["step_id"], "shadow_learning_result")
+        start = options._coordinator().start_local_register_collection
+        start.assert_called_once()
+        plan = start.call_args.args[0]
+        self.assertIs(type(plan), LocalRegisterSeriesPlan)
+        self.assertEqual((plan.sample_count, plan.sample_interval_seconds), (5, 300))
         result_hint = result["description_placeholders"]["control_discovery_hint"]
         self.assertIn("2 metadata field", result_hint)
+        self.assertIn("1 recognized semantic candidate", result_hint)
+        self.assertIn("device time zone could not be confirmed", result_hint)
+        self.assertIn("running (0/5 snapshots)", result_hint)
         self.assertNotIn("No controls were found", result_hint)
         self.assertEqual(
             _schema_select_options(result["data_schema"], "result_action"),
             ["create_support_package", "done"],
+        )
+
+    async def test_local_observation_can_be_cancelled_after_review_flow_closes(self) -> None:
+        options = self._wizard_options_flow()
+        coordinator = options._coordinator()
+        plan = LocalRegisterSeriesPlan(5, 300)
+        coordinator.local_register_collection_status = LocalRegisterCollectionStatus(
+            state=LOCAL_REGISTER_COLLECTION_STATE_RUNNING,
+            plan=plan,
+            started_at="2026-08-22T10:00:00+00:00",
+            completed_at="",
+            completed_sample_count=2,
+            failure_reason="",
+        )
+
+        async def _cancel():
+            coordinator.local_register_collection_status = (
+                LocalRegisterCollectionStatus(
+                    state="cancelled",
+                    plan=plan,
+                    started_at="2026-08-22T10:00:00+00:00",
+                    completed_at="2026-08-22T10:05:00+00:00",
+                    completed_sample_count=2,
+                    failure_reason="",
+                )
+            )
+            return coordinator.local_register_collection_status
+
+        coordinator.async_cancel_local_register_collection = AsyncMock(
+            side_effect=_cancel
+        )
+
+        shown = await options.async_step_local_register_observation()
+        self.assertEqual(shown["step_id"], "local_register_observation")
+        self.assertIn(
+            "running (2/5 snapshots)",
+            shown["description_placeholders"][
+                "local_register_observation_summary"
+            ],
+        )
+        self.assertEqual(
+            _schema_select_options(
+                shown["data_schema"],
+                "local_register_observation_action",
+            ),
+            ["cancel", "done"],
+        )
+
+        cancelled = await options.async_step_local_register_observation(
+            {"local_register_observation_action": "cancel"}
+        )
+        coordinator.async_cancel_local_register_collection.assert_awaited_once()
+        self.assertIn(
+            "was cancelled",
+            cancelled["description_placeholders"][
+                "local_register_observation_summary"
+            ],
+        )
+        self.assertEqual(
+            _schema_select_options(
+                cancelled["data_schema"],
+                "local_register_observation_action",
+            ),
+            ["restart", "done"],
         )
 
     async def test_control_discovery_runner_uses_live_bundle_identity_without_saved_evidence(self) -> None:

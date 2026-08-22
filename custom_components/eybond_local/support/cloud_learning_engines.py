@@ -48,6 +48,8 @@ class CloudLearningCapabilities:
     control_actions: bool
     raw_packets: bool
     history: bool
+    local_register_snapshot: bool
+    local_register_series: bool
     requires_shadow_route: bool
     requires_control_consent: bool
 
@@ -57,6 +59,8 @@ class CloudLearningCapabilities:
             self.control_actions,
             self.raw_packets,
             self.history,
+            self.local_register_snapshot,
+            self.local_register_series,
             self.requires_shadow_route,
             self.requires_control_consent,
         ):
@@ -66,6 +70,8 @@ class CloudLearningCapabilities:
             raise ValueError("cloud_learning_shadow_route_without_controls")
         if self.requires_control_consent and not self.control_actions:
             raise ValueError("cloud_learning_consent_without_controls")
+        if self.local_register_series and not self.local_register_snapshot:
+            raise ValueError("cloud_learning_series_without_snapshot")
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +129,8 @@ class SmartEssCloudLearningEngine(CloudLearningEngine):
             control_actions=True,
             raw_packets=False,
             history=False,
+            local_register_snapshot=False,
+            local_register_series=False,
             requires_shadow_route=True,
             requires_control_consent=True,
         ),
@@ -149,6 +157,8 @@ class ValueCloudCloudLearningEngine(CloudLearningEngine):
             control_actions=True,
             raw_packets=False,
             history=False,
+            local_register_snapshot=False,
+            local_register_series=False,
             requires_shadow_route=True,
             requires_control_consent=True,
         ),
@@ -171,7 +181,9 @@ class DessMonitorCloudLearningEngine(CloudLearningEngine):
             metadata=True,
             control_actions=False,
             raw_packets=True,
-            history=False,
+            history=True,
+            local_register_snapshot=True,
+            local_register_series=True,
             requires_shadow_route=False,
             requires_control_consent=False,
         ),
@@ -217,6 +229,8 @@ class UnavailableCloudLearningEngine(CloudLearningEngine):
                 control_actions=False,
                 raw_packets=False,
                 history=False,
+                local_register_snapshot=False,
+                local_register_series=False,
                 requires_shadow_route=False,
                 requires_control_consent=False,
             ),

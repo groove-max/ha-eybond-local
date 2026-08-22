@@ -17,6 +17,10 @@ from custom_components.eybond_local.dessmonitor_cloud import (  # noqa: E402
     DessMonitorEvidenceBundle,
     DessMonitorTelemetryField,
 )
+from custom_components.eybond_local.dessmonitor_collection import (  # noqa: E402
+    DESSMONITOR_COLLECTION_STATUS_TIME_BASIS_UNAVAILABLE,
+    DessMonitorHistoryCollection,
+)
 from custom_components.eybond_local.support.dessmonitor_learning import (  # noqa: E402
     DessMonitorReadOnlyLearningRunner,
 )
@@ -51,13 +55,22 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
         on_learning = Mock()
         identities: list[dict] = []
         progress: list[tuple[float, str]] = []
+        history_collection = DessMonitorHistoryCollection(
+            identity=bundle.identity,
+            time_basis=None,
+            requested_date="",
+            attempted_series_count=0,
+            failed_series_count=0,
+            budget_exhausted=False,
+            series=(),
+        )
 
         async def executor(operation):
             return operation()
 
         with patch(
-            "custom_components.eybond_local.support.dessmonitor_learning.fetch_read_only_evidence",
-            return_value=bundle,
+            "custom_components.eybond_local.support.dessmonitor_learning.fetch_read_only_evidence_with_history",
+            return_value=(bundle, history_collection),
         ) as fetch:
             outcome = await DessMonitorReadOnlyLearningRunner().async_run(
                 executor=executor,
@@ -82,8 +95,35 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(identities[0]["pn"], "E50000200000000001")
         self.assertTrue(outcome.result["metadata_only"])
         self.assertEqual(outcome.result["planned_write_count"], 0)
+        self.assertEqual(outcome.result["semantic_candidate_count"], 1)
+        self.assertEqual(outcome.result["semantic_unit_conflict_count"], 0)
+        self.assertEqual(outcome.result["semantic_unknown_count"], 0)
+        self.assertEqual(
+            outcome.result["history_status"],
+            DESSMONITOR_COLLECTION_STATUS_TIME_BASIS_UNAVAILABLE,
+        )
+        self.assertEqual(outcome.result["history_series_count"], 0)
+        self.assertEqual(outcome.result["history_point_count"], 0)
+        self.assertEqual(outcome.result["history_failed_series_count"], 0)
         assert outcome.metadata_evidence is not None
         self.assertEqual(outcome.metadata_evidence["metadata_field_count"], 1)
+        self.assertEqual(
+            outcome.metadata_evidence["history_collection"],
+            history_collection.to_record(),
+        )
+        semantic_report = outcome.metadata_evidence["semantic_report"]
+        self.assertEqual(semantic_report["authority"], "semantic_hint_only")
+        self.assertIs(semantic_report["local_mapping_proven"], False)
+        self.assertEqual(semantic_report["recognized_count"], 1)
+        self.assertEqual(
+            semantic_report["observations"][0]["semantic_key"],
+            "pv_voltage",
+        )
+        self.assertEqual(
+            semantic_report["observations"][0]["local_mapping"],
+            "unproven",
+        )
+        self.assertNotIn("register", str(semantic_report).casefold())
         self.assertEqual(progress, [(0.10, "fetching"), (0.82, "building")])
 
 

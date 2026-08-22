@@ -13,6 +13,11 @@ from ..models import DetectedInverter, ProbeTarget
 from ..payload.modbus import ModbusSession
 from ..payload.register_decode import decode_ascii_low_bytes, read_spec_set_values
 from .base import InverterDriver
+from .local_register_evidence import (
+    LocalRegisterReadPlan,
+    LocalRegisterSnapshot,
+    async_capture_modbus_snapshot,
+)
 from .read_result import DriverReadMode, DriverReadResult
 
 
@@ -173,6 +178,32 @@ class SrneModbusDriver(InverterDriver):
                 for item in captured_ranges
             ],
         }
+
+    async def async_capture_local_register_snapshot(
+        self,
+        transport,
+        inverter: DetectedInverter,
+        *,
+        collector_pn: str,
+    ) -> LocalRegisterSnapshot:
+        schema = load_register_schema(
+            inverter.register_schema_name or self.register_schema_name
+        )
+        plans = tuple(
+            LocalRegisterReadPlan.for_target(
+                inverter.probe_target,
+                function=3,
+                start=block.start,
+                count=block.count,
+            )
+            for block in schema.blocks
+        )
+        return await async_capture_modbus_snapshot(
+            collector_pn=collector_pn,
+            driver_key=self.key,
+            plans=plans,
+            session_factory=lambda target: self._session(transport, target),
+        )
 
     @staticmethod
     def _session(transport, target: ProbeTarget) -> ModbusSession:

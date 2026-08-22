@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from ...collector_identity import pn_is_same_identity
 from ...metadata.local_metadata import (
     _dump_json,
     _ensure_can_write,
@@ -31,6 +32,11 @@ from . import (
 from .review_model import (
     attach_learned_read_review_model,
     build_learned_control_review_model,
+)
+from .read_evidence import (
+    LearnedReadActivationContext,
+    ShadowReadRoute,
+    read_register_evidence_from_map,
 )
 
 
@@ -90,6 +96,7 @@ def generate_shadow_learning_overlay_drafts(
     correlation: dict[str, Any],
     read_map: dict[str, Any] | None = None,
     read_bindings: dict[str, Any] | None = None,
+    learned_read_context: LearnedReadActivationContext | None = None,
     output_profile_name: str | None = None,
     output_schema_name: str | None = None,
     overwrite: bool = False,
@@ -130,9 +137,21 @@ def generate_shadow_learning_overlay_drafts(
         session_manifest=normalized_manifest,
         register_enum_tables=_register_enum_table_authority(schema),
     )
+    register_evidence = read_register_evidence_from_map(read_map)
+    exact_read_context = (
+        learned_read_context
+        if type(learned_read_context) is LearnedReadActivationContext
+        and learned_read_context.register_schema_name == source_schema_name
+        and learned_read_context.driver_key == schema.driver_key
+        and pn_is_same_identity(
+            learned_read_context.collector_pn,
+            normalized_manifest.get("collector_pn"),
+        )
+        else None
+    )
     read_enum_bindings = match_enum_bindings(
         read_bindings=read_bindings,
-        registers=(read_map or {}).get("registers", {}) if isinstance(read_map, dict) else {},
+        register_evidence=register_evidence,
         enum_tables=dict(schema.enum_tables) if schema.enum_tables else {},
         register_enum_tables=_register_enum_table_authority(schema),
         control_enum_evidence=control_enum_evidence,
@@ -142,6 +161,7 @@ def generate_shadow_learning_overlay_drafts(
         schema=schema,
         read_bindings=read_bindings,
         read_enum_bindings=read_enum_bindings,
+        learned_read_context=exact_read_context,
     )
     read_review_evidence = _build_read_review_evidence(
         read_bindings=read_bindings,
@@ -173,6 +193,9 @@ def generate_shadow_learning_overlay_drafts(
         # the session seed snapshot). Evidence for read-sensor learning and for
         # catalog contributions; not consumed by write capabilities.
         "read_map": _normalize_read_map(read_map),
+        "learned_read_context": (
+            exact_read_context.to_record() if exact_read_context is not None else {}
+        ),
         # Cloud label ↔ register correlation verdicts (read-sensor evidence for
         # the schema generator and for catalog contributions).
         "read_bindings": read_bindings if isinstance(read_bindings, dict) else {},
@@ -293,6 +316,7 @@ def _build_learned_read_overlay(
     schema,
     read_bindings: dict[str, Any] | None,
     read_enum_bindings: dict[str, Any] | None,
+    learned_read_context: LearnedReadActivationContext | None = None,
 ) -> dict[str, Any]:
     """Turn unique read correlations into schema sensor definitions.
 
@@ -307,11 +331,11 @@ def _build_learned_read_overlay(
         # Validation mode: don't deduplicate against the builtin schema so every
         # correlated read sensor materializes (mirrors the duplicate-controls
         # toggle). Activating then adds learned reads alongside any builtin ones.
-        existing_registers: set[int] = set()
+        existing_locations: set[tuple[int, int]] = set()
         existing_titles: set[str] = set()
     else:
-        existing_registers = {
-            int(spec.register)
+        existing_locations = {
+            (int(spec.function), int(spec.register))
             for specs in schema.spec_sets.values()
             for spec in specs
         }
@@ -319,7 +343,7 @@ def _build_learned_read_overlay(
             _normalize_title(measurement.name or measurement.key)
             for measurement in schema.measurement_descriptions
         }
-    block_for_register = _polled_block_lookup(schema)
+    block_for_location = _polled_block_lookup(schema)
 
     spec_set_additions: dict[str, list[dict[str, Any]]] = {}
     measurements: list[dict[str, Any]] = []
@@ -329,18 +353,20 @@ def _build_learned_read_overlay(
 
     def _accept(
         *,
+        function: int,
         register: int,
         title: str,
         spec: dict[str, Any],
         measurement: dict[str, Any],
         kind: str,
     ) -> None:
-        set_name = block_for_register(register) or _READ_OUT_OF_BLOCK_SPEC_SET
+        set_name = block_for_location(function, register) or _READ_OUT_OF_BLOCK_SPEC_SET
         spec_set_additions.setdefault(set_name, []).append(spec)
         measurements.append(measurement)
         generated.append(
             {
                 "key": spec["key"],
+                "function": function,
                 "register": register,
                 "title": title,
                 "display_title": _canonical_read_title(title),
@@ -350,13 +376,36 @@ def _build_learned_read_overlay(
         )
 
     for binding in _unique_read_bindings(read_bindings):
+        if (
+            learned_read_context is None
+            or binding["route"] != learned_read_context.route
+        ):
+            skipped.append(
+                {
+                    "function": binding["function"],
+                    "register": binding["register"],
+                    "title": binding["title"],
+                    "display_title": _canonical_read_title(binding["title"]),
+                    "kind": "numeric",
+                    "reason": "read_route_unproven",
+                }
+            )
+            continue
+        function = binding["function"]
         register = binding["register"]
         title = binding["title"]
         title_key = _normalize_title(title)
-        skip_reason = _read_skip_reason(register, title_key, existing_registers, existing_titles)
+        skip_reason = _read_skip_reason(
+            function,
+            register,
+            title_key,
+            existing_locations,
+            existing_titles,
+        )
         if skip_reason is not None:
             skipped.append(
                 {
+                    "function": function,
                     "register": register,
                     "title": title,
                     "display_title": _canonical_read_title(title),
@@ -365,10 +414,14 @@ def _build_learned_read_overlay(
                 }
             )
             continue
-        key = _unique_read_key(f"learned_read_{register}", used_keys)
-        existing_registers.add(register)
+        key = _unique_read_key(f"learned_read_fc{function}_{register}", used_keys)
+        existing_locations.add((function, register))
         existing_titles.add(title_key)
-        spec: dict[str, Any] = {"key": key, "register": register}
+        spec: dict[str, Any] = {
+            "key": key,
+            "function": function,
+            "register": register,
+        }
         if binding["signed"]:
             spec["signed"] = True
         if binding["divisor"] > 1:
@@ -377,16 +430,46 @@ def _build_learned_read_overlay(
         measurement = _read_measurement(
             key=key, title=title, unit=binding["unit"], decimals=binding["decimals"], divisor=binding["divisor"]
         )
-        _accept(register=register, title=title, spec=spec, measurement=measurement, kind="numeric")
+        _accept(
+            function=function,
+            register=register,
+            title=title,
+            spec=spec,
+            measurement=measurement,
+            kind="numeric",
+        )
 
     for binding in _unique_enum_bindings(read_enum_bindings):
+        if (
+            learned_read_context is None
+            or binding["route"] != learned_read_context.route
+        ):
+            skipped.append(
+                {
+                    "function": binding["function"],
+                    "register": binding["register"],
+                    "title": binding["title"],
+                    "display_title": _canonical_read_title(binding["title"]),
+                    "kind": "enum",
+                    "reason": "read_route_unproven",
+                }
+            )
+            continue
+        function = binding["function"]
         register = binding["register"]
         title = binding["title"]
         title_key = _normalize_title(title)
-        skip_reason = _read_skip_reason(register, title_key, existing_registers, existing_titles)
+        skip_reason = _read_skip_reason(
+            function,
+            register,
+            title_key,
+            existing_locations,
+            existing_titles,
+        )
         if skip_reason is not None:
             skipped.append(
                 {
+                    "function": function,
                     "register": register,
                     "title": title,
                     "display_title": _canonical_read_title(title),
@@ -395,15 +478,27 @@ def _build_learned_read_overlay(
                 }
             )
             continue
-        key = _unique_read_key(f"learned_read_{register}", used_keys)
-        existing_registers.add(register)
+        key = _unique_read_key(f"learned_read_fc{function}_{register}", used_keys)
+        existing_locations.add((function, register))
         existing_titles.add(title_key)
-        spec = {"key": key, "register": register, "enum_table": binding["enum_table"]}
+        spec = {
+            "key": key,
+            "function": function,
+            "register": register,
+            "enum_table": binding["enum_table"],
+        }
         measurement = {"key": key, "name": title, "enabled_default": True, "learned": True}
         semantic = resolve_semantic_title(title)
         if semantic is not None:
             measurement["translation_key"] = semantic.semantic_key
-        _accept(register=register, title=title, spec=spec, measurement=measurement, kind="enum")
+        _accept(
+            function=function,
+            register=register,
+            title=title,
+            spec=spec,
+            measurement=measurement,
+            kind="enum",
+        )
 
     fragment: dict[str, Any] = {}
     if spec_set_additions:
@@ -413,6 +508,12 @@ def _build_learned_read_overlay(
     if measurements:
         fragment["measurement_descriptions"] = measurements
         fragment["learned_read_registers"] = sorted({int(item["register"]) for item in generated})
+        fragment["learned_read_locations"] = sorted(
+            {
+                (int(item["function"]), int(item["register"]))
+                for item in generated
+            }
+        )
 
     return {"schema_fragment": fragment, "generated": generated, "skipped": skipped}
 
@@ -508,14 +609,33 @@ def _build_read_review_evidence(
             and len(candidate_registers) == 1
             else 0
         )
-        review_key = (kind, register, _normalize_title(title))
+        candidate_functions = sorted(
+            {
+                int(candidate.get("function"))
+                for candidate in candidates
+                if isinstance(candidate, dict)
+                and type(candidate.get("function")) is int
+                and int(candidate["function"]) in {3, 4}
+            }
+        )
+        function = (
+            candidate_functions[0]
+            if binding_status in {"unique", "enum_unique"}
+            and len(candidate_functions) == 1
+            else 0
+        )
+        review_key = (kind, function, register, _normalize_title(title))
         skipped_item = skipped_by_key.get(review_key)
         if review_key in generated_keys:
             disposition = _READ_DISPOSITION_NEW
             reason = "generated"
         elif skipped_item is not None:
-            disposition = _READ_DISPOSITION_EXISTING
             reason = str(skipped_item.get("reason") or "already_supported")
+            disposition = (
+                _READ_DISPOSITION_INCONCLUSIVE
+                if reason == "read_route_unproven"
+                else _READ_DISPOSITION_EXISTING
+            )
         else:
             disposition = _READ_DISPOSITION_INCONCLUSIVE
             reason = _inconclusive_read_reason(binding_status)
@@ -531,6 +651,7 @@ def _build_read_review_evidence(
                 "binding_status": binding_status,
                 "disposition": disposition,
                 "reason": reason,
+                "function": function,
                 "register": register,
                 "candidate_registers": candidate_registers,
             }
@@ -538,9 +659,10 @@ def _build_read_review_evidence(
     return evidence
 
 
-def _read_review_key(item: dict[str, Any]) -> tuple[str, int, str]:
+def _read_review_key(item: dict[str, Any]) -> tuple[str, int, int, str]:
     return (
         str(item.get("kind") or "numeric"),
+        int(item.get("function") or 0),
         int(item.get("register") or 0),
         _normalize_title(str(item.get("title") or "")),
     )
@@ -558,24 +680,31 @@ def _inconclusive_read_reason(binding_status: str) -> str:
 
 
 def _polled_block_lookup(schema):
-    ranges: list[tuple[int, int, str]] = []
+    ranges: list[tuple[int, int, int, str]] = []
     for block in schema.blocks:
         if block.key in _READ_BLOCK_SPEC_SETS:
-            ranges.append((int(block.start), int(block.start) + int(block.count), block.key))
+            ranges.append(
+                (
+                    int(block.function),
+                    int(block.start),
+                    int(block.start) + int(block.count),
+                    block.key,
+                )
+            )
 
-    def _lookup(register: int) -> str | None:
-        for start, stop, set_name in ranges:
-            if start <= register < stop:
+    def _lookup(function: int, register: int) -> str | None:
+        for block_function, start, stop, set_name in ranges:
+            if function == block_function and start <= register < stop:
                 return set_name
         return None
 
     return _lookup
 
 
-def _register_enum_table_authority(schema) -> dict[int, str]:
-    """Return the effective schema's exact register→enum-table assignments."""
+def _register_enum_table_authority(schema) -> dict[tuple[int, int], str]:
+    """Return exact (function, register) enum-table assignments."""
 
-    authority: dict[int, str] = {}
+    authority: dict[tuple[int, int], str] = {}
     enum_tables = {
         str(name): dict(table)
         for name, table in schema.enum_tables.items()
@@ -594,17 +723,18 @@ def _register_enum_table_authority(schema) -> dict[int, str]:
             # reconstructed from the loaded spec, so leave those registers out
             # instead of assigning an arbitrary authority.
             if len(matching_tables) == 1:
-                authority[int(spec.register)] = matching_tables[0]
+                authority[(int(spec.function), int(spec.register))] = matching_tables[0]
     return authority
 
 
 def _read_skip_reason(
+    function: int,
     register: int,
     title_key: str,
-    existing_registers: set[int],
+    existing_locations: set[tuple[int, int]],
     existing_titles: set[str],
 ) -> str | None:
-    if register in existing_registers:
+    if (function, register) in existing_locations:
         return "register_already_decoded"
     if title_key and title_key in existing_titles:
         return "title_already_mapped"
@@ -651,48 +781,116 @@ def _read_measurement(
 
 
 def _unique_read_bindings(read_bindings: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not isinstance(read_bindings, dict):
+    if type(read_bindings) is not dict:
         return []
     rows: list[dict[str, Any]] = []
     for item in read_bindings.get("bindings", []):
-        if not isinstance(item, dict) or item.get("status") != "unique":
+        if type(item) is not dict or item.get("status") != "unique":
             continue
         candidates = item.get("candidates") or []
-        if not candidates:
+        if type(candidates) is not list or len(candidates) != 1:
             continue
         candidate = candidates[0]
+        if type(candidate) is not dict:
+            continue
+        route = _candidate_read_route(candidate)
+        function = candidate.get("function")
+        register = candidate.get("register")
+        if route is None or type(function) is not int or function not in {3, 4}:
+            continue
+        if type(register) is not int or register < 0 or register > 0xFFFF:
+            continue
+        divisor = candidate.get("divisor")
+        raw_value = candidate.get("raw_value")
+        signed = candidate.get("signed")
+        decimals = item.get("decimals", 0)
+        title = item.get("title")
+        unit = item.get("unit", "")
+        if (
+            type(divisor) is not int
+            or divisor not in {1, 10, 100, 1000}
+            or type(raw_value) is not int
+            or raw_value < 0
+            or raw_value > 0xFFFF
+            or type(signed) is not bool
+            or type(decimals) is not int
+            or decimals < 0
+            or decimals > 6
+            or type(title) is not str
+            or not title
+            or title != title.strip()
+            or type(unit) is not str
+            or unit != unit.strip()
+        ):
+            continue
         rows.append(
             {
-                "register": int(candidate.get("register", 0)),
-                "title": str(item.get("title") or ""),
-                "unit": str(item.get("unit") or ""),
-                "divisor": int(candidate.get("divisor", 1) or 1),
-                "decimals": int(item.get("decimals", 0) or 0),
-                "signed": bool(candidate.get("signed")),
+                "route": route,
+                "function": function,
+                "register": register,
+                "title": title,
+                "unit": unit,
+                "divisor": divisor,
+                "decimals": decimals,
+                "signed": signed,
             }
         )
     return rows
 
 
 def _unique_enum_bindings(read_enum_bindings: dict[str, Any] | None) -> list[dict[str, Any]]:
-    if not isinstance(read_enum_bindings, dict):
+    if type(read_enum_bindings) is not dict:
         return []
     rows: list[dict[str, Any]] = []
     for item in read_enum_bindings.get("bindings", []):
-        if not isinstance(item, dict) or item.get("status") != "unique":
+        if type(item) is not dict or item.get("status") != "unique":
             continue
         candidates = item.get("candidates") or []
-        if not candidates:
+        if type(candidates) is not list or len(candidates) != 1:
             continue
         candidate = candidates[0]
+        if type(candidate) is not dict:
+            continue
+        route = _candidate_read_route(candidate)
+        function = candidate.get("function")
+        register = candidate.get("register")
+        if route is None or type(function) is not int or function not in {3, 4}:
+            continue
+        if type(register) is not int or register < 0 or register > 0xFFFF:
+            continue
+        title = item.get("title")
+        enum_table = candidate.get("enum_table")
+        if (
+            type(title) is not str
+            or not title
+            or title != title.strip()
+            or type(enum_table) is not str
+            or not enum_table
+            or enum_table != enum_table.strip()
+        ):
+            continue
         rows.append(
             {
-                "register": int(candidate.get("register", 0)),
-                "title": str(item.get("title") or ""),
-                "enum_table": str(candidate.get("enum_table") or ""),
+                "route": route,
+                "function": function,
+                "register": register,
+                "title": title,
+                "enum_table": enum_table,
             }
         )
     return rows
+
+
+def _candidate_read_route(candidate: object) -> ShadowReadRoute | None:
+    if type(candidate) is not dict:
+        return None
+    return ShadowReadRoute.from_record(
+        {
+            "devcode": candidate.get("devcode"),
+            "collector_addr": candidate.get("collector_addr"),
+            "device_addr": candidate.get("device_addr"),
+        }
+    )
 
 
 def _unique_read_key(base_key: str, used_keys: set[str]) -> str:
@@ -924,6 +1122,7 @@ def _group_matched_records(correlation: dict[str, Any]) -> list[dict[str, Any]]:
                     ],
                     "devcode": _to_int(observation.get("devcode")),
                     "devaddr": _to_int(observation.get("devaddr")),
+                    "unit": _to_int(observation.get("unit")),
                     "timestamp": str(observation.get("timestamp") or "").strip(),
                 },
             }
@@ -968,7 +1167,7 @@ def _build_observed_control_enum_evidence(
     *,
     correlation: dict[str, Any],
     session_manifest: dict[str, Any],
-    register_enum_tables: dict[int, str] | None = None,
+    register_enum_tables: dict[tuple[int, int], str] | None = None,
 ) -> tuple[ObservedControlEnumEvidence, ...]:
     """Build strict same-session enum evidence from causally observed writes."""
 
@@ -1002,11 +1201,16 @@ def _build_observed_control_enum_evidence(
             continue
         field_match = _SMARTESS_CONTROL_FIELD_RE.search(field_id)
         semantic = resolve_semantic_title(field_name)
-        enum_table = (
-            register_enum_tables.get(register)
+        table_candidates = (
+            {
+                table_name
+                for (function, table_register), table_name in register_enum_tables.items()
+                if function in {3, 4} and table_register == register
+            }
             if isinstance(register_enum_tables, dict)
-            else None
+            else set()
         )
+        enum_table = next(iter(table_candidates)) if len(table_candidates) == 1 else None
         if (
             field_match is None
             or semantic is None
@@ -1017,6 +1221,7 @@ def _build_observed_control_enum_evidence(
             continue
 
         labels_by_value: dict[int, str] = {}
+        device_addr: int | None = None
         valid = True
         for sample in group.get("samples") or []:
             if not isinstance(sample, dict):
@@ -1033,6 +1238,8 @@ def _build_observed_control_enum_evidence(
                 or observation.get("devcode") != devcode
                 or type(observation.get("devaddr")) is not int
                 or observation.get("devaddr") != devaddr
+                or type(observation.get("unit")) is not int
+                or observation.get("unit") <= 0
             ):
                 valid = False
                 break
@@ -1041,12 +1248,18 @@ def _build_observed_control_enum_evidence(
                 valid = False
                 break
             raw_value = values[0]
+            observed_device_addr = observation["unit"]
+            if device_addr is None:
+                device_addr = observed_device_addr
+            elif device_addr != observed_device_addr:
+                valid = False
+                break
             previous = labels_by_value.get(raw_value)
             if previous is not None and previous != label:
                 valid = False
                 break
             labels_by_value[raw_value] = label
-        if not valid or len(labels_by_value) < 2:
+        if not valid or len(labels_by_value) < 2 or device_addr is None:
             continue
         evidence.append(
             ObservedControlEnumEvidence(
@@ -1058,7 +1271,8 @@ def _build_observed_control_enum_evidence(
                 provider_field_ordinal=int(field_match.group("ordinal")),
                 register=register,
                 devcode=devcode,
-                devaddr=devaddr,
+                collector_addr=devaddr,
+                device_addr=device_addr,
                 value_labels=tuple(sorted(labels_by_value.items())),
             )
         )
@@ -1497,6 +1711,9 @@ def _normalize_read_map(read_map: dict[str, Any] | None) -> dict[str, Any]:
             except (TypeError, ValueError):
                 continue
             registers[str(register)] = [int(value) for value in samples][:8]
+    register_series = [
+        item.to_record() for item in read_register_evidence_from_map(read_map)
+    ]
     ascii_commands = []
     for item in read_map.get("ascii_commands", []) or []:
         if isinstance(item, (list, tuple)) and len(item) >= 1:
@@ -1514,11 +1731,18 @@ def _normalize_read_map(read_map: dict[str, Any] | None) -> dict[str, Any]:
                 continue
             ascii_fields[command] = [str(value) for value in samples][:8]
 
-    if not blocks and not registers and not ascii_commands and not ascii_fields:
+    if (
+        not blocks
+        and not registers
+        and not register_series
+        and not ascii_commands
+        and not ascii_fields
+    ):
         return {}
     normalized = {
         "read_blocks": blocks,
         "registers": registers,
+        "register_series": register_series,
         "read_event_count": int(read_map.get("read_event_count", 0) or 0),
         "value_source": str(read_map.get("value_source") or ""),
     }

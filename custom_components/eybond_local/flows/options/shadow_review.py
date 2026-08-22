@@ -15,6 +15,7 @@ from homeassistant.helpers.selector import (
 
 from ..common.translation import with_translation_bundle as _with_translation_bundle
 from .shared import (
+    _BOOLEAN_SELECTOR,
     CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED,
     CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE,
     CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
@@ -24,8 +25,32 @@ from ...support.shadow_learning.review_model import (
     build_activation_selection,
     default_learned_control_label,
 )
+from ...support.cloud_local_coverage import (
+    CLOUD_LOCAL_STATUS_AVAILABLE_CARRIED,
+    CLOUD_LOCAL_STATUS_AVAILABLE_FRESH,
+)
+from ...dessmonitor_collection import DessMonitorHistoryCollection
+from ...support.cloud_learning_engines import resolve_cloud_learning_engine
+from .shadow_metadata_review import (
+    cloud_history_collection,
+    cloud_history_summary,
+    cloud_local_history_representability,
+    cloud_local_history_representability_markdown,
+    cloud_local_history_representability_summary,
+    cloud_local_history_draft_plan,
+    cloud_local_history_review,
+    cloud_local_history_review_markdown,
+    cloud_local_history_review_summary,
+    cloud_metadata_review_fields,
+    cloud_metadata_review_markdown,
+    cloud_metadata_semantic_candidate_count,
+)
+from .shadow_inactive_draft import async_generate_inactive_read_draft
 
 CONTROL_DISCOVERY_RESULT_ACTION_ACTIVATE = "activate_selected"
+
+
+CONTROL_DISCOVERY_RESULT_ACTION_INACTIVE_DRAFT = "create_inactive_read_draft"
 
 
 CONTROL_DISCOVERY_RESULT_ACTION_SUPPORT = "create_support_package"
@@ -59,6 +84,7 @@ class ShadowLearningReviewMixin:
         "cloud_metadata",
         "discovery",
         "identity",
+        "inactive_read_draft",
         "orchestration",
         "overlay",
         "preflight",
@@ -109,26 +135,101 @@ class ShadowLearningReviewMixin:
             and not already_reads
             and not inconclusive_reads
         ):
+            source_id = self._shadow_learning_state.get("wizard_source")
+            learning_engine = resolve_cloud_learning_engine(
+                source_id
+                if type(source_id) is str and source_id == source_id.strip()
+                else ""
+            )
+            collection_supported = bool(
+                learning_engine.available
+                and learning_engine.source.capabilities.local_register_series
+                and callable(
+                    getattr(coordinator, "start_local_register_collection", None)
+                )
+            )
+            collection_status = self._local_register_observation_status(coordinator)
+            collection_can_start = collection_supported and not collection_status.active
+            errors: dict[str, str] = {}
             if user_input is not None:
-                return await self.async_step_shadow_learning_result()
+                requested = user_input.get("start_local_register_observation", False)
+                if type(requested) is not bool:
+                    errors["start_local_register_observation"] = "invalid_selection"
+                elif requested and collection_can_start:
+                    try:
+                        self._start_local_register_observation(coordinator)
+                    except (TypeError, ValueError, RuntimeError):
+                        errors["base"] = "local_register_collection_unavailable"
+                elif requested:
+                    errors["base"] = "local_register_collection_unavailable"
+                if not errors:
+                    return await self.async_step_shadow_learning_result()
             metadata_count = len(metadata_fields)
+            semantic_candidate_count = self._control_discovery_semantic_candidate_count(
+                metadata_fields
+            )
+            local_available_count = sum(
+                item.get("local_status")
+                in {
+                    CLOUD_LOCAL_STATUS_AVAILABLE_FRESH,
+                    CLOUD_LOCAL_STATUS_AVAILABLE_CARRIED,
+                }
+                for item in metadata_fields
+            )
+            history_collection = self._control_discovery_history_collection()
+            history_series_count = (
+                history_collection.collected_series_count
+                if history_collection is not None
+                else 0
+            )
+            history_point_count = (
+                history_collection.point_count
+                if history_collection is not None
+                else 0
+            )
             placeholders = {
                 "cloud_metadata_count": str(metadata_count),
+                "cloud_semantic_candidate_count": str(semantic_candidate_count),
+                "cloud_local_available_count": str(local_available_count),
+                "cloud_history_series_count": str(history_series_count),
+                "cloud_history_point_count": str(history_point_count),
+                "cloud_history_summary": self._control_discovery_history_summary(
+                    history_collection
+                ),
+                "cloud_local_history_review_summary": (
+                    self._control_discovery_local_history_review_summary()
+                ),
+                "local_register_observation_summary": (
+                    self._local_register_observation_summary(coordinator)
+                ),
                 "cloud_metadata_overview": self._control_discovery_metadata_markdown(
                     metadata_fields
                 ),
             }
             return self.async_show_form(
                 step_id="shadow_learning_review",
-                data_schema=vol.Schema({}),
-                errors={},
+                data_schema=vol.Schema(
+                    {
+                        vol.Optional(
+                            "start_local_register_observation",
+                            default=False,
+                        ): _BOOLEAN_SELECTOR,
+                    }
+                    if collection_can_start
+                    else {}
+                ),
+                errors=errors,
                 description_placeholders=self._control_discovery_placeholders(
                     coordinator,
                     "common.dynamic.cloud_learning_metadata_overview_intro",
                     "{cloud_provider_label} returned {cloud_metadata_count} "
-                    "metadata field(s). They are saved as support evidence, but "
-                    "Home Assistant will not create local entities until a "
-                    "register mapping is proven."
+                    "metadata field(s). Home Assistant recognized "
+                    "{cloud_semantic_candidate_count} reading(s); "
+                    "{cloud_local_available_count} are already available "
+                    "locally. {cloud_history_summary} This read-only evidence "
+                    "did not add entities or controls. "
+                    "{cloud_local_history_review_summary} "
+                    "{local_register_observation_summary}"
                     "\n\n{cloud_metadata_overview}",
                     hint_placeholders=placeholders,
                     extra=placeholders,
@@ -314,71 +415,75 @@ class ShadowLearningReviewMixin:
 
     def _control_discovery_metadata_fields(self) -> list[dict[str, str]]:
         """Return deduplicated, credential-free metadata for read-only review."""
+        return cloud_metadata_review_fields(
+            self._shadow_learning_state.get("cloud_metadata")
+        )
+
+    def _control_discovery_history_collection(
+        self,
+    ) -> DessMonitorHistoryCollection | None:
+        """Return only an exact, internally consistent DESS history record."""
+        return cloud_history_collection(
+            self._shadow_learning_state.get("cloud_metadata")
+        )
+
+    def _control_discovery_history_summary(
+        self,
+        collection: DessMonitorHistoryCollection | None,
+    ) -> str:
+        """Render bounded history availability without exposing raw evidence."""
+        return cloud_history_summary(collection, self._tr)
+
+    def _control_discovery_local_history_review_summary(self) -> str:
+        """Describe exact review candidates without claiming a mapping."""
 
         evidence = self._shadow_learning_state.get("cloud_metadata")
-        if not isinstance(evidence, dict):
-            return []
-        output: list[dict[str, str]] = []
-        seen: set[tuple[str, str, str]] = set()
-        for group, kind in (
-            ("telemetry_fields", "reading"),
-            ("chart_fields", "chart"),
-            ("key_parameters", "key_parameter"),
-            ("control_fields", "setting"),
-        ):
-            rows = evidence.get(group)
-            if not isinstance(rows, list):
-                continue
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                field_id = str(row.get("field_id") or "").strip()
-                title = str(row.get("title") or "").strip()
-                unit = str(row.get("unit") or "").strip()
-                value = str(row.get("value") or row.get("current_value") or "").strip()
-                if not title:
-                    continue
-                key = (field_id, title.casefold(), unit)
-                if key in seen:
-                    continue
-                seen.add(key)
-                output.append(
-                    {
-                        "field_id": field_id,
-                        "title": title,
-                        "unit": unit,
-                        "value": value,
-                        "kind": kind,
-                    }
-                )
-        return output
+        review_summary = cloud_local_history_review_summary(
+            cloud_local_history_review(evidence),
+            self._tr,
+        )
+        representability_summary = cloud_local_history_representability_summary(
+            cloud_local_history_representability(evidence),
+            self._tr,
+        )
+        return " ".join(
+            part for part in (review_summary, representability_summary) if part
+        )
+
+    @staticmethod
+    def _control_discovery_semantic_candidate_count(
+        fields: list[dict[str, str]],
+    ) -> int:
+        """Count recognized read hints without treating settings as sensors."""
+
+        return cloud_metadata_semantic_candidate_count(fields)
 
     def _control_discovery_metadata_markdown(
         self, fields: list[dict[str, str]]
     ) -> str:
-        """Render a bounded read-only metadata summary without internal payloads."""
+        """Render grouped semantic hints without claiming a local mapping."""
 
-        lines: list[str] = []
-        visible = fields[:80]
-        for item in visible:
-            title = item["title"].replace("\n", " ")
-            value = item["value"].replace("\n", " ")
-            unit = item["unit"].replace("\n", " ")
-            suffix = ""
-            if value:
-                suffix = f" — {value}{(' ' + unit) if unit else ''}"
-            elif unit:
-                suffix = f" — {unit}"
-            lines.append(f"- {title}{suffix}")
-        if len(fields) > len(visible):
-            lines.append(
-                self._tr(
-                    "common.dynamic.cloud_learning_metadata_more",
-                    "…and {count} more field(s) in the support evidence.",
-                    {"count": str(len(fields) - len(visible))},
-                )
+        metadata_markdown = cloud_metadata_review_markdown(fields, self._tr)
+        evidence = self._shadow_learning_state.get("cloud_metadata")
+        review_markdown = cloud_local_history_review_markdown(
+            cloud_local_history_review(evidence),
+            self._tr,
+        )
+        representability_markdown = (
+            cloud_local_history_representability_markdown(
+                cloud_local_history_representability(evidence),
+                self._tr,
             )
-        return "\n".join(lines)
+        )
+        return "\n\n".join(
+            part
+            for part in (
+                metadata_markdown,
+                review_markdown,
+                representability_markdown,
+            )
+            if part
+        )
 
     def _control_discovery_review_read_sensors(self) -> list[dict[str, Any]]:
         """Return generated learned read sensors available for review."""
@@ -895,6 +1000,9 @@ class ShadowLearningReviewMixin:
           On success it CONFIRMS on the same screen (does not bounce to the menu);
         - **Try the scan again** — shown in place of Apply when the run failed;
           restarts the guided wizard;
+        - **Create an inactive local sensor draft** — only when the DESSMonitor
+          history review produced exact, non-colliding local candidates. It writes
+          a review artifact but never activates entities or reloads the entry;
         - **Download the support package** — always offered; confirms in place;
         - **Return to the menu** — leaves the wizard.
 
@@ -917,6 +1025,15 @@ class ShadowLearningReviewMixin:
         selected_count = self._control_discovery_enabled_selection_count()
         read_count = self._control_discovery_enabled_read_selection_count()
         metadata_count = len(self._control_discovery_metadata_fields())
+        inactive_draft_plan = cloud_local_history_draft_plan(
+            self._shadow_learning_state.get("cloud_metadata")
+        )
+        inactive_draft_count = (
+            inactive_draft_plan.item_count
+            if inactive_draft_plan is not None
+            else 0
+        )
+        can_generate_inactive_draft = inactive_draft_count > 0 and not failed
         # Learned read sensors are applied with the schema overlay regardless of
         # control selection, so selected read sensors make activation worthwhile
         # on their own.
@@ -925,9 +1042,10 @@ class ShadowLearningReviewMixin:
         errors: dict[str, str] = {}
         notice = ""
         if user_input is not None:
-            action = str(
-                user_input.get("result_action") or CONTROL_DISCOVERY_RESULT_ACTION_DONE
+            raw_action = user_input.get(
+                "result_action", CONTROL_DISCOVERY_RESULT_ACTION_DONE
             )
+            action = raw_action if type(raw_action) is str else ""
             if action == CONTROL_DISCOVERY_RESULT_ACTION_RETRY:
                 # Re-run the guided wizard from the consent step (it resets the
                 # run's transient state); credentials are re-gathered there.
@@ -967,6 +1085,23 @@ class ShadowLearningReviewMixin:
                         )
                 else:
                     errors["base"] = error
+            elif action == CONTROL_DISCOVERY_RESULT_ACTION_INACTIVE_DRAFT:
+                if can_generate_inactive_draft:
+                    error = (
+                        await self._async_control_discovery_generate_inactive_read_draft(
+                            coordinator
+                        )
+                    )
+                    if error is None:
+                        notice = self._tr(
+                            "common.dynamic.control_discovery_result_notice_inactive_draft",
+                            "✓ An inactive local sensor draft was saved for review. "
+                            "Nothing was added to Home Assistant.",
+                        )
+                    else:
+                        errors["base"] = error
+                else:
+                    errors["result_action"] = "invalid_selection"
             elif action == CONTROL_DISCOVERY_RESULT_ACTION_SUPPORT:
                 error = await self._async_control_discovery_export_support(coordinator)
                 if error is None:
@@ -976,8 +1111,10 @@ class ShadowLearningReviewMixin:
                     )
                 else:
                     errors["base"] = error
-            else:  # CONTROL_DISCOVERY_RESULT_ACTION_DONE
+            elif action == CONTROL_DISCOVERY_RESULT_ACTION_DONE:
                 return await self.async_step_init()
+            else:
+                errors["result_action"] = "invalid_selection"
 
         # "Apply the selected parameters" shows only when the user turned on at
         # least one discovered control; on a failed run it is replaced by "Try the
@@ -1000,6 +1137,16 @@ class ShadowLearningReviewMixin:
                     label=self._tr(
                         "common.dynamic.control_discovery_result_action_retry",
                         "Try the scan again",
+                    ),
+                )
+            )
+        if can_generate_inactive_draft:
+            action_options.append(
+                SelectOptionDict(
+                    value=CONTROL_DISCOVERY_RESULT_ACTION_INACTIVE_DRAFT,
+                    label=self._tr(
+                        "common.dynamic.control_discovery_result_action_inactive_draft",
+                        "Create an inactive local sensor draft",
                     ),
                 )
             )
@@ -1071,14 +1218,44 @@ class ShadowLearningReviewMixin:
                 "control_discovery_error": error_detail or "unknown error"
             }
         elif metadata_count > 0:
+            semantic_candidate_count = self._control_discovery_semantic_candidate_count(
+                self._control_discovery_metadata_fields()
+            )
+            history_collection = self._control_discovery_history_collection()
             body_key = "common.dynamic.cloud_learning_metadata_result"
             body_default = (
                 "The read-only check found {cloud_metadata_count} metadata "
-                "field(s). They are kept as support evidence; no local entities "
-                "or controls were added. Download the support package or return "
-                "to the menu."
+                "field(s), including {cloud_semantic_candidate_count} recognized "
+                "semantic candidate(s). {cloud_history_summary} No local register "
+                "mapping was proven, so "
+                "no entities or controls were added. "
+                "{cloud_local_history_review_summary} "
+                "{local_register_observation_summary} Download the support package "
+                "or return to the menu."
             )
-            hint_placeholders = {"cloud_metadata_count": str(metadata_count)}
+            hint_placeholders = {
+                "cloud_metadata_count": str(metadata_count),
+                "cloud_semantic_candidate_count": str(semantic_candidate_count),
+                "cloud_history_series_count": str(
+                    history_collection.collected_series_count
+                    if history_collection is not None
+                    else 0
+                ),
+                "cloud_history_point_count": str(
+                    history_collection.point_count
+                    if history_collection is not None
+                    else 0
+                ),
+                "cloud_history_summary": self._control_discovery_history_summary(
+                    history_collection
+                ),
+                "cloud_local_history_review_summary": (
+                    self._control_discovery_local_history_review_summary()
+                ),
+                "local_register_observation_summary": (
+                    self._local_register_observation_summary(coordinator)
+                ),
+            }
         else:
             body_key = "common.dynamic.control_discovery_result_empty_with_support"
             body_default = (
@@ -1110,6 +1287,16 @@ class ShadowLearningReviewMixin:
         if notice:
             placeholders["control_discovery_hint"] = (
                 f"{notice}\n\n{placeholders.get('control_discovery_hint', '')}"
+            )
+        elif can_generate_inactive_draft:
+            draft_line = self._tr(
+                "common.dynamic.cloud_learning_inactive_draft_available",
+                "{count} exact-route candidate(s) can be saved as an inactive "
+                "local sensor draft for review. This does not add entities.",
+                {"count": str(inactive_draft_count)},
+            )
+            placeholders["control_discovery_hint"] = (
+                f"{placeholders.get('control_discovery_hint', '')}\n\n{draft_line}"
             )
         return self.async_show_form(
             step_id="shadow_learning_result",
@@ -1228,6 +1415,22 @@ class ShadowLearningReviewMixin:
         except Exception as exc:  # noqa: BLE001 - surfaced to the user as a form error
             self._shadow_learning_state["status"] = str(exc)
             return "shadow_learning_failed"
+
+    async def _async_control_discovery_generate_inactive_read_draft(
+        self,
+        coordinator,
+    ) -> str | None:
+        """Write one review artifact without activating or reloading it."""
+
+        state = await async_generate_inactive_read_draft(
+            hass=self.hass,
+            coordinator=coordinator,
+            metadata=self._shadow_learning_state.get("cloud_metadata"),
+        )
+        if state is None:
+            return "shadow_learning_failed"
+        self._shadow_learning_state["inactive_read_draft"] = state
+        return None
 
     async def _async_control_discovery_export_support(self, coordinator) -> str | None:
         """Export a support package from the guided result screen.

@@ -31,7 +31,11 @@ from custom_components.eybond_local.metadata.register_schema_loader import (  # 
 from custom_components.eybond_local.metadata.effective_metadata_snapshot import (  # noqa: E402
     build_effective_metadata_snapshot,
 )
-from custom_components.eybond_local.models import CollectorInfo  # noqa: E402
+from custom_components.eybond_local.models import CollectorInfo, ProbeTarget  # noqa: E402
+from custom_components.eybond_local.support.shadow_learning.read_evidence import (  # noqa: E402
+    LearnedReadActivationContext,
+    ShadowReadRoute,
+)
 
 
 class EffectiveMetadataSelectionTests(unittest.TestCase):
@@ -506,6 +510,68 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
         )
 
         self.assertTrue(matches)
+
+    def test_selected_learned_reads_require_exact_persisted_and_runtime_route(self) -> None:
+        from custom_components.eybond_local.metadata.effective_metadata import (
+            _device_scope_matches_runtime,
+        )
+
+        context = LearnedReadActivationContext(
+            collector_pn="E50000200000000001",
+            driver_key="modbus_smg",
+            register_schema_name="modbus_smg/models/smg_6200.json",
+            route=ShadowReadRoute(devcode=2376, collector_addr=1, device_addr=1),
+        )
+        manifest = {
+            "scope": "device",
+            "source_profile_name": "smg_modbus.json",
+            "source_schema_name": "modbus_smg/models/smg_6200.json",
+            "session": {"collector_pn": context.collector_pn},
+            "learned_read_context": context.to_record(),
+        }
+        activation = {
+            "selected_read_sensor_keys": ["learned_read_fc3_404"],
+            "learned_read_context": context.to_record(),
+        }
+
+        def _matches(target: ProbeTarget, *, active=activation, draft=manifest) -> bool:
+            return _device_scope_matches_runtime(
+                manifest=draft,
+                activation=active,
+                inverter=types.SimpleNamespace(
+                    driver_key="modbus_smg",
+                    probe_target=target,
+                    serial_number="SN-1",
+                    model_name="SMG 6200",
+                    variant_key="default",
+                ),
+                collector=types.SimpleNamespace(
+                    collector_pn=context.collector_pn,
+                    smartess_device_address=1,
+                    smartess_protocol_asset_id="",
+                    smartess_protocol_profile_key="",
+                ),
+                entry_data={"collector_pn": context.collector_pn},
+                effective_owner_key="modbus_smg",
+                base_profile_name="smg_modbus.json",
+                base_register_schema_name="modbus_smg/models/smg_6200.json",
+                smartess_protocol=None,
+            )
+
+        self.assertTrue(_matches(ProbeTarget(2376, 1, 1)))
+        self.assertFalse(_matches(ProbeTarget(2376, 1, 2)))
+        self.assertFalse(
+            _matches(
+                ProbeTarget(2376, 1, 1),
+                active={"selected_read_sensor_keys": ["learned_read_fc3_404"]},
+            )
+        )
+        self.assertFalse(
+            _matches(
+                ProbeTarget(2376, 1, 1),
+                draft={**manifest, "learned_read_context": {}},
+            )
+        )
 
 
 if __name__ == "__main__":
