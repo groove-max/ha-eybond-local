@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from pathlib import Path
 import sys
@@ -65,12 +66,35 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
             series=(),
         )
 
+        executor_calls = 0
+
         async def executor(operation):
-            return operation()
+            nonlocal executor_calls
+            executor_calls += 1
+            return await asyncio.to_thread(operation)
+
+        def fetch_bundle(**kwargs):
+            report = kwargs["progress"]
+            for stage in (
+                "authSource",
+                "webQueryDeviceEs",
+                "querySPDeviceLastData",
+                "queryDeviceChartField",
+                "querySPKeyParameters",
+                "queryDeviceCtrlField",
+                "queryDeviceLastRawData",
+                "queryDeviceCtrlValue",
+                "metadata_bundle",
+                "queryDeviceInfo",
+                "queryDeviceSoleChartEs",
+                "history_complete",
+            ):
+                report(stage)
+            return bundle, history_collection
 
         with patch(
             "custom_components.eybond_local.support.dessmonitor_learning.fetch_read_only_evidence_with_history",
-            return_value=(bundle, history_collection),
+            side_effect=fetch_bundle,
         ) as fetch:
             outcome = await DessMonitorReadOnlyLearningRunner().async_run(
                 executor=executor,
@@ -91,6 +115,7 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
         start_route.assert_not_awaited()
         on_learning.assert_not_called()
         self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(executor_calls, 2)
         self.assertEqual(fetch.call_args.kwargs["max_control_values"], 16)
         self.assertEqual(identities[0]["pn"], "E50000200000000001")
         self.assertTrue(outcome.result["metadata_only"])
@@ -124,7 +149,25 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
             "unproven",
         )
         self.assertNotIn("register", str(semantic_report).casefold())
-        self.assertEqual(progress, [(0.10, "fetching"), (0.82, "building")])
+        self.assertEqual(
+            progress,
+            [
+                (0.10, "fetching"),
+                (0.16, "fetching"),
+                (0.23, "fetching"),
+                (0.30, "fetching"),
+                (0.36, "fetching"),
+                (0.42, "fetching"),
+                (0.48, "fetching"),
+                (0.54, "fetching"),
+                (0.60, "fetching"),
+                (0.64, "fetching"),
+                (0.68, "fetching"),
+                (0.73, "fetching"),
+                (0.80, "fetching"),
+                (0.82, "building"),
+            ],
+        )
 
 
 if __name__ == "__main__":

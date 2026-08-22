@@ -684,6 +684,29 @@ class ShadowLearningRunMixin:
         result = dict(outcome.result)
         read_bindings = outcome.read_bindings
         metadata_evidence = outcome.metadata_evidence
+        if source_id == "dessmonitor":
+            unavailable_actions = (
+                metadata_evidence.get("unavailable_actions")
+                if isinstance(metadata_evidence, dict)
+                else None
+            )
+            logger.info(
+                "Control discovery evidence ready entry=%s source=dessmonitor "
+                "metadata_fields=%d semantic_candidates=%d semantic_unknown=%d "
+                "unavailable_actions=%d history_status=%s history_series=%d "
+                "history_points=%d history_failures=%d",
+                getattr(self._config_entry, "entry_id", ""),
+                int(result.get("metadata_field_count") or 0),
+                int(result.get("semantic_candidate_count") or 0),
+                int(result.get("semantic_unknown_count") or 0),
+                len(unavailable_actions)
+                if isinstance(unavailable_actions, list)
+                else 0,
+                str(result.get("history_status") or ""),
+                int(result.get("history_series_count") or 0),
+                int(result.get("history_point_count") or 0),
+                int(result.get("history_failed_series_count") or 0),
+            )
         if isinstance(metadata_evidence, dict):
             try:
                 local_register_series = getattr(

@@ -127,6 +127,30 @@ class DessMonitorModelTests(unittest.TestCase):
                 control_fields=(),
             )
 
+        with self.assertRaisesRegex(TypeError, "unavailable_actions"):
+            DessMonitorEvidenceBundle(
+                identity=identity,
+                telemetry_fields=(),
+                chart_fields=(),
+                key_parameters=(),
+                control_fields=(),
+                unavailable_actions=["querySPKeyParameters"],  # type: ignore[arg-type]
+            )
+        for unavailable_actions in (
+            ("querySPKeyParameters", "querySPKeyParameters"),
+            ("unknownAction",),
+        ):
+            with self.subTest(unavailable_actions=unavailable_actions):
+                with self.assertRaisesRegex(ValueError, "unavailable_actions"):
+                    DessMonitorEvidenceBundle(
+                        identity=identity,
+                        telemetry_fields=(),
+                        chart_fields=(),
+                        key_parameters=(),
+                        control_fields=(),
+                        unavailable_actions=unavailable_actions,
+                    )
+
         with self.assertRaisesRegex(ValueError, "session_token_invalid"):
             DessMonitorSession(
                 token="x" * (dessmonitor_module.DEFAULT_MAX_TEXT_LENGTH + 1),
@@ -315,6 +339,111 @@ class DessMonitorSigningTests(unittest.TestCase):
 
 
 class DessMonitorBundleTests(unittest.TestCase):
+    def test_optional_metadata_failure_preserves_independent_evidence(self) -> None:
+        identity = _ok(
+            {
+                "device": [
+                    {
+                        "pn": FULL_PN,
+                        "sn": "92632511100118",
+                        "devcode": 2376,
+                        "devaddr": 1,
+                    }
+                ]
+            }
+        )
+        responses = {
+            "webQueryDeviceEs": identity,
+            "querySPDeviceLastData": _ok(
+                {
+                    "pars": {
+                        "pv_": [
+                            {
+                                "id": "pv_voltage",
+                                "par": "PV Voltage",
+                                "val": "123.4",
+                                "unit": "V",
+                            }
+                        ]
+                    }
+                }
+            ),
+            "queryDeviceChartField": _ok([]),
+            "queryDeviceCtrlField": _ok({"field": []}),
+            "queryDeviceLastRawData": _ok(None),
+        }
+        progress: list[str] = []
+
+        def fetch(*, action, **_kwargs):
+            action_name = parse_qs(action.removeprefix("&"))["action"][0]
+            if action_name == "querySPKeyParameters":
+                raise DessMonitorCloudError(
+                    "network_error",
+                    stage=action_name,
+                )
+            return responses[action_name]
+
+        with patch.object(
+            dessmonitor_module,
+            "fetch_signed_action",
+            side_effect=fetch,
+        ):
+            bundle = fetch_read_only_evidence_for_session(
+                session=DessMonitorSession(token="token", secret="secret"),
+                collector_pn=FULL_PN,
+                progress=progress.append,
+            )
+
+        self.assertEqual(bundle.telemetry_fields[0].title, "PV Voltage")
+        self.assertEqual(
+            bundle.unavailable_actions,
+            ("querySPKeyParameters",),
+        )
+        self.assertEqual(
+            bundle.to_record()["unavailable_actions"],
+            ["querySPKeyParameters"],
+        )
+        self.assertEqual(progress[0], "webQueryDeviceEs")
+        self.assertEqual(progress[-1], "metadata_bundle")
+
+    def test_all_optional_metadata_failures_do_not_mint_empty_success(self) -> None:
+        identity = _ok(
+            {
+                "device": [
+                    {
+                        "pn": FULL_PN,
+                        "sn": "92632511100118",
+                        "devcode": 2376,
+                        "devaddr": 1,
+                    }
+                ]
+            }
+        )
+        calls = 0
+
+        def fetch(*, action, **_kwargs):
+            nonlocal calls
+            calls += 1
+            action_name = parse_qs(action.removeprefix("&"))["action"][0]
+            if action_name == "webQueryDeviceEs":
+                return identity
+            raise DessMonitorCloudError("network_error", stage=action_name)
+
+        with patch.object(
+            dessmonitor_module,
+            "fetch_signed_action",
+            side_effect=fetch,
+        ):
+            with self.assertRaises(DessMonitorCloudError) as raised:
+                fetch_read_only_evidence_for_session(
+                    session=DessMonitorSession(token="token", secret="secret"),
+                    collector_pn=FULL_PN,
+                )
+
+        self.assertEqual(raised.exception.reason_code, "device_metadata_missing")
+        self.assertEqual(raised.exception.stage, "metadata_bundle")
+        self.assertEqual(calls, 6)
+
     def test_metadata_arrays_and_scalar_values_are_bounded(self) -> None:
         identity = {
             "device": [

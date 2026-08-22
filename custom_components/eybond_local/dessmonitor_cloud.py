@@ -34,6 +34,16 @@ DEFAULT_MAX_CONTROL_VALUES = 16
 DEFAULT_MAX_RESPONSE_BYTES = 2_000_000
 DEFAULT_MAX_METADATA_FIELDS = 512
 DEFAULT_MAX_TEXT_LENGTH = 512
+_OPTIONAL_METADATA_ACTIONS = frozenset(
+    {
+        "querySPDeviceLastData",
+        "queryDeviceChartField",
+        "querySPKeyParameters",
+        "queryDeviceCtrlField",
+        "queryDeviceCtrlValue",
+        "queryDeviceLastRawData",
+    }
+)
 _ERROR_TOKEN_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
 )
@@ -199,6 +209,7 @@ class DessMonitorEvidenceBundle:
     chart_fields: tuple[DessMonitorTelemetryField, ...]
     key_parameters: tuple[DessMonitorTelemetryField, ...]
     control_fields: tuple[DessMonitorControlField, ...]
+    unavailable_actions: tuple[str, ...] = ()
     raw_packet_sha256: str = ""
     raw_packet_length: int = 0
 
@@ -225,6 +236,19 @@ class DessMonitorEvidenceBundle:
             DessMonitorControlField,
             "dessmonitor_bundle_controls_invalid",
         )
+        if type(self.unavailable_actions) is not tuple or any(
+            type(action) is not str for action in self.unavailable_actions
+        ):
+            raise TypeError("dessmonitor_bundle_unavailable_actions_invalid")
+        if (
+            tuple(sorted(set(self.unavailable_actions)))
+            != self.unavailable_actions
+            or any(
+                action not in _OPTIONAL_METADATA_ACTIONS
+                for action in self.unavailable_actions
+            )
+        ):
+            raise ValueError("dessmonitor_bundle_unavailable_actions_invalid")
         if type(self.raw_packet_sha256) is not str:
             raise TypeError("dessmonitor_bundle_raw_digest_invalid")
         if self.raw_packet_sha256 and (
@@ -260,6 +284,7 @@ class DessMonitorEvidenceBundle:
             "chart_fields": [item.to_record() for item in self.chart_fields],
             "key_parameters": [item.to_record() for item in self.key_parameters],
             "control_fields": [item.to_record() for item in self.control_fields],
+            "unavailable_actions": list(self.unavailable_actions),
             "raw_packet_sha256": self.raw_packet_sha256,
             "raw_packet_length": self.raw_packet_length,
             "metadata_field_count": self.metadata_field_count,
@@ -728,19 +753,24 @@ def _with_control_values(
     identity: DessMonitorDeviceIdentity,
     fetch: Callable[[str], DessMonitorApiEnvelope],
     max_values: int,
-) -> tuple[DessMonitorControlField, ...]:
+) -> tuple[tuple[DessMonitorControlField, ...], bool]:
     if type(max_values) is not int or isinstance(max_values, bool) or max_values < 0:
         raise ValueError("dessmonitor_max_control_values_invalid")
     output: list[DessMonitorControlField] = []
+    unavailable = False
     for index, item in enumerate(fields):
         current = ""
         if index < max_values:
-            envelope = fetch(
-                _device_action("queryDeviceCtrlValue", identity)
-                + f"&id={quote(item.field_id, safe='')}"
-            )
-            if isinstance(envelope.dat, dict):
-                current = _text(envelope.dat.get("val"))
+            try:
+                envelope = fetch(
+                    _device_action("queryDeviceCtrlValue", identity)
+                    + f"&id={quote(item.field_id, safe='')}"
+                )
+            except DessMonitorCloudError:
+                unavailable = True
+            else:
+                if isinstance(envelope.dat, dict):
+                    current = _text(envelope.dat.get("val"))
         output.append(
             DessMonitorControlField(
                 field_id=item.field_id,
@@ -751,7 +781,7 @@ def _with_control_values(
                 current_value=current,
             )
         )
-    return tuple(output)
+    return tuple(output), unavailable
 
 
 def _raw_digest(dat: Any) -> tuple[str, int]:
@@ -798,12 +828,19 @@ def fetch_read_only_evidence_for_session(
     base_url: str = DEFAULT_BASE_URL,
     timeout: float = DEFAULT_TIMEOUT,
     max_control_values: int = DEFAULT_MAX_CONTROL_VALUES,
+    progress: Callable[[str], None] | None = None,
 ) -> DessMonitorEvidenceBundle:
     """Fetch metadata through one exact already-authenticated session."""
 
     if type(session) is not DessMonitorSession:
         raise TypeError("dessmonitor_session_invalid")
     _required_token(collector_pn, "dessmonitor_collector_pn_invalid")
+    if progress is not None and not callable(progress):
+        raise TypeError("dessmonitor_progress_invalid")
+
+    def report(action: str) -> None:
+        if progress is not None:
+            progress(action)
 
     def fetch(action: str) -> DessMonitorApiEnvelope:
         return fetch_signed_action(
@@ -825,15 +862,38 @@ def fetch_read_only_evidence_for_session(
             exc.reason_code,
             stage="webQueryDeviceEs",
         ) from exc
-    last_data = fetch(_device_action("querySPDeviceLastData", identity))
-    chart_fields = fetch(
-        _action("queryDeviceChartField", (("devcode", identity.devcode),))
+    report("webQueryDeviceEs")
+    unavailable: set[str] = set()
+
+    def optional_fetch(action_name: str, action: str) -> DessMonitorApiEnvelope:
+        try:
+            return fetch(action)
+        except DessMonitorCloudError:
+            unavailable.add(action_name)
+            return DessMonitorApiEnvelope(err=0, desc="", dat=None)
+        finally:
+            report(action_name)
+
+    last_data = optional_fetch(
+        "querySPDeviceLastData",
+        _device_action("querySPDeviceLastData", identity),
     )
-    key_parameters = fetch(
-        _action("querySPKeyParameters", (("devcode", identity.devcode),))
+    chart_fields = optional_fetch(
+        "queryDeviceChartField",
+        _action("queryDeviceChartField", (("devcode", identity.devcode),)),
     )
-    controls = fetch(_device_action("queryDeviceCtrlField", identity))
-    raw_packet = fetch(_device_action("queryDeviceLastRawData", identity))
+    key_parameters = optional_fetch(
+        "querySPKeyParameters",
+        _action("querySPKeyParameters", (("devcode", identity.devcode),)),
+    )
+    controls = optional_fetch(
+        "queryDeviceCtrlField",
+        _device_action("queryDeviceCtrlField", identity),
+    )
+    raw_packet = optional_fetch(
+        "queryDeviceLastRawData",
+        _device_action("queryDeviceLastRawData", identity),
+    )
     remaining = DEFAULT_MAX_METADATA_FIELDS
     telemetry_fields = _normalize_last_data(last_data.dat, limit=remaining)
     remaining -= len(telemetry_fields)
@@ -845,22 +905,33 @@ def fetch_read_only_evidence_for_session(
         key_parameters.dat, limit=remaining
     )
     remaining -= len(normalized_key_parameters)
-    normalized_controls = _with_control_values(
+    normalized_controls, control_values_unavailable = _with_control_values(
         _normalize_control_fields(controls.dat, limit=remaining),
         identity=identity,
         fetch=fetch,
         max_values=max_control_values,
     )
+    if control_values_unavailable:
+        unavailable.add("queryDeviceCtrlValue")
+    report("queryDeviceCtrlValue")
     digest, length = _raw_digest(raw_packet.dat)
-    return DessMonitorEvidenceBundle(
+    bundle = DessMonitorEvidenceBundle(
         identity=identity,
         telemetry_fields=telemetry_fields,
         chart_fields=normalized_chart_fields,
         key_parameters=normalized_key_parameters,
         control_fields=normalized_controls,
+        unavailable_actions=tuple(sorted(unavailable)),
         raw_packet_sha256=digest,
         raw_packet_length=length,
     )
+    if bundle.metadata_field_count == 0 and bundle.raw_packet_length == 0:
+        raise DessMonitorCloudError(
+            "device_metadata_missing",
+            stage="metadata_bundle",
+        )
+    report("metadata_bundle")
+    return bundle
 
 
 __all__ = [

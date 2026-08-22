@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import date as Date
 from datetime import datetime, timedelta, timezone
 from time import monotonic
-from typing import Any
+from typing import Any, Callable
 
 from .dessmonitor_cloud import (
     DEFAULT_BASE_URL,
@@ -367,6 +367,7 @@ def fetch_read_only_evidence_with_history(
     max_history_series: int = _MAX_HISTORY_SERIES,
     history_budget_seconds: float = _DEFAULT_HISTORY_BUDGET_SECONDS,
     utc_now: datetime | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> tuple[DessMonitorEvidenceBundle, DessMonitorHistoryCollection]:
     """Fetch metadata plus bounded supplemental history with one login."""
 
@@ -389,18 +390,27 @@ def fetch_read_only_evidence_with_history(
             raise TypeError("dessmonitor_collection_clock_invalid")
         if utc_now.tzinfo is None or utc_now.utcoffset() is None:
             raise ValueError("dessmonitor_collection_clock_invalid")
+    if progress is not None and not callable(progress):
+        raise TypeError("dessmonitor_collection_progress_invalid")
+
+    def report(stage: str) -> None:
+        if progress is not None:
+            progress(stage)
+
     _, session = login_with_password(
         username=username,
         password=password,
         base_url=base_url,
         timeout=timeout,
     )
+    report("authSource")
     bundle = fetch_read_only_evidence_for_session(
         session=session,
         collector_pn=collector_pn,
         base_url=base_url,
         timeout=timeout,
         max_control_values=max_control_values,
+        progress=progress,
     )
     history_deadline = monotonic() + history_budget
 
@@ -409,6 +419,7 @@ def fetch_read_only_evidence_with_history(
 
     time_basis_timeout = remaining_timeout()
     if time_basis_timeout <= 0:
+        report("history_complete")
         return bundle, DessMonitorHistoryCollection(
             identity=bundle.identity,
             time_basis=None,
@@ -426,6 +437,8 @@ def fetch_read_only_evidence_with_history(
             timeout=time_basis_timeout,
         )
     except (DessMonitorCloudError, TypeError, ValueError):
+        report("queryDeviceInfo")
+        report("history_complete")
         return bundle, DessMonitorHistoryCollection(
             identity=bundle.identity,
             time_basis=None,
@@ -435,6 +448,7 @@ def fetch_read_only_evidence_with_history(
             budget_exhausted=remaining_timeout() <= 0,
             series=(),
         )
+    report("queryDeviceInfo")
 
     requested_date = _device_local_date(time_basis, utc_now=utc_now)
     series: list[DessMonitorResolvedHistorySeries] = []
@@ -464,6 +478,7 @@ def fetch_read_only_evidence_with_history(
             budget_exhausted = remaining_timeout() <= 0
         else:
             series.append(resolved_chart)
+        report("queryDeviceSoleChartEs")
 
     seen_parameters: set[str] = set()
     for field in bundle.key_parameters:
@@ -498,9 +513,12 @@ def fetch_read_only_evidence_with_history(
         except (DessMonitorCloudError, TypeError, ValueError):
             failed += 1
             budget_exhausted = remaining_timeout() <= 0
+            report("queryDeviceKeyParameterOneDay")
             continue
         series.append(resolved_parameter)
+        report("queryDeviceKeyParameterOneDay")
 
+    report("history_complete")
     return bundle, DessMonitorHistoryCollection(
         identity=bundle.identity,
         time_basis=time_basis,
