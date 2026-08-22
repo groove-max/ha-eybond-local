@@ -4,11 +4,13 @@ This decision record explains how Graphify metrics are interpreted in this
 repository and where the decomposition boundary currently ends. It deliberately
 does not equate file length or raw graph degree with an architecture defect.
 
-Current structural graph (2026-08-21): 8,961 nodes, 20,908 edges and 341
-communities. Graphify was incrementally refreshed in code-only mode and then
-reclustered after the config/options/runtime/transport/support decomposition
-described below. The existing semantic documentation layer was retained, not
-re-extracted, because no semantic backend was configured for this run.
+Current structural graph (2026-08-22): 9,789 nodes and 23,434 edges; the latest
+navigation-only reclustering produced 316 communities. Community count can vary
+between unchanged reclustering runs and is not treated as an architecture
+invariant. Graphify was incrementally refreshed in code-only mode after the
+config/options/runtime/transport/support decomposition described below. The
+existing semantic documentation layer was retained, not re-extracted, because
+no semantic backend was configured for this run.
 
 ## Interpreting God Nodes
 
@@ -92,9 +94,36 @@ called them:
 - test-only connection-policy simulation and declaration helpers live in tests,
   not in the production policy module.
 
-Static inspection of all 287 production modules reports zero top-level runtime
+Static inspection of all 292 production modules reports zero top-level runtime
 import cycles and zero implementation-to-facade back-edges across the decomposed
 families. Boundary and behavior tests make these removals load-bearing.
+
+## Typed cloud-learning boundary
+
+Cloud evidence, cloud learning and collector endpoint ownership are separate
+authorities:
+
+- `CloudLearningSource` and `CloudLearningCapabilities` declare the exact API
+  source, compatible evidence provider and whether the source needs a temporary
+  shadow route or can produce control evidence;
+- `CloudLearningRunner` and `CloudLearningOutcome` are the neutral execution
+  contract. They import no provider client, Home Assistant flow, runtime or
+  transport implementation;
+- SmartESS and ValueCloud active runners may receive the flow-owned route and
+  correlation callbacks only when their typed capability requires that route;
+- `DessMonitorReadOnlyLearningRunner` performs identity-bound metadata reads
+  only. It cannot open or stop a shadow route, send a cloud control action,
+  activate an overlay or persist credentials;
+- DESSMonitor response bodies and normalized metadata are bounded before they
+  reach flow state. Support archives retain useful metadata evidence while
+  dropping credential principals/secrets and masking PN/serial identifiers.
+
+Graphify confirms the intended topology: the DESSMonitor runner has a one-hop
+`inherits` edge to `CloudLearningRunner`, and no directed path to
+`CoordinatorCloudToolsMixin`. The only undirected route crosses the engine
+registry and options-flow orchestration, where capability guards are enforced.
+Static guards additionally reject endpoint/control writers in the DESSMonitor
+source and reject provider/runtime dependencies in the neutral contract.
 
 ## Authorities intentionally kept whole
 
@@ -172,9 +201,11 @@ The newer decompositions also removed implicit root dependencies:
 
 At this checkpoint:
 
-- quality gate: 5/5 (full 3,814-test unit discovery included; 18 skipped);
-- HA 2026.7 / Python 3.14 lane: 57/57;
-- HA 2026.2 / Python 3.13 lane: 57/57;
+- affected architecture/runtime/cloud-learning suite: 1,443/1,443;
+- quality gate: 5/5 (full 3,892-test unit discovery included; 18 skipped);
+- current HA 2026.7 / Python 3.14 lane: 57/57;
+- HA 2026.2 / Python 3.13 compatibility baseline: 57/57 (not repeated in
+  this checkpoint; the current lane is the required per-batch lifecycle gate);
 - Graphify multigraph diagnostics: zero dangling endpoints, self-loops, exact
   duplicates or collapsed endpoint pairs;
 - `py_compile` and `git diff --check`: clean.
