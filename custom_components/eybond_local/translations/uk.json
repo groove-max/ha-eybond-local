@@ -567,6 +567,16 @@
         "title": "Розширити підтримку цього пристрою",
         "description": "{control_discovery_hint}",
         "data": {
+          "learning_source": "Джерело інформації"
+        },
+        "data_description": {
+          "learning_source": "Виберіть активне локальне навчання або читання метаданих без змін пристрою."
+        }
+      },
+      "shadow_learning_consent": {
+        "title": "Розширити підтримку цього пристрою",
+        "description": "{control_discovery_hint}",
+        "data": {
           "shadow_learning_confirm_cloud_write": "Так, ненадовго перевірити, які додаткові сенсори та елементи керування підтримує пристрій"
         },
         "data_description": {

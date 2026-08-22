@@ -567,6 +567,16 @@
         "title": "Expand support for this device",
         "description": "{control_discovery_hint}",
         "data": {
+          "learning_source": "Information source"
+        },
+        "data_description": {
+          "learning_source": "Choose active local learning or a read-only metadata check."
+        }
+      },
+      "shadow_learning_consent": {
+        "title": "Expand support for this device",
+        "description": "{control_discovery_hint}",
+        "data": {
           "shadow_learning_confirm_cloud_write": "Yes, briefly check which extra sensors and controls this device supports"
         },
         "data_description": {

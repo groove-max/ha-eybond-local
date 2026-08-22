@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..dessmonitor_cloud import fetch_read_only_evidence
+from ..dessmonitor_cloud import DEFAULT_MAX_CONTROL_VALUES, fetch_read_only_evidence
 from .cloud_control_discovery import (
     CloudControlDiscoveryRunner,
     ControlDiscoveryOutcome,
@@ -41,13 +41,18 @@ class DessMonitorReadOnlyLearningRunner(CloudControlDiscoveryRunner):
         del orchestrator_callbacks
         del start_shadow_route
         del on_learning
+        bounded_control_values = (
+            min(max_fields, DEFAULT_MAX_CONTROL_VALUES)
+            if type(max_fields) is int and max_fields >= 0
+            else 0
+        )
         progress(0.10, "fetching")
         bundle = await executor(
             lambda: fetch_read_only_evidence(
                 username=username,
                 password=password,
                 collector_pn=collector_pn,
-                max_control_values=max_fields,
+                max_control_values=bounded_control_values,
             )
         )
         identity = bundle.identity.to_record()
@@ -64,6 +69,7 @@ class DessMonitorReadOnlyLearningRunner(CloudControlDiscoveryRunner):
             "sent_count": 0,
             "leaked_count": 0,
             "degraded_count": 0,
+            "metadata_evidence": evidence,
         }
         return ControlDiscoveryOutcome(
             identity=identity,

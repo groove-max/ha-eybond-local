@@ -12,6 +12,12 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from ...collector.transport import _finish_cleanup_on_cancel
 from ..common.presentation import _smartess_credential_schema_fields
@@ -75,23 +81,109 @@ class ShadowLearningRunMixin:
         ):
             return await self._async_cloud_tools_unavailable()
 
+        sources = self._control_discovery_learning_sources(coordinator)
+        if not sources:
+            return await self._async_cloud_tools_unavailable()
+
+        # A provider with one API keeps the compact legacy entry point.  A
+        # provider with several APIs gets an explicit source choice; credentials
+        # never silently select an implementation.
+        if len(sources) == 1:
+            self._shadow_learning_state["wizard_source"] = sources[0].source_id
+            return await self.async_step_shadow_learning_consent(user_input)
+
+        errors: dict[str, str] = {}
+        default_source = self._control_discovery_learning_source(coordinator)
+        selected = (user_input or {}).get("learning_source", default_source)
+        if user_input is not None:
+            if type(selected) is not str or not any(
+                source.source_id == selected for source in sources
+            ):
+                errors["learning_source"] = "invalid_selection"
+            else:
+                self._reset_control_discovery_run_state()
+                self._shadow_learning_state["wizard_source"] = selected
+                engine = resolve_cloud_learning_engine(selected)
+                if engine.source.capabilities.requires_control_consent:
+                    return await self.async_step_shadow_learning_consent()
+                return await self.async_step_shadow_learning_credentials()
+
+        options = [
+            SelectOptionDict(
+                value=source.source_id,
+                label=self._control_discovery_source_option_label(source.source_id),
+            )
+            for source in sources
+        ]
+        return self.async_show_form(
+            step_id="shadow_learning",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("learning_source", default=default_source): SelectSelector(
+                        SelectSelectorConfig(
+                            options=options,
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+            errors=errors,
+            description_placeholders=self._control_discovery_placeholders(
+                coordinator,
+                "common.dynamic.cloud_learning_source_intro",
+                "Choose how Home Assistant should collect device information. "
+                "SmartESS active learning can discover local controls; DESSMonitor "
+                "collects broader read-only metadata without changing the device.",
+            ),
+        )
+
+    def _control_discovery_source_option_label(self, source_id: str) -> str:
+        labels = {
+            "smartess": self._tr(
+                "common.dynamic.cloud_learning_source_smartess",
+                "SmartESS API — active local learning",
+            ),
+            "dessmonitor": self._tr(
+                "common.dynamic.cloud_learning_source_dessmonitor",
+                "DESSMonitor API — read-only metadata",
+            ),
+            "valuecloud": self._tr(
+                "common.dynamic.cloud_learning_source_valuecloud",
+                "ValueCloud API — active local learning",
+            ),
+        }
+        return labels.get(source_id, source_id)
+
+    @_with_translation_bundle
+    async def async_step_shadow_learning_consent(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Require explicit consent only for sources that send control probes."""
+
+        coordinator = self._coordinator()
+        if coordinator is None:
+            return await self.async_step_shadow_learning()
+        source_id = self._control_discovery_learning_source(coordinator)
+        engine = resolve_cloud_learning_engine(source_id)
+        if not engine.available:
+            return await self.async_step_shadow_learning()
+        if not engine.source.capabilities.requires_control_consent:
+            return await self.async_step_shadow_learning_credentials()
+
         errors: dict[str, str] = {}
         consent = bool(
             (user_input or {}).get("shadow_learning_confirm_cloud_write", False)
         )
         if user_input is not None:
             if consent:
-                # Start a fresh wizard pass: drop ALL of the previous run's
-                # result state, not just credentials. Otherwise a run that fails
-                # early (e.g. a preflight blocker) would still show the prior
-                # run's overlay/controls/read counts as if they were its own.
                 self._reset_control_discovery_run_state()
+                self._shadow_learning_state["wizard_source"] = source_id
                 self._shadow_learning_state["wizard_consent"] = True
                 return await self.async_step_shadow_learning_credentials()
             errors["shadow_learning_confirm_cloud_write"] = "required"
-
         return self.async_show_form(
-            step_id="shadow_learning",
+            step_id="shadow_learning_consent",
             data_schema=vol.Schema(
                 {
                     vol.Required(
@@ -105,12 +197,9 @@ class ShadowLearningRunMixin:
                 coordinator,
                 "common.dynamic.control_discovery_intro_hint",
                 "Home Assistant will briefly sign in to {cloud_provider_label} to "
-                "find which settings it can control on this device. Your login is "
-                "used only for this check and is not saved.\n\n"
-                "⚠️ Before you continue, fully CLOSE the {cloud_app_label} mobile "
-                "app. If it stays open it competes with this check for the device "
-                "and can disrupt the scan or interfere with the inverter.\n\n"
-                "Confirm below to continue.",
+                "check which settings can be learned locally. Close the "
+                "{cloud_app_label} app before continuing so it does not compete "
+                "with the check.",
             ),
         )
 
@@ -126,8 +215,16 @@ class ShadowLearningRunMixin:
         the config entry or its options.
         """
         coordinator = self._coordinator()
-        if coordinator is None or not bool(
-            self._shadow_learning_state.get("wizard_consent")
+        source_id = (
+            self._control_discovery_learning_source(coordinator)
+            if coordinator is not None
+            else ""
+        )
+        engine = resolve_cloud_learning_engine(source_id)
+        requires_consent = engine.source.capabilities.requires_control_consent
+        if coordinator is None or not engine.available or (
+            requires_consent
+            and not bool(self._shadow_learning_state.get("wizard_consent"))
         ):
             # Credentials are unreachable without a coordinator and prior consent.
             return await self.async_step_shadow_learning()
@@ -163,8 +260,8 @@ class ShadowLearningRunMixin:
             description_placeholders=self._control_discovery_placeholders(
                 coordinator,
                 "common.dynamic.control_discovery_credentials_hint",
-                "Enter your {cloud_provider_label} username and password. They "
-                "are used only for this one check and are not saved.",
+                "Enter the username and password for {cloud_provider_label}. They "
+                "are used only for this check and are not saved.",
             ),
         )
 
@@ -273,10 +370,11 @@ class ShadowLearningRunMixin:
         generate the device-scoped overlay draft -> stop the session and restore
         the collector endpoint -> publish support artifacts.
 
-        Fail-closed: any failure attempts to stop the shadow session and restore
-        the endpoint, records the error in flow state, and preserves whatever
-        trace/support evidence already exists. This coroutine never raises, so the
-        progress step always advances to the review screen.
+        Fail-closed: failures from an active-learning engine stop its shadow
+        session and restore the endpoint.  Metadata-only engines never touch that
+        lifecycle, including on cancellation or failure.  Available evidence is
+        preserved.  Only cancellation is re-raised; ordinary failures advance to
+        the review/result screen.
         """
 
         coordinator = self._coordinator()
@@ -314,9 +412,10 @@ class ShadowLearningRunMixin:
                 "status": "cancelled",
                 "reason": "control_discovery_cancelled",
             }
-            await _finish_cleanup_on_cancel(
-                self._async_control_discovery_failsafe_stop(coordinator)
-            )
+            if self._control_discovery_requires_shadow_route(coordinator):
+                await _finish_cleanup_on_cancel(
+                    self._async_control_discovery_failsafe_stop(coordinator)
+                )
             raise
         except Exception as exc:
             # Fail-closed cleanup: stop the shadow session and restore the
@@ -345,7 +444,8 @@ class ShadowLearningRunMixin:
                 cloud_error_code or "not_cloud_classified",
                 failure_reason,
             )
-            await self._async_control_discovery_failsafe_stop(coordinator)
+            if self._control_discovery_requires_shadow_route(coordinator):
+                await self._async_control_discovery_failsafe_stop(coordinator)
             self._shadow_learning_state["discovery"] = {
                 "status": "error",
                 "reason": failure_reason,
@@ -379,13 +479,33 @@ class ShadowLearningRunMixin:
         # value, so the determinate scale renders correctly from the start instead
         # of mis-drawing the very first fill (an HA progress-dialog quirk).
         await asyncio.sleep(0.5)
+        source_id = self._control_discovery_learning_source(coordinator)
+        learning_engine = resolve_cloud_learning_engine(source_id)
+        if not learning_engine.available:
+            raise RuntimeError("cloud_learning_source_unavailable")
+
         self._set_control_discovery_progress(0.01, "preflight")
-        preflight_started = time.monotonic()
-        preflight = await self._build_shadow_learning_preflight_snapshot(coordinator)
-        preflight = dict(preflight)
-        preflight["duration_ms"] = int(
-            round((time.monotonic() - preflight_started) * 1000.0)
-        )
+        if learning_engine.source.capabilities.requires_shadow_route:
+            preflight_started = time.monotonic()
+            preflight = await self._build_shadow_learning_preflight_snapshot(coordinator)
+            preflight = dict(preflight)
+            preflight["duration_ms"] = int(
+                round((time.monotonic() - preflight_started) * 1000.0)
+            )
+        else:
+            collector_pn = getattr(coordinator, "smartess_collector_pn", "")
+            trusted_pn = (
+                type(collector_pn) is str
+                and bool(collector_pn)
+                and collector_pn == collector_pn.strip()
+            )
+            preflight = {
+                "can_start": trusted_pn,
+                "blockers": [] if trusted_pn else ["collector_identity_unavailable"],
+                "collector_pn": collector_pn if trusted_pn else "",
+                "metadata_only": True,
+                "duration_ms": 0,
+            }
         self._shadow_learning_state["preflight"] = preflight
         self._set_control_discovery_progress(0.03, "preflight")
         if not bool(preflight.get("can_start")):
@@ -399,30 +519,23 @@ class ShadowLearningRunMixin:
                 else "shadow_learning_preflight_blocked"
             )
 
-        source_id = self._control_discovery_learning_source(coordinator)
-        learning_engine = resolve_cloud_learning_engine(source_id)
-        if not learning_engine.available:
-            raise RuntimeError(
-                self._tr(
-                    "common.dynamic.control_discovery_provider_not_supported",
-                    "Automatic control discovery is not available for "
-                    "{cloud_provider_label} yet. Local read-only support and "
-                    "support packages still work.",
-                    {
-                        "cloud_provider_label": self._control_discovery_cloud_provider_label(
-                            coordinator
-                        )
-                    },
-                )
-            )
-
-        # The active provider owns login/fetch/parse/action/orchestrate, including
-        # the exact provider-specific ordering around the temporary route. The
-        # flow only opens that route on request and renders normalized progress.
-        shadow_runtime = self._shadow_learning_runtime(coordinator)
+        # The engine owns login/fetch/parse and, only when declared, the exact
+        # provider-specific ordering around a temporary route.  Metadata-only
+        # engines receive inert route callbacks so an implementation mistake
+        # fails closed instead of mutating the collector endpoint.
+        requires_shadow_route = (
+            learning_engine.source.capabilities.requires_shadow_route
+        )
+        shadow_runtime = (
+            self._shadow_learning_runtime(coordinator)
+            if requires_shadow_route
+            else None
+        )
         runner = learning_engine.control_discovery_runner()
 
         async def _start_shadow_route() -> None:
+            if not requires_shadow_route:
+                raise RuntimeError("cloud_learning_shadow_route_forbidden")
             self._set_control_discovery_progress(0.10, "connecting")
             session = await coordinator.async_start_shadow_learning(
                 allow_ack_writes=False
@@ -435,22 +548,37 @@ class ShadowLearningRunMixin:
             collector_pn=str(coordinator.smartess_collector_pn or ""),
             username=username,
             password=password,
-            fallback_identity=self._shadow_learning_cloud_identity(coordinator),
+            fallback_identity=(
+                self._shadow_learning_cloud_identity(coordinator)
+                if requires_shadow_route
+                else {}
+            ),
             max_fields=CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS,
             progress=self._set_control_discovery_progress,
-            orchestrator_callbacks=self._shadow_learning_orchestrator_callbacks(
-                coordinator,
-                shadow_runtime,
+            orchestrator_callbacks=(
+                self._shadow_learning_orchestrator_callbacks(
+                    coordinator,
+                    shadow_runtime,
+                )
+                if requires_shadow_route
+                else {}
             ),
             on_identity=lambda identity: self._on_control_discovery_identity(
                 coordinator, identity
             ),
             start_shadow_route=_start_shadow_route,
-            on_learning=self._on_control_discovery_learning,
+            on_learning=(
+                self._on_control_discovery_learning
+                if requires_shadow_route
+                else self._forbid_metadata_only_learning
+            ),
         )
         identity = outcome.identity
         result = outcome.result
         read_bindings = outcome.read_bindings
+        metadata_evidence = outcome.metadata_evidence
+        if isinstance(metadata_evidence, dict):
+            self._shadow_learning_state["cloud_metadata"] = dict(metadata_evidence)
 
         self._shadow_learning_state["orchestration"] = result
         plan = result.get("plan") if isinstance(result, dict) else None
@@ -460,15 +588,16 @@ class ShadowLearningRunMixin:
                 "items": plan,
                 "count": len(plan),
             }
-        self._shadow_learning_state["session"] = {
-            **dict(self._shadow_learning_state.get("session") or {}),
-            "status": "degraded"
-            if (
-                int(result.get("degraded_count") or 0) > 0
-                or int(result.get("leaked_count") or 0) > 0
-            )
-            else "ready",
-        }
+        if learning_engine.source.capabilities.requires_shadow_route:
+            self._shadow_learning_state["session"] = {
+                **dict(self._shadow_learning_state.get("session") or {}),
+                "status": "degraded"
+                if (
+                    int(result.get("degraded_count") or 0) > 0
+                    or int(result.get("leaked_count") or 0) > 0
+                )
+                else "ready",
+            }
         self._publish_shadow_learning_artifacts(coordinator)
 
         orchestration = dict(self._shadow_learning_state.get("orchestration") or {})
@@ -504,13 +633,20 @@ class ShadowLearningRunMixin:
         # Success path: stop the session and restore the endpoint, then publish
         # the final artifact bundle. (Failure cleanup is owned by the caller.)
         self._set_control_discovery_progress(0.95, "finalizing")
-        await self._async_control_discovery_stop(coordinator)
+        if learning_engine.source.capabilities.requires_shadow_route:
+            await self._async_control_discovery_stop(coordinator)
         self._publish_shadow_learning_artifacts(coordinator)
         self._set_control_discovery_progress(1.0, "finalizing")
-        self._shadow_learning_state["status"] = self._tr(
-            "common.dynamic.control_discovery_done",
-            "Control discovery finished. The temporary cloud connection is closed.",
-        )
+        if requires_shadow_route:
+            self._shadow_learning_state["status"] = self._tr(
+                "common.dynamic.control_discovery_done",
+                "Control discovery finished. The temporary cloud connection is closed.",
+            )
+        else:
+            self._shadow_learning_state["status"] = self._tr(
+                "common.dynamic.cloud_learning_metadata_done",
+                "The read-only cloud metadata check finished.",
+            )
         found_controls = int(
             dict(self._shadow_learning_state.get("overlay") or {}).get(
                 "generated_capability_count"
@@ -524,12 +660,22 @@ class ShadowLearningRunMixin:
             if isinstance(read_map_for_result, dict)
             else 0
         )
+        metadata_field_count = (
+            int(metadata_evidence.get("metadata_field_count") or 0)
+            if isinstance(metadata_evidence, dict)
+            else 0
+        )
         # A run that found nothing AND transmitted no probes at all did not actually
         # observe the device -- it stalled on the connection (e.g. the collector never
         # reconnected through the temporary proxy). That is a retryable error, not a
         # genuine "this device has no controls" result, so surface it as a failure with a
         # clear retry hint instead of the misleading "nothing found this time" message.
-        if found_controls == 0 and sent_count == 0 and read_event_count == 0:
+        if (
+            found_controls == 0
+            and sent_count == 0
+            and read_event_count == 0
+            and metadata_field_count == 0
+        ):
             self._shadow_learning_state["discovery"] = {
                 "status": "error",
                 "reason": self._tr(
@@ -543,6 +689,7 @@ class ShadowLearningRunMixin:
             self._shadow_learning_state["discovery"] = {
                 "status": "ok",
                 "found_controls": found_controls,
+                "found_metadata": metadata_field_count,
             }
         return None
 
@@ -561,6 +708,12 @@ class ShadowLearningRunMixin:
             **dict(self._shadow_learning_state.get("session") or {}),
             "status": "learning",
         }
+
+    @staticmethod
+    def _forbid_metadata_only_learning() -> None:
+        """Reject an active-learning callback from a metadata-only engine."""
+
+        raise RuntimeError("cloud_learning_control_probe_forbidden")
 
     def _shadow_learning_orchestrator_callbacks(
         self,

@@ -290,6 +290,7 @@ import custom_components.eybond_local.flows.options.shadow_run as options_shadow
 import custom_components.eybond_local.flows.options.shadow_runtime as options_shadow_runtime_module
 import custom_components.eybond_local.flows.options.shared as options_shared_module
 import custom_components.eybond_local.support.cloud_control_discovery as cloud_control_discovery_module
+import custom_components.eybond_local.support.dessmonitor_learning as dessmonitor_learning_module
 from custom_components.eybond_local.flows.config.ble import (
     BLE_ACTION_APPLY,
     BLE_ACTION_RESCAN,
@@ -7905,6 +7906,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         options._config_entry.runtime_data = types.SimpleNamespace(
             data=types.SimpleNamespace(values={}),
+            cloud_evidence_provider="smartess",
+            smartess_collector_pn="E50000253884199645",
         )
         return options
 
@@ -7928,16 +7931,20 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["step_id"], "connection")
         self.assertIn(CONF_CONNECTION_STRATEGY, result["data_schema"].schema)
 
-    async def test_control_discovery_entry_shows_consent_not_action_dropdown(self) -> None:
+    async def test_control_discovery_entry_shows_typed_source_picker(self) -> None:
         options = self._wizard_options_flow()
 
         result = await options.async_step_shadow_learning()
 
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "shadow_learning")
-        self.assertIn(
-            "shadow_learning_confirm_cloud_write", result["data_schema"].schema
+        self.assertEqual(set(result["data_schema"].schema), {"learning_source"})
+        self.assertEqual(
+            tuple(_schema_select_options(result["data_schema"], "learning_source")),
+            ("dessmonitor", "smartess"),
         )
+        source_field = next(iter(result["data_schema"].schema))
+        self.assertEqual(source_field.default(), "smartess")
         # The long technical action/mode dropdown must be gone from the normal path.
         self.assertNotIn("shadow_learning_action", result["data_schema"].schema)
         self.assertNotIn("shadow_learning_mode", result["data_schema"].schema)
@@ -7945,13 +7952,17 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_control_discovery_intro_requires_consent(self) -> None:
         options = self._wizard_options_flow()
+        selected = await options.async_step_shadow_learning(
+            {"learning_source": "smartess"}
+        )
+        self.assertEqual(selected["step_id"], "shadow_learning_consent")
 
-        result = await options.async_step_shadow_learning(
+        result = await options.async_step_shadow_learning_consent(
             {"shadow_learning_confirm_cloud_write": False}
         )
 
         self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "shadow_learning")
+        self.assertEqual(result["step_id"], "shadow_learning_consent")
         self.assertEqual(
             result["errors"], {"shadow_learning_confirm_cloud_write": "required"}
         )
@@ -7959,8 +7970,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_control_discovery_consent_advances_to_credentials(self) -> None:
         options = self._wizard_options_flow()
+        selected = await options.async_step_shadow_learning(
+            {"learning_source": "smartess"}
+        )
+        self.assertEqual(selected["step_id"], "shadow_learning_consent")
 
-        result = await options.async_step_shadow_learning(
+        result = await options.async_step_shadow_learning_consent(
             {"shadow_learning_confirm_cloud_write": True}
         )
 
@@ -7969,6 +7984,40 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(options._shadow_learning_state["wizard_consent"])
         # Credentials step asks only for cloud username/password.
         self.assertEqual(set(result["data_schema"].schema), {"username", "password"})
+
+    async def test_control_discovery_dessmonitor_skips_control_consent(self) -> None:
+        options = self._wizard_options_flow()
+        entry_data = dict(options._config_entry.data)
+        entry_options = dict(options._config_entry.options)
+
+        result = await options.async_step_shadow_learning(
+            {"learning_source": "dessmonitor"}
+        )
+
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "shadow_learning_credentials")
+        self.assertEqual(options._shadow_learning_state["wizard_source"], "dessmonitor")
+        self.assertNotIn("wizard_consent", options._shadow_learning_state)
+        self.assertEqual(options._config_entry.data, entry_data)
+        self.assertEqual(options._config_entry.options, entry_options)
+
+    async def test_control_discovery_source_selection_fails_closed(self) -> None:
+        options = self._wizard_options_flow()
+        options._shadow_learning_state["sentinel"] = "preserved"
+
+        for malformed in ("unknown", " smartess", b"smartess", object(), None):
+            with self.subTest(malformed=malformed):
+                result = await options.async_step_shadow_learning(
+                    {"learning_source": malformed}
+                )
+                self.assertEqual(result["step_id"], "shadow_learning")
+                self.assertEqual(
+                    result["errors"], {"learning_source": "invalid_selection"}
+                )
+                self.assertNotIn("wizard_source", options._shadow_learning_state)
+                self.assertEqual(
+                    options._shadow_learning_state["sentinel"], "preserved"
+                )
 
     async def test_control_discovery_credentials_require_username_and_password(self) -> None:
         options = self._wizard_options_flow()
@@ -8576,7 +8625,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_control_discovery_full_path_never_persists_credentials(self) -> None:
         options = self._wizard_options_flow()
 
-        await options.async_step_shadow_learning(
+        await options.async_step_shadow_learning({"learning_source": "smartess"})
+        await options.async_step_shadow_learning_consent(
             {"shadow_learning_confirm_cloud_write": True}
         )
         progress = await options.async_step_shadow_learning_credentials(
@@ -9288,6 +9338,176 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(options._shadow_learning_state["discovery"]["status"], "ok")
         self.assertEqual(
             options._shadow_learning_state["overlay"]["generated_capability_count"], 2
+        )
+
+    async def test_dessmonitor_runner_never_touches_shadow_route(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=False)
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_state["wizard_source"] = "dessmonitor"
+        evidence = {
+            "source": "dessmonitor",
+            "metadata_field_count": 2,
+            "telemetry_fields": [
+                {
+                    "field_id": "pv_voltage",
+                    "title": "PV Voltage",
+                    "value": "230.1",
+                    "unit": "V",
+                }
+            ],
+        }
+        outcome = cloud_control_discovery_module.ControlDiscoveryOutcome(
+            identity={"pn": coordinator.smartess_collector_pn},
+            result={
+                "source": "dessmonitor",
+                "metadata_only": True,
+                "metadata_field_count": 2,
+                "planned_write_count": 0,
+                "executed_result_count": 0,
+                "sent_count": 0,
+                "leaked_count": 0,
+                "degraded_count": 0,
+            },
+            read_bindings=None,
+            metadata_evidence=evidence,
+        )
+
+        with (
+            patch.object(asyncio, "sleep", new=AsyncMock()),
+            patch.object(
+                dessmonitor_learning_module.DessMonitorReadOnlyLearningRunner,
+                "async_run",
+                new=AsyncMock(return_value=outcome),
+            ) as run_mock,
+            patch.object(
+                options,
+                "_build_shadow_learning_preflight_snapshot",
+                new=AsyncMock(side_effect=AssertionError("active preflight used")),
+            ),
+            patch.object(
+                options,
+                "_shadow_learning_runtime",
+                side_effect=AssertionError("shadow runtime used"),
+            ),
+            patch.object(
+                options,
+                "_shadow_learning_cloud_identity",
+                side_effect=AssertionError("active identity fallback used"),
+            ),
+        ):
+            await options._async_run_control_discovery()
+
+        run_mock.assert_awaited_once()
+        kwargs = run_mock.await_args.kwargs
+        self.assertEqual(kwargs["fallback_identity"], {})
+        self.assertEqual(kwargs["orchestrator_callbacks"], {})
+        self.assertEqual(coordinator.started, [])
+        self.assertEqual(coordinator.stopped, [])
+        self.assertEqual(options._shadow_learning_state["cloud_metadata"], evidence)
+        self.assertEqual(
+            options._shadow_learning_state["discovery"],
+            {"status": "ok", "found_controls": 0, "found_metadata": 2},
+        )
+
+    async def test_dessmonitor_cancellation_never_runs_shadow_cleanup(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=False)
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_state["wizard_source"] = "dessmonitor"
+        entered = asyncio.Event()
+        never = asyncio.Event()
+
+        async def _blocked_run(*_args, **_kwargs):
+            entered.set()
+            await never.wait()
+
+        with (
+            patch.object(asyncio, "sleep", new=AsyncMock()),
+            patch.object(
+                dessmonitor_learning_module.DessMonitorReadOnlyLearningRunner,
+                "async_run",
+                side_effect=_blocked_run,
+            ),
+        ):
+            task = asyncio.create_task(options._async_run_control_discovery())
+            await entered.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        self.assertEqual(coordinator.started, [])
+        self.assertEqual(coordinator.stopped, [])
+        self.assertEqual(
+            options._shadow_learning_state["discovery"]["status"], "cancelled"
+        )
+
+    async def test_dessmonitor_failure_never_runs_shadow_cleanup(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=False)
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_state["wizard_source"] = "dessmonitor"
+
+        with (
+            patch.object(asyncio, "sleep", new=AsyncMock()),
+            patch.object(
+                dessmonitor_learning_module.DessMonitorReadOnlyLearningRunner,
+                "async_run",
+                new=AsyncMock(side_effect=RuntimeError("private dess detail")),
+            ),
+        ):
+            await options._async_run_control_discovery()
+
+        self.assertEqual(coordinator.started, [])
+        self.assertEqual(coordinator.stopped, [])
+        discovery = options._shadow_learning_state["discovery"]
+        self.assertEqual(discovery["status"], "error")
+        self.assertNotIn("private dess detail", str(discovery))
+
+    async def test_dessmonitor_metadata_has_read_only_review_and_result(self) -> None:
+        options = self._wizard_options_flow()
+        options._shadow_learning_state.update(
+            {
+                "wizard_source": "dessmonitor",
+                "discovery": {
+                    "status": "ok",
+                    "found_controls": 0,
+                    "found_metadata": 2,
+                },
+                "cloud_metadata": {
+                    "metadata_field_count": 2,
+                    "telemetry_fields": [
+                        {
+                            "field_id": "pv_voltage",
+                            "title": "PV Voltage",
+                            "value": "230.1",
+                            "unit": "V",
+                        }
+                    ],
+                    "control_fields": [
+                        {
+                            "field_id": "charger_priority",
+                            "title": "Charger Source Priority",
+                            "current_value": "Solar first",
+                            "unit": "",
+                        }
+                    ],
+                },
+            }
+        )
+
+        review = await options.async_step_shadow_learning_review()
+        self.assertEqual(review["step_id"], "shadow_learning_review")
+        hint = review["description_placeholders"]["control_discovery_hint"]
+        self.assertIn("PV Voltage", hint)
+        self.assertIn("Charger Source Priority", hint)
+        self.assertNotIn("Apply", hint)
+
+        result = await options.async_step_shadow_learning_review({})
+        self.assertEqual(result["step_id"], "shadow_learning_result")
+        result_hint = result["description_placeholders"]["control_discovery_hint"]
+        self.assertIn("2 metadata field", result_hint)
+        self.assertNotIn("No controls were found", result_hint)
+        self.assertEqual(
+            _schema_select_options(result["data_schema"], "result_action"),
+            ["create_support_package", "done"],
         )
 
     async def test_control_discovery_runner_uses_live_bundle_identity_without_saved_evidence(self) -> None:

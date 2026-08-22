@@ -56,6 +56,7 @@ class ShadowLearningReviewMixin:
 
     _CONTROL_DISCOVERY_RUN_STATE_KEYS = (
         "activation",
+        "cloud_metadata",
         "discovery",
         "identity",
         "orchestration",
@@ -98,6 +99,41 @@ class ShadowLearningReviewMixin:
         new_reads = self._control_discovery_review_read_sensors()
         already_reads = self._control_discovery_already_supported_read_sensors()
         inconclusive_reads = self._control_discovery_inconclusive_read_sensors()
+        metadata_fields = self._control_discovery_metadata_fields()
+
+        if (
+            metadata_fields
+            and not new_controls
+            and not already_controls
+            and not new_reads
+            and not already_reads
+            and not inconclusive_reads
+        ):
+            if user_input is not None:
+                return await self.async_step_shadow_learning_result()
+            metadata_count = len(metadata_fields)
+            placeholders = {
+                "cloud_metadata_count": str(metadata_count),
+                "cloud_metadata_overview": self._control_discovery_metadata_markdown(
+                    metadata_fields
+                ),
+            }
+            return self.async_show_form(
+                step_id="shadow_learning_review",
+                data_schema=vol.Schema({}),
+                errors={},
+                description_placeholders=self._control_discovery_placeholders(
+                    coordinator,
+                    "common.dynamic.cloud_learning_metadata_overview_intro",
+                    "{cloud_provider_label} returned {cloud_metadata_count} "
+                    "metadata field(s). They are saved as support evidence, but "
+                    "Home Assistant will not create local entities until a "
+                    "register mapping is proven."
+                    "\n\n{cloud_metadata_overview}",
+                    hint_placeholders=placeholders,
+                    extra=placeholders,
+                ),
+            )
 
         # Nothing discovered at all (or discovery failed earlier): skip the
         # redundant "nothing found" page entirely and go straight to the detailed
@@ -276,6 +312,74 @@ class ShadowLearningReviewMixin:
             return []
         return [dict(entry) for entry in learned_all if isinstance(entry, dict)]
 
+    def _control_discovery_metadata_fields(self) -> list[dict[str, str]]:
+        """Return deduplicated, credential-free metadata for read-only review."""
+
+        evidence = self._shadow_learning_state.get("cloud_metadata")
+        if not isinstance(evidence, dict):
+            return []
+        output: list[dict[str, str]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for group, kind in (
+            ("telemetry_fields", "reading"),
+            ("chart_fields", "chart"),
+            ("key_parameters", "key_parameter"),
+            ("control_fields", "setting"),
+        ):
+            rows = evidence.get(group)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                field_id = str(row.get("field_id") or "").strip()
+                title = str(row.get("title") or "").strip()
+                unit = str(row.get("unit") or "").strip()
+                value = str(row.get("value") or row.get("current_value") or "").strip()
+                if not title:
+                    continue
+                key = (field_id, title.casefold(), unit)
+                if key in seen:
+                    continue
+                seen.add(key)
+                output.append(
+                    {
+                        "field_id": field_id,
+                        "title": title,
+                        "unit": unit,
+                        "value": value,
+                        "kind": kind,
+                    }
+                )
+        return output
+
+    def _control_discovery_metadata_markdown(
+        self, fields: list[dict[str, str]]
+    ) -> str:
+        """Render a bounded read-only metadata summary without internal payloads."""
+
+        lines: list[str] = []
+        visible = fields[:80]
+        for item in visible:
+            title = item["title"].replace("\n", " ")
+            value = item["value"].replace("\n", " ")
+            unit = item["unit"].replace("\n", " ")
+            suffix = ""
+            if value:
+                suffix = f" — {value}{(' ' + unit) if unit else ''}"
+            elif unit:
+                suffix = f" — {unit}"
+            lines.append(f"- {title}{suffix}")
+        if len(fields) > len(visible):
+            lines.append(
+                self._tr(
+                    "common.dynamic.cloud_learning_metadata_more",
+                    "…and {count} more field(s) in the support evidence.",
+                    {"count": str(len(fields) - len(visible))},
+                )
+            )
+        return "\n".join(lines)
+
     def _control_discovery_review_read_sensors(self) -> list[dict[str, Any]]:
         """Return generated learned read sensors available for review."""
 
@@ -295,6 +399,7 @@ class ShadowLearningReviewMixin:
 
         for key in self._CONTROL_DISCOVERY_RUN_STATE_KEYS:
             self._shadow_learning_state.pop(key, None)
+        self._shadow_learning_state.pop("wizard_consent", None)
         self._shadow_learning_state.pop("wizard_credentials", None)
         self._shadow_learning_state.pop("wizard_progress_task", None)
 
@@ -811,6 +916,7 @@ class ShadowLearningReviewMixin:
         error_detail = self._control_discovery_error_detail() if failed else ""
         selected_count = self._control_discovery_enabled_selection_count()
         read_count = self._control_discovery_enabled_read_selection_count()
+        metadata_count = len(self._control_discovery_metadata_fields())
         # Learned read sensors are applied with the schema overlay regardless of
         # control selection, so selected read sensors make activation worthwhile
         # on their own.
@@ -964,6 +1070,15 @@ class ShadowLearningReviewMixin:
             hint_placeholders = {
                 "control_discovery_error": error_detail or "unknown error"
             }
+        elif metadata_count > 0:
+            body_key = "common.dynamic.cloud_learning_metadata_result"
+            body_default = (
+                "The read-only check found {cloud_metadata_count} metadata "
+                "field(s). They are kept as support evidence; no local entities "
+                "or controls were added. Download the support package or return "
+                "to the menu."
+            )
+            hint_placeholders = {"cloud_metadata_count": str(metadata_count)}
         else:
             body_key = "common.dynamic.control_discovery_result_empty_with_support"
             body_default = (

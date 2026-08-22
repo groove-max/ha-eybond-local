@@ -567,6 +567,16 @@
         "title": "Расширить поддержку этого устройства",
         "description": "{control_discovery_hint}",
         "data": {
+          "learning_source": "Источник информации"
+        },
+        "data_description": {
+          "learning_source": "Выберите активное локальное обучение или чтение метаданных без изменений устройства."
+        }
+      },
+      "shadow_learning_consent": {
+        "title": "Расширить поддержку этого устройства",
+        "description": "{control_discovery_hint}",
+        "data": {
           "shadow_learning_confirm_cloud_write": "Да, ненадолго проверить, какие дополнительные сенсоры и элементы управления поддерживает устройство"
         },
         "data_description": {

@@ -78,6 +78,7 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
         start_route.assert_not_awaited()
         on_learning.assert_not_called()
         self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(fetch.call_args.kwargs["max_control_values"], 16)
         self.assertEqual(identities[0]["pn"], "E50000253884199645")
         self.assertTrue(outcome.result["metadata_only"])
         self.assertEqual(outcome.result["planned_write_count"], 0)

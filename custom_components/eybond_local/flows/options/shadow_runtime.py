@@ -8,7 +8,12 @@ from contextlib import suppress
 from typing import Any
 
 from ...runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
-from ...support.cloud_learning_engines import default_cloud_learning_source
+from ...support.cloud_learning_engines import (
+    CloudLearningSource,
+    compatible_cloud_learning_sources,
+    default_cloud_learning_source,
+    resolve_cloud_learning_engine,
+)
 from ...support.memory_guard import (
     read_available_memory_mib,
     shadow_learning_memory_blocker,
@@ -46,12 +51,63 @@ class ShadowLearningRuntimeMixin:
     def _control_discovery_learning_source(self, coordinator) -> str:
         """Return the API surface selected for this run.
 
-        Until the explicit source selector is rendered, the sole source owned
-        by the trusted evidence provider is selected. Ambiguity fails closed.
+        A transient exact selection wins only while it remains compatible with
+        the trusted evidence provider.  Otherwise the registry's one declared
+        default is used.  No cloud family, hostname, or credential heuristic
+        selects an engine.
         """
 
+        compatible = self._control_discovery_learning_sources(coordinator)
+        selected = self._shadow_learning_state.get("wizard_source")
+        if type(selected) is str and selected == selected.strip() and any(
+            source.source_id == selected for source in compatible
+        ):
+            return selected
         return default_cloud_learning_source(
             self._control_discovery_cloud_provider(coordinator)
+        )
+
+    def _control_discovery_learning_sources(
+        self, coordinator
+    ) -> tuple[CloudLearningSource, ...]:
+        """Return exact sources compatible with the trusted provider."""
+
+        return compatible_cloud_learning_sources(
+            self._control_discovery_cloud_provider(coordinator)
+        )
+
+    def _control_discovery_learning_source_label(self, coordinator) -> str:
+        source_id = self._control_discovery_learning_source(coordinator)
+        source = resolve_cloud_learning_engine(source_id).source
+        labels = {
+            "smartess": self._tr(
+                "common.dynamic.cloud_learning_source_smartess",
+                "SmartESS API — active local learning",
+            ),
+            "dessmonitor": self._tr(
+                "common.dynamic.cloud_learning_source_dessmonitor",
+                "DESSMonitor API — read-only metadata",
+            ),
+            "valuecloud": self._tr(
+                "common.dynamic.cloud_learning_source_valuecloud",
+                "ValueCloud API — active local learning",
+            ),
+        }
+        return labels.get(source_id, source.label)
+
+    def _control_discovery_requires_shadow_route(self, coordinator) -> bool:
+        """Return whether the exact selected engine owns a temporary route.
+
+        Cleanup is a mutating endpoint operation.  It must therefore be gated by
+        the same typed engine capability that authorizes route creation; a
+        metadata-only source must never reach the shadow-session stop path even
+        when its HTTP request fails or its flow task is cancelled.
+        """
+
+        source_id = self._control_discovery_learning_source(coordinator)
+        engine = resolve_cloud_learning_engine(source_id)
+        return bool(
+            engine.available and engine.source.capabilities.requires_shadow_route
         )
 
     def _control_discovery_cloud_provider_label(self, coordinator) -> str:
@@ -442,7 +498,7 @@ class ShadowLearningRuntimeMixin:
             ).strip()
         return {
             "cloud_provider": self._control_discovery_cloud_provider(coordinator),
-            "cloud_provider_label": self._control_discovery_cloud_provider_label(
+            "cloud_provider_label": self._control_discovery_learning_source_label(
                 coordinator
             ),
             "cloud_app_label": self._control_discovery_cloud_app_label(coordinator),
