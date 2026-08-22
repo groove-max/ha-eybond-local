@@ -3766,6 +3766,61 @@ class RuntimeStateMachineTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_cancelled_refresh_drains_late_driver_detection_failure(self) -> None:
+        async def _run() -> None:
+            hub = self._hub(full_scan=False)
+            started = asyncio.Event()
+            child_cancelled = asyncio.Event()
+            finish_child = asyncio.Event()
+            loop_errors: list[dict[str, object]] = []
+            loop = asyncio.get_running_loop()
+            previous_handler = loop.get_exception_handler()
+            loop.set_exception_handler(
+                lambda _loop, context: loop_errors.append(context)
+            )
+
+            async def _late_failure(*_args, **_kwargs):
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    child_cancelled.set()
+                    await finish_child.wait()
+                    raise DriverSweepNoMatch(
+                        "no_supported_driver_matched",
+                        silent=True,
+                    )
+
+            try:
+                with patch(
+                    "custom_components.eybond_local.runtime.hub.detection."
+                    "async_detect_inverter",
+                    side_effect=_late_failure,
+                ):
+                    detection = asyncio.create_task(hub._async_detect_driver())
+                    await asyncio.wait_for(started.wait(), timeout=1.0)
+                    detection.cancel()
+                    await asyncio.wait_for(child_cancelled.wait(), timeout=1.0)
+                    self.assertFalse(detection.done())
+                    detection.cancel()
+                    await asyncio.sleep(0)
+                    self.assertFalse(detection.done())
+                    finish_child.set()
+                    try:
+                        result = await asyncio.wait_for(detection, timeout=1.0)
+                    except asyncio.CancelledError:
+                        pass
+                    else:
+                        self.fail(f"cancelled detection returned {result!r}")
+
+                await asyncio.sleep(0)
+                self.assertTrue(detection.cancelled())
+                self.assertEqual(loop_errors, [])
+            finally:
+                loop.set_exception_handler(previous_handler)
+
+        asyncio.run(_run())
+
 
 class CollectorDevcodeDiagnosticsTests(unittest.TestCase):
     """Diagnostics/devcode split: stable identity vs volatile frame vs route."""

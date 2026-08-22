@@ -25,6 +25,38 @@ from .common import (
 )
 
 
+async def _async_cancel_and_drain_task(task: asyncio.Task) -> bool:
+    """Cancel one owned child task and retrieve its terminal outcome.
+
+    Driver detection races the wire probe against an owned-session guard.  If
+    the parent refresh is cancelled, both children still belong to this
+    boundary: leaving either one running can surface its later, expected
+    ``DriverSweepNoMatch`` as an unhandled task exception.  Shielding the child
+    while draining also keeps repeated cancellation of the parent from
+    interrupting mandatory cleanup.
+    """
+
+    parent_cancel_interrupted = False
+    if not task.done():
+        task.cancel()
+    while True:
+        try:
+            await asyncio.shield(task)
+            return parent_cancel_interrupted
+        except asyncio.CancelledError:
+            if task.done():
+                return parent_cancel_interrupted
+            # Shield keeps the owned child alive, so a cancellation observed
+            # while it is still pending belongs to this parent task.  Remember
+            # it and finish draining before the caller re-raises it.
+            parent_cancel_interrupted = True
+        except Exception:
+            # The caller already consumed normal-path failures.  A failure that
+            # races parent cancellation is still retrieved here and remains an
+            # ordinary detection outcome rather than an orphan task exception.
+            return parent_cancel_interrupted
+
+
 class HubDetectionMixin:
     """Methods owned by HubDetectionMixin."""
 
@@ -219,25 +251,25 @@ class HubDetectionMixin:
                 wait_for_session_change(detection_generation),
                 name="eybond_detection_session_guard",
             )
+        parent_cancel_requested = False
         try:
             if session_change_task is None:
-                detection_result = await detection_task
+                detection_result = await asyncio.shield(detection_task)
             else:
                 done, _pending = await asyncio.wait(
                     (detection_task, session_change_task),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if session_change_task in done and detection_task not in done:
-                    detection_task.cancel()
-                    try:
-                        await detection_task
-                    except asyncio.CancelledError:
-                        pass
+                    await _async_cancel_and_drain_task(detection_task)
                     logger.info(
                         "Discarding inverter detection after owned collector session changed"
                     )
                     return "collector_session_changed"
-                detection_result = await detection_task
+                detection_result = await asyncio.shield(detection_task)
+        except asyncio.CancelledError:
+            parent_cancel_requested = True
+            raise
         except DriverSweepNoMatch as exc:
             self._record_inverter_detection_probe_log(
                 exc.probe_log,
@@ -254,12 +286,17 @@ class HubDetectionMixin:
         except RuntimeError as exc:
             return str(exc)
         finally:
+            parent_cancel_requested = (
+                await _async_cancel_and_drain_task(detection_task)
+                or parent_cancel_requested
+            )
             if session_change_task is not None:
-                session_change_task.cancel()
-                try:
-                    await session_change_task
-                except asyncio.CancelledError:
-                    pass
+                parent_cancel_requested = (
+                    await _async_cancel_and_drain_task(session_change_task)
+                    or parent_cancel_requested
+                )
+            if parent_cancel_requested:
+                raise asyncio.CancelledError
 
         if detect_all_candidates:
             self._record_inverter_detection_probe_log(
