@@ -7,6 +7,7 @@ This is the public documentation for EyeBond Local.
 - [Main README](../README.md) — installation, setup, connection settings, troubleshooting, and support flow
 - [Collector Management](COLLECTOR_MANAGEMENT.md) — how the collector connects, runtime settings, Wi-Fi change, restart, and proxy capture basics
 - [Device Learning](DEVICE_LEARNING.md) — how to discover extra sensors and controls for partially supported devices
+- [Cloud Learning Architecture](CLOUD_LEARNING_ARCHITECTURE.md) — typed API sources, trust boundaries, and read-only metadata evidence
 - [Support Archive](SUPPORT_ARCHIVE.md) — what to attach when asking for hardware support
 - [Collector Proxy Capture](PROXY_CAPTURE.md) — use this only when support asks for a temporary capture
 - [Remote / NAT Setup Guide](REMOTE_SETUP.md) — only for collectors outside the normal Home Assistant network

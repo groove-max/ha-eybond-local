@@ -531,7 +531,7 @@ class ShadowLearningRunMixin:
             if requires_shadow_route
             else None
         )
-        runner = learning_engine.control_discovery_runner()
+        runner = learning_engine.learning_runner()
 
         async def _start_shadow_route() -> None:
             if not requires_shadow_route:

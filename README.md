@@ -234,12 +234,15 @@ Use it when:
 What to expect:
 
 1. Start **Configure → Add controls (device learning)**.
-2. Read the safety notice.
-3. Sign in to the supported cloud account for this one session, if the flow asks
+2. Choose an available information source. Active learning can discover local
+   items; a read-only source collects support metadata without changing the
+   collector connection.
+3. Read the safety notice when active learning is selected.
+4. Sign in to the supported cloud account for this one session, if the flow asks
    for it. For many factory collectors this is the same account used by the
    SmartESS / SmartValue or another compatible vendor app.
-4. Let the integration check available settings.
-5. Review the discovered items before applying them.
+5. Let the integration check available information.
+6. Review the result. Only locally proven items can be applied.
 
 The cloud password is not saved. Learned items apply only to this Home Assistant
 device until they are reviewed and added to the built-in catalog.

@@ -291,6 +291,7 @@ import custom_components.eybond_local.flows.options.shadow_runtime as options_sh
 import custom_components.eybond_local.flows.options.shared as options_shared_module
 import custom_components.eybond_local.support.cloud_control_discovery as cloud_control_discovery_module
 import custom_components.eybond_local.support.dessmonitor_learning as dessmonitor_learning_module
+from custom_components.eybond_local.support.cloud_learning_runner import CloudLearningOutcome
 from custom_components.eybond_local.flows.config.ble import (
     BLE_ACTION_APPLY,
     BLE_ACTION_RESCAN,
@@ -9356,7 +9357,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         }
-        outcome = cloud_control_discovery_module.ControlDiscoveryOutcome(
+        outcome = CloudLearningOutcome(
             identity={"pn": coordinator.smartess_collector_pn},
             result={
                 "source": "dessmonitor",

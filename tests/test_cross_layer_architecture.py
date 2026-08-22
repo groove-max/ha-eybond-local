@@ -155,7 +155,7 @@ class ProviderControlDiscoveryIsolationGuardTests(unittest.TestCase):
         source_ids = tuple(source.source_id for source in supported_cloud_learning_sources())
         for source_id in (*source_ids, "nope", ""):
             engine = resolve_cloud_learning_engine(source_id)
-            runner = engine.control_discovery_runner()
+            runner = engine.learning_runner()
             # An engine never hands out a FOREIGN provider's runner: the runner
             # is either owned by its source provider or fail-closed (id "").
             self.assertIn(

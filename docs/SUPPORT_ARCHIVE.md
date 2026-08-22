@@ -72,10 +72,10 @@ If the case contains sensitive information, say so in the issue and share only t
 
 Creating a normal Support Archive does not require your cloud/app password.
 
-Some optional support actions can refresh cloud evidence and may ask for
-credentials for SmartESS / SmartValue or another compatible vendor app for that one action.
-The password is used only for the live request and is not saved by the
-integration.
+Some optional support or device-learning actions can refresh cloud evidence and
+may ask you to choose a supported API, such as SmartESS, ValueCloud, or the
+read-only DESSMonitor metadata source. Credentials are used only for that live
+request and are not saved by the integration.
 
 ## Support Archive vs proxy capture
 
@@ -85,6 +85,6 @@ Use **Proxy Capture** only when a developer asks for it. Proxy capture records o
 
 ## Support Archive after device learning
 
-If you ran **Add controls (device learning)**, create a Support Archive afterward.
+If you ran **Device learning**, create a Support Archive afterward.
 
 That gives the maintainer the learning result and enough context to decide whether the discovered sensors or controls can be added to the built-in model catalog.

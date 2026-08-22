@@ -10,13 +10,10 @@ from __future__ import annotations
 from typing import Any
 
 from ..dessmonitor_cloud import DEFAULT_MAX_CONTROL_VALUES, fetch_read_only_evidence
-from .cloud_control_discovery import (
-    CloudControlDiscoveryRunner,
-    ControlDiscoveryOutcome,
-)
+from .cloud_learning_runner import CloudLearningOutcome, CloudLearningRunner
 
 
-class DessMonitorReadOnlyLearningRunner(CloudControlDiscoveryRunner):
+class DessMonitorReadOnlyLearningRunner(CloudLearningRunner):
     """Fetch DESSMonitor metadata without collector endpoint side effects."""
 
     provider_id = "smartess"
@@ -36,7 +33,7 @@ class DessMonitorReadOnlyLearningRunner(CloudControlDiscoveryRunner):
         on_identity,
         start_shadow_route,
         on_learning,
-    ) -> ControlDiscoveryOutcome:
+    ) -> CloudLearningOutcome:
         del fallback_identity
         del orchestrator_callbacks
         del start_shadow_route
@@ -71,7 +68,7 @@ class DessMonitorReadOnlyLearningRunner(CloudControlDiscoveryRunner):
             "degraded_count": 0,
             "metadata_evidence": evidence,
         }
-        return ControlDiscoveryOutcome(
+        return CloudLearningOutcome(
             identity=identity,
             result=result,
             read_bindings=None,

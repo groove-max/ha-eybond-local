@@ -14,8 +14,6 @@ orchestrators are preserved exactly from the previous in-flow implementation.
 from __future__ import annotations
 
 import logging
-from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,6 +25,7 @@ from ..smartess_cloud import (
     fetch_signed_action,
     login_for_control_discovery,
 )
+from .cloud_learning_runner import CloudLearningOutcome, CloudLearningRunner
 from .read_learning_binder import bind_cloud_labels_to_registers
 from .shadow_learning.orchestrator import async_orchestrate_shadow_learning_settings
 from .shadow_learning.valuecloud_orchestrator import (
@@ -34,27 +33,6 @@ from .shadow_learning.valuecloud_orchestrator import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Executor is HA's ``hass.async_add_executor_job`` (blocking client work runs
-# there). ``progress`` is the flow's determinate-progress hook. ``on_identity`` /
-# ``on_learning`` let the flow update its own UI state at the same points as
-# before -- the runner never touches flow state directly.
-ExecutorJob = Callable[..., Awaitable[Any]]
-ProgressCallback = Callable[..., None]
-IdentityCallback = Callable[[dict[str, Any]], None]
-LearningCallback = Callable[[], None]
-StartShadowRouteCallback = Callable[[], Awaitable[None]]
-
-
-@dataclass(frozen=True)
-class ControlDiscoveryOutcome:
-    """Normalized result of one provider cloud control-discovery run."""
-
-    identity: dict[str, Any]
-    result: dict[str, Any]
-    read_bindings: dict[str, Any] | None = None
-    metadata_evidence: dict[str, Any] | None = None
-
 
 @dataclass(frozen=True, slots=True)
 class ControlDiscoveryTimeoutPolicy:
@@ -122,32 +100,9 @@ def _settings_dat_from_bundle(bundle: Any) -> dict[str, Any] | None:
     return dict(dat) if isinstance(dat, dict) else None
 
 
-class CloudControlDiscoveryRunner(ABC):
-    """One provider's cloud control-discovery runner."""
-
-    provider_id: str = ""
-
-    @abstractmethod
-    async def async_run(
-        self,
-        *,
-        executor: ExecutorJob,
-        collector_pn: str,
-        username: str,
-        password: str,
-        fallback_identity: dict[str, Any] | None,
-        max_fields: int,
-        progress: ProgressCallback,
-        orchestrator_callbacks: Mapping[str, Any],
-        on_identity: IdentityCallback,
-        start_shadow_route: StartShadowRouteCallback,
-        on_learning: LearningCallback,
-    ) -> ControlDiscoveryOutcome:
-        ...
-
-
-class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
+class SmartEssActiveLearningRunner(CloudLearningRunner):
     provider_id = "smartess"
+    source_id = "smartess"
     timeout_policy = DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY
 
     async def async_run(
@@ -164,7 +119,7 @@ class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
         on_identity,
         start_shadow_route,
         on_learning,
-    ) -> ControlDiscoveryOutcome:
+    ) -> CloudLearningOutcome:
         progress(0.08, "fetching")
         await start_shadow_route()
         progress(0.18, "fetching")
@@ -264,7 +219,7 @@ class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
                 identity=identity,
                 read_map=read_map,
             )
-        return ControlDiscoveryOutcome(
+        return CloudLearningOutcome(
             identity=identity, result=result, read_bindings=read_bindings
         )
 
@@ -312,8 +267,9 @@ class SmartEssControlDiscoveryRunner(CloudControlDiscoveryRunner):
             return None
 
 
-class ValueCloudControlDiscoveryRunner(CloudControlDiscoveryRunner):
+class ValueCloudActiveLearningRunner(CloudLearningRunner):
     provider_id = "valuecloud"
+    source_id = "valuecloud"
     timeout_policy = DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY
 
     async def async_run(
@@ -330,7 +286,7 @@ class ValueCloudControlDiscoveryRunner(CloudControlDiscoveryRunner):
         on_identity,
         start_shadow_route,
         on_learning,
-    ) -> ControlDiscoveryOutcome:
+    ) -> CloudLearningOutcome:
         progress(0.08, "fetching")
         _login_envelope, cloud_session = await executor(
             lambda: valuecloud_cloud_module.login_with_password(
@@ -399,16 +355,30 @@ class ValueCloudControlDiscoveryRunner(CloudControlDiscoveryRunner):
             timeout=self.timeout_policy.action_request,
             **dict(orchestrator_callbacks),
         )
-        return ControlDiscoveryOutcome(identity=identity, result=result, read_bindings=None)
+        return CloudLearningOutcome(identity=identity, result=result, read_bindings=None)
 
 
-class UnavailableControlDiscoveryRunner(CloudControlDiscoveryRunner):
+class UnavailableCloudLearningRunner(CloudLearningRunner):
     provider_id = ""
 
     def __init__(self, requested_provider_id: str = "") -> None:
-        self._requested = str(requested_provider_id or "").strip().lower()
-
-    async def async_run(self, **_kwargs) -> ControlDiscoveryOutcome:
-        raise RuntimeError(
-            f"control_discovery_provider_not_supported:{self._requested or 'unknown'}"
+        self._requested = (
+            requested_provider_id
+            if type(requested_provider_id) is str
+            and requested_provider_id == requested_provider_id.strip()
+            else ""
         )
+
+    async def async_run(self, **_kwargs) -> CloudLearningOutcome:
+        raise RuntimeError(
+            f"cloud_learning_source_not_supported:{self._requested or 'unknown'}"
+        )
+
+
+__all__ = [
+    "DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY",
+    "ControlDiscoveryTimeoutPolicy",
+    "SmartEssActiveLearningRunner",
+    "UnavailableCloudLearningRunner",
+    "ValueCloudActiveLearningRunner",
+]

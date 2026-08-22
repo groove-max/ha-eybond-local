@@ -20,8 +20,10 @@ if str(REPO_ROOT) not in sys.path:
 from custom_components.eybond_local.support import cloud_control_discovery as ccd  # noqa: E402
 from custom_components.eybond_local.support.cloud_control_discovery import (  # noqa: E402
     DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY,
-    ControlDiscoveryOutcome,
     ControlDiscoveryTimeoutPolicy,
+)
+from custom_components.eybond_local.support.cloud_learning_runner import (  # noqa: E402
+    CloudLearningOutcome,
 )
 from custom_components.eybond_local.support.cloud_learning_engines import (  # noqa: E402
     resolve_cloud_learning_engine,
@@ -29,7 +31,7 @@ from custom_components.eybond_local.support.cloud_learning_engines import (  # n
 
 
 def _runner(source_id: str):
-    return resolve_cloud_learning_engine(source_id).control_discovery_runner()
+    return resolve_cloud_learning_engine(source_id).learning_runner()
 
 
 async def _executor(fn, *args):
@@ -89,7 +91,7 @@ class RegistryTests(unittest.TestCase):
 
     def test_unknown_provider_fails_closed(self) -> None:
         runner = _runner("nope")
-        with self.assertRaisesRegex(RuntimeError, "control_discovery_provider_not_supported"):
+        with self.assertRaisesRegex(RuntimeError, "cloud_learning_source_not_supported"):
             _run(runner)
 
 
@@ -113,7 +115,7 @@ class ProviderIsolationTests(unittest.TestCase):
             ccd.valuecloud_cloud_module, "fetch_device_bundle_for_collector_with_session"
         ) as vc_fetch:
             outcome = _run(_runner("smartess"))
-        self.assertIsInstance(outcome, ControlDiscoveryOutcome)
+        self.assertIsInstance(outcome, CloudLearningOutcome)
         self.assertIs(
             smartess_orchestrate.call_args.kwargs["session"],
             control_session,
@@ -154,7 +156,7 @@ class ProviderIsolationTests(unittest.TestCase):
             ccd, "fetch_control_discovery_bundle_for_collector"
         ) as smartess_fetch:
             outcome = _run(_runner("valuecloud"))
-        self.assertIsInstance(outcome, ControlDiscoveryOutcome)
+        self.assertIsInstance(outcome, CloudLearningOutcome)
         vc_fetch.assert_called_once()
         smartess_login.assert_not_called()
         smartess_fetch.assert_not_called()

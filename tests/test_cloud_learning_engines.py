@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import types
 import unittest
 
 
@@ -27,9 +28,35 @@ from custom_components.eybond_local.support.cloud_learning_engines import (  # n
     resolve_cloud_learning_engine,
     supported_cloud_learning_sources,
 )
+from custom_components.eybond_local.support.cloud_learning_runner import (  # noqa: E402
+    CloudLearningOutcome,
+    CloudLearningRunner,
+)
 
 
 class CloudLearningModelTests(unittest.TestCase):
+    def test_outcome_direct_constructor_is_strict_and_detached(self) -> None:
+        identity = {"pn": "E50000253884199645"}
+        result = {"metadata_only": True}
+        outcome = CloudLearningOutcome(identity=identity, result=result)
+        identity["pn"] = "FOREIGN"
+        result["metadata_only"] = False
+
+        self.assertEqual(outcome.identity["pn"], "E50000253884199645")
+        self.assertTrue(outcome.result["metadata_only"])
+        for field, malformed in (
+            ("identity", object()),
+            ("result", []),
+            ("read_bindings", object()),
+            ("metadata_evidence", types.MappingProxyType({})),
+        ):
+            with self.subTest(field=field):
+                values = {"identity": {}, "result": {}, field: malformed}
+                with self.assertRaises(TypeError):
+                    CloudLearningOutcome(**values)
+
+        self.assertNotIn("control_discovery_runner", CloudLearningRunner.__dict__)
+
     def test_source_and_capabilities_direct_constructors_are_strict(self) -> None:
         capabilities = CloudLearningCapabilities(
             metadata=True,
@@ -133,6 +160,7 @@ class CloudLearningModelTests(unittest.TestCase):
                 self.assertFalse(engine.available)
 
     def test_evidence_provider_no_longer_owns_learning_execution(self) -> None:
+        self.assertNotIn("learning_runner", CloudEvidenceProvider.__dict__)
         self.assertNotIn("control_discovery_runner", CloudEvidenceProvider.__dict__)
         self.assertNotIn("control_discovery_available", CloudEvidenceProvider.__dict__)
         self.assertNotIn("classify_control_discovery_error", CloudEvidenceProvider.__dict__)

@@ -285,7 +285,7 @@ class ShadowLearningRuntimeMixin:
             discovery = state.get("discovery")
             if isinstance(discovery, dict) and discovery:
                 orchestration = {
-                    "source": "control_discovery_runner",
+                    "source": "cloud_learning_runner",
                     "status": str(discovery.get("status") or ""),
                     "reason": str(discovery.get("reason") or ""),
                     "preflight": dict(state.get("preflight") or {}),

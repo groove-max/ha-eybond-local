@@ -16,11 +16,11 @@ from ..dessmonitor_cloud import (
 )
 from ..smartess_cloud import SmartEssCloudError, classify_smartess_cloud_error
 from .cloud_control_discovery import (
-    CloudControlDiscoveryRunner,
-    SmartEssControlDiscoveryRunner,
-    UnavailableControlDiscoveryRunner,
-    ValueCloudControlDiscoveryRunner,
+    SmartEssActiveLearningRunner,
+    UnavailableCloudLearningRunner,
+    ValueCloudActiveLearningRunner,
 )
+from .cloud_learning_runner import CloudLearningRunner
 from .dessmonitor_learning import DessMonitorReadOnlyLearningRunner
 
 
@@ -103,7 +103,7 @@ class CloudLearningEngine(ABC):
         return True
 
     @abstractmethod
-    def control_discovery_runner(self) -> CloudControlDiscoveryRunner:
+    def learning_runner(self) -> CloudLearningRunner:
         """Return a fresh provider-owned runner for one transient flow run."""
 
     def classify_error(self, exc: BaseException) -> str:
@@ -129,8 +129,8 @@ class SmartEssCloudLearningEngine(CloudLearningEngine):
         default_for_provider=True,
     )
 
-    def control_discovery_runner(self) -> CloudControlDiscoveryRunner:
-        return SmartEssControlDiscoveryRunner()
+    def learning_runner(self) -> CloudLearningRunner:
+        return SmartEssActiveLearningRunner()
 
     def classify_error(self, exc: BaseException) -> str:
         if not isinstance(exc, (SmartEssCloudError, TimeoutError)):
@@ -155,8 +155,8 @@ class ValueCloudCloudLearningEngine(CloudLearningEngine):
         default_for_provider=True,
     )
 
-    def control_discovery_runner(self) -> CloudControlDiscoveryRunner:
-        return ValueCloudControlDiscoveryRunner()
+    def learning_runner(self) -> CloudLearningRunner:
+        return ValueCloudActiveLearningRunner()
 
 
 class DessMonitorCloudLearningEngine(CloudLearningEngine):
@@ -178,7 +178,7 @@ class DessMonitorCloudLearningEngine(CloudLearningEngine):
         default_for_provider=False,
     )
 
-    def control_discovery_runner(self) -> CloudControlDiscoveryRunner:
+    def learning_runner(self) -> CloudLearningRunner:
         return DessMonitorReadOnlyLearningRunner()
 
     def classify_error(self, exc: BaseException) -> str:
@@ -227,8 +227,8 @@ class UnavailableCloudLearningEngine(CloudLearningEngine):
     def available(self) -> bool:
         return False
 
-    def control_discovery_runner(self) -> CloudControlDiscoveryRunner:
-        return UnavailableControlDiscoveryRunner(self._requested)
+    def learning_runner(self) -> CloudLearningRunner:
+        return UnavailableCloudLearningRunner(self._requested)
 
 
 _ENGINES: dict[str, CloudLearningEngine] = {

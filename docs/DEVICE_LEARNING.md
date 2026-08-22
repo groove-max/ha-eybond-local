@@ -6,8 +6,9 @@ Most users do not need to run it. Use it when the integration offers it for your
 
 ## What it can help with
 
-Device learning can find extra items that are known to the supported cloud
-provider for your exact inverter:
+Device learning can use more than one information source for your exact
+inverter. The flow explains what each available source can do before asking for
+credentials. Depending on the selected source, it can find:
 
 - additional read-only sensors;
 - selectable settings;
@@ -15,7 +16,9 @@ provider for your exact inverter:
 - switches;
 - simple button-like actions.
 
-After the scan, Home Assistant shows what was found and lets you choose what to enable.
+Active learning shows locally proven items and lets you choose what to enable. A
+read-only metadata check shows information that can help add support later, but
+does not create entities until a local register mapping is proven.
 
 ## When to use it
 
@@ -35,10 +38,11 @@ Do not use it when only the collector was found and no inverter was detected. In
 Check these first:
 
 - The collector has stable Wi-Fi.
-- The collector uses the **Cloud + Home Assistant** connection profile. Control
-  discovery temporarily routes its cloud traffic through Home Assistant under
-  the same protected endpoint transaction used by proxy capture, then restores
-  the original cloud endpoint.
+- For active learning, the collector uses the **Cloud + Home Assistant**
+  connection profile. Active learning temporarily routes its cloud traffic
+  through Home Assistant under the same protected endpoint transaction used by
+  proxy capture, then restores the original cloud endpoint. A read-only metadata
+  source does not change the collector endpoint.
 - Home Assistant can read live data from the inverter.
 - You know the cloud/app username and password for this device, if the learning
   flow asks for them.
@@ -53,26 +57,28 @@ If the inverter powers critical loads, run learning only when it is safe to reco
 2. Open **EyeBond Local**.
 3. Click **Configure**.
 4. Choose **Add controls (device learning)**.
-5. Read the safety notice.
+5. Choose an available information source.
+6. If you selected active learning, read and accept the safety notice.
 
 <p align="center"><img src="images/device-learning-start.png" alt="Device learning safety notice" width="480"></p>
 
-6. Enter the supported cloud/app credentials for this one session, if the flow
+7. Enter the supported cloud/app credentials for this one session, if the flow
    asks for them.
 
 <p align="center"><img src="images/device-learning-credentials.png" alt="Device learning cloud credentials form" width="480"></p>
 
-7. Wait for the scan to finish.
+8. Wait for the scan to finish.
 
 <p align="center"><img src="images/device-learning-scanning.png" alt="Device learning scan in progress" width="480"></p>
 
-8. Review the discovered items before applying them.
+9. Review the result. Only active learning can offer locally proven items to
+   apply; read-only metadata remains support evidence.
 
 The cloud/app password is not saved.
 
 ## What happens during learning
 
-In plain terms:
+For active learning:
 
 1. Home Assistant starts a temporary safe learning session.
 2. It signs in to the supported cloud provider with the credentials you entered.
@@ -85,6 +91,11 @@ In plain terms:
 The goal is to learn what the device supports without permanently changing inverter settings.
 
 If the safe learning path is not ready, the integration stops instead of continuing.
+
+For a read-only metadata source, Home Assistant signs in, verifies that the
+cloud device has the same collector PN, and downloads bounded device metadata.
+It does not redirect the collector, send a control action, or claim a local
+register mapping.
 
 ## Review screen
 
