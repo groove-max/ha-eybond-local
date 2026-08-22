@@ -329,6 +329,31 @@ class TypedTelemetryFrameTests(unittest.TestCase):
 
 
 class TypedTelemetryArchitectureTests(unittest.TestCase):
+    def test_measurement_entity_platforms_never_read_broad_snapshot_values(self) -> None:
+        """Keep measurement entities on the typed-first snapshot boundary.
+
+        Collector-owned writable text is intentionally excluded: its values are
+        endpoint metadata and lifecycle state, not inverter measurements.
+        """
+
+        for filename in (
+            "binary_sensor.py",
+            "button.py",
+            "number.py",
+            "select.py",
+            "sensor.py",
+            "switch.py",
+        ):
+            with self.subTest(filename=filename):
+                path = REPO_ROOT / f"custom_components/eybond_local/{filename}"
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                broad_value_reads = [
+                    node
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Attribute) and node.attr == "values"
+                ]
+                self.assertEqual(broad_value_reads, [])
+
     def test_model_is_neutral_and_has_no_ha_runtime_or_driver_dependency(self) -> None:
         path = REPO_ROOT / "custom_components/eybond_local/telemetry.py"
         tree = ast.parse(path.read_text(encoding="utf-8"))

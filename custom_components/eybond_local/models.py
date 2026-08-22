@@ -714,9 +714,9 @@ class RuntimeSnapshot:
     # typed-first compatibility view below.
     values: dict[str, Any] = field(default_factory=dict)
     last_error: str | None = None
-    # Typed scalar driver telemetry lives beside the broad legacy ``values``
-    # mapping during migration. Tooling/metadata dicts and lists deliberately
-    # remain outside this frame.
+    # Typed scalar driver telemetry lives beside the broad metadata ``values``
+    # projection. Tooling/metadata dicts and lists deliberately remain outside
+    # this frame.
     telemetry: TypedTelemetryFrame = field(default_factory=TypedTelemetryFrame.empty)
 
     def telemetry_point(self, key: str) -> TelemetryPoint | None:
@@ -725,16 +725,16 @@ class RuntimeSnapshot:
         return self.telemetry.point(key)
 
     def has_runtime_value(self, key: str) -> bool:
-        """Check typed telemetry first, then the explicit legacy fallback."""
+        """Check typed telemetry first, then broad runtime metadata."""
 
         return self.telemetry_point(key) is not None or key in self.values
 
     def runtime_value(self, key: str, default: Any = None) -> Any:
-        """Read typed telemetry first, falling back to broad legacy values.
+        """Read typed telemetry first, falling back to broad runtime metadata.
 
-        The fallback keeps metadata and not-yet-migrated measurements available
-        while entity consumers move incrementally. A present typed ``None`` is
-        authoritative and is not confused with an absent point.
+        The fallback keeps metadata and structured diagnostics available to
+        mapping-oriented consumers. A present typed ``None`` is authoritative
+        and is not confused with an absent point.
         """
 
         point = self.telemetry_point(key)

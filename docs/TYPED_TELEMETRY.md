@@ -1,4 +1,4 @@
-# Typed telemetry migration
+# Typed telemetry architecture
 
 EyeBond Local historically exposes one broad `RuntimeSnapshot.values` mapping.
 That mapping is intentionally flexible, but it mixes live inverter measurements,
@@ -7,8 +7,9 @@ Consumers therefore cannot tell from the mapping alone whether a key is a
 measurement, whether a value was read in the current cycle, or whether it was
 carried from an earlier partial read.
 
-The typed telemetry migration introduces a narrow measurement contract without
-changing the legacy mapping in one large rewrite.
+The typed telemetry architecture provides a narrow measurement contract while
+keeping non-measurement runtime metadata in its existing typed owners and
+diagnostic projections.
 
 ## Current foundation
 
@@ -40,7 +41,7 @@ the typed frame; `RuntimeSnapshot.values` retains metadata and structured
 diagnostics, while `runtime_values()` constructs an explicit compatibility view
 for mapping consumers.
 
-## Migration order
+## Completed migration
 
 1. Project driver-produced scalar values into the typed frame. **Implemented.**
 2. Add typed provenance for canonical/derived measurements while retaining the
@@ -57,7 +58,7 @@ for mapping consumers.
    **Implemented.** Mapping-oriented callers use the non-stored
    `runtime_values()` compatibility view.
 
-## Current compatibility boundary
+## Current mapping boundary
 
 `RuntimeSnapshot.values` no longer contains the hub's compatibility copy of
 driver scalar values. The driver read, last-good cache, and
@@ -103,9 +104,16 @@ Phase 4 removed that copy after all of the following became true:
 
 Collector connection metadata does not belong in telemetry. The existing
 `CollectorInfo` model remains its typed owner; creating a second generic
-`RuntimeMetadata` frame would only duplicate authority. During the compatibility
-migration, `RuntimeSnapshot.set_collector_server_endpoint()` synchronizes the
-typed collector endpoint with the legacy `values` projection atomically. Reads
-prefer `CollectorInfo` and fall back only for old or partially constructed
-snapshots. Endpoint validation, persistence, wire writes, and recovery remain
-owned by their existing authorities.
+`RuntimeMetadata` frame would only duplicate authority.
+`RuntimeSnapshot.set_collector_server_endpoint()` synchronizes the typed
+collector endpoint with the broad `values` projection atomically. Reads prefer
+`CollectorInfo` and fall back only for old or partially constructed snapshots.
+Endpoint validation, persistence, wire writes, and recovery remain owned by
+their existing authorities.
+
+The broad mapping is therefore not unfinished typed telemetry work. It is the
+intentional projection surface for heterogeneous lifecycle state, structured
+diagnostics, support artifacts, and metadata whose typed owners already live
+elsewhere. A repository guard prevents every measurement entity platform from
+reading that mapping directly; collector endpoint text remains the sole entity
+exception because it exposes metadata rather than telemetry.
