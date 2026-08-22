@@ -4,8 +4,8 @@ This decision record explains how Graphify metrics are interpreted in this
 repository and where the decomposition boundary currently ends. It deliberately
 does not equate file length or raw graph degree with an architecture defect.
 
-Current structural graph (2026-08-22): 9,789 nodes and 23,434 edges; the latest
-navigation-only reclustering produced 316 communities. Community count can vary
+Current structural graph (2026-08-22): 9,795 nodes and 23,445 edges; the latest
+navigation-only reclustering produced 305 communities. Community count can vary
 between unchanged reclustering runs and is not treated as an architecture
 invariant. Graphify was incrementally refreshed in code-only mode after the
 config/options/runtime/transport/support decomposition described below. The
@@ -89,6 +89,12 @@ called them:
   silently adapts a legacy `async_send_forward`-only object;
 - cloud-evidence availability and export use the provider-neutral coordinator
   surface, without SmartESS-named availability/export wrappers;
+- collector metadata callers use the structured
+  `CollectorMetadataChannelReadResult`; the two test-only dict wrappers are
+  gone;
+- provider-neutral FC2/FC3 constants, payload parsers and builders are imported
+  from `collector_wire`; `smartess_local` owns only protocol-descriptor catalog
+  resolution and its specialized session, with no neutral-wire re-export API;
 - the unused coordinator `device_info` alias is gone; entity code names the
   collector/inverter owner explicitly;
 - test-only connection-policy simulation and declaration helpers live in tests,
@@ -97,6 +103,25 @@ called them:
 Static inspection of all 292 production modules reports zero top-level runtime
 import cycles and zero implementation-to-facade back-edges across the decomposed
 families. Boundary and behavior tests make these removals load-bearing.
+
+## Latest authority path audit
+
+The refreshed graph was queried for the shortest relationships between the
+remaining high-degree authorities. Each path was then checked against source
+imports and the architecture guards; graph proximity alone was not treated as
+shared ownership.
+
+| Question | Graph path | Source conclusion |
+| --- | --- | --- |
+| DESSMonitor learning → coordinator cloud tools | five undirected hops through the engine registry, options flow and `shadow_learning_facade` | expected orchestration only; the read-only runner imports no coordinator, endpoint writer or shadow-route implementation |
+| callback session registry → endpoint-operation authority | four hops, with `test_strategy_transition.py` as the bridge | no production coupling; session ownership and endpoint-operation serialization remain separate authorities composed by the transition workflow |
+| typed telemetry → measurement sensor | three hops through canonical measurement descriptions, with one inferred graph edge | source and repository-wide AST guards are authoritative: all measurement entity platforms use `runtime_value()` / `runtime_values()` and never read broad snapshot metadata |
+| SmartESS descriptor → generic collector wire | one lower-layer import with every neutral name private-aliased | dependency direction is correct; generic options, proxy and shadow-learning code import `collector_wire` directly |
+
+The audit therefore found no ownership split that would be safer than the
+current topology. It did find and remove internal compatibility surfaces, but
+did not remove persisted entry readers, protocol aliases present on real
+hardware, or support-artifact compatibility.
 
 ## Typed cloud-learning boundary
 
@@ -116,7 +141,10 @@ authorities:
   activate an overlay or persist credentials;
 - DESSMonitor response bodies and normalized metadata are bounded before they
   reach flow state. Support archives retain useful metadata evidence while
-  dropping credential principals/secrets and masking PN/serial identifiers.
+  dropping credential principals/secrets and masking PN/serial identifiers;
+- DESSMonitor login material is accepted only as exact normalized bounded
+  strings. Provider payloads are never `str()`-coerced into a valid session,
+  and network exception reasons are reduced to a stable typed error.
 
 Graphify confirms the intended topology: the DESSMonitor runner has a one-hop
 `inherits` edge to `CloudLearningRunner`, and no directed path to
@@ -201,8 +229,8 @@ The newer decompositions also removed implicit root dependencies:
 
 At this checkpoint:
 
-- affected architecture/runtime/cloud-learning suite: 1,443/1,443;
-- quality gate: 5/5 (full 3,892-test unit discovery included; 18 skipped);
+- affected architecture/runtime/cloud-learning suite: 856/856 in 29 seconds;
+- quality gate: 5/5 (full 3,897-test unit discovery included);
 - current HA 2026.7 / Python 3.14 lane: 57/57;
 - HA 2026.2 / Python 3.13 compatibility baseline: 57/57 (not repeated in
   this checkpoint; the current lane is the required per-batch lifecycle gate);
