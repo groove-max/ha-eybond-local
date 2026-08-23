@@ -48,6 +48,7 @@ body:
         - Entities / values
         - Controls / writes
         - Support archive / diagnostics
+        - Device support analysis / cloud traffic tools
         - Documentation
         - Other
     validations:

@@ -144,13 +144,6 @@
       "live": false
     },
     {
-      "key": "serial_number",
-      "name": "Serial Number",
-      "icon": "mdi:identifier",
-      "diagnostic": true,
-      "live": false
-    },
-    {
       "key": "main_cpu_firmware_version",
       "name": "Main CPU Firmware",
       "icon": "mdi:chip",
@@ -254,6 +247,16 @@
       "live": false
     },
     {
+      "key": "input_rating_current",
+      "name": "Input Rating Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
       "key": "output_rating_voltage",
       "name": "Output Rating Voltage",
       "unit": "V",
@@ -267,6 +270,26 @@
       "unit": "Hz",
       "device_class": "frequency",
       "state_class": "measurement",
+      "live": false
+    },
+    {
+      "key": "output_rating_current",
+      "name": "Output Rating Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "output_rating_apparent_power",
+      "name": "Output Rating Apparent Power",
+      "unit": "VA",
+      "icon": "mdi:flash-outline",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
       "live": false
     },
     {
@@ -326,12 +349,51 @@
       "live": false
     },
     {
+      "key": "max_ac_charging_current",
+      "name": "Max AC Charging Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "max_charging_current",
+      "name": "Max Charging Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "parallel_max_num",
+      "name": "Parallel Max Number",
+      "icon": "mdi:numeric",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
+      "key": "max_discharging_current",
+      "name": "Max Discharging Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true,
+      "enabled_default": false,
+      "live": false
+    },
+    {
       "key": "input_voltage",
       "name": "Input Voltage",
       "unit": "V",
       "device_class": "voltage",
       "state_class": "measurement",
-      "diagnostic": true
+      "diagnostic": true,
+      "enabled_default": false
     },
     {
       "key": "input_frequency",
@@ -339,7 +401,8 @@
       "unit": "Hz",
       "device_class": "frequency",
       "state_class": "measurement",
-      "diagnostic": true
+      "diagnostic": true,
+      "enabled_default": false
     },
     {
       "key": "output_voltage",
@@ -371,7 +434,8 @@
       "unit": "W",
       "device_class": "power",
       "state_class": "measurement",
-      "diagnostic": true
+      "diagnostic": true,
+      "enabled_default": false
     },
     {
       "key": "load_percent",
@@ -434,7 +498,8 @@
       "unit": "A",
       "device_class": "current",
       "state_class": "measurement",
-      "diagnostic": true
+      "diagnostic": true,
+      "enabled_default": false
     },
     {
       "key": "pv_input_voltage",
@@ -442,7 +507,8 @@
       "unit": "V",
       "device_class": "voltage",
       "state_class": "measurement",
-      "diagnostic": true
+      "diagnostic": true,
+      "enabled_default": false
     },
     {
       "key": "pv_input_power",
@@ -450,7 +516,8 @@
       "unit": "W",
       "device_class": "power",
       "state_class": "measurement",
-      "diagnostic": true
+      "diagnostic": true,
+      "enabled_default": false
     },
     {
       "key": "pv_charging_power",
@@ -637,13 +704,15 @@
       "key": "operating_mode_code",
       "name": "Operating Mode Code",
       "icon": "mdi:code-tags",
-      "diagnostic": true
+      "diagnostic": true,
+      "enabled_default": false
     },
     {
       "key": "status_bits_raw",
       "name": "Status Bits",
       "icon": "mdi:code-brackets",
-      "diagnostic": true
+      "diagnostic": true,
+      "enabled_default": false
     },
     {
       "key": "device_status_bits",
@@ -678,6 +747,7 @@
       "name": "Buzzer Enabled",
       "icon": "mdi:volume-high",
       "diagnostic": true,
+      "enabled_default": false,
       "live": false
     },
     {
@@ -685,6 +755,7 @@
       "name": "Overload Bypass Enabled",
       "icon": "mdi:electric-switch",
       "diagnostic": true,
+      "enabled_default": false,
       "live": false
     },
     {
@@ -692,6 +763,7 @@
       "name": "Power Saving Enabled",
       "icon": "mdi:leaf",
       "diagnostic": true,
+      "enabled_default": false,
       "live": false
     },
     {
@@ -723,6 +795,7 @@
       "name": "Overload Restart Enabled",
       "icon": "mdi:restart-alert",
       "diagnostic": true,
+      "enabled_default": false,
       "live": false
     },
     {
@@ -730,6 +803,7 @@
       "name": "Over Temperature Restart Enabled",
       "icon": "mdi:restart-alert",
       "diagnostic": true,
+      "enabled_default": false,
       "live": false
     },
     {
@@ -737,6 +811,7 @@
       "name": "LCD Backlight Enabled",
       "icon": "mdi:monitor",
       "diagnostic": true,
+      "enabled_default": false,
       "live": false
     },
     {

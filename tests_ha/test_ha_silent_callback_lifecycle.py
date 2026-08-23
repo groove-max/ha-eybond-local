@@ -42,6 +42,9 @@ from synthetic import SYNTHETIC_SERVER_IP  # noqa: E402
 
 # Synthetic identity only (18 chars; heartbeat carries the 14-char prefix).
 FULL_PN = "V001020SYN62344022"
+HA_IP = "127.0.0.1"
+ROUTE_IP = "127.0.0.2"
+NAT_PEER_IP = "127.0.0.3"
 
 _LIFECYCLE_TIMEOUT = 120.0
 
@@ -80,9 +83,12 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
 
     tcp_port = _free_tcp_port()
     service = FakeCollectorService(
-        listen_ip="127.0.0.1",
+        # The addressed UDP route and the source of the reverse TCP session are
+        # deliberately different.  This is the routed/NAT acceptance case: the
+        # peer is observable evidence only and must never replace the route.
+        listen_ip=ROUTE_IP,
         udp_port=0,
-        tcp_bind_ip="127.0.0.1",
+        tcp_bind_ip=NAT_PEER_IP,
         heartbeat_interval=1.0,
         connect_timeout=2.0,
         udp_reply="",
@@ -123,7 +129,7 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
         },
         options={},
     )
-    injected_listener = None
+    observed_listener_token = ""
     try:
         loopback_interfaces = [
             {
@@ -147,38 +153,44 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
 
             self._auto_config.update(
                 {
-                    "server_ip": "127.0.0.1",
+                    "server_ip": HA_IP,
                     "tcp_port": tcp_port,
                     "udp_port": udp_port,
-                    "discovery_target": "127.0.0.1",
+                    "discovery_target": ROUTE_IP,
                     "heartbeat_interval": 60,
                 }
             )
 
             detector = OnboardingDetector(
-                server_ip="127.0.0.1",
+                server_ip=HA_IP,
                 tcp_port=tcp_port,
                 udp_port=udp_port,
             )
             detected = await detector._async_detect_target(
-                DiscoveryTarget(ip="127.0.0.1", source="subnet_unicast"),
+                DiscoveryTarget(ip=ROUTE_IP, source="subnet_unicast"),
                 discovery_timeout=0.5,
                 connect_timeout=6.0,
                 heartbeat_timeout=0.2,
             )
             assert detected.observed_session is not None
             assert detected.callback_route is not None
+            assert detected.observed_session.peer_hint == NAT_PEER_IP
+            assert detected.callback_route.trigger_target_ip == ROUTE_IP
+            assert (
+                detected.callback_route.trigger_target_ip
+                != detected.observed_session.peer_hint
+            )
             self._autodetect_results = {"0": detected}
 
         with patch.object(integration, "PLATFORMS", ()), patch(
             "custom_components.eybond_local.runtime.link.common._default_local_ip",
-            return_value="127.0.0.1",
+            return_value=HA_IP,
         ), patch(
             "custom_components.eybond_local.network_interfaces.get_ipv4_interfaces",
             return_value=loopback_interfaces,
         ), patch(
             "custom_components.eybond_local.network_interfaces.get_local_ip",
-            return_value="127.0.0.1",
+            return_value=HA_IP,
         ), patch.object(
             config_flow_module.EybondLocalConfigFlow, "_async_do_scan", _active_scan
         ), patch.object(
@@ -196,17 +208,17 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
             boot.add_to_hass(hass)
             assert await hass.config_entries.async_setup(boot.entry_id)
             await hass.async_block_till_done()
-            from custom_components.eybond_local.collector.transport import (
-                _acquire_shared_listener,
-            )
             from custom_components.eybond_local.passive_discovery import (
                 get_passive_callback_discovery,
             )
 
             discovery_service = get_passive_callback_discovery(hass)
             assert discovery_service is not None
-            injected_listener = await _acquire_shared_listener("0.0.0.0", tcp_port)
-            discovery_service._listeners[tcp_port] = injected_listener
+            observed_listener_token = (
+                await discovery_service.async_ensure_observed_listener(
+                    "0.0.0.0", tcp_port
+                )
+            )
 
             # ---- 1-2. EVERY transition through the real flow manager -----
             flows = hass.config_entries.flow
@@ -302,8 +314,12 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
             assert result["type"] is FlowResultType.CREATE_ENTRY, result
             data = dict(result["data"])
             assert data["connection_strategy"] == "callback_on_demand"
+            assert data["collector_ip"] == ROUTE_IP
+            assert data["collector_ip"] != NAT_PEER_IP
             contract = RecoveryContract.from_entry_data(data)
             assert contract is not None and contract.callback_verified
+            assert contract.callback_proof is not None
+            assert contract.callback_proof.trigger_target == f"{ROUTE_IP}:{udp_port}"
 
             registry = get_callback_session_registry(hass)
             assert registry is not None
@@ -392,12 +408,7 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
         if boot.state is ConfigEntryState.LOADED:
             await hass.config_entries.async_unload(boot.entry_id)
             await hass.async_block_till_done()
-        if injected_listener is not None:
-            from custom_components.eybond_local.collector.transport import (
-                _release_shared_listener,
-            )
-
-            discovery_service = None
+        if observed_listener_token:
             try:
                 from custom_components.eybond_local.passive_discovery import (
                     get_passive_callback_discovery,
@@ -407,11 +418,7 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
             except Exception:
                 discovery_service = None
             if discovery_service is not None:
-                discovery_service._listeners.pop(tcp_port, None)
-            await _release_shared_listener(
-                injected_listener,
-                close_pending=True,
-                close_payload=True,
-                close_at=True,
-            )
+                await discovery_service.async_release_observed_listener(
+                    observed_listener_token
+                )
         await service.stop()

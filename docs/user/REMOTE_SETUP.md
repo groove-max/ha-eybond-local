@@ -10,6 +10,10 @@ For a normal home network:
 - keep Home Assistant and the collector on the same subnet;
 - leave advanced callback fields empty.
 
+The bounded local fallback probes one `/24`; it does not enumerate every host
+in a `/16`. Broadcast discovery can still cover a larger subnet when the
+network permits it. Otherwise enter a known collector address manually.
+
 ## When to use remote setup
 
 Use these fields only if at least one is true:
@@ -66,7 +70,8 @@ Use this only when VPN is not available and the collector must reach Home Assist
 Example:
 
 - Home Assistant local IP: `192.168.1.50`
-- Router forwards public `203.0.113.10:50099` to `192.168.1.50`
+- Router forwards public `203.0.113.10:18899` to
+  `192.168.1.50:8899`
 - Remote collector IP: `198.51.100.44`
 
 Then use:
@@ -75,9 +80,12 @@ Then use:
 - **Collector IP**: `198.51.100.44`
 - **Discovery target**: `198.51.100.44`
 - **Advertised callback IP**: `203.0.113.10`
-- **Advertised callback TCP port**: `50099`
+- **Advertised callback TCP port**: `18899`
 
 Your router/firewall must allow the collector to connect back to Home Assistant.
+Use a callback port accepted by the collector firmware; `8899` and `18899` are
+common EyeBond choices, while some variants use `502`. An arbitrary external
+port may be rejected even when the router forwards it correctly.
 
 ## Step by step
 
@@ -89,7 +97,8 @@ Your router/firewall must allow the collector to connect back to Home Assistant.
 6. Open **Advanced connection settings**.
 7. Fill **Advertised callback IP** and **Advertised callback TCP port** only for VPN/NAT/port-forwarding cases.
 8. For remote setup, set **Discovery target** to the exact collector IP.
-9. Save and wait. Some collectors reconnect slowly.
+9. Confirm the check and wait. Home Assistant accepts the route only after the
+   expected collector identity reconnects through this attempt.
 10. If setup stays partial, create a Support Archive.
 
 ## Troubleshooting

@@ -25,7 +25,7 @@ _FAMILY_NAMES = (
 )
 _FAMILY = tuple(_PACKAGE / name for name in _FAMILY_NAMES)
 _ORIGINAL_DEFINITION_DIGEST = (
-    "9e05b20267b4258b089e9d9cfa967ffd51eceff71ef656ea5e6cc929b011dfb1"
+    "f35f85fe822fc078822a970f4d6902c24be63e4f4356346263cbb81ffac5399d"
 )
 
 
@@ -67,8 +67,8 @@ class IntegrationModuleBoundaryTests(unittest.TestCase):
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()
-        self.assertEqual(len(definitions), 54)
-        self.assertEqual(len(set(definitions)), 54)
+        self.assertEqual(len(definitions), 55)
+        self.assertEqual(len(set(definitions)), 55)
         self.assertEqual(hashlib.sha256(payload).hexdigest(), _ORIGINAL_DEFINITION_DIGEST)
 
     def test_responsibility_families_have_one_top_level_owner(self) -> None:
@@ -77,6 +77,7 @@ class IntegrationModuleBoundaryTests(unittest.TestCase):
             "_register_entry_network_reconcile": "integration_registration.py",
             "_async_self_heal_collector_cloud_family": "integration_metadata.py",
             "_async_initial_refresh_for_setup": "integration_metadata.py",
+            "_start_background_refresh_for_setup": "integration_metadata.py",
             "_async_cleanup_obsolete_entities": "integration_entities.py",
             "_async_self_heal_sensor_display_precision": "integration_sensor_precision.py",
             "async_migrate_entry": "integration_migration.py",

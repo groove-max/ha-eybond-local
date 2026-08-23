@@ -6470,16 +6470,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await options.async_step_diagnostics()
 
         self.assertEqual(result["type"], "menu")
-        # The diagnostic command runner is gated behind Home Assistant Advanced
-        # Mode (off by default), so it is not in the standard diagnostics menu.
         self.assertEqual(
             result["menu_options"],
             [
                 "create_support_package",
+                "diagnostic_commands",
                 "reload_local_metadata",
             ],
         )
-        self.assertNotIn("diagnostic_commands", result["menu_options"])
         self.assertEqual(
             result["description_placeholders"]["support_archive_action_label"],
             "Create support archive",
@@ -6490,9 +6488,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("advanced_metadata", result["menu_options"])
 
-    async def test_diagnostics_menu_shows_command_runner_in_advanced_mode(self) -> None:
+    async def test_diagnostics_menu_does_not_depend_on_advanced_mode(self) -> None:
         options = self._make_options_flow()
-        options.show_advanced_options = True
+        options.context = {"show_advanced_options": False}
         workflow = {
             f"support_workflow_{key}": value
             for key, value in build_support_workflow_state(
@@ -6523,6 +6521,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await options.async_step_diagnostics()
         self.assertEqual(result["type"], "menu")
         self.assertIn("diagnostic_commands", result["menu_options"])
+        source = Path(
+            "custom_components/eybond_local/flows/options/diagnostics.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn('getattr(self, "show_advanced_options"', source)
 
     async def test_diagnostic_commands_step_runs_and_displays_result(self) -> None:
         options = self._make_options_flow()
@@ -9750,7 +9752,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         coordinator = self._RunnerCoordinator(ready=False)
         identity = CloudHistoryIdentity(
             pn=coordinator.smartess_collector_pn,
-            sn="92632511100118",
+            sn="90000000000001",
             devcode=2376,
             devaddr=1,
         )
@@ -10313,7 +10315,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                         "activation_allowed": False,
                         "identity": {
                             "pn": "E50000200000000001",
-                            "sn": "92632511100118",
+                            "sn": "90000000000001",
                             "devcode": 2376,
                             "devaddr": 1,
                         },
@@ -10455,7 +10457,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options = self._wizard_options_flow()
         identity = CloudHistoryIdentity(
             pn="E50000200000000001",
-            sn="92632511100118",
+            sn="90000000000001",
             devcode=2376,
             devaddr=1,
         )

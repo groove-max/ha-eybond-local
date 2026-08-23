@@ -107,7 +107,7 @@ REPRESENTABILITY_SOURCE = (
 def _identity(*, pn: str = FULL_PN) -> CloudHistoryIdentity:
     return CloudHistoryIdentity(
         pn=pn,
-        sn="92632511100118",
+        sn="90000000000001",
         devcode=2376,
         devaddr=1,
     )

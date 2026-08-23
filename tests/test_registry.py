@@ -190,6 +190,115 @@ class RegistryTests(unittest.TestCase):
         self.assertTrue(descriptions["pv_voltage"].diagnostic)
         self.assertTrue(descriptions["pv_current"].diagnostic)
 
+    def test_serial_identity_is_device_metadata_not_a_sensor_entity(self) -> None:
+        """A serial belongs to HA device info; raw reports stay in support evidence."""
+
+        pi30_keys = {
+            description.key
+            for description in measurements_for_runtime(
+                driver_key="pi30",
+                register_schema_name="pi30_ascii/models/default.json",
+                include_all_drivers_when_unknown=False,
+            )
+        }
+        smartess_keys = {
+            description.key
+            for description in measurements_for_runtime(
+                driver_key="smartess_local",
+                register_schema_name="smartess_local/models/0912.json",
+                include_all_drivers_when_unknown=False,
+            )
+        }
+
+        self.assertNotIn("serial_number", pi30_keys)
+        self.assertNotIn("serial_number", smartess_keys)
+
+    def test_pi30_default_surface_avoids_raw_duplicate_clutter(self) -> None:
+        descriptions = {
+            description.key: description
+            for description in measurements_for_driver("pi30")
+        }
+
+        # These values remain available as opt-in wire diagnostics, while the
+        # canonical entities are the default product surface.
+        for key in (
+            "input_voltage",
+            "input_frequency",
+            "output_active_power",
+            "pv_input_current",
+            "pv_input_voltage",
+            "pv_input_power",
+            "operating_mode_code",
+            "status_bits_raw",
+        ):
+            with self.subTest(key=key):
+                self.assertTrue(descriptions[key].diagnostic)
+                self.assertFalse(descriptions[key].enabled_default)
+
+        for key in (
+            "grid_voltage",
+            "grid_frequency",
+            "output_power",
+            "pv_voltage",
+            "pv_current",
+            "pv_power",
+            "operating_mode",
+        ):
+            with self.subTest(key=key):
+                self.assertTrue(descriptions[key].enabled_default)
+
+        # Non-duplicate PI30 measurements remain visible by default.
+        for key in (
+            "output_voltage",
+            "output_frequency",
+            "output_apparent_power",
+            "battery_voltage",
+            "battery_charge_current",
+            "battery_discharge_current",
+            "pv_charging_power",
+        ):
+            with self.subTest(key=key):
+                self.assertTrue(descriptions[key].enabled_default)
+
+    def test_pi30_documented_rating_fields_are_available_as_opt_in_diagnostics(self) -> None:
+        descriptions = {
+            description.key: description
+            for description in measurements_for_driver("pi30")
+        }
+
+        for key in (
+            "input_rating_current",
+            "output_rating_current",
+            "output_rating_apparent_power",
+            "max_ac_charging_current",
+            "max_charging_current",
+            "parallel_max_num",
+            "max_discharging_current",
+        ):
+            with self.subTest(key=key):
+                self.assertIn(key, descriptions)
+                self.assertTrue(descriptions[key].diagnostic)
+                self.assertFalse(descriptions[key].enabled_default)
+                self.assertFalse(descriptions[key].live)
+
+    def test_pi30_writable_flag_readbacks_do_not_duplicate_switches_by_default(self) -> None:
+        descriptions = {
+            description.key: description
+            for description in binary_sensors_for_driver("pi30")
+        }
+
+        self.assertTrue(descriptions["alarm_active"].enabled_default)
+        for key in (
+            "buzzer_enabled",
+            "overload_bypass_enabled",
+            "power_saving_enabled",
+            "overload_restart_enabled",
+            "over_temperature_restart_enabled",
+            "lcd_backlight_enabled",
+        ):
+            with self.subTest(key=key):
+                self.assertFalse(descriptions[key].enabled_default)
+
     def test_binary_sensors_for_smg_do_not_include_pi30_only_flags(self) -> None:
         keys = {description.key for description in binary_sensors_for_driver("modbus_smg")}
 

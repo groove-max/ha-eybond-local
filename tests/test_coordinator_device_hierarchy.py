@@ -243,12 +243,20 @@ def _install_coordinator_stubs() -> None:
             str(driver_key or "").strip(), _DEFAULT_POLL_POLICY
         )
     )
-    drivers_registry.serial_is_stable = (
-        lambda driver_key="", inverter=None: str(
-            getattr(inverter, "variant_key", "") or ""
-        ).strip()
-        != "smartess_0925"
-    )
+    def _serial_is_stable(driver_key="", inverter=None):
+        if str(getattr(inverter, "variant_key", "") or "").strip() == "smartess_0925":
+            return False
+        details = getattr(inverter, "details", {})
+        if str(driver_key or "").strip() == "pi30" and isinstance(details, dict):
+            trust = details.get("serial_identity_trust")
+            if trust is not None:
+                return bool(
+                    str(getattr(inverter, "serial_number", "") or "").strip()
+                    and trust == "trusted"
+                )
+        return True
+
+    drivers_registry.serial_is_stable = _serial_is_stable
     # Neutral support-marker resolver double: the coordinator only projects the
     # driver's verdict, so the double returns no special marker.
     drivers_registry.support_marker = (
@@ -1938,6 +1946,56 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(collector.model, "Wi-Fi.DTU")
         self.assertEqual(collector.hw_version, "HW-7")
         self.assertEqual(inverter.via_device_id, collector.id)
+
+    def test_sync_device_registry_clears_untrusted_pi30_placeholder(self) -> None:
+        class _PreservingRegistry(FakeRegistry):
+            def async_get_or_create(self, config_entry_id=None, **info):
+                identifiers = set(info.get("identifiers") or set())
+                existing = self.async_get_device(identifiers=identifiers)
+                prior_serial = None if existing is None else existing.serial_number
+                device = super().async_get_or_create(config_entry_id, **info)
+                if "serial_number" not in info:
+                    device.serial_number = prior_serial
+                return device
+
+        registry = _PreservingRegistry()
+        self.coordinator_module.dr.async_get = lambda hass: registry
+        inverter_device = registry.async_get_or_create(
+            config_entry_id="entry-1",
+            identifiers={("eybond_local", "entry-1")},
+            name="PI30 4200",
+            serial_number="55355535553555",
+        )
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = object()
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={
+                "detected_model": "PI30 4200",
+                "detected_serial": "55355535553555",
+            },
+            options={},
+            title="Collector PN Q0000000000001",
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            inverter=types.SimpleNamespace(
+                driver_key="pi30",
+                model_name="PI30 4200",
+                serial_number="",
+                details={
+                    "reported_serial_number": "55355535553555",
+                    "serial_identity_source": "qid",
+                    "serial_identity_trust": "untrusted",
+                    "serial_identity_reason": "known_placeholder",
+                },
+            )
+        )
+        coordinator._last_synced_device_meta = ("", "", "", "", "")
+
+        coordinator._async_sync_inverter_device_registry()
+
+        self.assertIsNone(inverter_device.serial_number)
 
     def test_pending_entry_uses_collector_scope_until_inverter_identity_exists(self) -> None:
         registry = FakeRegistry()
@@ -5078,6 +5136,64 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 model_name="PowMr 4.2kW / VMII-NXPW5KW (SmartESS 0925)",
                 serial_number="",
                 variant_key="smartess_0925",
+            ),
+            collector=types.SimpleNamespace(
+                collector_pn="Q0000000000001",
+                profile_name="EyeBond ASCII PN v1",
+                smartess_protocol_name=None,
+                smartess_protocol_asset_name=None,
+                smartess_collector_version="3.6.7.6",
+            ),
+        )
+
+        import asyncio
+
+        asyncio.run(coordinator._async_remember_runtime_identity(snapshot))
+
+        self.assertEqual(coordinator.config_entry.data["detected_serial"], "")
+        self.assertEqual(len(updated_entries), 1)
+
+    def test_remember_runtime_identity_clears_stale_pi30_placeholder(self) -> None:
+        updated_entries: list[dict[str, object]] = []
+
+        class _ConfigEntries:
+            def async_update_entry(self, entry, *, title=None, data=None, options=None) -> None:
+                if data is not None:
+                    entry.data = dict(data)
+                if options is not None:
+                    entry.options = dict(options)
+                if title is not None:
+                    entry.title = title
+                updated_entries.append({"title": entry.title, "data": dict(entry.data)})
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(config_entries=_ConfigEntries())
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-pi30-placeholder",
+            data={
+                "collector_ip": "192.168.1.14",
+                "collector_pn": "Q0000000000001",
+                "detected_model": "PI30 4200",
+                "detected_serial": "55355535553555",
+                "server_ip": "192.168.1.50",
+            },
+            options={},
+            title="Collector PN Q0000000000001",
+        )
+        coordinator.data = self.RuntimeSnapshot()
+        snapshot = self.RuntimeSnapshot(
+            values={},
+            inverter=types.SimpleNamespace(
+                driver_key="pi30",
+                model_name="PI30 4200",
+                serial_number="",
+                variant_key="default",
+                details={
+                    "reported_serial_number": "55355535553555",
+                    "serial_identity_source": "qid",
+                    "serial_identity_trust": "untrusted",
+                    "serial_identity_reason": "known_placeholder",
+                },
             ),
             collector=types.SimpleNamespace(
                 collector_pn="Q0000000000001",

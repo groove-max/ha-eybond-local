@@ -154,6 +154,102 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(cap.key == "output_source_priority" for cap in inverter.capabilities))
         self.assertTrue(any(cap.key == "battery_bulk_voltage" for cap in inverter.capabilities))
 
+    async def test_known_placeholder_is_diagnostic_not_canonical_identity(self) -> None:
+        target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
+        transport = _FakeTransport(
+            {
+                (0x0994, 0x01, "QPI"): "PI30",
+                (0x0994, 0x01, "QID"): "55355535553555",
+                (0x0994, 0x01, "QPIRI"): "230.0 18.2 230.0 50.0 18.2 4200 4200 24.0 23.0 22.4 29.2 27.2 2 070 100 1 0 1 1 01 0 0 27.0 0 1 23.0 10 22.0",
+            }
+        )
+
+        inverter = await Pi30Driver().async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.variant_key, "default")
+        self.assertEqual(inverter.serial_number, "")
+        self.assertEqual(
+            inverter.details["reported_serial_number"],
+            "55355535553555",
+        )
+        self.assertEqual(inverter.details["serial_identity_source"], "qid")
+        self.assertEqual(inverter.details["serial_identity_trust"], "untrusted")
+        self.assertEqual(
+            inverter.details["serial_identity_reason"],
+            "known_placeholder",
+        )
+        self.assertNotIn("QSID", transport.commands)
+
+    async def test_qsid_replaces_untrusted_qid_for_pi30_max(self) -> None:
+        target = ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0)
+        transport = _FakeTransport(
+            {
+                (0x0994, 0xFF, "QPI"): "PI30",
+                (0x0994, 0xFF, "QID"): "55355535553555",
+                (0x0994, 0xFF, "QSID"): "20ABC12345678901234567",
+                (0x0994, 0xFF, "QPIRI"): "230.0 26.9 230.0 50.0 26.9 6200 6200 48.0 46.0 42.0 56.4 54.0 2 030 010 1 1 1 1 01 0 0 54.0 0 1 46.0 10 44.0",
+                (0x0994, 0xFF, "QPIGS"): "224.5 49.9 224.5 49.9 0314 0210 005 377 01.60 000 000 0029 00.6 336.9 00.00 00000 10010000 00 00 00220 010",
+                (0x0994, 0xFF, "QFLAG"): "ExzDabjkuvygld",
+                (0x0994, 0xFF, "QPIWS"): "00000000000000000000000000000000",
+            }
+        )
+
+        inverter = await Pi30Driver().async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.serial_number, "ABC12345678901234567")
+        self.assertEqual(
+            inverter.details["reported_serial_number"],
+            "ABC12345678901234567",
+        )
+        self.assertEqual(inverter.details["serial_identity_source"], "qsid")
+        self.assertEqual(inverter.details["serial_identity_trust"], "trusted")
+
+    async def test_trusted_qid_does_not_pay_qsid_timeout(self) -> None:
+        target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
+        transport = _FakeTransport(
+            {
+                (0x0994, 0x01, "QPI"): "PI30",
+                (0x0994, 0x01, "QID"): "8092809280929054",
+                (0x0994, 0x01, "QPIRI"): "230.0 26.9 230.0 50.0 26.9 6200 6200 48.0 46.0 42.0 56.4 54.0 2 030 010 1 1 1 1 01 0 0 54.0 0 1 46.0 10 44.0",
+                (0x0994, 0x01, "QPIWS"): "00000000000000000000000000000000",
+            }
+        )
+
+        inverter = await Pi30Driver().async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.serial_number, "8092809280929054")
+        self.assertEqual(inverter.details["serial_identity_source"], "qid")
+        self.assertEqual(inverter.details["serial_identity_trust"], "trusted")
+        self.assertNotIn("QSID", transport.commands)
+
+    async def test_serial_queries_are_optional_for_pi30_detection(self) -> None:
+        target = ProbeTarget(devcode=0x0994, collector_addr=0xFF, device_addr=0)
+        transport = _FakeTransport(
+            {
+                (0x0994, 0xFF, "QPI"): "PI30",
+                (0x0994, 0xFF, "QPIRI"): "230.0 26.9 230.0 50.0 26.9 6200 6200 48.0 46.0 42.0 56.4 54.0 2 030 010 1 1 1 1 01 0 0 54.0 0 1 46.0 10 44.0",
+                (0x0994, 0xFF, "QPIGS"): "224.5 49.9 224.5 49.9 0314 0210 005 377 01.60 000 000 0029 00.6 336.9 00.00 00000 10010000 00 00 00220 010",
+                (0x0994, 0xFF, "QFLAG"): "ExzDabjkuvygld",
+                (0x0994, 0xFF, "QPIWS"): "00000000000000000000000000000000",
+            }
+        )
+
+        inverter = await Pi30Driver().async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.model_name, "PI30 6200")
+        self.assertEqual(inverter.serial_number, "")
+        self.assertEqual(inverter.details["serial_identity_trust"], "unavailable")
+        self.assertEqual(
+            inverter.details["serial_identity_reason"],
+            "serial_query_unavailable",
+        )
+        self.assertIn("QID", transport.commands)
+        self.assertIn("QSID", transport.commands)
+
     async def test_probe_scales_numeric_capabilities_for_24v_units(self) -> None:
         driver = Pi30Driver()
         target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
@@ -299,10 +395,10 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
 
         assert inverter is not None
         self.assertEqual(inverter.driver_key, "pi30")
-        self.assertEqual(inverter.serial_number, "55355535553555")
+        self.assertEqual(inverter.serial_number, "")
+        self.assertEqual(inverter.details["serial_identity_trust"], "untrusted")
         self.assertIn("QMN", transport.commands)
-        self.assertLess(transport.commands.index("QID"), transport.commands.index("QPIGS"))
-        self.assertLess(transport.commands.index("QID"), transport.commands.index("QMN"))
+        self.assertIn("QID", transport.commands)
         timings = inverter.details["catalog_detection"]["probe_actions"]["timings"]
         self.assertTrue(timings)
         timing_by_command = {
@@ -310,8 +406,7 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
             for item in timings
             if item.get("command")
         }
-        self.assertEqual(timing_by_command["QID"]["outcome"], "executed")
-        self.assertEqual(timing_by_command["QID"]["timeout_ms"], 4000)
+        self.assertNotIn("QID", timing_by_command)
         self.assertEqual(timing_by_command["QMN"]["outcome"], "failed")
         self.assertIn(timing_by_command["QMN"].get("error"), {"timeout", "Pi30Error"})
         self.assertEqual(

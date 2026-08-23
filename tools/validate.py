@@ -609,6 +609,13 @@ def main() -> int:
                     "release mode requires exactly the 2026.2 and 2026.7 HA lanes; "
                     "pass --ha-lane twice or set EYBOND_HA_*_PYTHON"
                 )
+            _run(
+                (
+                    sys.executable,
+                    "tools/check_release_readiness.py",
+                    "--require-local-fixtures",
+                )
+            )
             _run((sys.executable, "tools/quality_gate.py"))
             for version, executable in lanes:
                 print(f"HA compatibility lane {version}")

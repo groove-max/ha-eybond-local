@@ -161,6 +161,28 @@ class VariantSerialStabilityTests(unittest.TestCase):
         inverter = types.SimpleNamespace(variant_key="smartess_0912")
         self.assertTrue(registry.serial_is_stable("smartess_local", inverter))
 
+    def test_pi30_placeholder_is_not_a_stable_serial(self) -> None:
+        inverter = types.SimpleNamespace(
+            serial_number="",
+            details={
+                "reported_serial_number": "55355535553555",
+                "serial_identity_source": "qid",
+                "serial_identity_trust": "untrusted",
+                "serial_identity_reason": "known_placeholder",
+            },
+        )
+        self.assertFalse(registry.serial_is_stable("pi30", inverter))
+
+    def test_pi30_trusted_qsid_is_stable(self) -> None:
+        inverter = types.SimpleNamespace(
+            serial_number="ABC12345678901234567",
+            details={
+                "serial_identity_source": "qsid",
+                "serial_identity_trust": "trusted",
+            },
+        )
+        self.assertTrue(registry.serial_is_stable("pi30", inverter))
+
     def test_other_drivers_default_stable(self) -> None:
         for driver_key in ("modbus_smg", "pi30", "", "unknown_driver"):
             self.assertTrue(

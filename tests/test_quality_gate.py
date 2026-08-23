@@ -21,6 +21,16 @@ from custom_components.eybond_local.support.quality_gate import (
 
 
 class QualityGateTests(unittest.TestCase):
+    def test_release_validation_runs_fixture_readiness_before_quality_gate(self) -> None:
+        source = (TOOLS_DIR / "validate.py").read_text(encoding="utf-8")
+        release_branch = source[source.index('if args.mode == "plan"') :]
+
+        readiness = release_branch.index('"tools/check_release_readiness.py"')
+        fixture_requirement = release_branch.index('"--require-local-fixtures"')
+        quality_gate = release_branch.rindex('"tools/quality_gate.py"')
+        self.assertLess(readiness, fixture_requirement)
+        self.assertLess(fixture_requirement, quality_gate)
+
     def test_generated_exports_cover_all_checked_docs(self) -> None:
         exports = generated_exports()
 
@@ -35,8 +45,14 @@ class QualityGateTests(unittest.TestCase):
         step_keys = [step.key for step in steps]
 
         self.assertEqual(
-            step_keys[:4],
-            ["validate_profiles", "validate_model_catalog", "unit_tests", "compileall"],
+            step_keys[:5],
+            [
+                "validate_profiles",
+                "validate_model_catalog",
+                "check_public_docs",
+                "unit_tests",
+                "compileall",
+            ],
         )
         self.assertIn("check_model_catalog", step_keys)
         self.assertNotIn("refresh_support_matrix", step_keys)
@@ -47,10 +63,10 @@ class QualityGateTests(unittest.TestCase):
             ("python3", str(TOOLS_DIR / "model_catalog.py"), "validate"),
         )
         self.assertEqual(
-            steps[3].command,
+            steps[4].command,
             ("python3", "-m", "compileall", str(PACKAGE_DIR), str(TOOLS_DIR)),
         )
-        for step in steps[4:]:
+        for step in steps[5:]:
             self.assertIn("--check", step.command)
 
     def test_build_steps_with_refresh_writes_then_checks(self) -> None:

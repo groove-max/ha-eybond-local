@@ -36,7 +36,7 @@ from custom_components.eybond_local.smartess_cloud import (  # noqa: E402
 )
 
 
-FULL_PN = "E50000253884199645"
+FULL_PN = "E50000200000000001"
 
 
 def _bundle() -> dict:
@@ -44,7 +44,7 @@ def _bundle() -> dict:
         "request": {
             "params": {
                 "pn": FULL_PN,
-                "sn": "92632511100118",
+                "sn": "90000000000001",
                 "devcode": 2376,
                 "devaddr": 1,
             }
@@ -74,7 +74,7 @@ def _collect_with_keys(
                 dat=[
                     {
                         "pn": FULL_PN,
-                        "sn": "92632511100118",
+                        "sn": "90000000000001",
                         "devcode": 2376,
                         "devaddr": 1,
                         "timezone": 7200,
@@ -137,7 +137,7 @@ class SmartEssHistoryTests(unittest.TestCase):
                     dat=[
                         {
                             "pn": FULL_PN,
-                            "sn": "92632511100118",
+                            "sn": "90000000000001",
                             "devcode": 2376,
                             "devaddr": 1,
                             "timezone": 7200,
@@ -155,7 +155,7 @@ class SmartEssHistoryTests(unittest.TestCase):
                 )
             self.assertEqual(action_name, SMARTESS_HISTORY_SOURCE_ACTION)
             self.assertEqual(params["pn"], [FULL_PN])
-            self.assertEqual(params["sn"], ["92632511100118"])
+            self.assertEqual(params["sn"], ["90000000000001"])
             self.assertEqual(params["devcode"], ["2376"])
             self.assertEqual(params["devaddr"], ["1"])
             self.assertEqual(params["date"], ["2026-08-23"])

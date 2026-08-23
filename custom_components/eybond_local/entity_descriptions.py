@@ -767,13 +767,6 @@ BASE_SENSOR_DESCRIPTIONS: tuple[MeasurementDescription, ...] = (
         live=False,
     ),
     MeasurementDescription(
-        key="serial_number",
-        name="Serial Number",
-        icon="mdi:identifier",
-        diagnostic=True,
-        live=False,
-    ),
-    MeasurementDescription(
         key="detection_confidence",
         name="Detection Confidence",
         icon="mdi:check-decagram-outline",

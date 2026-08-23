@@ -20,7 +20,7 @@ python3 tools/validate.py unit
 python3 tools/validate.py ha --ha-python /path/to/ha-current/bin/python
 ```
 
-See [the validation workflow](../docs/VALIDATION.md) for the release command,
+See [the validation workflow](../docs/maintainer/VALIDATION.md) for the release command,
 the two HA lanes, and the intended local/CI cadence.
 
 Run the public quality gate used by CI:
@@ -72,7 +72,7 @@ python3 tools/render_release_notes.py vX.Y.Z \
   --output .local/release-notes/vX.Y.Z.md
 ```
 
-The full release flow is documented in [docs/RELEASING.md](../docs/RELEASING.md).
+The full release flow is documented in [Releasing](../docs/maintainer/RELEASING.md).
 
 ## Vet a device contribution
 

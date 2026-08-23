@@ -151,7 +151,7 @@
      "command": "QID",
      "parser_key": "pi30.serial_number",
      "cost": 1,
-     "optional": false,
+     "optional": true,
      "timeout": 4.0,
      "evidence_fields": [
       {

@@ -103,7 +103,7 @@ def _anonymize_command_responses(payload: dict[str, Any]) -> list[dict[str, Any]
         return []
 
     redactions: list[dict[str, Any]] = []
-    for command in ("QID", "^P005ID"):
+    for command in ("QID", "QSID", "^P005ID"):
         raw = command_responses.get(command)
         if not raw:
             continue
@@ -126,7 +126,7 @@ def _mask_command_serial_response(command: str, payload: str) -> str:
         return payload
     if command == "QID":
         return _mask_text_by_shape(text)
-    if command == "^P005ID" and len(text) >= 2 and text[:2].isdigit():
+    if command in {"QSID", "^P005ID"} and len(text) >= 2 and text[:2].isdigit():
         available = int(text[:2])
         serial = text[2 : 2 + available]
         if not serial:

@@ -62,7 +62,7 @@ class FixtureValidationTests(unittest.TestCase):
         self.assertIn("Generated from replaying local fixtures", markdown)
         self.assertIn("| `smg-6200-live-capture` | `ok` | `modbus_smg` | `SMG 6200` |", markdown)
         self.assertIn("| `pi18-5000-synthetic-capture` | `ok` | `pi18` | `PI18 5000` | `Hybrid` |", markdown)
-        self.assertIn("| `pi30-vmii-nxpw5kw-live-capture` | `ok` | `pi30` | `VMII-NXPW5KW` | `Line` |", markdown)
+        self.assertIn("| `pi30-vmii-nxpw5kw-live-capture` | `ok` | `pi30` | `PI30 4200` | `Line` |", markdown)
 
     def test_generated_markdown_export_is_in_sync(self) -> None:
         overview = asyncio.run(build_fixture_validation_overview())

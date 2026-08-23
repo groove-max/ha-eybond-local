@@ -499,14 +499,12 @@ class DiagnosticsOptionsMixin:
         rollback_paths = self._local_metadata_rollback_paths()
         menu_options: list[str] = [
             "create_support_package",
+            "diagnostic_commands",
         ]
 
-        # The free-form diagnostic command runner issues raw reads/writes/AT
-        # commands directly on the device; expose its UI form only in Home
-        # Assistant Advanced Mode. The run_diagnostic_commands action stays
-        # available and is itself write-gated by confirm_write.
-        if getattr(self, "show_advanced_options", False):
-            menu_options.append("diagnostic_commands")
+        # This is already the integration's explicit support/diagnostics area,
+        # so the command runner has a stable entry point here. Device writes
+        # remain separately and explicitly gated by confirm_write.
 
         if primary_action == "reload_local_metadata":
             menu_options.append("reload_local_metadata")

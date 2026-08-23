@@ -26,7 +26,7 @@ from custom_components.eybond_local.support.cloud_semantic_evidence import (  # 
 def _identity() -> CloudHistoryIdentity:
     return CloudHistoryIdentity(
         pn="E50000200000000001",
-        sn="92632511100118",
+        sn="90000000000001",
         devcode=2376,
         devaddr=1,
     )
@@ -151,7 +151,7 @@ class CloudHistoryEvidenceTests(unittest.TestCase):
                 "identity",
                 CloudHistoryIdentity(
                     pn="FOREIGN",
-                    sn="92632511100118",
+                    sn="90000000000001",
                     devcode=2376,
                     devaddr=1,
                 ),

@@ -62,7 +62,7 @@ class FixtureCoverageTests(unittest.TestCase):
         self.assertIn("Generated from local fixture catalog metadata", markdown)
         self.assertIn("| `SMG 6200 Live Capture` | `modbus_smg` | `SMG 6200` |", markdown)
         self.assertIn("| `PI18 5000 Synthetic Capture` | `pi18` | `PI18 5000` | `eybond_ascii_pn_v1` | `experimental` |", markdown)
-        self.assertIn("| `PI30 VMII-NXPW5KW Live Capture` | `pi30` | `VMII-NXPW5KW` | `eybond_ascii_pn_v1` | `release` |", markdown)
+        self.assertIn("| `PI30 VMII-NXPW5KW Live Capture` | `pi30` | `PI30 4200` | `eybond_ascii_pn_v1` | `release` |", markdown)
 
     def test_generated_markdown_export_is_in_sync(self) -> None:
         overview = build_fixture_coverage_overview()

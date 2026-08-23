@@ -1676,12 +1676,6 @@
       "enabled_default": false
     },
     {
-      "key": "serial_number",
-      "name": "serial number",
-      "diagnostic": true,
-      "enabled_default": false
-    },
-    {
       "key": "system_version_number",
       "name": "system version number",
       "diagnostic": true,

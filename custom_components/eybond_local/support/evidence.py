@@ -17,23 +17,35 @@ async def build_evidence_index() -> dict[str, Any]:
     coverage = build_fixture_coverage_overview()
     validation = await build_fixture_validation_overview()
 
-    coverage_by_driver: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    validation_by_driver: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    coverage_by_profile: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    validation_by_profile: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    unmapped_coverage_by_driver: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    unmapped_validation_by_driver: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for entry in coverage["entries"]:
-        coverage_by_driver[str(entry["driver_key"])].append(entry)
+        profile_name = str(entry.get("profile_name", ""))
+        if profile_name:
+            coverage_by_profile[profile_name].append(entry)
+        else:
+            unmapped_coverage_by_driver[str(entry["driver_key"])].append(entry)
     for entry in validation["entries"]:
-        validation_by_driver[str(entry.get("driver_key", "unknown"))].append(entry)
+        profile_name = str(
+            entry.get("expected_profile_name") or entry.get("profile_name") or ""
+        )
+        if profile_name:
+            validation_by_profile[profile_name].append(entry)
+        else:
+            unmapped_validation_by_driver[
+                str(entry.get("driver_key", "unknown"))
+            ].append(entry)
 
     rows: list[dict[str, Any]] = []
-    seen_drivers: set[str] = set()
-
     for profile in support["profiles"]:
         driver_key = str(profile["driver_key"])
-        seen_drivers.add(driver_key)
-        driver_coverage = coverage_by_driver.get(driver_key, [])
-        driver_validation = validation_by_driver.get(driver_key, [])
-        validation_counts = _count_validation_statuses(driver_validation)
-        evidence_scope = _derive_driver_evidence_scope(driver_coverage)
+        profile_name = str(profile["profile_name"])
+        profile_coverage = coverage_by_profile.get(profile_name, [])
+        profile_validation = validation_by_profile.get(profile_name, [])
+        validation_counts = _count_validation_statuses(profile_validation)
+        evidence_scope = _derive_driver_evidence_scope(profile_coverage)
         rows.append(
             {
                 "profile_key": profile["profile_key"],
@@ -45,17 +57,17 @@ async def build_evidence_index() -> dict[str, Any]:
                 "tested_capabilities": int(profile["validation_state_counts"].get("tested", 0)),
                 "untested_capabilities": int(profile["validation_state_counts"].get("untested", 0)),
                 "blocked_capabilities": int(profile["support_tier_counts"].get("blocked", 0)),
-                "fixture_count": len(driver_coverage),
+                "fixture_count": len(profile_coverage),
                 "validated_ok": validation_counts["ok"],
                 "validated_mismatch": validation_counts["mismatch"],
                 "validated_error": validation_counts["error"],
-                "models": sorted({str(item["model_name"]) for item in driver_coverage}),
+                "models": sorted({str(item["model_name"]) for item in profile_coverage}),
                 "collector_profiles": sorted(
-                    {str(item["collector_profile_key"]) for item in driver_coverage}
+                    {str(item["collector_profile_key"]) for item in profile_coverage}
                 ),
                 "readiness": _derive_readiness(
                     evidence_scope=evidence_scope,
-                    fixture_count=len(driver_coverage),
+                    fixture_count=len(profile_coverage),
                     ok_count=validation_counts["ok"],
                     mismatch_count=validation_counts["mismatch"],
                     error_count=validation_counts["error"],
@@ -64,10 +76,12 @@ async def build_evidence_index() -> dict[str, Any]:
             }
         )
 
-    for driver_key, driver_coverage in coverage_by_driver.items():
-        if driver_key in seen_drivers:
-            continue
-        driver_validation = validation_by_driver.get(driver_key, [])
+    unmapped_driver_keys = set(unmapped_coverage_by_driver) | set(
+        unmapped_validation_by_driver
+    )
+    for driver_key in sorted(unmapped_driver_keys):
+        driver_coverage = unmapped_coverage_by_driver.get(driver_key, [])
+        driver_validation = unmapped_validation_by_driver.get(driver_key, [])
         validation_counts = _count_validation_statuses(driver_validation)
         evidence_scope = _derive_driver_evidence_scope(driver_coverage)
         rows.append(
@@ -75,7 +89,11 @@ async def build_evidence_index() -> dict[str, Any]:
                 "profile_key": "",
                 "title": "Unmapped Fixture Coverage",
                 "driver_key": driver_key,
-                "protocol_family": driver_coverage[0].get("protocol_family", ""),
+                "protocol_family": (
+                    driver_coverage[0].get("protocol_family", "")
+                    if driver_coverage
+                    else driver_validation[0].get("protocol_family", "")
+                ),
                 "evidence_scope": evidence_scope,
                 "capabilities": 0,
                 "tested_capabilities": 0,

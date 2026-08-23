@@ -15,6 +15,7 @@ from custom_components.eybond_local.payload.pi30 import (
     build_request,
     crc16_xmodem,
     parse_energy_counter,
+    parse_extended_serial_number,
     parse_firmware_version,
     parse_protocol_id,
     parse_q1,
@@ -89,6 +90,30 @@ class Pi30PayloadTests(unittest.TestCase):
             parse_serial_number("553555355535552"),
             {"serial_number": "553555355535552"},
         )
+        self.assertEqual(
+            parse_extended_serial_number("20ABC12345678901234567"),
+            {"serial_number": "ABC12345678901234567"},
+        )
+
+    def test_extended_serial_rejects_malformed_length_and_padding(self) -> None:
+        for payload in (
+            "14ABC12345678901000000",
+            # Real V0010/PI30 response: claims a 14-character serial but leaves
+            # six non-zero bytes in the supposedly invalid QSID tail.
+            "1455355535553555355535",
+            "20ABC123",
+            "15ABC123456789012XXXXX",
+            " 20ABC12345678901234567 ",
+        ):
+            with self.subTest(payload=payload), self.assertRaises(Pi30Error):
+                parse_extended_serial_number(payload)
+
+    def test_qid_serial_rejects_normalization_and_type_coercion(self) -> None:
+        for payload in (" 55355535553555 ", "55355535553555\n", ""):
+            with self.subTest(payload=payload), self.assertRaises(Pi30Error):
+                parse_serial_number(payload)
+        with self.assertRaises(TypeError):
+            parse_serial_number(55355535553555)  # type: ignore[arg-type]
 
     def test_parse_firmware_version(self) -> None:
         self.assertEqual(

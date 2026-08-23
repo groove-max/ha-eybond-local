@@ -75,6 +75,11 @@ def build_quality_gate_steps(
             command=(python_executable, str(TOOLS_DIR / "model_catalog.py"), "validate"),
         ),
         QualityGateStep(
+            key="check_public_docs",
+            title="Check documentation links, audience index, and screenshots",
+            command=(python_executable, str(TOOLS_DIR / "check_public_docs.py")),
+        ),
+        QualityGateStep(
             key="unit_tests",
             title="Run unit tests",
             command=(python_executable, "-m", "unittest", "discover", "-s", "tests", "-v"),

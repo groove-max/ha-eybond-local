@@ -27,6 +27,12 @@ def metadata_mismatches(metadata: dict[str, object], context: Any) -> list[str]:
         mismatches.append(
             f"model_name expected={metadata.get('model_name')!r} actual={context.inverter.model_name!r}"
         )
+    expected_profile_name = metadata.get("profile_name")
+    if expected_profile_name and expected_profile_name != context.inverter.profile_name:
+        mismatches.append(
+            "profile_name "
+            f"expected={expected_profile_name!r} actual={context.inverter.profile_name!r}"
+        )
     return mismatches
 
 
@@ -50,6 +56,8 @@ async def validate_catalog_entry(
             "driver_key": context.inverter.driver_key,
             "protocol_family": context.inverter.protocol_family,
             "model_name": context.inverter.model_name,
+            "profile_name": context.inverter.profile_name,
+            "expected_profile_name": str(metadata.get("profile_name", "")),
             "serial_number": context.inverter.serial_number,
             "operating_mode": values.get("operating_mode"),
             "warning_code": values.get("warning_code"),
@@ -61,6 +69,11 @@ async def validate_catalog_entry(
             "status": "error",
             "fixture_path": str(entry.fixture_path),
             "metadata_path": str(entry.metadata_path),
+            "driver_key": str(metadata.get("driver_key", "unknown")),
+            "protocol_family": str(metadata.get("protocol_family", "")),
+            "model_name": str(metadata.get("model_name", "")),
+            "profile_name": "",
+            "expected_profile_name": str(metadata.get("profile_name", "")),
             "error": str(exc),
         }
 

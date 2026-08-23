@@ -7,7 +7,7 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
-## [0.3.0-beta.3] - 2026-08-21
+## [0.3.0-beta.3] - 2026-08-23
 
 ### Added
 
@@ -17,6 +17,16 @@ the GitHub release body should be rendered from the matching version section her
   one broad untyped mapping.
 - Added focused architecture guards and a tiered validation command for fast,
   affected, full-unit, real-Home-Assistant, and two-lane release checks.
+- Added a provider-neutral **Expand support for this device** workflow. Users
+  choose read-only analysis or advanced active verification first, then choose
+  a compatible SmartESS, DESSMonitor, or ValueCloud API without silent
+  cross-provider fallback.
+- Added bounded SmartESS and DESSMonitor history evidence plus an optional
+  background series of local read-only snapshots. Cloud labels remain hints;
+  no local sensor or register binding is created without local proof.
+- Added advanced diagnostic-command scenarios in the options flow and as a
+  Home Assistant action, with explicit write confirmation and a short-lived,
+  entry-scoped download for the redacted result.
 
 ### Changed
 
@@ -31,6 +41,12 @@ the GitHub release body should be rendered from the matching version section her
 - Cloud-traffic tools are hidden for local-only ESP EyeBond Collector firmware,
   while its local endpoint, connection, UART, diagnostics, and Wi-Fi controls
   remain available.
+- Device-support analysis now defaults to read-only evidence. Active
+  verification, temporary cloud routing, and applying locally proven controls
+  remain separate, explicitly confirmed steps.
+- Proxy capture duration, start/stop, recovery, live status, and saved downloads
+  are managed through one options-flow screen instead of separate device
+  entities.
 
 ### Fixed
 
@@ -52,9 +68,26 @@ the GitHub release body should be rendered from the matching version section her
   shutdown.
 - Fixed proxy-capture startup after the coordinator package split and preserved
   safe, localized cloud failure reasons when device learning cannot finish.
+- Fixed DESSMonitor login/provider validation, partial device reads, history
+  pagination and time-basis handling; fixed SmartESS history collection and
+  monotonic progress so long cloud waits no longer make the progress bar move
+  backwards.
+- Fixed cancelled inverter-detection and cloud-learning tasks so their expected
+  cancellation cannot surface later as an unhandled task exception.
+- Hardened diagnostic result downloads: only the redacted shareable copy is
+  served by the signed API route; raw local results remain outside `/config/www`.
 - Fixed sensor, capability, collector-endpoint, cloud metadata, and derived
   energy projections so they all publish from the same validated runtime
   snapshot.
+
+### Docs
+
+- Reworked the English and Ukrainian setup guides around collector-first
+  onboarding, one bounded scan, runtime inverter detection, the current
+  connection/profile menus, and provider-neutral device-support analysis.
+- Updated the proxy capture, remote/NAT, Support Archive, collector management,
+  and release-validation guides; added a dedicated diagnostic-command safety
+  guide and an automated public-link/anchor/index check.
 
 ### Migration
 
@@ -64,6 +97,9 @@ the GitHub release body should be rendered from the matching version section her
 - Existing normal collector entries require no manual migration. Their saved
   connection strategy, endpoint, recovery proof, detected inverter, and entity
   registry identities are retained.
+- Obsolete proxy start/stop buttons and the proxy-duration entity are removed
+  from the entity registry. Existing or interrupted captures remain recoverable
+  from **Configure → Cloud traffic tools → Capture collector traffic**.
 
 ## [0.3.0-beta.2] - 2026-08-18
 

@@ -37,6 +37,7 @@ def build_fixture_coverage_overview() -> dict[str, Any]:
                 "protocol_family": str(metadata.get("protocol_family", "")),
                 "evidence_scope": str(metadata.get("evidence_scope", "release")),
                 "model_name": model_name,
+                "profile_name": str(metadata.get("profile_name", "")),
                 "collector_profile_key": collector_profile_key,
                 "anonymized": anonymized,
                 "ranges": list(metadata.get("ranges", [])),

@@ -51,6 +51,7 @@ class FixtureUtilsTests(unittest.TestCase):
             },
             "command_responses": {
                 "QID": "55355535553555",
+                "QSID": "20ABC12345678901234567",
                 "^P005ID": "1401234567890123456789",
             },
         }
@@ -60,11 +61,17 @@ class FixtureUtilsTests(unittest.TestCase):
         self.assertNotEqual(anonymized["command_responses"]["QID"], "55355535553555")
         self.assertTrue(anonymized["command_responses"]["QID"].isdigit())
         self.assertNotEqual(
+            anonymized["command_responses"]["QSID"],
+            "20ABC12345678901234567",
+        )
+        self.assertEqual(anonymized["command_responses"]["QSID"][:2], "20")
+        self.assertNotEqual(
             anonymized["command_responses"]["^P005ID"],
             "1401234567890123456789",
         )
         self.assertEqual(anonymized["command_responses"]["^P005ID"][:2], "14")
         self.assertTrue(any(item["field"] == "command_responses.QID" for item in anonymized["redactions"]))
+        self.assertTrue(any(item["field"] == "command_responses.QSID" for item in anonymized["redactions"]))
 
 
 if __name__ == "__main__":

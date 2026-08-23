@@ -56,25 +56,35 @@ If the inverter powers critical loads, run learning only when it is safe to reco
 1. Open **Settings → Devices & Services**.
 2. Open **EyeBond Local**.
 3. Click **Configure**.
-4. Choose **Add controls (device learning)**.
-5. Choose an available information source.
-6. If you selected active learning, read and accept the safety notice.
-
-<p align="center"><img src="images/device-learning-start.png" alt="Device learning safety notice" width="480"></p>
-
-7. Enter the supported cloud/app credentials for this one session, if the flow
+4. Choose **Expand support for this device**.
+5. Choose what Home Assistant should do:
+   - **Analyze device data** is read-only and recommended;
+   - **Verify additional local controls** is an advanced active check.
+6. If more than one compatible API is offered, choose the exact cloud source.
+7. For active verification, read and accept the safety notice.
+8. Enter the supported cloud/app credentials for this one session, if the flow
    asks for them.
-
-<p align="center"><img src="images/device-learning-credentials.png" alt="Device learning cloud credentials form" width="480"></p>
-
-8. Wait for the scan to finish.
-
-<p align="center"><img src="images/device-learning-scanning.png" alt="Device learning scan in progress" width="480"></p>
-
-9. Review the result. Only active learning can offer locally proven items to
+9. Wait for the check to finish. Progress can pause while the selected cloud
+   service waits for its next sample or history page; it must never move
+   backwards.
+10. Review the result. Only active learning can offer locally proven items to
    apply; read-only metadata remains support evidence.
 
 The cloud/app password is not saved.
+
+### Example: SmartESS active verification
+
+The screens below were captured from the SmartESS active-verification path in
+an earlier beta. They still illustrate the consent, temporary credential, and
+progress stages. Current versions first ask you to choose the learning task and
+cloud API, so the exact wording and the screens immediately before these may
+differ. Follow the current on-screen text when it differs from an image.
+
+<p align="center"><img src="../images/device-learning-start.png" alt="Consent before a SmartESS active device-learning check" width="720"></p>
+
+<p align="center"><img src="../images/device-learning-credentials.png" alt="Temporary SmartESS credentials for device learning" width="720"></p>
+
+<p align="center"><img src="../images/device-learning-scanning.png" alt="Device-learning progress screen" width="720"></p>
 
 ## What happens during learning
 
@@ -93,9 +103,19 @@ For active correlation:
 5. It blocks unsafe or unknown traffic instead of letting it reach the real inverter.
 6. It builds a local result for review.
 
-SmartESS and DESSMonitor are separate API choices even when the same account
-credentials work with both. Home Assistant uses only the API selected for that
-run; it does not silently retry through another service.
+The currently implemented method/source combinations are:
+
+| Cloud source | Read-only analysis | Active verification |
+|---|---:|---:|
+| SmartESS API | Yes | Yes |
+| DESSMonitor API | Yes | Yes |
+| ValueCloud API | No | Yes |
+
+The options flow shows only sources compatible with the cloud family already
+confirmed for this collector. SmartESS and DESSMonitor remain separate API
+choices even when the same credentials work with both. Home Assistant uses only
+the source selected for that run; it does not silently retry through another
+service.
 
 The goal is to learn what the device supports without permanently changing inverter settings.
 
@@ -103,11 +123,12 @@ If the safe learning path is not ready, the integration stops instead of continu
 
 For a read-only metadata source, Home Assistant signs in, verifies that the
 cloud device has the same collector PN, and downloads bounded device metadata
-and available daily sensor history. Both SmartESS and DESSMonitor can provide
+and available daily sensor history. SmartESS and DESSMonitor can provide
 history for this workflow. Home Assistant may then offer a separate background
-observation of local readings so several timestamped local samples can be
-compared with the cloud series. It does not redirect the collector, send a
-control action, or claim a local register mapping.
+observation of five local snapshots over roughly 20 minutes so timestamped
+local samples can be compared with the cloud series. The options dialog may be
+closed while that observation runs. It does not redirect the collector, send a
+control action, add an entity automatically, or claim a local register mapping.
 
 ## Review screen
 

@@ -345,7 +345,16 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertEqual(len(schema.spec_set("config")), 93)
         self.assertEqual(len(schema.spec_set("update_flags")), 3)
         self.assertEqual(len(schema.spec_set("dc_pv_live")), 24)
-        self.assertEqual(len(schema.measurement_descriptions), 953)
+        self.assertEqual(len(schema.measurement_descriptions), 952)
+        self.assertIsNotNone(
+            next(
+                spec
+                for spec in schema.spec_set("status")
+                if spec.key == "serial_number"
+            )
+        )
+        with self.assertRaises(KeyError):
+            schema.measurement_description("serial_number")
         self.assertEqual(schema.measurement_description("battery_power").name, "battery power")
         self.assertEqual(
             schema.measurement_description("highest_temperature_of_battery").unit,

@@ -1559,10 +1559,8 @@ class InitModuleTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_initial_refresh_for_setup_returns_immediately_when_primed(self) -> None:
+    def test_initial_refresh_for_setup_defers_live_refresh_when_primed(self) -> None:
         async def _run() -> None:
-            refresh_started = asyncio.Event()
-            release_refresh = asyncio.Event()
             created_tasks: list[asyncio.Task] = []
             unload_callbacks: list[object] = []
 
@@ -1576,8 +1574,7 @@ class InitModuleTests(unittest.TestCase):
                     return True
 
                 async def async_refresh(self) -> None:
-                    refresh_started.set()
-                    await release_refresh.wait()
+                    raise AssertionError("refresh must start after platform setup")
 
             hass = types.SimpleNamespace(async_create_task=async_create_task)
             entry = types.SimpleNamespace(
@@ -1586,32 +1583,26 @@ class InitModuleTests(unittest.TestCase):
             )
 
             with patch("custom_components.eybond_local.integration_metadata._SETUP_INITIAL_REFRESH_TIMEOUT", 60.0):
-                await asyncio.wait_for(
+                deferred = await asyncio.wait_for(
                     _async_initial_refresh_for_setup(hass, entry, _Coordinator()),
                     timeout=0.5,
                 )
 
-            self.assertEqual(len(created_tasks), 1)
-            self.assertEqual(len(unload_callbacks), 1)
-            await refresh_started.wait()
-            self.assertFalse(created_tasks[0].done())
-
-            unload_callbacks[0]()
-            with self.assertRaises(asyncio.CancelledError):
-                await created_tasks[0]
+            self.assertTrue(deferred)
+            self.assertEqual(created_tasks, [])
+            self.assertEqual(unload_callbacks, [])
 
         asyncio.run(_run())
 
-    def test_finalize_expert_entity_migration_times_out_block_till_done(self) -> None:
+    def test_finalize_expert_entity_migration_does_not_wait_on_global_tasks(self) -> None:
         async def _run() -> None:
             async def async_block_till_done() -> None:
-                await asyncio.Event().wait()
+                raise AssertionError("migration must not wait on its own HA task")
 
             hass = types.SimpleNamespace(async_block_till_done=async_block_till_done)
             entry = types.SimpleNamespace(entry_id="entry123", runtime_data=object())
 
             with (
-                patch("custom_components.eybond_local.integration_entities._EXPERT_ENTITY_MIGRATION_SETTLE_TIMEOUT", 0.01),
                 patch(
                     "custom_components.eybond_local.integration_entities._async_self_heal_expert_defaults",
                     new=AsyncMock(),

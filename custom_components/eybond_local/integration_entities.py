@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -34,7 +33,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_EXPERT_ENTITY_MIGRATION_SETTLE_TIMEOUT = 1.0
 _DEFAULT_ENABLED_RUNTIME_SELECT_KEYS: tuple[str, ...] = ()
 
 def _is_integration_disabled(disabled_by: object, integration_disabler: object) -> bool:
@@ -330,19 +328,6 @@ async def _async_finalize_expert_entity_migration(
     entry: ConfigEntry,
 ) -> None:
     """Run expert-only entity migration after platform setup finishes."""
-
-    async_block_till_done = getattr(hass, "async_block_till_done", None)
-    if async_block_till_done is not None:
-        try:
-            await asyncio.wait_for(
-                async_block_till_done(),
-                timeout=_EXPERT_ENTITY_MIGRATION_SETTLE_TIMEOUT,
-            )
-        except asyncio.TimeoutError:
-            logger.info(
-                "Timed out waiting to finalize EyeBond expert entity migration for entry %s; continuing best-effort cleanup",
-                entry.entry_id,
-            )
     await _async_self_heal_expert_defaults(hass, entry)
     if getattr(entry, "runtime_data", None) is not None:
         await _async_remove_legacy_runtime_select_entities(hass, entry)

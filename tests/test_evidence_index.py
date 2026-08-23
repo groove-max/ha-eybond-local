@@ -39,26 +39,45 @@ class EvidenceIndexTests(unittest.TestCase):
 
         self.assertEqual(summary["drivers"], len(index["entries"]))
         self.assertGreaterEqual(summary["drivers"], 1)
-        self.assertEqual(summary["profiles"], 2)
+        self.assertGreaterEqual(summary["profiles"], 18)
         self.assertEqual(summary["fixtures"], 3)
-        self.assertIn("evidence_backed", summary["readiness_counts"])
-        self.assertIn("experimental", summary["readiness_counts"])
-        self.assertNotIn("profile_only", summary["readiness_counts"])
+        self.assertEqual(summary["validated_ok"], 3)
+        self.assertEqual(summary["validated_mismatch"], 0)
+        self.assertEqual(summary["validated_error"], 0)
+        self.assertEqual(summary["readiness_counts"]["evidence_backed"], 2)
+        self.assertEqual(summary["readiness_counts"]["experimental"], 1)
+        self.assertGreaterEqual(summary["readiness_counts"]["profile_only"], 1)
 
-        entry_by_driver = {item["driver_key"]: item for item in index["entries"]}
-        self.assertIn("modbus_smg", entry_by_driver)
-        self.assertEqual(entry_by_driver["modbus_smg"]["profile_key"], "smg_modbus")
-        self.assertEqual(entry_by_driver["modbus_smg"]["readiness"], "evidence_backed")
-        self.assertEqual(entry_by_driver["modbus_smg"]["validated_ok"], 1)
-        self.assertIn("pi18", entry_by_driver)
-        self.assertEqual(entry_by_driver["pi18"]["profile_key"], "")
-        self.assertEqual(entry_by_driver["pi18"]["readiness"], "experimental")
-        self.assertEqual(entry_by_driver["pi18"]["evidence_scope"], "experimental")
-        self.assertIn("pi30", entry_by_driver)
-        self.assertEqual(entry_by_driver["pi30"]["profile_key"], "pi30_ascii")
-        self.assertEqual(entry_by_driver["pi30"]["readiness"], "evidence_backed")
-        self.assertEqual(entry_by_driver["pi30"]["fixture_count"], 1)
-        self.assertEqual(entry_by_driver["pi30"]["validated_ok"], 1)
+        entry_by_profile = {
+            (item["driver_key"], item["profile_key"]): item
+            for item in index["entries"]
+        }
+        smg = entry_by_profile[("modbus_smg", "modbus_smg_6200")]
+        self.assertEqual(smg["readiness"], "evidence_backed")
+        self.assertEqual(smg["fixture_count"], 1)
+        self.assertEqual(smg["validated_ok"], 1)
+
+        pi18 = entry_by_profile[("pi18", "")]
+        self.assertEqual(pi18["readiness"], "experimental")
+        self.assertEqual(pi18["evidence_scope"], "experimental")
+        self.assertEqual(pi18["fixture_count"], 1)
+        self.assertEqual(pi18["validated_ok"], 1)
+
+        pi30 = entry_by_profile[("pi30", "pi30_ascii_pi30_max")]
+        self.assertEqual(pi30["readiness"], "evidence_backed")
+        self.assertEqual(pi30["fixture_count"], 1)
+        self.assertEqual(pi30["validated_ok"], 1)
+
+        # One fixture belongs to one exact runtime profile. It must not be
+        # multiplied across every profile that happens to use the same driver.
+        self.assertEqual(
+            sum(int(item["fixture_count"]) for item in index["entries"]),
+            summary["fixtures"],
+        )
+        self.assertEqual(
+            sum(int(item["validated_ok"]) for item in index["entries"]),
+            summary["validated_ok"],
+        )
 
     def test_render_markdown_contains_key_sections(self) -> None:
         index = asyncio.run(build_evidence_index())
@@ -67,7 +86,7 @@ class EvidenceIndexTests(unittest.TestCase):
         self.assertIn("# Driver Evidence Index", markdown)
         self.assertIn("Generated from declarative profiles, local fixture coverage, and replay validation", markdown)
         self.assertIn(
-            "| `modbus_smg` | `smg_modbus` | `modbus_smg` | `25` | `8` | `1` | `1` | `0` | `0` | `evidence_backed` |",
+            "| `modbus_smg` | `modbus_smg_6200` | `modbus_smg` | `30` | `8` | `1` | `1` | `0` | `0` | `evidence_backed` | SMG 6200 |",
             markdown,
         )
         self.assertIn(
@@ -75,7 +94,7 @@ class EvidenceIndexTests(unittest.TestCase):
             markdown,
         )
         self.assertIn(
-            "| `pi30` | `pi30_ascii` | `pi30` | `18` | `0` | `1` | `1` | `0` | `0` | `evidence_backed` | VMII-NXPW5KW |",
+            "| `pi30` | `pi30_ascii_pi30_max` | `pi30` | `20` | `0` | `1` | `1` | `0` | `0` | `evidence_backed` | PI30 4200 |",
             markdown,
         )
 

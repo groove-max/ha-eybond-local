@@ -15,9 +15,10 @@ assignees: groove-max
 
 ## Validation
 
-- [ ] Run `python3 tools/quality_gate.py` locally.
-- [ ] If generated reports changed, run `python3 tools/quality_gate.py --refresh-generated` and commit the updated files under `docs/generated/`.
-- [ ] Confirm GitHub Actions are green for HACS validation, Hassfest, and Quality Gate.
+- [ ] Refresh `docs/generated/INVERTER_MODEL_CATALOG.generated.md` with `tools/model_catalog.py` and commit it if changed.
+- [ ] Run `python3 tools/validate.py release` with both supported real-Home-Assistant lanes.
+- [ ] Confirm the public documentation link/index check passes.
+- [ ] Confirm GitHub Actions are green for HACS validation, Hassfest, Quality Gate, and the current HA runtime lane.
 
 ## Release Notes
 

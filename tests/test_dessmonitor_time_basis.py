@@ -43,7 +43,7 @@ SOURCE = (
 def _identity() -> DessMonitorDeviceIdentity:
     return DessMonitorDeviceIdentity(
         pn=FULL_PN,
-        sn="92632511100118",
+        sn="90000000000001",
         devcode=2376,
         devaddr=1,
     )
@@ -52,7 +52,7 @@ def _identity() -> DessMonitorDeviceIdentity:
 def _row(*, pn: str = FULL_PN, timezone: object = 28800) -> dict[str, object]:
     return {
         "pn": pn,
-        "sn": "92632511100118",
+        "sn": "90000000000001",
         "devcode": 2376,
         "devaddr": 1,
         "timezone": timezone,
@@ -187,7 +187,7 @@ class DessMonitorTimeBasisParserTests(unittest.TestCase):
         self.assertEqual(query["action"], [DESSMONITOR_TIME_BASIS_SOURCE_ACTION])
         self.assertEqual(
             query["device"],
-            [f"{FULL_PN},2376,1,92632511100118"],
+            [f"{FULL_PN},2376,1,90000000000001"],
         )
         self.assertNotIn("ctrlDevice", captured[0])
         self.assertEqual(basis.offset_seconds, 28800)

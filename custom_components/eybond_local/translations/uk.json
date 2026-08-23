@@ -545,8 +545,8 @@
         }
       },
       "diagnostics": {
-        "title": "Діагностика та експериментальні метадані",
-        "description": "**{support_archive_action_label}** збирає один ZIP з усім необхідним для допомоги: дані рантайму, захоплені докази, анонімізовану фікстуру та збережені хмарні дані SmartESS.\n\n**Статус підтримки:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n---\n**Пристрій:** {model_name} — серійний {serial_number}\n**Останній архів підтримки:** {support_package_path}\n**Завантажити:** {support_package_download_markdown}",
+        "title": "Діагностика та сервісні інструменти",
+        "description": "**{support_archive_action_label}** збирає один ZIP з усім необхідним для допомоги: дані рантайму, захоплені докази, анонімізовану фікстуру та збережені хмарні дані.\n\n**Статус підтримки:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n---\n**Пристрій:** {model_name} — серійний {serial_number}\n**Останній архів підтримки:** {support_package_path}\n**Завантажити:** {support_package_download_markdown}",
         "menu_options": {
           "create_support_package": "Створити архів підтримки",
           "diagnostic_commands": "Виконати діагностичні команди",

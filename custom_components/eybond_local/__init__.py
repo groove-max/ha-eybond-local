@@ -25,10 +25,8 @@ from .integration_common import (
     ConfigEntryError,
     ConfigEntryNotReady,
     EVENT_COMPONENT_LOADED,
-    _cancel_task_callback,
 )
 from .integration_entities import (
-    _EXPERT_ENTITY_MIGRATION_SETTLE_TIMEOUT,
     _async_cleanup_obsolete_entities,
     _async_finalize_expert_entity_migration,
     _async_remove_legacy_runtime_select_entities,
@@ -61,6 +59,7 @@ from .integration_metadata import (
     _preset_unique_id,
     _prime_metadata_caches,
     _register_background_refresh_task,
+    _start_background_refresh_for_setup,
     _text_unique_id,
     _tool_unique_id,
 )
@@ -168,7 +167,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.runtime_data = coordinator
         _register_entry_stop_shutdown(hass, entry, coordinator)
         _register_entry_network_reconcile(hass, entry, coordinator)
-        await _async_initial_refresh_for_setup(hass, entry, coordinator)
+        refresh_deferred_until_platform_setup = await _async_initial_refresh_for_setup(
+            hass,
+            entry,
+            coordinator,
+        )
         await _async_self_heal_enabled_defaults(hass, entry, coordinator)
         await _async_cleanup_obsolete_entities(hass, entry, coordinator)
 
@@ -183,10 +186,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             has_inverter_identity=platforms_started_with_inverter_identity,
             has_driver_fallback=platforms_started_with_driver_fallback,
         )
-        expert_migration_task = hass.async_create_task(
-            _async_finalize_expert_entity_migration(hass, entry)
-        )
-        entry.async_on_unload(partial(_cancel_task_callback, expert_migration_task))
+        await _async_finalize_expert_entity_migration(hass, entry)
+        if refresh_deferred_until_platform_setup:
+            _start_background_refresh_for_setup(hass, entry, coordinator)
         coordinator.async_sync_device_registry()
         entry.async_on_unload(entry.add_update_listener(_async_update_listener))
         await _async_ensure_listener_entry(hass)

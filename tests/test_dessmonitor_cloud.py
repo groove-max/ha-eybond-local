@@ -68,7 +68,7 @@ class DessMonitorModelTests(unittest.TestCase):
     def test_control_action_is_strict_and_identity_bound(self) -> None:
         identity = DessMonitorDeviceIdentity(
             pn=FULL_PN,
-            sn="92632511100118",
+            sn="90000000000001",
             devcode=2376,
             devaddr=1,
         )
@@ -83,7 +83,7 @@ class DessMonitorModelTests(unittest.TestCase):
             {
                 "action": ["ctrlDevice"],
                 "pn": [FULL_PN],
-                "sn": ["92632511100118"],
+                "sn": ["90000000000001"],
                 "devcode": ["2376"],
                 "devaddr": ["1"],
                 "id": ["bat_eybond_ctrl_75"],
@@ -106,7 +106,7 @@ class DessMonitorModelTests(unittest.TestCase):
     def test_send_control_uses_exact_session_and_propagates_typed_rejection(self) -> None:
         identity = DessMonitorDeviceIdentity(
             pn=FULL_PN,
-            sn="92632511100118",
+            sn="90000000000001",
             devcode=2376,
             devaddr=1,
         )
@@ -156,7 +156,7 @@ class DessMonitorModelTests(unittest.TestCase):
     def test_direct_constructors_are_strict_and_json_safe(self) -> None:
         identity = DessMonitorDeviceIdentity(
             pn=FULL_PN,
-            sn="92632511100118",
+            sn="90000000000001",
             devcode=2376,
             devaddr=1,
         )
@@ -457,7 +457,7 @@ class DessMonitorBundleTests(unittest.TestCase):
                 "device": [
                     {
                         "pn": FULL_PN,
-                        "sn": "92632511100118",
+                        "sn": "90000000000001",
                         "devcode": 2376,
                         "devaddr": 1,
                     }
@@ -518,7 +518,7 @@ class DessMonitorBundleTests(unittest.TestCase):
                 "device": [
                     {
                         "pn": FULL_PN,
-                        "sn": "92632511100118",
+                        "sn": "90000000000001",
                         "devcode": 2376,
                         "devaddr": 1,
                     }
@@ -563,7 +563,7 @@ class DessMonitorBundleTests(unittest.TestCase):
                 "device": [
                     {
                         "pn": FULL_PN,
-                        "sn": "92632511100118",
+                        "sn": "90000000000001",
                         "devcode": 2376,
                         "devaddr": 1,
                     }
@@ -619,7 +619,7 @@ class DessMonitorBundleTests(unittest.TestCase):
                 "device": [
                     {
                         "pn": FULL_PN,
-                        "sn": "92632511100118",
+                        "sn": "90000000000001",
                         "devcode": 2376,
                         "devaddr": 1,
                     }
@@ -673,7 +673,7 @@ class DessMonitorBundleTests(unittest.TestCase):
                 "device": [
                     {
                         "pn": FULL_PN,
-                        "sn": "92632511100118",
+                        "sn": "90000000000001",
                         "devcode": 2376,
                         "devaddr": 1,
                     }
@@ -737,7 +737,7 @@ class DessMonitorBundleTests(unittest.TestCase):
                 "device": [
                     {
                         "pn": FULL_PN,
-                        "sn": "92632511100118",
+                        "sn": "90000000000001",
                         "devcode": 2376,
                         "devaddr": 1,
                     }
@@ -804,7 +804,7 @@ class DessMonitorBundleTests(unittest.TestCase):
                 "device": [
                     {
                         "pn": FULL_PN,
-                        "sn": "92632511100118",
+                        "sn": "90000000000001",
                         "devcode": 2376,
                         "devaddr": 1,
                     }
@@ -841,7 +841,7 @@ class DessMonitorBundleTests(unittest.TestCase):
             "device": [
                 {
                     "pn": FULL_PN,
-                    "sn": "92632511100118",
+                    "sn": "90000000000001",
                     "devcode": 2376,
                     "devaddr": 1,
                 }
@@ -900,7 +900,7 @@ class DessMonitorBundleTests(unittest.TestCase):
                 "device": [
                     {
                         "pn": FULL_PN,
-                        "sn": "92632511100118",
+                        "sn": "90000000000001",
                         "devcode": 2376,
                         "devaddr": 1,
                     }
@@ -1031,7 +1031,7 @@ class DessMonitorBundleTests(unittest.TestCase):
         bundle = DessMonitorEvidenceBundle(
             identity=DessMonitorDeviceIdentity(
                 pn=FULL_PN,
-                sn="92632511100118",
+                sn="90000000000001",
                 devcode=2376,
                 devaddr=1,
             ),

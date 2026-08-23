@@ -53,6 +53,31 @@ def _collector_entry(hass: HomeAssistant) -> MockConfigEntry:
     return entry
 
 
+def _persisted_anenji_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """Return an offline entry with a previously confirmed model surface."""
+
+    entry = _collector_entry(hass)
+    data = dict(entry.data)
+    data.update(
+        {
+            "detected_driver": "modbus_smg",
+            "detected_model": "Anenji ANJ-11KW-48V-WIFI-P",
+            "detected_serial": "92B32500004401",
+            "detection_confidence": "high",
+        }
+    )
+    options = dict(entry.options)
+    options["effective_metadata_snapshot"] = {
+        "effective_owner_key": "modbus_smg",
+        "variant_key": "anenji_anj_11kw_48v_wifi_p",
+        "profile_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        "register_schema_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        "confidence": "high",
+    }
+    hass.config_entries.async_update_entry(entry, data=data, options=options)
+    return entry
+
+
 async def test_component_setup_removes_obsolete_pending_entry_without_runtime(
     hass: HomeAssistant,
     fake_runtime,
@@ -112,6 +137,48 @@ async def test_setup_forwards_platforms_then_unloads(
 
     assert entry.state is ConfigEntryState.NOT_LOADED
     assert fake_runtime[0].stopped >= 1
+
+
+async def test_offline_persisted_model_creates_model_specific_entities_before_refresh(
+    hass: HomeAssistant,
+    fake_runtime,
+    caplog,
+) -> None:
+    """A fast disconnected refresh cannot erase the setup metadata surface."""
+
+    entry = _persisted_anenji_entry(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    registry = er.async_get(hass)
+    unique_ids = {
+        entity.unique_id
+        for entity in er.async_entries_for_config_entry(registry, entry.entry_id)
+    }
+    for key in (
+        "pv1_voltage",
+        "pv1_current",
+        "pv1_power",
+        "pv2_voltage",
+        "pv2_current",
+        "pv2_power",
+    ):
+        assert f"{entry.entry_id}_{key}" in unique_ids
+    assert "Timed out waiting to finalize EyeBond expert entity migration" not in caplog.text
+
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    reloaded_unique_ids = {
+        entity.unique_id
+        for entity in er.async_entries_for_config_entry(registry, entry.entry_id)
+    }
+    assert unique_ids <= reloaded_unique_ids
+    assert "Timed out waiting to finalize EyeBond expert entity migration" not in caplog.text
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
 
 
 async def test_unload_leaves_no_pending_tasks_or_listeners(

@@ -545,7 +545,7 @@
         }
       },
       "diagnostics": {
-        "title": "Diagnostics And Experimental Metadata",
+        "title": "Diagnostics and service tools",
         "description": "**{support_archive_action_label}** builds one ZIP with everything needed to help: runtime data, capture evidence, an anonymized replay fixture, and saved cloud evidence.\n\n**Support status:** {support_workflow_level_label}\n\n{support_workflow_summary}\n\n---\n**Device:** {model_name} — serial {serial_number}\n**Last support archive:** {support_package_path}\n**Download:** {support_package_download_markdown}",
         "menu_options": {
           "create_support_package": "Create support archive",

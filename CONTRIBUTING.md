@@ -38,7 +38,7 @@ When deciding where new logic belongs, use this order:
 
 ### Fixture-first
 
-When live hardware access is limited, use fixtures. The full workflow for adding a new driver or profile is documented in [docs/ADDING_DRIVERS.md](docs/ADDING_DRIVERS.md).
+When live hardware access is limited, use fixtures. The full workflow for adding a new driver or profile is documented in [Adding Drivers](docs/maintainer/ADDING_DRIVERS.md).
 
 The short version:
 
@@ -67,7 +67,12 @@ custom_components/eybond_local/
 ├── metadata/               # profile/schema loaders and local drafts
 └── *.py                    # entity platforms, config flow, services
 
-docs/                       # public docs and generated reports
+docs/
+├── user/                   # installation, operation, and support guides
+├── maintainer/             # contribution, validation, release, and Graphify workflows
+├── architecture/           # design boundaries and migration references
+├── images/                 # shared documentation screenshots
+└── generated/              # checked generated catalogs
 catalog/inverter_models/    # commercial model and sanitized source records
 tools/                      # CLI utilities, validation scripts, and release helpers
 .local/                     # maintainer-only notes, fixtures, design history, generated reports, and release scratch files (gitignored)

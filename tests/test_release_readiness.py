@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 import sys
@@ -37,14 +38,27 @@ class ReleaseReadinessTests(unittest.TestCase):
         report = asyncio.run(build_release_readiness())
 
         self.assertEqual(report["integration"]["domain"], "eybond_local")
-        self.assertEqual(report["integration"]["version"], "0.2.0")
-        self.assertEqual(report["status"], "ready")
-        self.assertEqual(report["summary"]["drivers"], 2)
-        self.assertEqual(report["summary"]["profiles"], 2)
+        manifest = json.loads(
+            (REPO_ROOT / "custom_components" / "eybond_local" / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(report["integration"]["version"], manifest["version"])
+        self.assertEqual(report["status"], "incomplete")
+        self.assertGreaterEqual(report["summary"]["drivers"], 18)
+        self.assertGreaterEqual(report["summary"]["profiles"], 18)
         self.assertEqual(report["summary"]["fixtures"], 2)
         self.assertEqual(report["summary"]["validated_ok"], 2)
-        self.assertEqual(report["summary"]["readiness_counts"], {"evidence_backed": 2})
+        self.assertEqual(report["summary"]["validated_mismatch"], 0)
+        self.assertEqual(report["summary"]["validated_error"], 0)
+        self.assertEqual(report["summary"]["readiness_counts"]["evidence_backed"], 2)
+        self.assertGreaterEqual(report["summary"]["readiness_counts"]["profile_only"], 1)
         self.assertEqual(report["blockers"], [])
+
+        release_fixtures = sum(
+            int(item["fixture_count"]) for item in report["drivers"]
+        )
+        self.assertEqual(release_fixtures, report["summary"]["fixtures"])
 
     def test_render_markdown_contains_key_sections(self) -> None:
         report = asyncio.run(build_release_readiness())
@@ -52,9 +66,9 @@ class ReleaseReadinessTests(unittest.TestCase):
 
         self.assertIn("# Release Readiness", markdown)
         self.assertIn("Generated from manifest metadata and local evidence", markdown)
-        self.assertIn("- status: `ready`", markdown)
-        self.assertIn("| `modbus_smg` | `smg_modbus` | `evidence_backed` | `25` | `8` | `1` | `1` | `0` | `0` |", markdown)
-        self.assertIn("| `pi30` | `pi30_ascii` | `evidence_backed` | `18` | `0` | `1` | `1` | `0` | `0` |", markdown)
+        self.assertIn("- status: `incomplete`", markdown)
+        self.assertIn("| `modbus_smg` | `modbus_smg_6200` | `evidence_backed` | `30` | `8` | `1` | `1` | `0` | `0` |", markdown)
+        self.assertIn("| `pi30` | `pi30_ascii_pi30_max` | `evidence_backed` | `20` | `0` | `1` | `1` | `0` | `0` |", markdown)
         self.assertNotIn("| `pi18` |", markdown)
 
     def test_generated_markdown_export_is_in_sync(self) -> None:

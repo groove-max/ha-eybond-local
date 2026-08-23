@@ -26,13 +26,15 @@ For unsupported or partially supported hardware, always attach a Support Archive
 3. Click **Configure**.
 4. Open **Diagnostics and service tools**.
 
-<p align="center"><img src="images/diagnostics-service-tools.png" alt="Diagnostics and service tools menu" width="480"></p>
+<p align="center"><img src="../images/diagnostics-service-tools.png" alt="Diagnostics and service tools menu" width="480"></p>
 
 5. Choose **Create support archive**.
 
-<p align="center"><img src="images/support-archive-create.png" alt="Create support archive form" width="480"></p>
+<p align="center"><img src="../images/support-archive-create.png" alt="Create support archive form" width="480"></p>
 
-6. Download the generated ZIP.
+6. Download the generated ZIP from the signed link shown by Home Assistant. The
+   link is short-lived and scoped to this archive; it is not a public `/local`
+   file.
 7. Attach it to the GitHub issue.
 
 ## What to include in the issue
@@ -73,9 +75,10 @@ If the case contains sensitive information, say so in the issue and share only t
 Creating a normal Support Archive does not require your cloud/app password.
 
 Some optional support or device-learning actions can refresh cloud evidence and
-may ask you to choose a supported API, such as SmartESS, ValueCloud, or the
-read-only DESSMonitor metadata source. Credentials are used only for that live
-request and are not saved by the integration.
+may ask you to choose a supported API such as SmartESS, DESSMonitor, or
+ValueCloud. The available source depends on the collector's confirmed cloud
+family and the selected read-only or active task. Credentials are used only for
+that live request and are not saved by the integration.
 
 ## Support Archive vs proxy capture
 

@@ -58,7 +58,7 @@ SOURCE = (
 def _identity() -> DessMonitorDeviceIdentity:
     return DessMonitorDeviceIdentity(
         pn=FULL_PN,
-        sn="92632511100118",
+        sn="90000000000001",
         devcode=2376,
         devaddr=1,
     )

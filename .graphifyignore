@@ -20,8 +20,8 @@ AGENTS.md
 .github/ISSUE_TEMPLATE/
 .github/PULL_REQUEST_TEMPLATE*
 CONTRIBUTING.md
-docs/RELEASING.md
-docs/GRAPHIFY.md
+docs/maintainer/RELEASING.md
+docs/maintainer/GRAPHIFY.md
 requirements*.txt
 
 # Binary/UI assets and generated/reference-heavy documentation.
@@ -64,5 +64,5 @@ tests/*
 !tests/test_strategy_transition_repair.py
 !tests/test_strategy_verification.py
 
-# tests_ha/, tools/, README.md, docs/*.md, and all remaining production source
+# tests_ha/, tools/, README.md, the remaining docs/**/*.md files, and all production source
 # are intentionally included.

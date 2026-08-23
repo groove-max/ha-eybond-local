@@ -108,8 +108,14 @@ async def _async_initial_refresh_for_setup(
     hass: HomeAssistant,
     entry: ConfigEntry,
     coordinator,
-) -> None:
-    """Run the first coordinator refresh without letting startup hang forever."""
+) -> bool:
+    """Prepare setup data and report whether live refresh must start afterward.
+
+    A persisted startup snapshot is the stable metadata authority for entity
+    construction. Starting a live refresh before platform forwarding can race
+    that snapshot and replace it with a disconnected collector-only result.
+    Callers must start the deferred refresh only after entity setup completes.
+    """
 
     primed = False
     prime = getattr(coordinator, "prime_startup_snapshot", None)
@@ -123,14 +129,14 @@ async def _async_initial_refresh_for_setup(
                 exc_info=True,
             )
 
-    refresh_task = hass.async_create_task(coordinator.async_refresh())
-    _register_background_refresh_task(hass, entry, refresh_task)
     if primed:
         logger.info(
-            "Primed EyeBond startup snapshot for entry %s; live refresh continues in background",
+            "Primed EyeBond startup snapshot for entry %s; deferring live refresh until entity setup completes",
             entry.entry_id,
         )
-        return
+        return True
+
+    refresh_task = _start_background_refresh_for_setup(hass, entry, coordinator)
 
     try:
         await asyncio.wait_for(
@@ -144,8 +150,19 @@ async def _async_initial_refresh_for_setup(
             _SETUP_INITIAL_REFRESH_TIMEOUT,
             entry.entry_id,
         )
+    return False
 
 
+def _start_background_refresh_for_setup(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator,
+) -> asyncio.Task:
+    """Start and track one setup refresh after its metadata boundary is safe."""
+
+    refresh_task = hass.async_create_task(coordinator.async_refresh())
+    _register_background_refresh_task(hass, entry, refresh_task)
+    return refresh_task
 
 def _register_background_refresh_task(
     hass: HomeAssistant,

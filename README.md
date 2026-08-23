@@ -83,7 +83,8 @@ The current model list is here:
 
 - [Inverter model catalog](docs/generated/INVERTER_MODEL_CATALOG.generated.md)
 
-During setup, the integration shows what it could identify and what support level is available:
+After the collector is added, runtime detection reports what it identified and
+which support level is available:
 
 - **Supported** — normal monitoring and confirmed controls.
 - **Limited / partial** — monitoring works, but some controls or sensors may be missing.
@@ -139,8 +140,10 @@ when your collector supports it.
 ### 2. Scan for devices
 
 Choose the Home Assistant network interface and start a scan. One bounded scan
-checks broadcast replies, reachable local addresses, and already connected
-collectors.
+combines broadcast replies, already connected collectors, and a local `/24`
+unicast fallback when broadcast discovery is not enough. On a larger network,
+use the correct subnet broadcast or enter a known collector address through
+advanced setup instead of expecting every address in a `/16` to be probed.
 
 <p align="center"><img src="docs/images/setup-02-scanning.png" alt="Scanning the local network" width="480"></p>
 
@@ -160,18 +163,14 @@ The wizard can show collector candidates such as:
   connection, but its reachable address must be confirmed.
 - **Check address** — an address responded and can be probed directly.
 
-<p align="center"><img src="docs/images/setup-06-detected-devices.png" alt="Detected devices" width="480"></p>
-
 ### 4. Confirm the collector and refresh mode
 
 Confirm the collector and choose how sensors should refresh. Home Assistant
 then creates the entry and detects the inverter on the owned runtime session.
 The inverter device may appear shortly after the collector device.
 
-Collector mode is managed later from **Connection and polling**, after the
+Collector mode is managed later from **Collector connection and cloud**, after the
 integration has created the device and read its collector capabilities.
-
-<p align="center"><img src="docs/images/setup-07-confirm.png" alt="Confirm detection and choose sensor refresh mode" width="480"></p>
 
 Manual setup is available when automatic scanning is not practical.
 
@@ -202,8 +201,9 @@ The inverter device may include:
 
 <p align="center"><img src="docs/images/inverter-sensors.png" alt="Inverter sensors after setup" width="320"></p>
 
-You can change how the collector connects, control mode, and sensor refresh mode
-later from **Connection and polling**.
+You can change the collector operating profile later from **Collector
+connection and cloud**. Inverter driver selection, control mode, and sensor
+refresh are under **Polling and inverter detection**.
 
 <p align="center"><img src="docs/images/settings.png" alt="EyeBond Local configuration menu" width="480"></p>
 
@@ -217,13 +217,13 @@ stays high, increase the interval or switch back to Automatic.
 detecting an inverter, or only checking the collector, so long detection cycles
 are not confused with normal runtime polling.
 
-<p align="center"><img src="docs/images/runtime-settings.png" alt="Runtime settings with control mode and connection strategy" width="480"></p>
-
 ---
 
 ## Device learning
 
-Some devices can be added in read-only or partial mode first. **Add controls (device learning)** can then check which extra settings and sensors your exact device supports.
+Some devices can be added in read-only or partial mode first. **Expand support
+for this device** can then collect extra evidence or check which additional
+settings and sensors your exact device supports.
 
 Use it when:
 
@@ -233,23 +233,22 @@ Use it when:
 
 What to expect:
 
-1. Start **Configure → Add controls (device learning)**.
-2. Choose an available information source. Active learning can discover local
-   items; a read-only source collects support metadata without changing the
-   collector connection.
-3. Read the safety notice when active learning is selected.
-4. Sign in to the supported cloud account for this one session, if the flow asks
-   for it. For many factory collectors this is the same account used by the
-   SmartESS / SmartValue or another compatible vendor app.
-5. Let the integration check available information.
-6. Review the result. Only locally proven items can be applied.
+1. Start **Configure → Expand support for this device**.
+2. Choose **Analyze device data** (recommended) or the advanced active-control
+   verification.
+3. When more than one compatible API is available, choose the exact cloud
+   source for this run.
+4. Read the safety notice when active verification is selected.
+5. Sign in to the supported cloud account for this one session, if requested.
+6. Review the result. Read-only evidence does not add entities automatically;
+   only locally proven active results can be applied.
 
 The cloud password is not saved. Learned items apply only to this Home Assistant
 device until they are reviewed and added to the built-in catalog.
 
 If anything looks unsafe or unexpected, stop and create a Support Archive instead.
 
-For the full walkthrough, see [Device Learning](docs/DEVICE_LEARNING.md).
+For the full walkthrough, see [Device Learning](docs/user/DEVICE_LEARNING.md).
 
 ---
 
@@ -264,7 +263,7 @@ If the integration does not work as expected:
 
 The Support Archive is the preferred way to report unsupported hardware, failed setup, missing sensors, or missing controls.
 
-For details, see [Support Archive](docs/SUPPORT_ARCHIVE.md).
+For details, see [Support Archive](docs/user/SUPPORT_ARCHIVE.md).
 
 Use these issue templates:
 
@@ -287,20 +286,23 @@ Use these issue templates:
 | Vendor app stopped showing live data | If you pointed the collector at Home Assistant only, that disconnects it from its cloud by design. Use **Restore previous collector endpoint** to bring the vendor app back. |
 | Vendor app works, but Home Assistant says unavailable | The collector may have reconnected to its cloud faster than it reconnected locally. Wait a few minutes and check Wi-Fi stability. |
 | A setting changes back immediately | The inverter rejected the value or did not confirm it. Check diagnostics, avoid changing the same setting from the vendor app at the same time, and retry after the collector is stable. |
-| Remote setup is needed | Use [Remote / NAT setup guide](docs/REMOTE_SETUP.md). Prefer VPN over public port forwarding when possible. |
+| Remote setup is needed | Use [Remote / NAT setup guide](docs/user/REMOTE_SETUP.md). Prefer VPN over public port forwarding when possible. |
 | Controls are missing | Keep **Auto** mode for normal use. If monitoring works but controls are missing, run device learning if offered, or create a Support Archive. Use **Full Control** only if you understand the risk. |
+| An unconfigured collector connects later | Enable the persistent **EyeBond Local — Discovery** entry. It publishes identified, unconfigured collector sessions without creating a placeholder device. |
 
 ---
 
 ## Documentation
 
 - [Documentation index](docs/README.md)
-- [Collector management](docs/COLLECTOR_MANAGEMENT.md)
-- [Device learning](docs/DEVICE_LEARNING.md)
-- [Support Archive](docs/SUPPORT_ARCHIVE.md)
-- [Remote / NAT setup](docs/REMOTE_SETUP.md)
-- [Proxy capture](docs/PROXY_CAPTURE.md) — use this only when asked during support
+- [Collector management](docs/user/COLLECTOR_MANAGEMENT.md)
+- [Device learning](docs/user/DEVICE_LEARNING.md)
+- [Diagnostic commands](docs/user/DIAGNOSTIC_COMMANDS.md) — advanced, developer-directed scenarios
+- [Support Archive](docs/user/SUPPORT_ARCHIVE.md)
+- [Remote / NAT setup](docs/user/REMOTE_SETUP.md)
+- [Proxy capture](docs/user/PROXY_CAPTURE.md) — use this only when asked during support
 - [Inverter model catalog](docs/generated/INVERTER_MODEL_CATALOG.generated.md)
+- [Interface screenshots by version](docs/user/INTERFACE_SCREENSHOTS.md) — visual examples with notes about controls that moved
 - [Contributing](CONTRIBUTING.md)
 
 ---

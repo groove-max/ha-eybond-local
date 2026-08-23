@@ -31,28 +31,24 @@ If you are not sure, stop and create a Support Archive instead.
 
 ## How to start
 
-You can start proxy capture from the collector device page:
-
-1. Open the EyeBond collector device in Home Assistant.
-2. Set **Proxy Mode Duration** to the requested number of minutes.
-3. Press **Start Traffic Capture**.
-4. Reproduce the problem, or follow the developer’s instructions.
-5. Press **Stop Traffic Capture**, or wait for the timer to finish.
-
-<p align="center"><img src="images/proxy-capture-settings.png" alt="Collector settings with proxy mode controls" width="520"></p>
-
-You can also open:
-
 1. **Settings → Devices & Services**
 2. **EyeBond Local**
 3. **Configure**
-4. **Temporary cloud proxy and traffic capture**
+4. **Cloud traffic tools**
+5. **Capture collector traffic**
+6. Choose the duration and start the capture.
+7. Reproduce the problem, or follow the developer's instructions.
+8. Stop the capture, or wait for the timer to finish.
+
+Duration, start/stop, live status, and the saved result are all managed on this
+screen. Older versions exposed separate proxy entities on the collector device;
+those controls are obsolete and are removed during entity migration.
 
 The option appears only when a new capture can safely start. If a capture is
 already active or needs recovery, the option remains visible until Home
 Assistant finishes stopping it and restoring the collector route.
 
-<p align="center"><img src="images/proxy-capture-running.png" alt="Running proxy capture session with timer and live log" width="720"></p>
+<p align="center"><img src="../images/proxy-capture-running.png" alt="Running proxy capture session with timer and live log" width="720"></p>
 
 ## Timer behavior
 
@@ -70,9 +66,11 @@ Refreshing the live log does not extend the timer.
 
 ## Downloading the result
 
-After the capture finishes, the same screen shows a **Saved result** download link.
+After the capture finishes, the same screen shows a **Saved result** download
+link. It uses an authenticated, short-lived API route rather than a public file
+under `/local`.
 
-<p align="center"><img src="images/proxy-capture-result.png" alt="Finished proxy capture session with saved result download" width="720"></p>
+<p align="center"><img src="../images/proxy-capture-result.png" alt="Finished proxy capture session with saved result download" width="720"></p>
 
 Download the ZIP and attach it to the GitHub issue together with a short note about what you did during the capture.
 
@@ -84,9 +82,9 @@ Normally, EyeBond Local restores the collector automatically after capture.
 
 If the vendor app stops showing live data afterward:
 
-1. Open the collector device page.
-2. Press the restore cloud/app access action shown for this collector.
-3. Wait a few minutes for the collector to reconnect.
+1. Open **Configure → Cloud traffic tools → Capture collector traffic**.
+2. Use the stop/recovery action shown for the current session.
+3. Wait for Home Assistant to confirm restoration.
 4. Check the vendor app again.
 
 If the restore action is unavailable or the collector still does not recover, do not repeat captures. Create a Support Archive and report the issue.

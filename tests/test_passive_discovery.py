@@ -370,7 +370,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "session_id": "matched-session",
                     "peer_ip": "192.168.1.55",
-                    "collector_pn": "E500SYN253884199645",
+                    "collector_pn": "E500SYN000000000001",
                     "state": "routed_framed",
                     "collector_identity_source": "fc2_parameter_2",
                 },
@@ -484,7 +484,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
             {
                 "session_id": "listener-18899-scan-result",
                 "peer_ip": "192.168.1.55",
-                "collector_pn": "E500SYN253884199645",
+                "collector_pn": "E500SYN000000000001",
                 "state": "routed_framed",
                 "protocol_shape": "eybond_framed",
                 "collector_identity_source": "fc2_parameter_2",
@@ -508,7 +508,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
             {
                 "session_id": "listener-18899-triggered",
                 "peer_ip": "192.168.1.55",
-                "collector_pn": "E500SYN253884199645",
+                "collector_pn": "E500SYN000000000001",
                 "state": "routed_framed",
                 "protocol_shape": "eybond_framed",
                 "collector_identity_source": "fc2_parameter_2",
@@ -525,7 +525,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
             {
                 "session_id": "listener-18899-later-inbound",
                 "peer_ip": "192.168.1.55",
-                "collector_pn": "E500SYN253884199645",
+                "collector_pn": "E500SYN000000000001",
                 "state": "routed_framed",
                 "protocol_shape": "eybond_framed",
                 "collector_identity_source": "fc2_parameter_2",
@@ -541,7 +541,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         session = {
             "session_id": "listener-8899-configured",
             "peer_ip": "192.168.1.55",
-            "collector_pn": "E500SYN253884199645",
+            "collector_pn": "E500SYN000000000001",
             "state": "routed_framed",
             "protocol_shape": "eybond_framed",
             "collector_identity_source": "fc2_parameter_2",
@@ -550,7 +550,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         discovery._listeners[8899] = listener
         discovery._registry.claim(
             "entry-e500",
-            collector_pn="E500SYN253884199645",
+            collector_pn="E500SYN000000000001",
         )
 
         discovery.retire_entry_sessions("entry-e500")
@@ -646,7 +646,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         session = {
             "session_id": "listener-8899-configured",
             "peer_ip": "192.168.1.55",
-            "collector_pn": "E500SYN253884199645",
+            "collector_pn": "E500SYN000000000001",
             "state": "routed_framed",
             "protocol_shape": "eybond_framed",
             "collector_identity_source": "fc2_parameter_2",
@@ -654,7 +654,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         discovery._listeners[8899] = _FakeListener((session,))
         discovery._registry.claim(
             "entry-e500",
-            collector_pn="E500SYN253884199645",
+            collector_pn="E500SYN000000000001",
         )
         discovery.retire_entry_sessions("entry-e500")
         discovery._registry.release("entry-e500")
@@ -680,7 +680,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         session = {
             "session_id": "listener-8899-old",
             "peer_ip": "192.168.1.1",
-            "collector_pn": "E500SYN253884199645",
+            "collector_pn": "E500SYN000000000001",
             "state": "routed_framed",
             "protocol_shape": "eybond_framed",
             "collector_identity_source": "fc2_parameter_2",
@@ -714,7 +714,7 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         session = {
             "session_id": "listener-8899-e500",
             "peer_ip": "192.168.1.1",
-            "collector_pn": "E500SYN253884199645",
+            "collector_pn": "E500SYN000000000001",
             "state": "routed_framed",
             "protocol_shape": "eybond_framed",
             "collector_identity_source": "fc2_parameter_2",

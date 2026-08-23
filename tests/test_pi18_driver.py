@@ -238,6 +238,9 @@ class Pi18DriverTests(unittest.IsolatedAsyncioTestCase):
                 "qpigs_field_count",
                 "battery_power_balance_current",
                 "catalog_detection",
+                # Identity metadata belongs to the HA device registry, not to
+                # a synthetic sensor entity.
+                "serial_number",
             }
         }
         missing = sorted(

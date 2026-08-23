@@ -167,9 +167,45 @@ def parse_protocol_id(payload: str) -> dict[str, str]:
 def parse_serial_number(payload: str) -> dict[str, str]:
     """Decode the inverter serial number from QID."""
 
-    serial_number = payload.strip()
-    if not serial_number:
+    if type(payload) is not str:
+        raise TypeError("serial_number_not_string")
+    if payload != payload.strip():
+        raise Pi30Error("serial_number_not_normalized")
+    if not payload:
         raise Pi30Error("serial_number_empty")
+    if not payload.isascii() or any(
+        not character.isprintable() for character in payload
+    ):
+        raise Pi30Error("serial_number_invalid_ascii")
+    return {"serial_number": payload}
+
+
+def parse_extended_serial_number(payload: str) -> dict[str, str]:
+    """Decode the length-prefixed extended inverter serial from QSID.
+
+    PI30 MAX defines ``NN`` as the valid serial length followed by exactly 20
+    character slots; unused slots are zero-filled.  QSID is optional on the
+    wire, but a malformed positive response must never be accepted as identity.
+    """
+
+    if type(payload) is not str:
+        raise TypeError("extended_serial_number_not_string")
+    if payload != payload.strip():
+        raise Pi30Error("extended_serial_number_not_normalized")
+    if len(payload) != 22 or not payload[:2].isdigit():
+        raise Pi30Error("extended_serial_number_shape")
+    valid_length = int(payload[:2])
+    if not 15 <= valid_length <= 20:
+        raise Pi30Error("extended_serial_number_length")
+    slots = payload[2:]
+    serial_number = slots[:valid_length]
+    padding = slots[valid_length:]
+    if not serial_number or not serial_number.isascii() or any(
+        not character.isprintable() for character in serial_number
+    ):
+        raise Pi30Error("extended_serial_number_invalid_ascii")
+    if padding != "0" * len(padding):
+        raise Pi30Error("extended_serial_number_padding")
     return {"serial_number": serial_number}
 
 

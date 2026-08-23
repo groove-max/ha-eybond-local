@@ -130,7 +130,14 @@ class CoordinatorDeviceRegistryMixin:
         if meta == self._last_synced_device_meta:
             return
 
-        registry.async_get_or_create(config_entry_id=self.config_entry.entry_id, **info)
+        device = registry.async_get_or_create(
+            config_entry_id=self.config_entry.entry_id,
+            **info,
+        )
+        if not desired_serial and getattr(device, "serial_number", None):
+            update_device = getattr(registry, "async_update_device", None)
+            if callable(update_device):
+                update_device(device.id, serial_number=None)
         self._last_synced_device_meta = meta
 
     def _async_sync_collector_device_registry(

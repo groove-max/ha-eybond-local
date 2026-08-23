@@ -35,7 +35,7 @@ class DessMonitorSemanticAdapterTests(unittest.TestCase):
         bundle = DessMonitorEvidenceBundle(
             identity=DessMonitorDeviceIdentity(
                 pn="E50000200000000001",
-                sn="92632511100118",
+                sn="90000000000001",
                 devcode=2376,
                 devaddr=1,
             ),

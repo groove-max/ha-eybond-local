@@ -322,14 +322,14 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `pi30_vmii_nxpw5kw` → surface `pi30_vmii_full` (driver pi30, variant vmii_nxpw5kw)
       - Protocol: pi30 | Detection: anchors (protocol.protocol_id=PI30; identity.model_number=VMII-NXPW5KW)
       - Tier: full | Read-only: no | Profile: pi30_ascii/models/vmii_nxpw5kw.json | Schema: pi30_ascii/models/vmii_nxpw5kw.json
-      - Capabilities: 20 (tested 20); support tiers: standard 20 | Telemetry: 71 measurements, 16 binary sensors
+      - Capabilities: 20 (tested 20); support tiers: standard 20 | Telemetry: 77 measurements, 16 binary sensors
   - `smartess_0925_modbus` — SmartESS 0925 local Modbus alternate runtime
     - Descriptors: pi30_vmii_nxpw5kw
     - Known firmware: —
     - `pi30_vmii_nxpw5kw` → surface `pi30_vmii_full` (driver pi30, variant vmii_nxpw5kw)
       - Protocol: pi30 | Detection: anchors (protocol.protocol_id=PI30; identity.model_number=VMII-NXPW5KW)
       - Tier: full | Read-only: no | Profile: pi30_ascii/models/vmii_nxpw5kw.json | Schema: pi30_ascii/models/vmii_nxpw5kw.json
-      - Capabilities: 20 (tested 20); support tiers: standard 20 | Telemetry: 71 measurements, 16 binary sensors
+      - Capabilities: 20 (tested 20); support tiers: standard 20 | Telemetry: 77 measurements, 16 binary sensors
 - Known limitations: —
 - Evidence: 1 source(s)
 
@@ -396,7 +396,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `pi30_max_qpiri` → surface `pi30_max_full` (driver pi30, variant pi30_max)
       - Protocol: pi30 | Detection: anchors (protocol.protocol_id=PI30; shape.qpiri_field_count=)
       - Tier: full | Read-only: no | Profile: pi30_ascii/models/pi30_max.json | Schema: pi30_ascii/models/pi30_max.json
-      - Capabilities: 20 (tested 20); support tiers: standard 20 | Telemetry: 71 measurements, 16 binary sensors
+      - Capabilities: 20 (tested 20); support tiers: standard 20 | Telemetry: 77 measurements, 16 binary sensors
 - Known limitations:
   - The commercial model name is known from the user report, not from a local inverter identity command in the captured traffic.
   - QMN/model-number evidence was not present in the cloud proxy capture, so runtime resolution is currently by PI30 protocol plus QPIRI 28-field MAX-family shape.
@@ -419,7 +419,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `pi30_max_qpiri` → surface `pi30_max_full` (driver pi30, variant pi30_max)
       - Protocol: pi30 | Detection: anchors (protocol.protocol_id=PI30; shape.qpiri_field_count=)
       - Tier: full | Read-only: no | Profile: pi30_ascii/models/pi30_max.json | Schema: pi30_ascii/models/pi30_max.json
-      - Capabilities: 20 (tested 20); support tiers: standard 20 | Telemetry: 71 measurements, 16 binary sensors
+      - Capabilities: 20 (tested 20); support tiers: standard 20 | Telemetry: 77 measurements, 16 binary sensors
 - Known limitations:
   - The inverter identity command reports the generic raw model VMII-NXPW5KW rather than the commercial Yingfa model name.
   - Writable controls were exposed by the runtime but were not independently exercised in the attached support archive.

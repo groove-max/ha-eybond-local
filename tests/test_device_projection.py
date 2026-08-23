@@ -42,13 +42,46 @@ class DeviceInfoProjectionTests(unittest.TestCase):
             entry_id="entry-1",
             entry_title="Collector entry",
             detected_model="PI30 3500",
-            detected_serial="55355535553555",
+            detected_serial="553555355535552",
             inverter=None,
         )
 
         self.assertEqual(payload["name"], "PI30 3500")
         self.assertEqual(payload["model"], "PI30 3500")
-        self.assertEqual(payload["serial_number"], "55355535553555")
+        self.assertEqual(payload["serial_number"], "553555355535552")
+
+    def test_known_placeholder_is_never_projected_from_persisted_data(self) -> None:
+        payload = build_inverter_device_info_payload(
+            entry_id="entry-1",
+            entry_title="Collector entry",
+            detected_model="PI30 4200",
+            detected_serial="55355535553555",
+            inverter=None,
+        )
+
+        self.assertEqual(payload["model"], "PI30 4200")
+        self.assertNotIn("serial_number", payload)
+
+    def test_live_untrusted_serial_suppresses_persisted_placeholder(self) -> None:
+        payload = build_inverter_device_info_payload(
+            entry_id="entry-1",
+            entry_title="Collector entry",
+            detected_model="PI30 4200",
+            detected_serial="55355535553555",
+            inverter=SimpleNamespace(
+                model_name="PI30 4200",
+                serial_number="",
+                details={
+                    "reported_serial_number": "55355535553555",
+                    "serial_identity_source": "qid",
+                    "serial_identity_trust": "untrusted",
+                    "serial_identity_reason": "known_placeholder",
+                },
+            ),
+        )
+
+        self.assertEqual(payload["model"], "PI30 4200")
+        self.assertNotIn("serial_number", payload)
 
     def test_factory_collector_projection_has_no_speculative_manufacturer(self) -> None:
         collector = CollectorInfo(

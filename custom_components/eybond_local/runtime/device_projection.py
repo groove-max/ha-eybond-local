@@ -12,6 +12,10 @@ from collections.abc import Mapping
 from ..collector.capabilities import collector_capability_profile_from_runtime
 from ..const import DOMAIN
 from ..naming import collector_display_name
+from ..serial_identity import (
+    SerialIdentityTrust,
+    serial_report_is_known_untrusted,
+)
 
 
 def build_inverter_device_info_payload(
@@ -31,11 +35,30 @@ def build_inverter_device_info_payload(
     persisted_serial = str(detected_serial or "").strip()
     runtime_model = str(getattr(inverter, "model_name", "") or "").strip()
     runtime_serial = str(getattr(inverter, "serial_number", "") or "").strip()
+    if serial_report_is_known_untrusted(persisted_serial):
+        persisted_serial = ""
+    if serial_report_is_known_untrusted(runtime_serial):
+        runtime_serial = ""
+    runtime_details = getattr(inverter, "details", {})
+    serial_trust_is_declared = bool(
+        isinstance(runtime_details, Mapping)
+        and "serial_identity_trust" in runtime_details
+    )
+    runtime_serial_is_trusted = bool(
+        serial_trust_is_declared
+        and type(runtime_details.get("serial_identity_trust")) is str
+        and runtime_details.get("serial_identity_trust")
+        == SerialIdentityTrust.TRUSTED.value
+        and runtime_serial
+    )
 
-    if runtime_model or runtime_serial:
+    if runtime_model or runtime_serial or serial_trust_is_declared:
         name = runtime_model or persisted_model or name
         model = runtime_model or persisted_model or None
-        serial_number = runtime_serial or persisted_serial or None
+        if serial_trust_is_declared:
+            serial_number = runtime_serial if runtime_serial_is_trusted else None
+        else:
+            serial_number = runtime_serial or persisted_serial or None
     else:
         if persisted_model:
             name = persisted_model

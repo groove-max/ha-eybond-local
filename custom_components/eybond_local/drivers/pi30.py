@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
-
-from ..poll_policy import PollPolicy
-
-
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
+from ..metadata.compiled_detection_catalog import (
+    RESOLUTION_COMPATIBLE_GROUP,
+    RESOLUTION_EXACT,
+    RESOLUTION_FAMILY,
+    load_compiled_detection_catalog,
+)
+from ..metadata.profile_loader import load_driver_profile
+from ..metadata.register_schema_loader import load_register_schema
 from ..models import (
     DetectedInverter,
     ProbeTarget,
@@ -22,6 +27,7 @@ from ..payload.pi30 import (
     Pi30Session,
     build_request as build_pi30_request,
     parse_energy_counter,
+    parse_extended_serial_number,
     parse_firmware_version,
     parse_model_number,
     parse_protocol_id,
@@ -36,17 +42,20 @@ from ..payload.pi30 import (
     q1_output_keys,
     qpiws_output_keys,
 )
-from ..metadata.compiled_detection_catalog import (
-    RESOLUTION_COMPATIBLE_GROUP,
-    RESOLUTION_EXACT,
-    RESOLUTION_FAMILY,
-    load_compiled_detection_catalog,
+from ..poll_policy import PollPolicy
+from ..serial_identity import (
+    SerialIdentityEvidence,
+    SerialIdentitySource,
+    SerialIdentityTrust,
+    serial_report_is_known_untrusted,
 )
-from ..metadata.profile_loader import load_driver_profile
-from ..metadata.register_schema_loader import load_register_schema
 from .base import InverterDriver
-from .read_result import DriverReadMode, DriverReadResult
-from .support_probe import SupportProbeRequest
+from .catalog_probe import (
+    async_probe_ascii_catalog,
+    async_probe_ascii_catalog_signature,
+    catalog_model_name,
+    evidence_providers_from_transport,
+)
 from .command_support import (
     command_skipped_as_unsupported as _command_skipped_as_unsupported,
     commit_cycle_failures as _commit_cycle_failures,
@@ -55,12 +64,8 @@ from .command_support import (
     unsupported_command_diagnostics as _unsupported_command_diagnostics,
     unsupported_commands as _unsupported_commands,
 )
-from .catalog_probe import (
-    async_probe_ascii_catalog,
-    async_probe_ascii_catalog_signature,
-    catalog_model_name,
-    evidence_providers_from_transport,
-)
+from .read_result import DriverReadMode, DriverReadResult
+from .support_probe import SupportProbeRequest
 
 
 PI30_POLL_POLICY = PollPolicy(
@@ -156,15 +161,38 @@ _CATALOG_PARSERS = {
 
 # The bounded read-only ASCII support-probe commands PI30 owns. Order and set
 # are fixed here (moved out of the runtime hub); do not expand the sweep.
-_PI30_SUPPORT_PROBE_COMMANDS: tuple[str, ...] = ("QPI", "QMOD", "QPIGS", "QPIRI", "QID")
+_PI30_SUPPORT_PROBE_COMMANDS: tuple[str, ...] = (
+    "QPI",
+    "QMOD",
+    "QPIGS",
+    "QPIRI",
+    "QID",
+)
 
-
+_PI30_SERIAL_QUERY_TIMEOUT = 4.0
 class Pi30Driver(InverterDriver):
     """PI30 probe, runtime reader, and command-based controller."""
 
     key = "pi30"
     poll_policy = PI30_POLL_POLICY
     name = "PI30 / ASCII"
+
+    def serial_is_stable(self, inverter: DetectedInverter | None = None) -> bool:
+        """Return whether PI30 exposed a canonical, non-placeholder serial."""
+
+        if inverter is None:
+            return True
+        serial_number = str(getattr(inverter, "serial_number", "") or "").strip()
+        details = getattr(inverter, "details", {})
+        if isinstance(details, dict):
+            trust = details.get("serial_identity_trust")
+            if trust is not None:
+                return bool(
+                    serial_number and trust == SerialIdentityTrust.TRUSTED.value
+                )
+        if serial_report_is_known_untrusted(serial_number):
+            return False
+        return bool(serial_number) or not hasattr(inverter, "serial_number")
 
     def support_probe_plan(self) -> tuple[SupportProbeRequest, ...]:
         """Return the fixed PI30 read-only ASCII support-probe requests."""
@@ -269,9 +297,15 @@ class Pi30Driver(InverterDriver):
         profile = load_driver_profile(profile_name)
         schema = load_register_schema(schema_name)
         config_values.update(_translate_config_enums(config_values, schema))
-        serial_number = config_values.get("serial_number", "")
-        if len(serial_number) < 6:
-            return None
+        serial_identity = await _async_resolve_pi30_serial_identity(
+            session,
+            variant_key=surface.variant_key,
+        )
+        serial_number = serial_identity.canonical
+        config_values.pop("serial_number", None)
+        if serial_number:
+            config_values["serial_number"] = serial_number
+        config_values.update(serial_identity.as_details())
 
         capabilities = _build_pi30_capabilities(config_values, profile.capabilities)
         _translate_capability_enum_values(config_values, capabilities)
@@ -442,6 +476,7 @@ def _support_commands() -> tuple[str, ...]:
                     if action.kind == "ascii_command" and action.command
                 ),
                 *(spec.command for spec in _RUNTIME_COMMAND_SPECS),
+                "QSID",
                 # Read-only selectable-value queries for the two documented
                 # PI30 charge-current controls. They belong in support
                 # evidence, not the normal polling cycle.
@@ -450,6 +485,96 @@ def _support_commands() -> tuple[str, ...]:
             ]
         )
     )
+
+
+def _classify_pi30_serial(
+    serial_number: str,
+    *,
+    source: SerialIdentitySource,
+) -> SerialIdentityEvidence:
+    """Classify one normalized PI30 serial report without guessing identity."""
+
+    if len(serial_number) < 6:
+        return SerialIdentityEvidence.untrusted(
+            serial_number,
+            source=source,
+            reason="invalid_length",
+        )
+    if (
+        serial_report_is_known_untrusted(serial_number)
+        or set(serial_number) == {"0"}
+    ):
+        return SerialIdentityEvidence.untrusted(
+            serial_number,
+            source=source,
+            reason="known_placeholder",
+        )
+    return SerialIdentityEvidence.trusted(serial_number, source=source)
+
+
+async def _async_request_pi30_serial(
+    session: Pi30Session,
+    *,
+    command: str,
+) -> str:
+    """Return one optional serial response; cancellation always propagates."""
+
+    try:
+        return await asyncio.wait_for(
+            session.request(command),
+            timeout=_PI30_SERIAL_QUERY_TIMEOUT,
+        )
+    except (asyncio.TimeoutError, Pi30Error):
+        return ""
+
+
+async def _async_resolve_pi30_serial_identity(
+    session: Pi30Session,
+    *,
+    variant_key: str,
+) -> SerialIdentityEvidence:
+    """Resolve canonical PI30 identity from QID and optional PI30-MAX QSID."""
+
+    qid_payload = await _async_request_pi30_serial(session, command="QID")
+    qid_identity: SerialIdentityEvidence | None = None
+    if qid_payload:
+        try:
+            qid_serial = parse_serial_number(qid_payload)["serial_number"]
+        except (Pi30Error, TypeError):
+            qid_serial = ""
+        if qid_serial:
+            qid_identity = _classify_pi30_serial(
+                qid_serial,
+                source=SerialIdentitySource.QID,
+            )
+            if qid_identity.trust is SerialIdentityTrust.TRUSTED:
+                return qid_identity
+
+    # QSID is a PI30 MAX extension for serials longer than 14 characters. It is
+    # queried only when QID did not cross the trust boundary, avoiding an extra
+    # timeout for the normal PI30 path.
+    if variant_key == "pi30_max":
+        qsid_payload = await _async_request_pi30_serial(session, command="QSID")
+        if qsid_payload:
+            try:
+                qsid_serial = parse_extended_serial_number(qsid_payload)[
+                    "serial_number"
+                ]
+            except (Pi30Error, TypeError):
+                qsid_serial = ""
+            if qsid_serial:
+                qsid_identity = _classify_pi30_serial(
+                    qsid_serial,
+                    source=SerialIdentitySource.QSID,
+                )
+                if qsid_identity.trust is SerialIdentityTrust.TRUSTED:
+                    return qsid_identity
+                if qid_identity is None:
+                    return qsid_identity
+
+    if qid_identity is not None:
+        return qid_identity
+    return SerialIdentityEvidence.unavailable(reason="serial_query_unavailable")
 
 
 # The full universe of PI30 runtime commands (by STABLE cache key). It bounds
