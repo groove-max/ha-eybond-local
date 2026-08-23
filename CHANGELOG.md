@@ -7,7 +7,7 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
-## [0.3.0-beta.3] - 2026-08-23
+## [0.3.0-beta.3] - 2026-08-24
 
 ### Added
 
@@ -17,6 +17,8 @@ the GitHub release body should be rendered from the matching version section her
   one broad untyped mapping.
 - Added focused architecture guards and a tiered validation command for fast,
   affected, full-unit, real-Home-Assistant, and two-lane release checks.
+- Added a fixture-backed release-readiness gate that refuses publication when
+  required hardware evidence is missing or no longer replays cleanly.
 - Added a provider-neutral **Expand support for this device** workflow. Users
   choose read-only analysis or advanced active verification first, then choose
   a compatible SmartESS, DESSMonitor, or ValueCloud API without silent
@@ -79,6 +81,12 @@ the GitHub release body should be rendered from the matching version section her
 - Fixed sensor, capability, collector-endpoint, cloud metadata, and derived
   energy projections so they all publish from the same validated runtime
   snapshot.
+- Fixed offline and reload startup so persisted inverter metadata creates the
+  model-specific entity set before a disconnected live refresh can replace it;
+  removed a self-waiting entity-migration timeout from the same lifecycle.
+- Fixed PI30 serial identity handling: repeated factory placeholder values stay
+  diagnostic-only, supported extended serials are read through QSID, and stale
+  serial metadata is removed instead of being exposed as device identity.
 
 ### Docs
 
