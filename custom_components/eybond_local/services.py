@@ -89,9 +89,10 @@ _RUN_DIAGNOSTIC_COMMANDS_SCHEMA = vol.Schema(
         vol.Required("entry_id"): str,
         vol.Required("commands"): str,
         vol.Optional("stop_on_error", default=True): bool,
-        # Required to be true before a scenario containing write/write_bit runs;
-        # read-only scenarios ignore it.
+        # Required before register writes and free-form ASCII commands; pure
+        # Modbus read scenarios ignore it.
         vol.Optional("confirm_write", default=False): bool,
+        vol.Optional("publish_download_copy", default=False): bool,
         # Positivity is enforced in the handler so the schema stays within the
         # validator subset shared with the test stubs.
         vol.Optional("operation_timeout"): vol.All(vol.Range(min=0)),

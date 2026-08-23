@@ -3,36 +3,48 @@
 Cloud learning is an optional evidence workflow. It is not a runtime telemetry
 transport and it never makes cloud data authoritative over local registers.
 
-Two typed registries deliberately model different questions:
+Three typed concepts deliberately model different questions:
 
 - `CloudEvidenceProvider` identifies the cloud ecosystem that owns existing
   evidence for an entry.
-- `CloudLearningEngine` identifies the exact API and algorithm used for one
-  transient learning run.
+- `CloudLearningMethod` identifies the user-selected task: read-only evidence
+  or active correlation.
+- `CloudApiSource` identifies the exact API and credential realm.
+- `CloudLearningEngine` binds one exact method/source pair to an executable
+  transient workflow.
 
-More than one learning engine may be compatible with one evidence provider.
-The options flow therefore uses the trusted provider only to list compatible
-engines. It never chooses an API from a hostname, collector kind, credentials,
-or a cloud-family substring. Exactly one engine may declare itself the default
-for a provider; an absent or ambiguous default fails closed.
+More than one method and API source may be compatible with one evidence
+provider. The options flow therefore asks for the task first and the API second.
+It never chooses a method from a source, or an API from a hostname, collector
+kind, credentials, or cloud-family substring. Defaults are declared per exact
+provider/method pair; an absent or ambiguous default fails closed.
 
 ## Current sources
 
-| Source | Purpose | Collector endpoint | Cloud writes | Result |
+| Source | Executable method | Collector endpoint | Cloud writes | Result |
 | --- | --- | --- | --- | --- |
-| SmartESS API | Active local learning | Temporary protected shadow route | Bounded control probes under explicit consent | Proven local read/control candidates |
+| SmartESS API | Read-only evidence | Never changed | None | Typed semantic hints, bounded five-minute history and redacted support evidence |
+| SmartESS API | Active correlation | Temporary protected shadow route | Bounded control probes under explicit consent | Proven local read/control candidates |
 | ValueCloud API | Active local learning | Temporary protected shadow route | Bounded control probes under explicit consent | Proven local read/control candidates |
-| DESSMonitor API | Read-only metadata collection | Never changed | None | Typed semantic hints and redacted support evidence |
+| DESSMonitor API | Read-only metadata collection | Never changed | None | Typed semantic hints, bounded history and redacted support evidence |
+| DESSMonitor API | Active correlation | Temporary protected shadow route | Bounded `ctrlDevice` probes under explicit consent | Exact post-action local-write evidence |
 
-DESSMonitor is intentionally not an alternate implementation of active shadow
-learning. It can expose a broader field catalog, current values, setting names,
-and a digest of the latest raw packet, but those facts do not prove a local
-register mapping. Consequently its result cannot create an entity, activate a
-control, or write a device-scoped overlay.
+DESSMonitor's [official API](https://api.dessmonitor.com/chapter5/ctrlDevice.html)
+documents `ctrlDevice`. The active engine authenticates and resolves an exact
+same-PN metadata bundle before opening the protected route, then sends only
+provider-declared choice values or the already-reported current value. It never
+invents a numeric value and excludes destructive-looking controls. Every action
+is matched only against writes observed after that action's exact route cursor;
+a successful cloud response without such an observation stops the run as a
+possible unproxied write. There is no fallback to SmartESS or ValueCloud.
+
+Read-only DESSMonitor analysis remains a separate engine. Selecting it never
+opens the route or calls `ctrlDevice`, and its result still cannot create an
+entity, activate a control, or write a device-scoped overlay.
 
 ## Semantic hints are not register bindings
 
-The DESSMonitor adapter classifies each normalized field through the shared
+The SmartESS and DESSMonitor adapters classify each normalized field through the shared
 provider-neutral semantic-title catalog. A typed report records the observed
 title/value/unit, its source action, and one closed verdict:
 
@@ -72,7 +84,8 @@ or old coverage records fail closed and the review falls back to the original
 
 ## Typed local register observations
 
-DESSMonitor declares an optional `local_register_snapshot` capability. Before
+Both read-only engines declare optional local-register evidence capabilities.
+Before
 the cloud fetch, the runtime may ask the currently selected inverter driver for
 one bounded live snapshot. The driver — not the cloud adapter, options flow, or
 support-package code — owns the exact Modbus tunnel route, function code, slave
@@ -85,7 +98,7 @@ marked `authority=live_local_wire_observation` and
 `cloud_mapping_proven=false`. The options flow accepts it only when its PN is
 the same identity as the entry PN under the central reconciliation rule. A
 foreign, malformed, unsupported, or unavailable snapshot is omitted; the
-read-only DESSMonitor run continues without it. Non-Modbus drivers return no
+read-only cloud run continues without it. Non-Modbus drivers return no
 snapshot.
 
 This producer does not parse the older free-form support-capture dictionaries
@@ -103,7 +116,8 @@ adds ordering and the marker
 `cloud_mapping_proven=false`.
 
 `LocalRegisterCollectionManager` owns a long observation as one retained
-coordinator-lifetime task. The DESSMonitor review may start it only after an
+coordinator-lifetime task. A read-only review with identity-bound history may
+start it only after an
 explicit checkbox; the foreground options flow returns immediately and may be
 closed. The default `LocalRegisterSeriesPlan` takes five snapshots at the
 provider's five-minute chart precision (about twenty minutes total): four are
@@ -122,6 +136,20 @@ reload: a reload changes the live driver/transport authority, so silently
 resuming an old schedule would weaken its provenance.
 
 ## Bounded history and future correlation
+
+Both SmartESS and DESSMonitor expose identity-bound daily history. They remain
+separate API clients: each owns authentication, request construction, response
+parsing, and provider-specific failure handling. The shared boundary begins
+only after an adapter has resolved the exact cloud identity and converted the
+device-local timestamps to UTC.
+
+The SmartESS Android client uses `querySPKeyParameters` to obtain the device's
+day-chart keys and `queryDeviceKeyParameterOneDay` to read each selected series.
+The responses contain timestamp/value points at the cadence displayed by the
+application (normally five minutes). `queryDeviceInfo` supplies the exact
+device timezone. The SmartESS adapter reuses one authenticated session, limits
+the run to eight series and a 30-second history budget, and never opens a shadow
+route or sends a control request.
 
 The official DESSMonitor API documents read-only daily series through
 [`queryDeviceKeyParameterOneDay`](https://api.dessmonitor.com/en/chapter5/queryDeviceKeyParameterOneDay.html)
@@ -150,7 +178,8 @@ without the device timezone would manufacture false chronology. Duplicate
 timestamps, oversized payloads, forged authority markers, and values outside
 the requested device-local date fail closed.
 
-`DessMonitorHistoryCollection` is the production collection boundary. One
+`DessMonitorHistoryCollection` is the provider-owned DESSMonitor collection
+boundary. One
 login session is reused for metadata, the exact-device timezone query, one sole
 chart and at most seven key-parameter series. The request date is derived from
 an aware UTC clock through the provider-owned offset. A missing or malformed
@@ -160,7 +189,7 @@ bounded to eight series, and marks both `local_mapping_proven=false` and
 `activation_allowed=false`. The DESSMonitor engine therefore truthfully
 declares `history=True`, while route mutation and controls remain disabled.
 
-`DessMonitorResolvedHistorySeries` is the only composition boundary between an
+`DessMonitorResolvedHistorySeries` is the DESSMonitor composition boundary between an
 unresolved series and `DessMonitorDeviceTimeBasis`. It requires exact typed
 inputs with the same full cloud identity and preserves both the original
 device-local timestamp and its canonical derived UTC timestamp. Its serialized
@@ -169,6 +198,14 @@ construction and reload, and remains marked
 `authority=provider_identity_bound_time_resolution` and
 `local_mapping_proven=false`. A forged offset, foreign identity, altered UTC
 time, or altered value therefore cannot become valid resolved evidence.
+
+Both provider adapters then project their output into
+`CloudHistoryCollection`. This provider-neutral record stores the exact API
+source, field kind, source action, full device identity, original device-local
+timestamp, derived UTC timestamp, unit, and numeric value. It is marked
+`authority=provider_normalized_history_observation`, `read_only=true`,
+`local_mapping_proven=false`, and `activation_allowed=false`. The correlator
+therefore consumes one strict type without importing either API client.
 
 The pure `CloudLocalHistoryCorrelationReport` is the first comparison policy,
 but remains deliberately disconnected from the learning engine. It accepts
@@ -188,8 +225,9 @@ recomputes the complete verdict when directly constructed or parsed, so a
 forged status/candidate/policy count cannot pass the boundary. It imports no
 runtime, flow, overlay, activation, or write surface.
 
-After a user-started local observation completes, a later DESSMonitor run may
-compose its newly fetched identity-bound history with that completed series.
+After a user-started local observation completes, a later SmartESS or
+DESSMonitor read-only run may compose its newly fetched identity-bound history
+with that completed series.
 The pure `CloudLocalHistoryReview` stores both evidence inputs once and emits
 compact, recomputed verdicts. Its alignment tolerance is half of the tighter
 observed cadence (150 seconds for the default five-minute collection), so
@@ -350,6 +388,11 @@ words remain available for offline analysis.
 - `test_dessmonitor_learning.py` checks that the read-only runner never opens a
   route or invokes a learning writer, and emits only unproven semantic and
   bounded historical evidence.
+- `test_dessmonitor_active.py` checks authentication/metadata ordering,
+  exact-PN adoption, and zero route mutation on pre-route failure.
+- `test_dessmonitor_orchestrator.py` checks bounded non-destructive planning,
+  exact post-cursor observation matching, rejection correlation, and
+  fail-closed degraded/leaked/indeterminate outcomes.
 - `test_cloud_semantic_evidence.py` and `test_dessmonitor_semantics.py` check the
   strict typed report, catalog classification, JSON roundtrip, and absence of
   local-mapping authority.

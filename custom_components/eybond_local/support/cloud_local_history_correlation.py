@@ -15,19 +15,14 @@ from decimal import Decimal
 from typing import Any
 
 from ..collector_identity import pn_is_same_identity
-from ..dessmonitor_collection import DessMonitorHistoryCollection
-from ..dessmonitor_history import (
-    DESSMONITOR_HISTORY_SOURCE_KEY_PARAMETER,
-    DESSMONITOR_HISTORY_SOURCE_SOLE_CHART,
-)
-from ..dessmonitor_history_resolution import (
-    DessMonitorResolvedHistorySeries,
-)
 from ..drivers.local_register_series import LocalRegisterSnapshotSeries
+from .cloud_history_evidence import (
+    CloudHistoryCollection,
+    CloudHistorySeries,
+)
 from .cloud_semantic_evidence import (
-    CLOUD_FIELD_KIND_CHART,
-    CLOUD_FIELD_KIND_KEY_PARAMETER,
     CLOUD_SEMANTIC_STATUS_RECOGNIZED,
+    CLOUD_SEMANTIC_STATUS_UNIT_CONFLICT,
     CloudSemanticObservation,
     classify_cloud_semantic_observation,
 )
@@ -227,7 +222,7 @@ class CloudLocalHistoryCandidate:
 class CloudLocalHistoryCorrelationReport:
     """Revalidatable candidate report with no activation authority."""
 
-    cloud_history: DessMonitorResolvedHistorySeries
+    cloud_history: CloudHistorySeries
     local_series: LocalRegisterSnapshotSeries
     semantic: CloudSemanticObservation
     alignment_tolerance_seconds: int
@@ -235,7 +230,7 @@ class CloudLocalHistoryCorrelationReport:
     candidates: tuple[CloudLocalHistoryCandidate, ...]
 
     def __post_init__(self) -> None:
-        if type(self.cloud_history) is not DessMonitorResolvedHistorySeries:
+        if type(self.cloud_history) is not CloudHistorySeries:
             raise TypeError("cloud_local_history_cloud_series_invalid")
         if type(self.local_series) is not LocalRegisterSnapshotSeries:
             raise TypeError("cloud_local_history_local_series_invalid")
@@ -330,7 +325,7 @@ class CloudLocalHistoryCorrelationReport:
             or type(record["candidates"]) is not list
         ):
             return None
-        cloud_history = DessMonitorResolvedHistorySeries.from_record(
+        cloud_history = CloudHistorySeries.from_record(
             record["cloud_history"]
         )
         local_series = LocalRegisterSnapshotSeries.from_record(
@@ -367,14 +362,14 @@ class CloudLocalHistoryCorrelationReport:
 
 
 def build_cloud_local_history_correlation_report(
-    cloud_history: DessMonitorResolvedHistorySeries,
+    cloud_history: CloudHistorySeries,
     local_series: LocalRegisterSnapshotSeries,
     *,
     alignment_tolerance_seconds: int,
 ) -> CloudLocalHistoryCorrelationReport:
     """Build an exact but explicitly non-authoritative candidate report."""
 
-    if type(cloud_history) is not DessMonitorResolvedHistorySeries:
+    if type(cloud_history) is not CloudHistorySeries:
         raise TypeError("cloud_local_history_cloud_series_invalid")
     if type(local_series) is not LocalRegisterSnapshotSeries:
         raise TypeError("cloud_local_history_local_series_invalid")
@@ -384,12 +379,11 @@ def build_cloud_local_history_correlation_report(
         maximum=_MAX_ALIGNMENT_TOLERANCE_SECONDS,
         reason="cloud_local_history_tolerance_invalid",
     )
-    source = cloud_history.source_series
+    source = cloud_history
     if not source.title:
         raise ValueError("cloud_local_history_title_missing")
-    field_kind = _field_kind_for_source(source.source_action)
     semantic = classify_cloud_semantic_observation(
-        field_kind=field_kind,
+        field_kind=source.field_kind,
         field_id=source.series_key,
         title=source.title,
         value="",
@@ -421,12 +415,12 @@ class CloudLocalHistoryReview:
     avoiding both duplicated register dumps and forgeable candidate summaries.
     """
 
-    history_collection: DessMonitorHistoryCollection
+    history_collection: CloudHistoryCollection
     local_series: LocalRegisterSnapshotSeries
     reports: tuple[CloudLocalHistoryCorrelationReport, ...]
 
     def __post_init__(self) -> None:
-        if type(self.history_collection) is not DessMonitorHistoryCollection:
+        if type(self.history_collection) is not CloudHistoryCollection:
             raise TypeError("cloud_local_history_review_collection_invalid")
         if type(self.local_series) is not LocalRegisterSnapshotSeries:
             raise TypeError("cloud_local_history_review_local_series_invalid")
@@ -524,7 +518,7 @@ class CloudLocalHistoryReview:
     def from_record(cls, record: object) -> "CloudLocalHistoryReview | None":
         if type(record) is not dict:
             return None
-        collection = DessMonitorHistoryCollection.from_record(
+        collection = CloudHistoryCollection.from_record(
             record.get("history_collection")
         )
         local_series = LocalRegisterSnapshotSeries.from_record(
@@ -547,12 +541,12 @@ class CloudLocalHistoryReview:
 
 
 def build_cloud_local_history_review(
-    history_collection: DessMonitorHistoryCollection,
+    history_collection: CloudHistoryCollection,
     local_series: LocalRegisterSnapshotSeries,
 ) -> CloudLocalHistoryReview:
     """Compose fresh typed evidence into a review-only aggregate."""
 
-    if type(history_collection) is not DessMonitorHistoryCollection:
+    if type(history_collection) is not CloudHistoryCollection:
         raise TypeError("cloud_local_history_review_collection_invalid")
     if type(local_series) is not LocalRegisterSnapshotSeries:
         raise TypeError("cloud_local_history_review_local_series_invalid")
@@ -569,7 +563,7 @@ def build_cloud_local_history_review(
 
 
 def _review_reports(
-    history_collection: DessMonitorHistoryCollection,
+    history_collection: CloudHistoryCollection,
     local_series: LocalRegisterSnapshotSeries,
 ) -> tuple[CloudLocalHistoryCorrelationReport, ...]:
     reports: list[CloudLocalHistoryCorrelationReport] = []
@@ -599,12 +593,12 @@ def _review_reports(
 
 
 def _review_alignment_tolerance_seconds(
-    cloud_history: DessMonitorResolvedHistorySeries,
+    cloud_history: CloudHistorySeries,
     local_series: LocalRegisterSnapshotSeries,
 ) -> int:
     """Derive the nearest-neighbour window from observed source cadences."""
 
-    precision_minutes = cloud_history.source_series.precision_minutes
+    precision_minutes = cloud_history.precision_minutes
     cloud_cadence = (
         precision_minutes * 60
         if precision_minutes > 0
@@ -621,7 +615,7 @@ def _review_alignment_tolerance_seconds(
 def _review_verdict(
     report: CloudLocalHistoryCorrelationReport,
 ) -> dict[str, Any]:
-    source = report.cloud_history.source_series
+    source = report.cloud_history
     return {
         "source_action": source.source_action,
         "series_key": source.series_key,
@@ -633,43 +627,44 @@ def _review_verdict(
     }
 
 
-def _field_kind_for_source(source_action: str) -> str:
-    if source_action == DESSMONITOR_HISTORY_SOURCE_KEY_PARAMETER:
-        return CLOUD_FIELD_KIND_KEY_PARAMETER
-    if source_action == DESSMONITOR_HISTORY_SOURCE_SOLE_CHART:
-        return CLOUD_FIELD_KIND_CHART
-    raise ValueError("cloud_local_history_source_invalid")
-
-
 def _validate_identity_and_semantic(
-    cloud_history: DessMonitorResolvedHistorySeries,
+    cloud_history: CloudHistorySeries,
     local_series: LocalRegisterSnapshotSeries,
     semantic: CloudSemanticObservation,
 ) -> None:
-    source = cloud_history.source_series
+    source = cloud_history
     if not pn_is_same_identity(
         source.identity.pn,
         local_series.collector_pn,
     ):
         raise ValueError("cloud_local_history_identity_mismatch")
     expected_semantic = classify_cloud_semantic_observation(
-        field_kind=_field_kind_for_source(source.source_action),
+        field_kind=source.field_kind,
         field_id=source.series_key,
         title=source.title,
         value="",
         observed_unit=source.unit,
         source_action=source.source_action,
     )
+    exact_power_scale = (
+        expected_semantic.status == CLOUD_SEMANTIC_STATUS_UNIT_CONFLICT
+        and expected_semantic.device_class == "power"
+        and expected_semantic.observed_unit.casefold() == "kw"
+        and expected_semantic.expected_unit.casefold() == "w"
+    )
     if (
         semantic != expected_semantic
-        or semantic.status != CLOUD_SEMANTIC_STATUS_RECOGNIZED
+        or (
+            semantic.status != CLOUD_SEMANTIC_STATUS_RECOGNIZED
+            and not exact_power_scale
+        )
         or semantic.semantic_kind not in {"read", "both"}
     ):
         raise ValueError("cloud_local_history_semantic_untrusted")
 
 
 def _correlate(
-    cloud_history: DessMonitorResolvedHistorySeries,
+    cloud_history: CloudHistorySeries,
     local_series: LocalRegisterSnapshotSeries,
     *,
     alignment_tolerance_seconds: int,

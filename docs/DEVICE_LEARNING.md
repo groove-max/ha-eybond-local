@@ -78,24 +78,36 @@ The cloud/app password is not saved.
 
 ## What happens during learning
 
-For active learning:
+Home Assistant first asks what you want to do. Read-only analysis is the
+recommended default; active correlation is a separate advanced task. If more
+than one API can perform the selected task, the next step asks which API to use.
+Choosing an API never silently changes the task.
 
-1. Home Assistant starts a temporary safe learning session.
-2. It signs in to the supported cloud provider with the credentials you entered.
-3. It asks the provider which settings and fields the cloud knows for this
+For active correlation:
+
+1. Home Assistant signs in to the selected cloud API with the credentials you entered.
+2. It verifies the exact device identity and asks which settings and fields the cloud knows for this
    device.
+3. Only after that succeeds, it starts a temporary safe learning session.
 4. It observes how those cloud items map to the local inverter connection.
 5. It blocks unsafe or unknown traffic instead of letting it reach the real inverter.
 6. It builds a local result for review.
+
+SmartESS and DESSMonitor are separate API choices even when the same account
+credentials work with both. Home Assistant uses only the API selected for that
+run; it does not silently retry through another service.
 
 The goal is to learn what the device supports without permanently changing inverter settings.
 
 If the safe learning path is not ready, the integration stops instead of continuing.
 
 For a read-only metadata source, Home Assistant signs in, verifies that the
-cloud device has the same collector PN, and downloads bounded device metadata.
-It does not redirect the collector, send a control action, or claim a local
-register mapping.
+cloud device has the same collector PN, and downloads bounded device metadata
+and available daily sensor history. Both SmartESS and DESSMonitor can provide
+history for this workflow. Home Assistant may then offer a separate background
+observation of local readings so several timestamped local samples can be
+compared with the cloud series. It does not redirect the collector, send a
+control action, or claim a local register mapping.
 
 ## Review screen
 

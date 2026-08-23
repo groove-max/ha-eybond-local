@@ -18,7 +18,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from custom_components.eybond_local.support import cloud_control_discovery as ccd  # noqa: E402
-from custom_components.eybond_local.support.cloud_control_discovery import (  # noqa: E402
+from custom_components.eybond_local.support.cloud_active_workflow import (  # noqa: E402
     DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY,
     ControlDiscoveryTimeoutPolicy,
 )
@@ -26,12 +26,21 @@ from custom_components.eybond_local.support.cloud_learning_runner import (  # no
     CloudLearningOutcome,
 )
 from custom_components.eybond_local.support.cloud_learning_engines import (  # noqa: E402
-    resolve_cloud_learning_engine,
+    resolve_cloud_learning_selection,
+)
+from custom_components.eybond_local.support.cloud_learning_models import (  # noqa: E402
+    LEARNING_METHOD_ACTIVE_CORRELATION,
+    CloudLearningSelection,
 )
 
 
 def _runner(source_id: str):
-    return resolve_cloud_learning_engine(source_id).learning_runner()
+    return resolve_cloud_learning_selection(
+        CloudLearningSelection(
+            method_id=LEARNING_METHOD_ACTIVE_CORRELATION,
+            source_id=source_id,
+        )
+    ).learning_runner()
 
 
 async def _executor(fn, *args):
@@ -63,6 +72,7 @@ def _run(runner, **overrides):
 _ORCHESTRATION = {
     "planned_write_count": 1,
     "executed_result_count": 1,
+    "sent_count": 1,
     "degraded_count": 0,
     "leaked_count": 0,
     "results": [],
@@ -84,9 +94,9 @@ class RegistryTests(unittest.TestCase):
                     ControlDiscoveryTimeoutPolicy(action_request=malformed)
 
     def test_supported_and_resolution(self) -> None:
-        self.assertTrue(resolve_cloud_learning_engine("smartess").available)
-        self.assertTrue(resolve_cloud_learning_engine("valuecloud").available)
-        self.assertFalse(resolve_cloud_learning_engine("nope").available)
+        self.assertEqual(_runner("smartess").provider_id, "smartess")
+        self.assertEqual(_runner("valuecloud").provider_id, "valuecloud")
+        self.assertEqual(_runner("nope").provider_id, "")
         self.assertEqual(_runner("smartess").provider_id, "smartess")
 
     def test_unknown_provider_fails_closed(self) -> None:

@@ -197,7 +197,7 @@ def _draft_items(
         raise ValueError("cloud_local_read_draft_decision_count_mismatch")
 
     for report, decision in zip(reports, decisions, strict=True):
-        source = report.cloud_history.source_series
+        source = report.cloud_history
         if (
             decision.source_action != source.source_action
             or decision.series_key != source.series_key

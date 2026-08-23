@@ -68,6 +68,11 @@ _OPTIONS_SHADOW_INACTIVE_DRAFT = (
 _OPTIONS_SHADOW_RUNTIME = _CC / "flows" / "options" / "shadow_runtime.py"
 _OPTIONS_LIFECYCLE = tuple(sorted((_CC / "flows" / "options").glob("*.py")))
 _CLOUD_LEARNING_RUNNER = _CC / "support" / "cloud_learning_runner.py"
+_CLOUD_LEARNING_MODELS = _CC / "support" / "cloud_learning_models.py"
+_CLOUD_API_ADAPTERS = _CC / "support" / "cloud_api_adapters.py"
+_CLOUD_LEARNING_ENGINES = _CC / "support" / "cloud_learning_engines.py"
+_CLOUD_ACTIVE_WORKFLOW = _CC / "support" / "cloud_active_workflow.py"
+_CLOUD_READ_ONLY_WORKFLOW = _CC / "support" / "cloud_read_only_workflow.py"
 _ACTIVE_CLOUD_LEARNING = _CC / "support" / "cloud_control_discovery.py"
 _ACTIVE_READ_BINDER = _CC / "support" / "read_learning_binder.py"
 _SHADOW_READ_EVIDENCE = (
@@ -78,6 +83,13 @@ _SHADOW_OVERLAY_GENERATOR = (
     _CC / "support" / "shadow_learning" / "overlay_generator.py"
 )
 _DESSMONITOR_LEARNING = _CC / "support" / "dessmonitor_learning.py"
+_DESSMONITOR_ACTIVE = _CC / "support" / "dessmonitor_active.py"
+_DESSMONITOR_ORCHESTRATOR = (
+    _CC / "support" / "shadow_learning" / "dessmonitor_orchestrator.py"
+)
+_SMARTESS_READ_ONLY = _CC / "support" / "smartess_read_only.py"
+_SMARTESS_HISTORY = _CC / "support" / "smartess_history.py"
+_CLOUD_HISTORY_EVIDENCE = _CC / "support" / "cloud_history_evidence.py"
 _DESSMONITOR_CLIENT = _CC / "dessmonitor_cloud.py"
 _DESSMONITOR_COLLECTION = _CC / "dessmonitor_collection.py"
 _DESSMONITOR_HISTORY = _CC / "dessmonitor_history.py"
@@ -235,10 +247,12 @@ class ConfigFlowProviderBoundaryGuardTests(unittest.TestCase):
         config_identifiers = set().union(
             *(_code_identifiers(_read(path)) for path in _CONFIG_LIFECYCLE)
         )
-        options_identifiers = _code_identifiers(_read(_OPTIONS_SHADOW_RUN))
+        options_identifiers = _code_identifiers(
+            _read(_OPTIONS_SHADOW_RUN) + "\n" + _read(_OPTIONS_SHADOW_RUNTIME)
+        )
         self.assertIn("resolve_cloud_evidence_provider", config_identifiers)
         self.assertIn("build_onboarding_assist", config_identifiers)
-        self.assertIn("resolve_cloud_learning_engine", options_identifiers)
+        self.assertIn("resolve_cloud_learning_selection", options_identifiers)
         self.assertIn("learning_runner", options_identifiers)
 
     def test_control_discovery_provider_has_no_family_heuristic_or_default(self) -> None:
@@ -262,12 +276,53 @@ class ConfigFlowProviderBoundaryGuardTests(unittest.TestCase):
             and node.name == "_control_discovery_learning_source"
         )
         source_code = ast.unparse(source_method)
-        self.assertIn("default_cloud_learning_source", source_code)
+        self.assertIn("wizard_source", source_code)
+        self.assertNotIn("default_cloud_learning_source", source_code)
         self.assertNotIn("'smartess'", source_code)
         self.assertNotIn("'valuecloud'", source_code)
 
+        method_method = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_control_discovery_learning_method"
+        )
+        method_code = ast.unparse(method_method)
+        self.assertIn("wizard_method", method_code)
+        self.assertNotIn("default_cloud_learning_method", method_code)
+
 
 class CloudLearningBoundaryGuardTests(unittest.TestCase):
+    def test_selection_models_are_provider_and_orchestration_neutral(self) -> None:
+        identifiers = _code_identifiers(_read(_CLOUD_LEARNING_MODELS))
+        for forbidden in (
+            "config_flow",
+            "runtime",
+            "coordinator",
+            "smartess_cloud",
+            "valuecloud_cloud",
+            "dessmonitor_cloud",
+            "CloudLearningRunner",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+
+    def test_api_adapters_do_not_own_runner_or_workflow_policy(self) -> None:
+        source = _read(_CLOUD_API_ADAPTERS)
+        identifiers = _code_identifiers(source)
+        for forbidden in (
+            "config_flow",
+            "runtime",
+            "coordinator",
+            "CloudLearningRunner",
+            "requires_shadow_route",
+            "requires_control_consent",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+
+        engines = _read(_CLOUD_LEARNING_ENGINES)
+        self.assertNotIn("smartess_cloud", _code_identifiers(engines))
+        self.assertNotIn("dessmonitor_cloud", _code_identifiers(engines))
+
     def test_runner_contract_is_neutral(self) -> None:
         identifiers = _code_identifiers(_read(_CLOUD_LEARNING_RUNNER))
         for forbidden in (
@@ -283,13 +338,12 @@ class CloudLearningBoundaryGuardTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, identifiers)
 
-    def test_dessmonitor_source_has_no_endpoint_or_control_writer(self) -> None:
+    def test_dessmonitor_read_only_operation_has_no_endpoint_or_control_writer(self) -> None:
         identifiers = _code_identifiers(
             "\n".join(
                 _read(path)
                 for path in (
                     _DESSMONITOR_LEARNING,
-                    _DESSMONITOR_CLIENT,
                     _DESSMONITOR_SEMANTICS,
                     _CLOUD_SEMANTIC_EVIDENCE,
                 )
@@ -302,9 +356,62 @@ class CloudLearningBoundaryGuardTests(unittest.TestCase):
             "async_apply_collector_server_endpoint",
             "async_reboot_collector",
             "ctrlDevice",
+            "send_device_control",
             "set_collector",
         ):
             self.assertNotIn(forbidden, identifiers)
+
+        client = _read(_DESSMONITOR_CLIENT)
+        self.assertIn("def build_device_control_action", client)
+        self.assertIn("def send_device_control", client)
+        self.assertIn('"ctrlDevice"', client)
+        client_identifiers = _code_identifiers(client)
+        for forbidden in (
+            "async_start_shadow_learning",
+            "async_stop_shadow_learning",
+            "async_set_collector_server_endpoint",
+            "async_apply_collector_server_endpoint",
+            "async_reboot_collector",
+        ):
+            self.assertNotIn(forbidden, client_identifiers)
+
+    def test_dessmonitor_active_is_provider_owned_and_uses_only_common_lifecycle(self) -> None:
+        active = _read(_DESSMONITOR_ACTIVE)
+        active_identifiers = _code_identifiers(active)
+        self.assertIn("CloudActiveCorrelationOperation", active_identifiers)
+        self.assertIn(
+            "async_orchestrate_dessmonitor_shadow_learning",
+            active_identifiers,
+        )
+        self.assertIn("fetch_read_only_evidence_for_session", active_identifiers)
+        for forbidden in (
+            "smartess_cloud",
+            "valuecloud_cloud",
+            "config_flow",
+            "runtime",
+            "coordinator",
+            "async_set_collector_server_endpoint",
+            "async_start_shadow_learning",
+            "async_stop_shadow_learning",
+        ):
+            self.assertNotIn(forbidden, active_identifiers)
+
+        orchestrator = _read(_DESSMONITOR_ORCHESTRATOR)
+        orchestrator_identifiers = _code_identifiers(orchestrator)
+        self.assertIn("send_device_control", orchestrator_identifiers)
+        self.assertIn("async_dispatch_cloud_action", orchestrator_identifiers)
+        self.assertIn("summarize_shadow_learning_attempts", orchestrator_identifiers)
+        for forbidden in (
+            "smartess_cloud",
+            "valuecloud_cloud",
+            "config_flow",
+            "runtime",
+            "coordinator",
+            "async_set_collector_server_endpoint",
+            "async_start_shadow_learning",
+            "async_stop_shadow_learning",
+        ):
+            self.assertNotIn(forbidden, orchestrator_identifiers)
 
     def test_dessmonitor_semantics_cannot_mint_local_bindings_or_overlays(self) -> None:
         identifiers = _code_identifiers(
@@ -418,7 +525,7 @@ class CloudLearningBoundaryGuardTests(unittest.TestCase):
     def test_dessmonitor_local_snapshot_is_capability_gated_and_never_bound(self) -> None:
         flow = _read(_OPTIONS_SHADOW_RUN)
         self.assertIn(
-            "learning_engine.source.capabilities.local_register_snapshot",
+            "learning_engine.evidence_capabilities.local_register_snapshot",
             flow,
         )
         self.assertIn("async_capture_local_register_snapshot", flow)
@@ -446,12 +553,12 @@ class CloudLearningBoundaryGuardTests(unittest.TestCase):
         self.assertIn("device_local_timezone_unresolved", history)
         self.assertIn('"local_mapping_proven": False', history)
 
-        engines = _read(_CC / "support" / "cloud_learning_engines.py")
-        dessmonitor_class = engines.split(
-            "class DessMonitorCloudLearningEngine",
+        adapters = _read(_CC / "support" / "cloud_api_adapters.py")
+        dessmonitor_adapter = adapters.split(
+            "class DessMonitorCloudApiAdapter",
             1,
-        )[1].split("class UnavailableCloudLearningEngine", 1)[0]
-        self.assertIn("history=True", dessmonitor_class)
+        )[1].split("class UnavailableCloudApiAdapter", 1)[0]
+        self.assertIn("history=True", dessmonitor_adapter)
 
         collection = _read(_DESSMONITOR_COLLECTION)
         collection_identifiers = _code_identifiers(collection)
@@ -488,7 +595,7 @@ class CloudLearningBoundaryGuardTests(unittest.TestCase):
     ) -> None:
         source = _read(_OPTIONS_SHADOW_METADATA_REVIEW)
         identifiers = _code_identifiers(source)
-        self.assertIn("DessMonitorHistoryCollection", identifiers)
+        self.assertIn("CloudHistoryCollection", identifiers)
         self.assertIn("CloudSemanticEvidenceReport", identifiers)
         self.assertIn("CloudLocalCoverageReport", identifiers)
         self.assertIn("CloudLocalHistoryReview", identifiers)
@@ -504,6 +611,45 @@ class CloudLearningBoundaryGuardTests(unittest.TestCase):
             "write_capability",
         ):
             self.assertNotIn(forbidden, identifiers)
+
+    def test_smartess_history_is_provider_owned_read_only_evidence(self) -> None:
+        adapter = _read(_SMARTESS_HISTORY)
+        identifiers = _code_identifiers(adapter)
+        for required in (
+            "login_for_control_discovery",
+            "fetch_device_bundle_for_collector_with_session",
+            "fetch_signed_action",
+            "CloudHistoryCollection",
+        ):
+            self.assertIn(required, identifiers)
+        for required in (
+            "queryDeviceInfo",
+            "querySPKeyParameters",
+            "queryDeviceKeyParameterOneDay",
+        ):
+            self.assertIn(required, adapter)
+        for forbidden in (
+            "runtime",
+            "config_flow",
+            "read_learning_binder",
+            "async_activate_device_scoped_overlay",
+            "write_capability",
+        ):
+            self.assertNotIn(forbidden, identifiers)
+
+        neutral = _read(_CLOUD_HISTORY_EVIDENCE)
+        neutral_identifiers = _code_identifiers(neutral)
+        self.assertIn("provider_normalized_history_observation", neutral)
+        self.assertIn('"local_mapping_proven": False', neutral)
+        self.assertIn('"activation_allowed": False', neutral)
+        for forbidden in (
+            "dessmonitor",
+            "smartess_cloud",
+            "runtime",
+            "config_flow",
+            "register_address",
+        ):
+            self.assertNotIn(forbidden, neutral_identifiers)
 
     def test_dessmonitor_time_basis_is_exact_identity_provider_evidence(self) -> None:
         source = _read(_DESSMONITOR_TIME_BASIS)
@@ -543,7 +689,8 @@ class CloudLearningBoundaryGuardTests(unittest.TestCase):
     def test_history_correlator_is_review_only_and_flow_composed(self) -> None:
         source = _read(_CLOUD_LOCAL_HISTORY_CORRELATION)
         identifiers = _code_identifiers(source)
-        self.assertIn("DessMonitorResolvedHistorySeries", identifiers)
+        self.assertIn("CloudHistorySeries", identifiers)
+        self.assertIn("CloudHistoryCollection", identifiers)
         self.assertIn("LocalRegisterSnapshotSeries", identifiers)
         self.assertIn("review_candidate_only", source)
         self.assertIn("candidate_not_proven", source)
@@ -557,6 +704,7 @@ class CloudLearningBoundaryGuardTests(unittest.TestCase):
             "async_activate_device_scoped_overlay",
             "read_bindings",
             "write_capability",
+            "DessMonitorResolvedHistorySeries",
         ):
             self.assertNotIn(forbidden, identifiers)
         self.assertNotIn(
@@ -705,10 +853,23 @@ class CloudLearningBoundaryGuardTests(unittest.TestCase):
 
     def test_active_and_metadata_implementations_share_only_neutral_contract(self) -> None:
         active = _read(_ACTIVE_CLOUD_LEARNING)
+        dessmonitor_active = _read(_DESSMONITOR_ACTIVE)
         metadata = _read(_DESSMONITOR_LEARNING)
-        self.assertIn("from .cloud_learning_runner import", active)
-        self.assertIn("from .cloud_learning_runner import", metadata)
+        self.assertIn("from .cloud_active_workflow import", active)
+        self.assertIn("from .cloud_active_workflow import", dessmonitor_active)
+        self.assertIn("from .cloud_read_only_workflow import", metadata)
         self.assertNotIn("from .cloud_control_discovery import", metadata)
+        self.assertNotIn("from .cloud_control_discovery import", dessmonitor_active)
+        active_workflow = _read(_CLOUD_ACTIVE_WORKFLOW)
+        self.assertIn("from .cloud_learning_runner import", active_workflow)
+        self.assertNotIn("smartess_cloud", active_workflow)
+        self.assertNotIn("valuecloud_cloud", active_workflow)
+        workflow = _read(_CLOUD_READ_ONLY_WORKFLOW)
+        self.assertIn("from .cloud_learning_runner import", workflow)
+        self.assertNotIn("cloud_control_discovery", workflow)
+        smartess = _read(_SMARTESS_READ_ONLY)
+        self.assertIn("from .cloud_read_only_workflow import", smartess)
+        self.assertNotIn("cloud_control_discovery", smartess)
 
     def test_flow_gates_both_failure_cleanup_and_route_start_by_capability(self) -> None:
         source = _read(_OPTIONS_SHADOW_RUN)
@@ -717,10 +878,60 @@ class CloudLearningBoundaryGuardTests(unittest.TestCase):
             2,
         )
         self.assertIn(
-            "learning_engine.source.capabilities.requires_shadow_route",
+            "learning_engine.method.requires_shadow_route",
             source,
         )
         self.assertIn("cloud_learning_shadow_route_forbidden", source)
+
+    def test_api_source_does_not_own_workflow_policy(self) -> None:
+        models = _read(_CC / "support" / "cloud_learning_models.py")
+        source_class = models.split("class CloudApiSource", 1)[1].split(
+            "class CloudLearningMethod", 1
+        )[0]
+        capabilities_class = models.split("class CloudApiCapabilities", 1)[1].split(
+            "class CloudApiSource", 1
+        )[0]
+        for forbidden in ("requires_shadow_route", "requires_control_consent"):
+            self.assertNotIn(forbidden, source_class)
+            self.assertNotIn(forbidden, capabilities_class)
+
+        method_class = models.split("class CloudLearningMethod", 1)[1].split(
+            "class CloudLearningSelection", 1
+        )[0]
+        self.assertIn("requires_shadow_route", method_class)
+        self.assertIn("requires_control_consent", method_class)
+
+    def test_api_capabilities_do_not_claim_local_evidence_capabilities(self) -> None:
+        models = _read(_CLOUD_LEARNING_MODELS)
+        api_capabilities = models.split("class CloudApiCapabilities", 1)[1].split(
+            "class CloudApiSource", 1
+        )[0]
+        self.assertNotIn("local_register_snapshot", api_capabilities)
+        self.assertNotIn("local_register_series", api_capabilities)
+        evidence = models.split(
+            "class CloudLearningEvidenceCapabilities", 1
+        )[1].split("class CloudLearningMethod", 1)[0]
+        self.assertIn("local_register_snapshot", evidence)
+        self.assertIn("local_register_series", evidence)
+
+    def test_flow_requires_explicit_method_and_source_selection(self) -> None:
+        runtime = _read(_OPTIONS_SHADOW_RUNTIME)
+        run = _read(_OPTIONS_SHADOW_RUN)
+        self.assertNotIn("resolve_cloud_learning_engine", runtime)
+        self.assertNotIn("current_cloud_learning_selection", runtime)
+        self.assertIn("resolve_cloud_learning_selection", runtime)
+        self.assertIn('"learning_method"', run)
+        self.assertIn('"learning_source"', run)
+
+    def test_flow_reads_route_and_consent_only_from_method(self) -> None:
+        run = _read(_OPTIONS_SHADOW_RUN)
+        runtime = _read(_OPTIONS_SHADOW_RUNTIME)
+        for source in (run, runtime):
+            self.assertNotIn("source.capabilities.requires_shadow_route", source)
+            self.assertNotIn("source.capabilities.requires_control_consent", source)
+        self.assertIn("engine.method.requires_control_consent", run)
+        self.assertIn("learning_engine.method.requires_shadow_route", run)
+        self.assertIn("engine.method.requires_shadow_route", runtime)
 
 
 class NoUnscopedEvidenceReadGuardTests(unittest.TestCase):

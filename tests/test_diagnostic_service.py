@@ -11,7 +11,9 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.const import DOMAIN
-from custom_components.eybond_local.services import _async_handle_run_diagnostic_commands
+from custom_components.eybond_local.services import (
+    _async_handle_run_diagnostic_commands,
+)
 
 
 class _FakeCoordinator:
@@ -28,7 +30,10 @@ class _FakeCoordinator:
             "started_at": "2026-06-19T00:00:00+00:00",
             "finished_at": "2026-06-19T00:00:01+00:00",
             "result_path": "/config/eybond_local/diagnostic_runs/x.json",
-            "download_url": "/local/eybond_local/diagnostic_runs/x.share.json",
+            "download_url": (
+                "https://ha.example/api/eybond_local/diagnostic_run/entry-1/"
+                "diagnostic_entry-1_x.share.json?authSig=signed"
+            ),
         }
 
 
@@ -78,9 +83,7 @@ class DiagnosticServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("started_at", result)
         self.assertIn("finished_at", result)
         self.assertEqual(result["result_path"], "/config/eybond_local/diagnostic_runs/x.json")
-        self.assertEqual(
-            result["download_url"], "/local/eybond_local/diagnostic_runs/x.share.json"
-        )
+        self.assertIn("/api/eybond_local/diagnostic_run/entry-1/", result["download_url"])
 
         forwarded = coordinator.calls[0]
         self.assertEqual(forwarded["commands"], "read 171 14\n")

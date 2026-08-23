@@ -1455,7 +1455,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
             export = types.SimpleNamespace(
                 result_path=Path("/tmp/result.json"),
-                download_url=None,
+                shareable_path=Path("/tmp/result.share.json"),
             )
 
             poll_task = asyncio.create_task(coordinator._async_update_data())
@@ -1482,6 +1482,66 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 await poll_task
                 await diagnostic_task
                 self.assertTrue(diagnostic_started.is_set())
+
+        asyncio.run(_run())
+
+    def test_diagnostic_download_uses_signed_entry_scoped_api_url(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(
+                self.coordinator_module.EybondLocalCoordinator
+            )
+            coordinator._runtime_operation_lock = asyncio.Lock()
+            coordinator.config_entry = types.SimpleNamespace(entry_id="entry-1")
+
+            async def _run_executor_job(job):
+                return job()
+
+            coordinator.hass = types.SimpleNamespace(
+                config=types.SimpleNamespace(config_dir="/tmp"),
+                async_add_executor_job=_run_executor_job,
+            )
+            result = types.SimpleNamespace(
+                success=True,
+                output="ok\n",
+                results=[],
+                context={},
+                started_at="start",
+                finished_at="finish",
+                error=None,
+            )
+            export = types.SimpleNamespace(
+                result_path=Path("/tmp/result.json"),
+                shareable_path=Path(
+                    "/tmp/diagnostic_entry-1_20260823T125052279675Z.share.json"
+                ),
+            )
+            signed = "https://ha.example/api/eybond_local/diagnostic_run/signed"
+
+            with patch.object(
+                self.coordinator_diagnostics_module,
+                "run_scenario",
+                return_value=result,
+            ), patch.object(
+                self.coordinator_diagnostics_module,
+                "export_diagnostic_run",
+                return_value=export,
+            ), patch.object(
+                self.coordinator_diagnostics_module,
+                "sign_diagnostic_run_download_url",
+                return_value=signed,
+            ) as signer:
+                payload = await coordinator._async_execute_diagnostic(
+                    "read 1",
+                    types.SimpleNamespace(transport=None),
+                    publish_download_copy=True,
+                )
+
+            signer.assert_called_once_with(
+                coordinator.hass,
+                "entry-1",
+                export.shareable_path.name,
+            )
+            self.assertEqual(payload["download_url"], signed)
 
         asyncio.run(_run())
 

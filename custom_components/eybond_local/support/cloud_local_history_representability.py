@@ -460,7 +460,7 @@ def _representability_decisions(
     semantics = set(context.existing_semantic_keys)
     decisions: list[CloudLocalHistoryRepresentabilityDecision] = []
     for report in review.reports:
-        source = report.cloud_history.source_series
+        source = report.cloud_history
         status = REPRESENTABILITY_STATUS_INCONCLUSIVE
         if report.status == CLOUD_LOCAL_HISTORY_STATUS_AMBIGUOUS:
             status = REPRESENTABILITY_STATUS_AMBIGUOUS

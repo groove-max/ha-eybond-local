@@ -254,15 +254,21 @@ def _check_command_wire_limits(
 def _check_write_confirmation(
     commands: tuple[Command, ...], confirm_write: bool
 ) -> None:
-    """Require explicit confirmation before any scenario that writes to the device."""
+    """Require confirmation before any command that may mutate the device.
+
+    Raw ASCII protocols do not carry a trustworthy read/write classification:
+    strings such as ``QPIGS`` are reads while commands such as ``POP`` can
+    change inverter settings. Treat every free-form ASCII command as
+    potentially mutating instead of maintaining an incomplete allowlist.
+    """
 
     if confirm_write:
         return
     for command in commands:
-        if command.requires in ("write", "write_bit"):
+        if command.requires in ("write", "write_bit", "ascii"):
             raise ScenarioError(
-                "scenario contains write commands; set confirm_write=true to run "
-                "writes that can change device settings",
+                "scenario contains a command that may change device settings; "
+                "set confirm_write=true to run it",
                 line=command.line,
             )
 

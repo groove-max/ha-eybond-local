@@ -13,22 +13,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.dessmonitor_cloud import (  # noqa: E402
-    DessMonitorDeviceIdentity,
-)
-from custom_components.eybond_local.dessmonitor_collection import (  # noqa: E402
-    DessMonitorHistoryCollection,
-)
 from custom_components.eybond_local.dessmonitor_history import (  # noqa: E402
     DESSMONITOR_HISTORY_SOURCE_SOLE_CHART,
-    DessMonitorHistoryPoint,
-    DessMonitorHistorySeries,
-)
-from custom_components.eybond_local.dessmonitor_history_resolution import (  # noqa: E402
-    resolve_dessmonitor_history_time_basis,
-)
-from custom_components.eybond_local.dessmonitor_time_basis import (  # noqa: E402
-    DessMonitorDeviceTimeBasis,
 )
 from custom_components.eybond_local.drivers.local_register_evidence import (  # noqa: E402
     LocalRegisterBlockObservation,
@@ -64,6 +50,16 @@ from custom_components.eybond_local.support.cloud_local_history_correlation impo
     CloudLocalHistoryReview,
     build_cloud_local_history_correlation_report,
     build_cloud_local_history_review,
+)
+from custom_components.eybond_local.support.cloud_history_evidence import (  # noqa: E402
+    CloudHistoryCollection,
+    CloudHistoryIdentity,
+    CloudHistoryPoint,
+    CloudHistorySeries,
+)
+from custom_components.eybond_local.support.cloud_semantic_evidence import (  # noqa: E402
+    CLOUD_FIELD_KIND_CHART,
+    CLOUD_FIELD_KIND_KEY_PARAMETER,
 )
 from custom_components.eybond_local.support.cloud_local_history_draft import (  # noqa: E402
     CLOUD_LOCAL_READ_DRAFT_AUTHORITY,
@@ -108,8 +104,8 @@ REPRESENTABILITY_SOURCE = (
 )
 
 
-def _identity(*, pn: str = FULL_PN) -> DessMonitorDeviceIdentity:
-    return DessMonitorDeviceIdentity(
+def _identity(*, pn: str = FULL_PN) -> CloudHistoryIdentity:
+    return CloudHistoryIdentity(
         pn=pn,
         sn="92632511100118",
         devcode=2376,
@@ -124,30 +120,31 @@ def _cloud_history(
     series_key: str = "pv_voltage",
     unit: str = "V",
     pn: str = FULL_PN,
-):
+    source_id: str = "dessmonitor",
+    source_action: str = DESSMONITOR_HISTORY_SOURCE_SOLE_CHART,
+    field_kind: str = CLOUD_FIELD_KIND_CHART,
+) -> CloudHistorySeries:
     points = tuple(
-        DessMonitorHistoryPoint(
+        CloudHistoryPoint(
             device_local_timestamp=f"2026-08-22 10:{index * 5:02d}:00",
+            utc_timestamp=f"2026-08-22T10:{index * 5:02d}:00+00:00",
             value=value,
         )
         for index, value in enumerate(values)
     )
-    source = DessMonitorHistorySeries(
+    return CloudHistorySeries(
+        provider_id="smartess",
+        source_id=source_id,
+        field_kind=field_kind,
         identity=_identity(pn=pn),
-        source_action=DESSMONITOR_HISTORY_SOURCE_SOLE_CHART,
+        source_action=source_action,
         series_key=series_key,
         title=title,
         unit=unit,
         requested_date="2026-08-22",
         precision_minutes=5,
+        timezone_offset_seconds=0,
         points=points,
-    )
-    return resolve_dessmonitor_history_time_basis(
-        source,
-        DessMonitorDeviceTimeBasis(
-            identity=source.identity,
-            offset_seconds=0,
-        ),
     )
 
 
@@ -198,15 +195,17 @@ def _local_series(
 
 
 def _history_collection(
-    *series,
-) -> DessMonitorHistoryCollection:
+    *series: CloudHistorySeries,
+) -> CloudHistoryCollection:
     if not series:
         series = (_cloud_history(),)
     first = series[0]
-    return DessMonitorHistoryCollection(
-        identity=first.source_series.identity,
-        time_basis=first.time_basis,
-        requested_date=first.source_series.requested_date,
+    return CloudHistoryCollection(
+        provider_id=first.provider_id,
+        source_id=first.source_id,
+        identity=first.identity,
+        requested_date=first.requested_date,
+        timezone_offset_seconds=first.timezone_offset_seconds,
         attempted_series_count=len(series),
         failed_series_count=0,
         budget_exhausted=False,
@@ -339,6 +338,28 @@ class CloudLocalHistoryCorrelationTests(unittest.TestCase):
         self.assertEqual(report.status, CLOUD_LOCAL_HISTORY_STATUS_UNIQUE)
         self.assertEqual(report.candidates[0].divisor, 1)
         self.assertIs(report.candidates[0].signed, True)
+
+    def test_smartess_kw_history_uses_explicit_power_scale_for_local_watts(
+        self,
+    ) -> None:
+        report = build_cloud_local_history_correlation_report(
+            _cloud_history(
+                values=("0.230", "0.231", "0.232", "0.233", "0.234"),
+                title="PV Power",
+                series_key="PV_OUTPUT_POWER",
+                unit="kW",
+                source_id="smartess",
+                source_action="queryDeviceKeyParameterOneDay",
+                field_kind=CLOUD_FIELD_KIND_KEY_PARAMETER,
+            ),
+            _local_series((230, 231, 232, 233, 234)),
+            alignment_tolerance_seconds=30,
+        )
+
+        self.assertEqual(report.status, CLOUD_LOCAL_HISTORY_STATUS_UNIQUE)
+        self.assertEqual(report.semantic.status, "unit_conflict")
+        self.assertEqual(report.semantic.expected_unit, "W")
+        self.assertEqual(report.candidates[0].divisor, 1000)
 
     def test_foreign_identity_or_unknown_semantic_fails_closed(self) -> None:
         with self.assertRaisesRegex(ValueError, "identity_mismatch"):
@@ -655,7 +676,7 @@ class CloudLocalReadDraftPlanTests(unittest.TestCase):
     def _representability(
         self,
         *,
-        collection: DessMonitorHistoryCollection | None = None,
+        collection: CloudHistoryCollection | None = None,
         local_series: LocalRegisterSnapshotSeries | None = None,
         context: LocalRegisterOverlayContext | None = None,
     ) -> CloudLocalHistoryRepresentabilityReview:

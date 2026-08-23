@@ -14,7 +14,6 @@ orchestrators are preserved exactly from the previous in-flow implementation.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import Any
 
 from .. import valuecloud_cloud as valuecloud_cloud_module
@@ -25,6 +24,10 @@ from ..smartess_cloud import (
     fetch_signed_action,
     login_for_control_discovery,
 )
+from .cloud_active_workflow import (
+    DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY,
+    CloudActiveCorrelationOperation,
+)
 from .cloud_learning_runner import CloudLearningOutcome, CloudLearningRunner
 from .read_learning_binder import bind_cloud_labels_to_registers
 from .shadow_learning.read_evidence import read_register_evidence_from_map
@@ -34,28 +37,6 @@ from .shadow_learning.valuecloud_orchestrator import (
 )
 
 logger = logging.getLogger(__name__)
-
-@dataclass(frozen=True, slots=True)
-class ControlDiscoveryTimeoutPolicy:
-    """Separate long metadata sweeps from one control-action dispatch."""
-
-    # An E500 production sweep completed its final one of 23 Modbus reads at
-    # 14.55 s while the generic HTTP timeout was 15 s. The cloud still needs to
-    # consume that response and finish its envelope, so metadata gets a bounded
-    # operation budget independent from the short per-action causality window.
-    metadata_request: float = 30.0
-    action_request: float = 15.0
-
-    def __post_init__(self) -> None:
-        for value in (self.metadata_request, self.action_request):
-            if type(value) not in {int, float} or isinstance(value, bool):
-                raise TypeError("control_discovery_timeout_invalid")
-            if value <= 0:
-                raise ValueError("control_discovery_timeout_invalid")
-
-
-DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY = ControlDiscoveryTimeoutPolicy()
-
 
 def _coerce_int(value: Any) -> int | None:
     if value in (None, ""):
@@ -101,12 +82,12 @@ def _settings_dat_from_bundle(bundle: Any) -> dict[str, Any] | None:
     return dict(dat) if isinstance(dat, dict) else None
 
 
-class SmartEssActiveLearningRunner(CloudLearningRunner):
+class SmartEssActiveCorrelationOperation(CloudActiveCorrelationOperation):
     provider_id = "smartess"
     source_id = "smartess"
     timeout_policy = DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY
 
-    async def async_run(
+    async def async_correlate(
         self,
         *,
         executor,
@@ -117,7 +98,7 @@ class SmartEssActiveLearningRunner(CloudLearningRunner):
         max_fields,
         progress,
         orchestrator_callbacks,
-        on_identity,
+        adopt_identity,
         start_shadow_route,
         on_learning,
     ) -> CloudLearningOutcome:
@@ -135,7 +116,7 @@ class SmartEssActiveLearningRunner(CloudLearningRunner):
         identity = _identity_from_bundle(cloud_bundle) or fallback_identity
         if identity is None:
             raise RuntimeError("shadow_learning_identity_unavailable")
-        on_identity(identity)
+        adopt_identity(identity)
 
         # SmartESS serializes collector-bound work within one authenticated
         # session. The full provider bundle owns its metadata login; a fresh
@@ -187,6 +168,9 @@ class SmartEssActiveLearningRunner(CloudLearningRunner):
             timeout=self.timeout_policy.action_request,
             **dict(orchestrator_callbacks),
         )
+        result = dict(result)
+        result["source"] = self.source_id
+        result["metadata_only"] = False
         if int(result.get("degraded_count") or 0) > 0:
             first_result = next(
                 (
@@ -271,12 +255,12 @@ class SmartEssActiveLearningRunner(CloudLearningRunner):
             return None
 
 
-class ValueCloudActiveLearningRunner(CloudLearningRunner):
+class ValueCloudActiveCorrelationOperation(CloudActiveCorrelationOperation):
     provider_id = "valuecloud"
     source_id = "valuecloud"
     timeout_policy = DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY
 
-    async def async_run(
+    async def async_correlate(
         self,
         *,
         executor,
@@ -287,7 +271,7 @@ class ValueCloudActiveLearningRunner(CloudLearningRunner):
         max_fields,
         progress,
         orchestrator_callbacks,
-        on_identity,
+        adopt_identity,
         start_shadow_route,
         on_learning,
     ) -> CloudLearningOutcome:
@@ -311,7 +295,7 @@ class ValueCloudActiveLearningRunner(CloudLearningRunner):
         identity = _identity_from_bundle(cloud_bundle) or fallback_identity
         if identity is None:
             raise RuntimeError("shadow_learning_identity_unavailable")
-        on_identity(identity)
+        adopt_identity(identity)
 
         normalized = cloud_bundle.get("normalized") if isinstance(cloud_bundle, dict) else None
         batch_control = (
@@ -359,6 +343,9 @@ class ValueCloudActiveLearningRunner(CloudLearningRunner):
             timeout=self.timeout_policy.action_request,
             **dict(orchestrator_callbacks),
         )
+        result = dict(result)
+        result["source"] = self.source_id
+        result["metadata_only"] = False
         return CloudLearningOutcome(identity=identity, result=result, read_bindings=None)
 
 
@@ -380,9 +367,7 @@ class UnavailableCloudLearningRunner(CloudLearningRunner):
 
 
 __all__ = [
-    "DEFAULT_CONTROL_DISCOVERY_TIMEOUT_POLICY",
-    "ControlDiscoveryTimeoutPolicy",
-    "SmartEssActiveLearningRunner",
+    "SmartEssActiveCorrelationOperation",
     "UnavailableCloudLearningRunner",
-    "ValueCloudActiveLearningRunner",
+    "ValueCloudActiveCorrelationOperation",
 ]

@@ -368,6 +368,7 @@ def fetch_read_only_evidence_with_history(
     history_budget_seconds: float = _DEFAULT_HISTORY_BUDGET_SECONDS,
     utc_now: datetime | None = None,
     progress: Callable[[str], None] | None = None,
+    progress_detail: Callable[[str, int, int], None] | None = None,
 ) -> tuple[DessMonitorEvidenceBundle, DessMonitorHistoryCollection]:
     """Fetch metadata plus bounded supplemental history with one login."""
 
@@ -392,6 +393,8 @@ def fetch_read_only_evidence_with_history(
             raise ValueError("dessmonitor_collection_clock_invalid")
     if progress is not None and not callable(progress):
         raise TypeError("dessmonitor_collection_progress_invalid")
+    if progress_detail is not None and not callable(progress_detail):
+        raise TypeError("dessmonitor_collection_progress_detail_invalid")
 
     def report(stage: str) -> None:
         if progress is not None:
@@ -411,6 +414,7 @@ def fetch_read_only_evidence_with_history(
         timeout=timeout,
         max_control_values=max_control_values,
         progress=progress,
+        progress_detail=progress_detail,
     )
     history_deadline = monotonic() + history_budget
 
@@ -457,6 +461,16 @@ def fetch_read_only_evidence_with_history(
     budget_exhausted = False
 
     seen_parameters: set[str] = set()
+    history_series_total = min(
+        max_history_series,
+        len(
+            {
+                field.field_id
+                for field in bundle.key_parameters
+                if field.field_id
+            }
+        ),
+    )
     for field in bundle.key_parameters:
         if attempted >= max_history_series or budget_exhausted:
             break
@@ -489,9 +503,22 @@ def fetch_read_only_evidence_with_history(
         except (DessMonitorCloudError, TypeError, ValueError):
             failed += 1
             budget_exhausted = remaining_timeout() <= 0
-            report("queryDeviceKeyParameterOneDay")
+            if progress_detail is not None:
+                progress_detail(
+                    "queryDeviceKeyParameterOneDay",
+                    attempted,
+                    history_series_total,
+                )
             continue
         series.append(resolved_parameter)
+        if progress_detail is not None:
+            progress_detail(
+                "queryDeviceKeyParameterOneDay",
+                attempted,
+                history_series_total,
+            )
+
+    if attempted:
         report("queryDeviceKeyParameterOneDay")
 
     # The current DESSMonitor web API publishes key-parameter history and no

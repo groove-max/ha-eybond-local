@@ -22,8 +22,15 @@ from custom_components.eybond_local.dessmonitor_collection import (  # noqa: E40
     DESSMONITOR_COLLECTION_STATUS_TIME_BASIS_UNAVAILABLE,
     DessMonitorHistoryCollection,
 )
+from custom_components.eybond_local.support.cloud_read_only_workflow import (  # noqa: E402
+    ReadOnlyEvidenceWorkflowRunner,
+)
+from custom_components.eybond_local.support.cloud_history_evidence import (  # noqa: E402
+    CLOUD_HISTORY_AUTHORITY,
+    CloudHistoryCollection,
+)
 from custom_components.eybond_local.support.dessmonitor_learning import (  # noqa: E402
-    DessMonitorReadOnlyLearningRunner,
+    DessMonitorReadOnlyEvidenceOperation,
 )
 
 
@@ -75,6 +82,7 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
 
         def fetch_bundle(**kwargs):
             report = kwargs["progress"]
+            detail = kwargs["progress_detail"]
             for stage in (
                 "authSource",
                 "webQueryDeviceEs",
@@ -83,20 +91,26 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
                 "querySPKeyParameters",
                 "queryDeviceCtrlField",
                 "queryDeviceLastRawData",
-                "queryDeviceCtrlValue",
-                "metadata_bundle",
-                "queryDeviceInfo",
-                "queryDeviceSoleChartEs",
-                "history_complete",
             ):
                 report(stage)
+            for completed in range(1, 5):
+                detail("queryDeviceCtrlValue", completed, 4)
+            report("queryDeviceCtrlValue")
+            report("metadata_bundle")
+            report("queryDeviceInfo")
+            for completed in range(1, 5):
+                detail("queryDeviceKeyParameterOneDay", completed, 4)
+            report("queryDeviceKeyParameterOneDay")
+            report("history_complete")
             return bundle, history_collection
 
         with patch(
             "custom_components.eybond_local.support.dessmonitor_learning.fetch_read_only_evidence_with_history",
             side_effect=fetch_bundle,
         ) as fetch:
-            outcome = await DessMonitorReadOnlyLearningRunner().async_run(
+            outcome = await ReadOnlyEvidenceWorkflowRunner(
+                DessMonitorReadOnlyEvidenceOperation()
+            ).async_run(
                 executor=executor,
                 collector_pn="E5000020000000",
                 username="account",
@@ -132,10 +146,13 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome.result["history_failed_series_count"], 0)
         assert outcome.metadata_evidence is not None
         self.assertEqual(outcome.metadata_evidence["metadata_field_count"], 1)
-        self.assertEqual(
-            outcome.metadata_evidence["history_collection"],
-            history_collection.to_record(),
-        )
+        history_record = outcome.metadata_evidence["history_collection"]
+        self.assertEqual(history_record["authority"], CLOUD_HISTORY_AUTHORITY)
+        normalized_history = CloudHistoryCollection.from_record(history_record)
+        self.assertIsNotNone(normalized_history)
+        assert normalized_history is not None
+        self.assertEqual(normalized_history.source_id, "dessmonitor")
+        self.assertEqual(normalized_history.identity.pn, bundle.identity.pn)
         semantic_report = outcome.metadata_evidence["semantic_report"]
         self.assertEqual(semantic_report["authority"], "semantic_hint_only")
         self.assertIs(semantic_report["local_mapping_proven"], False)
@@ -160,10 +177,18 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
                 (0.42, "fetching"),
                 (0.48, "fetching"),
                 (0.54, "fetching"),
+                (0.5525, "fetching"),
+                (0.565, "fetching"),
+                (0.5775, "fetching"),
+                (0.59, "fetching"),
                 (0.60, "fetching"),
                 (0.64, "fetching"),
                 (0.68, "fetching"),
-                (0.73, "fetching"),
+                (0.70, "fetching"),
+                (0.72, "fetching"),
+                (0.74, "fetching"),
+                (0.76, "fetching"),
+                (0.77, "fetching"),
                 (0.80, "fetching"),
                 (0.82, "building"),
             ],

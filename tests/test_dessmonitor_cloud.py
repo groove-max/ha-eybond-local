@@ -29,11 +29,13 @@ from custom_components.eybond_local.dessmonitor_cloud import (  # noqa: E402
     DessMonitorEvidenceBundle,
     DessMonitorSession,
     DessMonitorTelemetryField,
+    build_device_control_action,
     build_login_url,
     build_signed_action_url,
     fetch_read_only_evidence,
     fetch_read_only_evidence_for_session,
     fetch_signed_action,
+    send_device_control,
 )
 
 
@@ -62,6 +64,94 @@ class DessMonitorModelTests(unittest.TestCase):
         )
         self.assertNotIn("private provider detail", repr(envelope))
         self.assertNotIn("private-account-name", repr(envelope))
+
+    def test_control_action_is_strict_and_identity_bound(self) -> None:
+        identity = DessMonitorDeviceIdentity(
+            pn=FULL_PN,
+            sn="92632511100118",
+            devcode=2376,
+            devaddr=1,
+        )
+        action = build_device_control_action(
+            identity=identity,
+            field_id="bat_eybond_ctrl_75",
+            value="3",
+        )
+        params = parse_qs(action.removeprefix("&"))
+        self.assertEqual(
+            params,
+            {
+                "action": ["ctrlDevice"],
+                "pn": [FULL_PN],
+                "sn": ["92632511100118"],
+                "devcode": ["2376"],
+                "devaddr": ["1"],
+                "id": ["bat_eybond_ctrl_75"],
+                "val": ["3"],
+            },
+        )
+        for field_id, value in ((" padded ", "3"), ("id", " 3"), ("", "3")):
+            with self.subTest(field_id=field_id, value=value):
+                with self.assertRaises(ValueError):
+                    build_device_control_action(
+                        identity=identity,
+                        field_id=field_id,
+                        value=value,
+                    )
+        with self.assertRaises(TypeError):
+            build_device_control_action(  # type: ignore[arg-type]
+                identity=object(), field_id="id", value="3"
+            )
+
+    def test_send_control_uses_exact_session_and_propagates_typed_rejection(self) -> None:
+        identity = DessMonitorDeviceIdentity(
+            pn=FULL_PN,
+            sn="92632511100118",
+            devcode=2376,
+            devaddr=1,
+        )
+        session = DessMonitorSession(token="token-1", secret="secret-1")
+        with patch.object(
+            dessmonitor_module,
+            "fetch_signed_action",
+            return_value=_ok({"dat": "AA BB"}),
+        ) as fetch:
+            envelope = send_device_control(
+                session=session,
+                identity=identity,
+                field_id="bat_eybond_ctrl_75",
+                value="3",
+            )
+        self.assertEqual(envelope.err, 0)
+        self.assertIs(fetch.call_args.kwargs["session"], session)
+        self.assertIn("&action=ctrlDevice", fetch.call_args.kwargs["action"])
+
+        rejection = DessMonitorActionRejectedError(
+            err=11,
+            action="ctrlDevice",
+            desc="ERR_NO_PERMISSION",
+        )
+        with patch.object(
+            dessmonitor_module,
+            "fetch_signed_action",
+            side_effect=rejection,
+        ):
+            with self.assertRaises(DessMonitorActionRejectedError) as raised:
+                send_device_control(
+                    session=session,
+                    identity=identity,
+                    field_id="bat_eybond_ctrl_75",
+                    value="3",
+                )
+        self.assertIs(raised.exception, rejection)
+
+        with self.assertRaises(TypeError):
+            send_device_control(  # type: ignore[arg-type]
+                session=object(),
+                identity=identity,
+                field_id="id",
+                value="1",
+            )
 
     def test_direct_constructors_are_strict_and_json_safe(self) -> None:
         identity = DessMonitorDeviceIdentity(
@@ -180,6 +270,27 @@ class DessMonitorModelTests(unittest.TestCase):
                     session=object(),
                     collector_pn=FULL_PN,
                 )
+        fetch.assert_not_called()
+
+    def test_required_metadata_actions_are_strict_before_any_request(self) -> None:
+        session = DessMonitorSession(token="token", secret="secret")
+        cases = (
+            (["queryDeviceCtrlField"], TypeError),
+            ((object(),), TypeError),
+            (("queryDeviceCtrlField", "queryDeviceCtrlField"), ValueError),
+            ((" queryDeviceCtrlField ",), ValueError),
+            (("unknownAction",), ValueError),
+            (("",), ValueError),
+        )
+        with patch.object(dessmonitor_module, "fetch_signed_action") as fetch:
+            for required_actions, expected in cases:
+                with self.subTest(required_actions=required_actions):
+                    with self.assertRaises(expected):
+                        fetch_read_only_evidence_for_session(
+                            session=session,
+                            collector_pn=FULL_PN,
+                            required_actions=required_actions,  # type: ignore[arg-type]
+                        )
         fetch.assert_not_called()
 
 
@@ -340,6 +451,112 @@ class DessMonitorSigningTests(unittest.TestCase):
 
 
 class DessMonitorBundleTests(unittest.TestCase):
+    def test_required_control_metadata_retries_once_then_succeeds(self) -> None:
+        identity = _ok(
+            {
+                "device": [
+                    {
+                        "pn": FULL_PN,
+                        "sn": "92632511100118",
+                        "devcode": 2376,
+                        "devaddr": 1,
+                    }
+                ]
+            }
+        )
+        control_calls = 0
+
+        def fetch(*, action, **_kwargs):
+            nonlocal control_calls
+            action_name = parse_qs(action.removeprefix("&"))["action"][0]
+            if action_name == "webQueryDeviceEs":
+                return identity
+            if action_name == "querySPDeviceLastData":
+                return _ok({"pars": {"main": []}})
+            if action_name == "queryDeviceCtrlField":
+                control_calls += 1
+                if control_calls == 1:
+                    raise DessMonitorCloudError(
+                        "network_error",
+                        stage=action_name,
+                    )
+                return _ok(
+                    {
+                        "field": [
+                            {
+                                "id": "mode",
+                                "name": "Mode",
+                                "item": [{"key": "1", "val": "One"}],
+                            }
+                        ]
+                    }
+                )
+            return _ok(None)
+
+        with patch.object(
+            dessmonitor_module,
+            "fetch_signed_action",
+            side_effect=fetch,
+        ):
+            bundle = fetch_read_only_evidence_for_session(
+                session=DessMonitorSession(token="token", secret="secret"),
+                collector_pn=FULL_PN,
+                max_control_values=0,
+                required_actions=("queryDeviceCtrlField",),
+            )
+
+        self.assertEqual(control_calls, 2)
+        self.assertEqual(
+            [(field.field_id, field.choices) for field in bundle.control_fields],
+            [("mode", (("1", "One"),))],
+        )
+        self.assertNotIn("queryDeviceCtrlField", bundle.unavailable_actions)
+
+    def test_required_control_metadata_second_failure_propagates(self) -> None:
+        identity = _ok(
+            {
+                "device": [
+                    {
+                        "pn": FULL_PN,
+                        "sn": "92632511100118",
+                        "devcode": 2376,
+                        "devaddr": 1,
+                    }
+                ]
+            }
+        )
+        control_calls = 0
+
+        def fetch(*, action, **_kwargs):
+            nonlocal control_calls
+            action_name = parse_qs(action.removeprefix("&"))["action"][0]
+            if action_name == "webQueryDeviceEs":
+                return identity
+            if action_name == "queryDeviceCtrlField":
+                control_calls += 1
+                raise DessMonitorCloudError(
+                    "network_error",
+                    stage=action_name,
+                )
+            return _ok(None)
+
+        with patch.object(
+            dessmonitor_module,
+            "fetch_signed_action",
+            side_effect=fetch,
+        ):
+            with self.assertRaises(DessMonitorCloudError) as raised:
+                fetch_read_only_evidence_for_session(
+                    session=DessMonitorSession(token="token", secret="secret"),
+                    collector_pn=FULL_PN,
+                    max_control_values=0,
+                    required_actions=("queryDeviceCtrlField",),
+                )
+
+        self.assertEqual(control_calls, 2)
+        self.assertEqual(raised.exception.reason_code, "network_error")
+        self.assertEqual(raised.exception.stage, "queryDeviceCtrlField")
+
     def test_live_key_parameter_shape_is_normalized_without_duck_coercion(self) -> None:
         identity = _ok(
             {
@@ -414,6 +631,7 @@ class DessMonitorBundleTests(unittest.TestCase):
             for index in range(4)
         ]
         control_value_calls = 0
+        progress_detail: list[tuple[str, int, int]] = []
 
         def fetch(*, action, **_kwargs):
             nonlocal control_value_calls
@@ -435,6 +653,7 @@ class DessMonitorBundleTests(unittest.TestCase):
             bundle = fetch_read_only_evidence_for_session(
                 session=DessMonitorSession(token="token", secret="secret"),
                 collector_pn=FULL_PN,
+                progress_detail=lambda *args: progress_detail.append(args),
             )
 
         self.assertEqual(control_value_calls, 1)
@@ -443,6 +662,10 @@ class DessMonitorBundleTests(unittest.TestCase):
             all(not field.current_value for field in bundle.control_fields)
         )
         self.assertIn("queryDeviceCtrlValue", bundle.unavailable_actions)
+        self.assertEqual(
+            progress_detail,
+            [("queryDeviceCtrlValue", 1, 4)],
+        )
 
     def test_control_value_rejection_does_not_hide_later_field_values(self) -> None:
         identity = _ok(
@@ -462,6 +685,7 @@ class DessMonitorBundleTests(unittest.TestCase):
             {"id": "available", "name": "Available"},
         ]
         control_value_calls = 0
+        progress_detail: list[tuple[str, int, int]] = []
 
         def fetch(*, action, **_kwargs):
             nonlocal control_value_calls
@@ -490,6 +714,7 @@ class DessMonitorBundleTests(unittest.TestCase):
             bundle = fetch_read_only_evidence_for_session(
                 session=DessMonitorSession(token="token", secret="secret"),
                 collector_pn=FULL_PN,
+                progress_detail=lambda *args: progress_detail.append(args),
             )
 
         self.assertEqual(control_value_calls, 2)
@@ -498,6 +723,13 @@ class DessMonitorBundleTests(unittest.TestCase):
             ["", "42"],
         )
         self.assertIn("queryDeviceCtrlValue", bundle.unavailable_actions)
+        self.assertEqual(
+            progress_detail,
+            [
+                ("queryDeviceCtrlValue", 1, 2),
+                ("queryDeviceCtrlValue", 2, 2),
+            ],
+        )
 
     def test_optional_metadata_failure_preserves_independent_evidence(self) -> None:
         identity = _ok(

@@ -1,264 +1,237 @@
-"""Typed registry for provider-specific cloud learning engines.
-
-Cloud evidence providers answer which cloud ecosystem owns persisted evidence.
-Learning engines answer which API surface performs one transient discovery run.
-Those axes intentionally differ: more than one learning source may serve the
-same provider and credential realm without sharing algorithms or evidence.
-"""
+"""Registry binding cloud API adapters to product learning methods."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 
-from ..dessmonitor_cloud import (
-    DessMonitorCloudError,
+from .cloud_api_adapters import (
+    CloudApiAdapter,
+    DessMonitorCloudApiAdapter,
+    SmartEssCloudApiAdapter,
+    UnavailableCloudApiAdapter,
+    ValueCloudApiAdapter,
 )
-from ..smartess_cloud import SmartEssCloudError, classify_smartess_cloud_error
 from .cloud_control_discovery import (
-    SmartEssActiveLearningRunner,
+    SmartEssActiveCorrelationOperation,
     UnavailableCloudLearningRunner,
-    ValueCloudActiveLearningRunner,
+    ValueCloudActiveCorrelationOperation,
+)
+from .cloud_active_workflow import ActiveCorrelationWorkflowRunner
+from .cloud_learning_models import (
+    ACTIVE_CORRELATION_METHOD,
+    LOCAL_SERIES_EVIDENCE,
+    NO_LOCAL_EVIDENCE,
+    READ_ONLY_EVIDENCE_METHOD,
+    CloudApiSource,
+    CloudLearningEvidenceCapabilities,
+    CloudLearningMethod,
+    CloudLearningSelection,
+    source_supports_method,
 )
 from .cloud_learning_runner import CloudLearningRunner
-from .dessmonitor_learning import DessMonitorReadOnlyLearningRunner
-
-
-LEARNING_SOURCE_SMARTESS = "smartess"
-LEARNING_SOURCE_DESSMONITOR = "dessmonitor"
-LEARNING_SOURCE_VALUECLOUD = "valuecloud"
-
-CREDENTIAL_REALM_EYBOND = "eybond"
-CREDENTIAL_REALM_VALUECLOUD = "valuecloud"
-
-
-def _required_token(value: object, *, reason: str) -> str:
-    if type(value) is not str:
-        raise TypeError(reason)
-    if not value or value != value.strip():
-        raise ValueError(reason)
-    return value
-
-
-@dataclass(frozen=True, slots=True)
-class CloudLearningCapabilities:
-    """Closed capability declaration for one learning source."""
-
-    metadata: bool
-    control_actions: bool
-    raw_packets: bool
-    history: bool
-    local_register_snapshot: bool
-    local_register_series: bool
-    requires_shadow_route: bool
-    requires_control_consent: bool
-
-    def __post_init__(self) -> None:
-        for value in (
-            self.metadata,
-            self.control_actions,
-            self.raw_packets,
-            self.history,
-            self.local_register_snapshot,
-            self.local_register_series,
-            self.requires_shadow_route,
-            self.requires_control_consent,
-        ):
-            if type(value) is not bool:
-                raise TypeError("cloud_learning_capability_invalid")
-        if self.requires_shadow_route and not self.control_actions:
-            raise ValueError("cloud_learning_shadow_route_without_controls")
-        if self.requires_control_consent and not self.control_actions:
-            raise ValueError("cloud_learning_consent_without_controls")
-        if self.local_register_series and not self.local_register_snapshot:
-            raise ValueError("cloud_learning_series_without_snapshot")
-
-
-@dataclass(frozen=True, slots=True)
-class CloudLearningSource:
-    """Presentation and trust metadata for one selectable API surface."""
-
-    source_id: str
-    provider_id: str
-    credential_realm_id: str
-    label: str
-    capabilities: CloudLearningCapabilities
-    default_for_provider: bool = False
-
-    def __post_init__(self) -> None:
-        _required_token(self.source_id, reason="cloud_learning_source_id_invalid")
-        _required_token(self.provider_id, reason="cloud_learning_provider_id_invalid")
-        _required_token(
-            self.credential_realm_id,
-            reason="cloud_learning_credential_realm_invalid",
-        )
-        _required_token(self.label, reason="cloud_learning_label_invalid")
-        if type(self.capabilities) is not CloudLearningCapabilities:
-            raise TypeError("cloud_learning_capabilities_invalid")
-        if type(self.default_for_provider) is not bool:
-            raise TypeError("cloud_learning_default_invalid")
+from .cloud_read_only_workflow import ReadOnlyEvidenceWorkflowRunner
+from .dessmonitor_active import DessMonitorActiveCorrelationOperation
+from .dessmonitor_learning import DessMonitorReadOnlyEvidenceOperation
+from .smartess_read_only import SmartEssReadOnlyEvidenceOperation
 
 
 class CloudLearningEngine(ABC):
-    """One isolated API-specific learning implementation."""
+    """One registered API-source and product-method implementation."""
 
-    source: CloudLearningSource
+    adapter: CloudApiAdapter
+    method: CloudLearningMethod | None
+    evidence_capabilities: CloudLearningEvidenceCapabilities = NO_LOCAL_EVIDENCE
+    default_for_method: bool = False
 
     @property
     def available(self) -> bool:
         return True
+
+    @property
+    def source(self) -> CloudApiSource:
+        return self.adapter.source
+
+    @property
+    def selection(self) -> CloudLearningSelection | None:
+        if type(self.method) is not CloudLearningMethod:
+            return None
+        return CloudLearningSelection(
+            method_id=self.method.method_id,
+            source_id=self.source.source_id,
+        )
 
     @abstractmethod
     def learning_runner(self) -> CloudLearningRunner:
         """Return a fresh provider-owned runner for one transient flow run."""
 
     def classify_error(self, exc: BaseException) -> str:
-        """Return a stable provider-owned error code, or empty if unrelated."""
-
-        return ""
+        return self.adapter.classify_error(exc)
 
 
 class SmartEssCloudLearningEngine(CloudLearningEngine):
-    source = CloudLearningSource(
-        source_id=LEARNING_SOURCE_SMARTESS,
-        provider_id="smartess",
-        credential_realm_id=CREDENTIAL_REALM_EYBOND,
-        label="SmartESS-compatible cloud",
-        capabilities=CloudLearningCapabilities(
-            metadata=True,
-            control_actions=True,
-            raw_packets=False,
-            history=False,
-            local_register_snapshot=False,
-            local_register_series=False,
-            requires_shadow_route=True,
-            requires_control_consent=True,
-        ),
-        default_for_provider=True,
-    )
+    adapter = SmartEssCloudApiAdapter()
+    method = ACTIVE_CORRELATION_METHOD
+    default_for_method = True
 
     def learning_runner(self) -> CloudLearningRunner:
-        return SmartEssActiveLearningRunner()
-
-    def classify_error(self, exc: BaseException) -> str:
-        if not isinstance(exc, (SmartEssCloudError, TimeoutError)):
-            return ""
-        return classify_smartess_cloud_error(exc)
+        return ActiveCorrelationWorkflowRunner(
+            SmartEssActiveCorrelationOperation()
+        )
 
 
 class ValueCloudCloudLearningEngine(CloudLearningEngine):
-    source = CloudLearningSource(
-        source_id=LEARNING_SOURCE_VALUECLOUD,
-        provider_id="valuecloud",
-        credential_realm_id=CREDENTIAL_REALM_VALUECLOUD,
-        label="ValueCloud",
-        capabilities=CloudLearningCapabilities(
-            metadata=True,
-            control_actions=True,
-            raw_packets=False,
-            history=False,
-            local_register_snapshot=False,
-            local_register_series=False,
-            requires_shadow_route=True,
-            requires_control_consent=True,
-        ),
-        default_for_provider=True,
-    )
+    adapter = ValueCloudApiAdapter()
+    method = ACTIVE_CORRELATION_METHOD
+    default_for_method = True
 
     def learning_runner(self) -> CloudLearningRunner:
-        return ValueCloudActiveLearningRunner()
+        return ActiveCorrelationWorkflowRunner(
+            ValueCloudActiveCorrelationOperation()
+        )
 
 
 class DessMonitorCloudLearningEngine(CloudLearningEngine):
-    """DESSMonitor metadata learning; never redirects or writes the collector."""
-
-    source = CloudLearningSource(
-        source_id=LEARNING_SOURCE_DESSMONITOR,
-        provider_id="smartess",
-        credential_realm_id=CREDENTIAL_REALM_EYBOND,
-        label="DESSMonitor API (read-only)",
-        capabilities=CloudLearningCapabilities(
-            metadata=True,
-            control_actions=False,
-            raw_packets=True,
-            history=True,
-            local_register_snapshot=True,
-            local_register_series=True,
-            requires_shadow_route=False,
-            requires_control_consent=False,
-        ),
-        default_for_provider=False,
-    )
+    adapter = DessMonitorCloudApiAdapter()
+    method = READ_ONLY_EVIDENCE_METHOD
+    evidence_capabilities = LOCAL_SERIES_EVIDENCE
+    default_for_method = True
 
     def learning_runner(self) -> CloudLearningRunner:
-        return DessMonitorReadOnlyLearningRunner()
+        return ReadOnlyEvidenceWorkflowRunner(
+            DessMonitorReadOnlyEvidenceOperation()
+        )
 
-    def classify_error(self, exc: BaseException) -> str:
-        if isinstance(exc, TimeoutError):
-            return "timeout"
-        if not isinstance(exc, DessMonitorCloudError):
-            return ""
-        message = str(exc)
-        if message.startswith("login_failed") or message.startswith("http_error:40"):
-            return "auth_failed"
-        if message.startswith("http_error:429"):
-            return "rate_limited"
-        if message.startswith("network_error"):
-            return "network"
-        if message.startswith("http_error:5") or message.startswith("invalid_"):
-            return "unavailable"
-        return "unexpected"
+
+class DessMonitorActiveCloudLearningEngine(CloudLearningEngine):
+    adapter = DessMonitorCloudApiAdapter()
+    method = ACTIVE_CORRELATION_METHOD
+
+    def learning_runner(self) -> CloudLearningRunner:
+        return ActiveCorrelationWorkflowRunner(
+            DessMonitorActiveCorrelationOperation()
+        )
+
+
+class SmartEssReadOnlyCloudLearningEngine(CloudLearningEngine):
+    adapter = SmartEssCloudApiAdapter()
+    method = READ_ONLY_EVIDENCE_METHOD
+    evidence_capabilities = LOCAL_SERIES_EVIDENCE
+
+    def learning_runner(self) -> CloudLearningRunner:
+        return ReadOnlyEvidenceWorkflowRunner(
+            SmartEssReadOnlyEvidenceOperation()
+        )
 
 
 class UnavailableCloudLearningEngine(CloudLearningEngine):
-    def __init__(self, requested_source_id: str = "") -> None:
+    """Fail-closed result for malformed or unregistered selections."""
+
+    def __init__(self, requested_source_id: object = "") -> None:
         requested = (
             requested_source_id
             if type(requested_source_id) is str
+            and requested_source_id
             and requested_source_id == requested_source_id.strip()
-            else ""
+            else "unknown"
         )
         self._requested = requested
-        self.source = CloudLearningSource(
-            source_id=requested or "unknown",
-            provider_id="unavailable",
-            credential_realm_id="unavailable",
-            label="Unavailable cloud source",
-            capabilities=CloudLearningCapabilities(
-                metadata=False,
-                control_actions=False,
-                raw_packets=False,
-                history=False,
-                local_register_snapshot=False,
-                local_register_series=False,
-                requires_shadow_route=False,
-                requires_control_consent=False,
-            ),
-            default_for_provider=False,
-        )
+        self.adapter = UnavailableCloudApiAdapter(requested)
+        self.method = None
+        self.evidence_capabilities = NO_LOCAL_EVIDENCE
+        self.default_for_method = False
 
     @property
     def available(self) -> bool:
         return False
 
     def learning_runner(self) -> CloudLearningRunner:
-        return UnavailableCloudLearningRunner(self._requested)
+        return UnavailableCloudLearningRunner(
+            "" if self._requested == "unknown" else self._requested
+        )
 
 
-_ENGINES: dict[str, CloudLearningEngine] = {
-    LEARNING_SOURCE_DESSMONITOR: DessMonitorCloudLearningEngine(),
-    LEARNING_SOURCE_SMARTESS: SmartEssCloudLearningEngine(),
-    LEARNING_SOURCE_VALUECLOUD: ValueCloudCloudLearningEngine(),
-}
+_REGISTERED_ENGINES: tuple[CloudLearningEngine, ...] = (
+    DessMonitorActiveCloudLearningEngine(),
+    DessMonitorCloudLearningEngine(),
+    SmartEssCloudLearningEngine(),
+    SmartEssReadOnlyCloudLearningEngine(),
+    ValueCloudCloudLearningEngine(),
+)
 
 
-def supported_cloud_learning_sources() -> tuple[CloudLearningSource, ...]:
-    """Return every real source in stable source-id order."""
-
-    return tuple(_ENGINES[key].source for key in sorted(_ENGINES))
+def _engine_key(selection: CloudLearningSelection) -> tuple[str, str]:
+    return selection.method_id, selection.source_id
 
 
-def compatible_cloud_learning_sources(provider_id: object) -> tuple[CloudLearningSource, ...]:
+def _validate_registered_engines(
+    engines: tuple[CloudLearningEngine, ...],
+) -> None:
+    """Reject malformed, incompatible or ambiguous registry declarations."""
+
+    selection_keys: set[tuple[str, str]] = set()
+    for engine in engines:
+        if not isinstance(engine, CloudLearningEngine):
+            raise TypeError("cloud_learning_registered_engine_invalid")
+        if type(engine.source) is not CloudApiSource:
+            raise TypeError("cloud_learning_registered_source_invalid")
+        if type(engine.method) is not CloudLearningMethod:
+            raise TypeError("cloud_learning_registered_method_invalid")
+        if type(engine.evidence_capabilities) is not CloudLearningEvidenceCapabilities:
+            raise TypeError("cloud_learning_registered_evidence_invalid")
+        if type(engine.default_for_method) is not bool:
+            raise TypeError("cloud_learning_registered_default_invalid")
+        if not source_supports_method(engine.source, engine.method):
+            raise ValueError("cloud_learning_registered_selection_incompatible")
+        selection = engine.selection
+        if type(selection) is not CloudLearningSelection:
+            raise TypeError("cloud_learning_registered_selection_invalid")
+        key = _engine_key(selection)
+        if key in selection_keys:
+            raise ValueError("cloud_learning_registered_selection_duplicate")
+        selection_keys.add(key)
+
+
+_validate_registered_engines(_REGISTERED_ENGINES)
+
+_ENGINES_BY_SELECTION: dict[tuple[str, str], CloudLearningEngine] = {}
+for _registered_engine in _REGISTERED_ENGINES:
+    _registered_selection = _registered_engine.selection
+    if type(_registered_selection) is not CloudLearningSelection:
+        raise TypeError("cloud_learning_registered_selection_invalid")
+    _ENGINES_BY_SELECTION[_engine_key(_registered_selection)] = _registered_engine
+
+def supported_cloud_learning_sources() -> tuple[CloudApiSource, ...]:
+    """Return every registered API source in stable source-id order."""
+
+    sources = {
+        engine.source.source_id: engine.source for engine in _REGISTERED_ENGINES
+    }
+    return tuple(sources[key] for key in sorted(sources))
+
+
+def supported_cloud_learning_methods() -> tuple[CloudLearningMethod, ...]:
+    """Return every registered product method in stable method-id order."""
+
+    methods = {
+        engine.method.method_id: engine.method
+        for engine in _REGISTERED_ENGINES
+        if type(engine.method) is CloudLearningMethod
+    }
+    return tuple(methods[key] for key in sorted(methods))
+
+
+def supported_cloud_learning_selections() -> tuple[CloudLearningSelection, ...]:
+    """Return every exact executable method/source binding."""
+
+    selections = tuple(
+        engine.selection
+        for engine in _REGISTERED_ENGINES
+        if type(engine.selection) is CloudLearningSelection
+    )
+    return tuple(sorted(selections, key=_engine_key))
+
+
+def compatible_cloud_learning_sources(provider_id: object) -> tuple[CloudApiSource, ...]:
     """Return sources owned by one exact normalized evidence provider."""
 
     if type(provider_id) is not str or provider_id != provider_id.strip():
@@ -270,37 +243,119 @@ def compatible_cloud_learning_sources(provider_id: object) -> tuple[CloudLearnin
     )
 
 
-def default_cloud_learning_source(provider_id: object) -> str:
-    """Return the sole declared default, fail closed when none/ambiguous."""
+def compatible_cloud_learning_sources_for_method(
+    provider_id: object,
+    method_id: object,
+) -> tuple[CloudApiSource, ...]:
+    """Return exact API sources registered for one provider and method."""
 
-    compatible = compatible_cloud_learning_sources(provider_id)
-    defaults = tuple(source for source in compatible if source.default_for_provider)
-    return defaults[0].source_id if len(defaults) == 1 else ""
+    if (
+        type(provider_id) is not str
+        or provider_id != provider_id.strip()
+        or type(method_id) is not str
+        or method_id != method_id.strip()
+    ):
+        return ()
+    return tuple(
+        engine.source
+        for engine in _REGISTERED_ENGINES
+        if engine.source.provider_id == provider_id
+        and engine.method.method_id == method_id
+        and source_supports_method(engine.source, engine.method)
+    )
 
 
-def resolve_cloud_learning_engine(source_id: object) -> CloudLearningEngine:
-    """Resolve one exact source id; malformed/unknown values fail closed."""
+def compatible_cloud_learning_methods(
+    source_id: object,
+) -> tuple[CloudLearningMethod, ...]:
+    """Return exact product methods registered for one API source."""
 
     if type(source_id) is not str or source_id != source_id.strip():
+        return ()
+    return tuple(
+        engine.method
+        for engine in _REGISTERED_ENGINES
+        if engine.source.source_id == source_id
+        and source_supports_method(engine.source, engine.method)
+    )
+
+
+def compatible_cloud_learning_methods_for_provider(
+    provider_id: object,
+) -> tuple[CloudLearningMethod, ...]:
+    """Return product methods executable for one trusted provider."""
+
+    if type(provider_id) is not str or provider_id != provider_id.strip():
+        return ()
+    methods = {
+        engine.method.method_id: engine.method
+        for engine in _REGISTERED_ENGINES
+        if engine.source.provider_id == provider_id
+        and type(engine.method) is CloudLearningMethod
+    }
+    preferred_order = (
+        READ_ONLY_EVIDENCE_METHOD.method_id,
+        ACTIVE_CORRELATION_METHOD.method_id,
+    )
+    return tuple(methods[key] for key in preferred_order if key in methods)
+
+
+def default_cloud_learning_method(provider_id: object) -> str:
+    """Prefer read-only analysis, otherwise return the sole available method."""
+
+    compatible = compatible_cloud_learning_methods_for_provider(provider_id)
+    method_ids = tuple(method.method_id for method in compatible)
+    if READ_ONLY_EVIDENCE_METHOD.method_id in method_ids:
+        return READ_ONLY_EVIDENCE_METHOD.method_id
+    return method_ids[0] if len(method_ids) == 1 else ""
+
+
+def default_cloud_learning_source_for_method(
+    provider_id: object,
+    method_id: object,
+) -> str:
+    """Return the sole binding default for one exact provider/method pair."""
+
+    if type(method_id) is not str or method_id != method_id.strip():
+        return ""
+    defaults = tuple(
+        engine.source.source_id
+        for engine in _REGISTERED_ENGINES
+        if engine.source.provider_id == provider_id
+        and engine.method is not None
+        and engine.method.method_id == method_id
+        and engine.default_for_method
+    )
+    return defaults[0] if len(defaults) == 1 else ""
+
+
+def resolve_cloud_learning_selection(selection: object) -> CloudLearningEngine:
+    """Resolve one strict method/source pair; malformed values fail closed."""
+
+    if type(selection) is not CloudLearningSelection:
         return UnavailableCloudLearningEngine()
-    return _ENGINES.get(source_id, UnavailableCloudLearningEngine(source_id))
+    return _ENGINES_BY_SELECTION.get(
+        _engine_key(selection),
+        UnavailableCloudLearningEngine(selection.source_id),
+    )
 
 
 __all__ = [
-    "CREDENTIAL_REALM_EYBOND",
-    "CREDENTIAL_REALM_VALUECLOUD",
-    "LEARNING_SOURCE_DESSMONITOR",
-    "LEARNING_SOURCE_SMARTESS",
-    "LEARNING_SOURCE_VALUECLOUD",
-    "CloudLearningCapabilities",
     "CloudLearningEngine",
-    "CloudLearningSource",
+    "DessMonitorActiveCloudLearningEngine",
     "DessMonitorCloudLearningEngine",
     "SmartEssCloudLearningEngine",
+    "SmartEssReadOnlyCloudLearningEngine",
     "UnavailableCloudLearningEngine",
     "ValueCloudCloudLearningEngine",
+    "compatible_cloud_learning_methods",
+    "compatible_cloud_learning_methods_for_provider",
     "compatible_cloud_learning_sources",
-    "default_cloud_learning_source",
-    "resolve_cloud_learning_engine",
+    "compatible_cloud_learning_sources_for_method",
+    "default_cloud_learning_method",
+    "default_cloud_learning_source_for_method",
+    "resolve_cloud_learning_selection",
+    "supported_cloud_learning_methods",
+    "supported_cloud_learning_selections",
     "supported_cloud_learning_sources",
 ]

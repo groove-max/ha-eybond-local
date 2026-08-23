@@ -8,6 +8,7 @@ from ...const import CONF_DRIVER_HINT, DRIVER_HINT_AUTO
 from ...support.diagnostic_export import export_diagnostic_run
 from ...support.diagnostic_projection import build_runtime_transport_debug
 from ...support.diagnostic_runner import DiagnosticRuntimeContext, run_scenario
+from ...support.download import sign_diagnostic_run_download_url
 
 
 class CoordinatorDiagnosticsMixin:
@@ -170,6 +171,15 @@ class CoordinatorDiagnosticsMixin:
                 publish_download_copy=publish_download_copy,
             )
         )
+        download_url = (
+            sign_diagnostic_run_download_url(
+                self.hass,
+                entry_id,
+                export.shareable_path.name,
+            )
+            if publish_download_copy
+            else None
+        )
         return {
             "success": result.success,
             "output": result.output,
@@ -178,7 +188,7 @@ class CoordinatorDiagnosticsMixin:
             "started_at": result.started_at,
             "finished_at": result.finished_at,
             "result_path": str(export.result_path),
-            "download_url": export.download_url,
+            "download_url": download_url,
         }
 
 

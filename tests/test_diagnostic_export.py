@@ -14,7 +14,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.support.diagnostic_export import (
     build_shareable_payload,
-    diagnostic_run_download_url,
     export_diagnostic_run,
 )
 from custom_components.eybond_local.support.diagnostic_runner import DiagnosticRunResult
@@ -144,12 +143,11 @@ class ExportTests(unittest.TestCase):
             self.assertNotIn(SYNTHETIC_SERIAL, shareable_text)
             self.assertNotIn(ENTRY_ID, shareable_text)
 
-            # Nothing is exposed via /local unless the caller opts in.
+            # No browser download is requested by default.
             self.assertIsNone(export.download_path)
-            self.assertIsNone(export.download_url)
             self.assertFalse((config_dir / "www").exists())
 
-    def test_export_with_publish_exposes_only_shareable_copy(self) -> None:
+    def test_export_with_publish_selects_shareable_file_without_public_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_dir = Path(tmp)
             export = export_diagnostic_run(
@@ -162,15 +160,10 @@ class ExportTests(unittest.TestCase):
 
             self.assertIsNotNone(export.download_path)
             self.assertTrue(export.download_path.exists())
-            self.assertEqual(export.download_path.name, export.shareable_path.name)
-            self.assertEqual(
-                export.download_url,
-                diagnostic_run_download_url(export.shareable_path.name),
-            )
-            self.assertTrue(export.download_url.startswith("/local/eybond_local/diagnostic_runs/"))
+            self.assertEqual(export.download_path, export.shareable_path)
 
-            # The published copy lives under www/, the raw files do not.
-            self.assertIn("www", export.download_path.parts)
+            # The signed HTTP view serves the private redacted file in place.
+            self.assertFalse((config_dir / "www").exists())
             self.assertNotIn("www", export.result_path.parts)
 
     def test_export_without_publish_returns_no_url(self) -> None:
@@ -183,7 +176,6 @@ class ExportTests(unittest.TestCase):
                 publish_download_copy=False,
             )
             self.assertIsNone(export.download_path)
-            self.assertIsNone(export.download_url)
             self.assertFalse((Path(tmp) / "www").exists())
 
 

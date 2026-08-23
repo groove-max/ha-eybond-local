@@ -29,14 +29,17 @@ def _smg_marker_payload(*, variant_key: str = "", profile_name: str = ""):
     )
     return marker.as_payload() if marker is not None else None
 from custom_components.eybond_local.support.download import (
-    async_register_support_package_download_view,
+    async_register_download_views,
+    diagnostic_run_authenticated_download_url,
     proxy_capture_authenticated_download_url,
+    resolve_diagnostic_run_download_path,
     resolve_proxy_capture_download_path,
     resolve_support_package_download_path,
+    sign_diagnostic_run_download_url,
     sign_proxy_capture_download_url,
     sign_support_package_download_url,
     support_package_authenticated_download_url,
-    support_package_download_request_allowed,
+    download_request_allowed,
 )
 from custom_components.eybond_local.support.package import (
     _mask_jsonl_text,
@@ -106,6 +109,66 @@ class SupportPackageTests(unittest.TestCase):
                 "/api/eybond_local/support_package/entry123?authSig=signed",
             )
 
+    def test_signed_support_package_download_url_is_absolute_for_frontend_navigation(
+        self,
+    ) -> None:
+        auth_module = types.ModuleType("homeassistant.components.http.auth")
+        auth_module.async_sign_path = (
+            lambda _hass, path, _expiration: f"{path}?authSig=signed"
+        )
+        hass = types.SimpleNamespace(
+            config=types.SimpleNamespace(
+                external_url="https://ha.example.test",
+                internal_url="http://ha.local:8123",
+            )
+        )
+
+        with patch.dict(sys.modules, {"homeassistant.components.http.auth": auth_module}):
+            self.assertEqual(
+                sign_support_package_download_url(hass, "entry123"),
+                (
+                    "https://ha.example.test/api/eybond_local/support_package/"
+                    "entry123?authSig=signed"
+                ),
+            )
+
+    def test_signed_support_package_download_prefers_current_request_origin(
+        self,
+    ) -> None:
+        auth_module = types.ModuleType("homeassistant.components.http.auth")
+        auth_module.async_sign_path = (
+            lambda _hass, path, _expiration: f"{path}?authSig=signed"
+        )
+        http_module = types.ModuleType("homeassistant.helpers.http")
+        http_module.current_request = types.SimpleNamespace(
+            get=lambda: types.SimpleNamespace(
+                url=types.SimpleNamespace(
+                    origin=lambda: "http://195.191.72.37:8123"
+                )
+            )
+        )
+        hass = types.SimpleNamespace(
+            config=types.SimpleNamespace(
+                external_url="https://stale.example.test",
+                internal_url="http://ha.local:8123",
+            )
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "homeassistant.components.http.auth": auth_module,
+                "homeassistant.helpers.http": http_module,
+            },
+        ):
+            self.assertEqual(
+                sign_support_package_download_url(hass, "entry123"),
+                (
+                    "http://195.191.72.37:8123/api/eybond_local/"
+                    "support_package/entry123?authSig=signed"
+                ),
+            )
+
     def test_authenticated_proxy_capture_download_url_is_entry_scoped(self) -> None:
         self.assertEqual(
             proxy_capture_authenticated_download_url(
@@ -117,6 +180,35 @@ class SupportPackageTests(unittest.TestCase):
                 "entry123_20260725T234645357268Z.zip"
             ),
         )
+
+    def test_authenticated_diagnostic_run_url_is_entry_scoped(self) -> None:
+        filename = "diagnostic_entry123_20260823T125052279675Z.share.json"
+        self.assertEqual(
+            diagnostic_run_authenticated_download_url("entry123", filename),
+            f"/api/eybond_local/diagnostic_run/entry123/{filename}",
+        )
+
+    def test_signed_diagnostic_run_url_uses_shared_absolute_signer(self) -> None:
+        auth_module = types.ModuleType("homeassistant.components.http.auth")
+        auth_module.async_sign_path = (
+            lambda _hass, path, _expiration: f"{path}?authSig=signed"
+        )
+        hass = types.SimpleNamespace(
+            config=types.SimpleNamespace(
+                external_url="https://ha.example.test",
+                internal_url=None,
+            )
+        )
+        filename = "diagnostic_entry123_20260823T125052279675Z.share.json"
+
+        with patch.dict(sys.modules, {"homeassistant.components.http.auth": auth_module}):
+            self.assertEqual(
+                sign_diagnostic_run_download_url(hass, "entry123", filename),
+                (
+                    "https://ha.example.test/api/eybond_local/diagnostic_run/"
+                    f"entry123/{filename}?authSig=signed"
+                ),
+            )
 
     def test_signed_proxy_capture_download_url_uses_ha_signed_path(self) -> None:
         auth_module = types.ModuleType("homeassistant.components.http.auth")
@@ -172,12 +264,12 @@ class SupportPackageTests(unittest.TestCase):
         signed = Request(hass_user=types.SimpleNamespace(is_admin=False))
         signed.headers = {}
         signed.query = {"authSig": "signed"}
-        self.assertTrue(support_package_download_request_allowed(signed))
+        self.assertTrue(download_request_allowed(signed))
 
         admin = Request(hass_user=types.SimpleNamespace(is_admin=True))
         admin.headers = {"Authorization": "Bearer admin"}
         admin.query = {}
-        self.assertTrue(support_package_download_request_allowed(admin))
+        self.assertTrue(download_request_allowed(admin))
 
     def test_non_admin_bearer_cannot_bypass_admin_with_authsig_parameter(self) -> None:
         class Request(dict):
@@ -187,11 +279,11 @@ class SupportPackageTests(unittest.TestCase):
         request = Request(hass_user=types.SimpleNamespace(is_admin=False))
         request.headers = {"Authorization": "Bearer non-admin"}
         request.query = {"authSig": "not-validated-because-bearer-wins"}
-        self.assertFalse(support_package_download_request_allowed(request))
+        self.assertFalse(download_request_allowed(request))
 
     def test_download_view_registration_noops_for_minimal_hass_stub(self) -> None:
         self.assertFalse(
-            async_register_support_package_download_view(types.SimpleNamespace())
+            async_register_download_views(types.SimpleNamespace())
         )
 
     def test_support_bundle_diagnostics_split_separates_identity_frame_route(self) -> None:
@@ -591,6 +683,40 @@ class SupportPackageTests(unittest.TestCase):
             ):
                 self.assertIsNone(
                     resolve_proxy_capture_download_path(
+                        config_dir=config_dir,
+                        entry_id="entry123",
+                        filename=unsafe,
+                    )
+                )
+
+    def test_resolves_only_entry_owned_redacted_diagnostic_results(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            root = config_dir / "eybond_local" / "diagnostic_runs"
+            root.mkdir(parents=True)
+            filename = "diagnostic_entry123_20260823T125052279675Z.share.json"
+            shareable = root / filename
+            shareable.write_text("{}", encoding="utf-8")
+
+            self.assertEqual(
+                resolve_diagnostic_run_download_path(
+                    config_dir=config_dir,
+                    entry_id="entry123",
+                    filename=filename,
+                ),
+                shareable.resolve(),
+            )
+
+            for unsafe in (
+                "../" + filename,
+                "diagnostic_other_20260823T125052279675Z.share.json",
+                "diagnostic_entry123_20260823T125052279675Z.json",
+                "diagnostic_entry123_20260823T125052279675Z.txt",
+                " " + filename,
+                object(),
+            ):
+                self.assertIsNone(
+                    resolve_diagnostic_run_download_path(
                         config_dir=config_dir,
                         entry_id="entry123",
                         filename=unsafe,

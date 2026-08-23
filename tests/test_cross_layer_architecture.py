@@ -34,8 +34,8 @@ from custom_components.eybond_local.support.cloud_evidence_providers import (  #
     supported_cloud_evidence_providers,
 )
 from custom_components.eybond_local.support.cloud_learning_engines import (  # noqa: E402
-    resolve_cloud_learning_engine,
-    supported_cloud_learning_sources,
+    resolve_cloud_learning_selection,
+    supported_cloud_learning_selections,
 )
 from custom_components.eybond_local.collector import transport_profile  # noqa: E402
 
@@ -152,19 +152,22 @@ class ProviderAuthorityDriftGuardTests(unittest.TestCase):
 
 class ProviderControlDiscoveryIsolationGuardTests(unittest.TestCase):
     def test_learning_engine_returns_only_its_own_provider_runner(self) -> None:
-        source_ids = tuple(source.source_id for source in supported_cloud_learning_sources())
-        for source_id in (*source_ids, "nope", ""):
-            engine = resolve_cloud_learning_engine(source_id)
+        selections = supported_cloud_learning_selections()
+        for selection in selections:
+            engine = resolve_cloud_learning_selection(selection)
             runner = engine.learning_runner()
             # An engine never hands out a FOREIGN provider's runner: the runner
             # is either owned by its source provider or fail-closed (id "").
             self.assertIn(
                 runner.provider_id,
                 {engine.source.provider_id, ""},
-                msg=f"{source_id!r} returned foreign runner {runner.provider_id!r}",
+                msg=f"{selection!r} returned foreign runner {runner.provider_id!r}",
             )
             if not engine.available:
                 self.assertEqual(runner.provider_id, "")
+        unavailable = resolve_cloud_learning_selection(object())
+        self.assertFalse(unavailable.available)
+        self.assertEqual(unavailable.learning_runner().provider_id, "")
 
 
 class TransportProfileAuthorityGuardTests(unittest.TestCase):

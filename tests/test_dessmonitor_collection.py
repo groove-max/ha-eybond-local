@@ -217,6 +217,7 @@ class DessMonitorHistoryCollectionFetchTests(unittest.TestCase):
     def test_single_login_prefers_bounded_provider_key_parameters(self) -> None:
         session = DessMonitorSession(token="token", secret="secret")
         seen_sessions: list[DessMonitorSession] = []
+        progress_detail: list[tuple[str, int, int]] = []
 
         def chart(*, session, requested_date, **_kwargs):
             seen_sessions.append(session)
@@ -276,6 +277,7 @@ class DessMonitorHistoryCollectionFetchTests(unittest.TestCase):
                 collector_pn=FULL_PN,
                 max_history_series=3,
                 utc_now=datetime(2026, 8, 22, 22, 30, tzinfo=timezone.utc),
+                progress_detail=lambda *args: progress_detail.append(args),
             )
 
         self.assertEqual(login.call_count, 1)
@@ -289,6 +291,13 @@ class DessMonitorHistoryCollectionFetchTests(unittest.TestCase):
         self.assertEqual(
             [item.source_series.title for item in collection.series],
             ["PV Voltage", "Battery Voltage"],
+        )
+        self.assertEqual(
+            progress_detail,
+            [
+                ("queryDeviceKeyParameterOneDay", 1, 2),
+                ("queryDeviceKeyParameterOneDay", 2, 2),
+            ],
         )
         chart_fetch.assert_not_called()
 

@@ -5,13 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from ...dessmonitor_collection import (
-    DESSMONITOR_COLLECTION_STATUS_COMPLETE,
-    DESSMONITOR_COLLECTION_STATUS_PARTIAL,
-    DESSMONITOR_COLLECTION_STATUS_TIME_BASIS_UNAVAILABLE,
-    DessMonitorHistoryCollection,
-)
 from ...drivers.local_register_series import LocalRegisterSnapshotSeries
+from ...support.cloud_history_evidence import (
+    CLOUD_HISTORY_STATUS_COMPLETE,
+    CLOUD_HISTORY_STATUS_PARTIAL,
+    CLOUD_HISTORY_STATUS_TIME_BASIS_UNAVAILABLE,
+    CloudHistoryCollection,
+)
 from ...support.cloud_local_coverage import (
     CLOUD_LOCAL_STATUS_AVAILABLE_CARRIED,
     CLOUD_LOCAL_STATUS_AVAILABLE_FRESH,
@@ -151,18 +151,18 @@ def cloud_metadata_semantic_candidate_count(
     )
 
 
-def cloud_history_collection(evidence: object) -> DessMonitorHistoryCollection | None:
-    """Return only an exact, internally consistent DESS history record."""
+def cloud_history_collection(evidence: object) -> CloudHistoryCollection | None:
+    """Return only exact, internally consistent normalized history."""
 
     if not isinstance(evidence, dict):
         return None
-    return DessMonitorHistoryCollection.from_record(
+    return CloudHistoryCollection.from_record(
         evidence.get("history_collection")
     )
 
 
 def cloud_history_summary(
-    collection: DessMonitorHistoryCollection | None,
+    collection: CloudHistoryCollection | None,
     translate: Translation,
 ) -> str:
     """Render bounded history availability without exposing raw evidence."""
@@ -173,20 +173,20 @@ def cloud_history_summary(
         "count": str(collection.collected_series_count),
         "points": str(collection.point_count),
     }
-    if collection.status == DESSMONITOR_COLLECTION_STATUS_COMPLETE:
+    if collection.status == CLOUD_HISTORY_STATUS_COMPLETE:
         return translate(
             "common.dynamic.cloud_learning_history_complete",
             "Historical evidence includes {count} series ({points} points).",
             placeholders,
         )
-    if collection.status == DESSMONITOR_COLLECTION_STATUS_PARTIAL:
+    if collection.status == CLOUD_HISTORY_STATUS_PARTIAL:
         return translate(
             "common.dynamic.cloud_learning_history_partial",
             "Historical evidence includes {count} series ({points} points); "
             "some series were unavailable.",
             placeholders,
         )
-    if collection.status == DESSMONITOR_COLLECTION_STATUS_TIME_BASIS_UNAVAILABLE:
+    if collection.status == CLOUD_HISTORY_STATUS_TIME_BASIS_UNAVAILABLE:
         return translate(
             "common.dynamic.cloud_learning_history_time_unavailable",
             "Historical data was skipped because the device time zone could not "

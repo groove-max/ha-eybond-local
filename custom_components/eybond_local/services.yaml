@@ -267,15 +267,15 @@ run_diagnostic_commands:
       selector:
         boolean:
     confirm_write:
-      name: Confirm device writes
-      description: Must be enabled before running a scenario that contains write or write_bit commands, which can change device settings. Read-only scenarios ignore this.
+      name: Confirm potentially mutating commands
+      description: Must be enabled before register writes or any free-form ASCII command. Arbitrary ASCII commands cannot be classified safely as read-only and may change device settings.
       required: false
       default: false
       selector:
         boolean:
     publish_download_copy:
-      name: Publish shareable download copy
-      description: Copy the redacted shareable result to Home Assistant /local so it can be downloaded from the UI. Leave disabled unless you intend to share the file.
+      name: Create shareable download link
+      description: Create a short-lived signed link to the redacted result. The raw diagnostic output remains private on the Home Assistant host.
       required: false
       default: false
       selector:

@@ -228,6 +228,40 @@ class AffectedValidationSelectionTests(unittest.TestCase):
             }.issubset(selected)
         )
 
+    def test_smartess_history_selects_provider_neutral_consumers(self) -> None:
+        selected = self._selected(
+            "custom_components/eybond_local/support/smartess_history.py"
+        )
+
+        self.assertTrue(
+            {
+                "test_smartess_history.py",
+                "test_smartess_read_only.py",
+                "test_cloud_history_evidence.py",
+                "test_cloud_local_history_correlation.py",
+                "test_cloud_learning_engines.py",
+                "test_config_flow.py",
+                "test_cloud_evidence_architecture.py",
+            }.issubset(selected)
+        )
+
+    def test_neutral_cloud_history_selects_both_provider_adapters(self) -> None:
+        selected = self._selected(
+            "custom_components/eybond_local/support/cloud_history_evidence.py"
+        )
+
+        self.assertTrue(
+            {
+                "test_cloud_history_evidence.py",
+                "test_smartess_history.py",
+                "test_smartess_read_only.py",
+                "test_dessmonitor_learning.py",
+                "test_cloud_local_history_correlation.py",
+                "test_config_flow.py",
+                "test_cloud_evidence_architecture.py",
+            }.issubset(selected)
+        )
+
     def test_history_representability_selects_context_and_archive_boundaries(
         self,
     ) -> None:

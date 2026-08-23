@@ -2,22 +2,20 @@
 
 Writes a local raw result (JSON + TXT, kept under the HA config directory for
 owner-only diagnostics) and a shareable JSON with the project's redaction
-helpers applied. Only the shareable copy is optionally published to ``/local``
-so the un-redacted raw responses never leave the owner's host through the
-download URL.
+helpers applied. The shareable file can be exposed through the integration's
+short-lived authenticated API endpoint; nothing is copied to public ``/local``.
 
 Documented limitation (per design decision): the shareable copy scrubs
 serial-looking tokens from text/ASCII fields and hex blobs, but raw Modbus
 register words in the ``decimal``/``hex`` arrays are NOT scrubbed — a serial
 sitting in arbitrary registers can still appear there. That residual risk is why
-the raw result stays local and only the shareable copy is published.
+the raw result stays local and only the shareable file can be downloaded.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,25 +40,12 @@ def diagnostic_runs_root(config_dir: Path) -> Path:
     return config_dir / LOCAL_METADATA_DIR / LOCAL_DIAGNOSTIC_RUNS_DIR
 
 
-def diagnostic_runs_public_root(config_dir: Path) -> Path:
-    """Return the Home Assistant static-file directory for shareable exports."""
-
-    return config_dir / "www" / LOCAL_METADATA_DIR / LOCAL_DIAGNOSTIC_RUNS_DIR
-
-
-def diagnostic_run_download_url(filename: str) -> str:
-    """Return the Home Assistant `/local` URL for one shareable export."""
-
-    return f"/local/{LOCAL_METADATA_DIR}/{LOCAL_DIAGNOSTIC_RUNS_DIR}/{filename}"
-
-
 @dataclass(frozen=True, slots=True)
 class DiagnosticExportResult:
     result_path: Path
     text_path: Path
     shareable_path: Path
     download_path: Path | None = None
-    download_url: str | None = None
 
 
 def build_local_payload(result: DiagnosticRunResult) -> dict:
@@ -195,19 +180,14 @@ def export_diagnostic_run(
     )
 
     download_path: Path | None = None
-    download_url: str | None = None
     if publish_download_copy:
-        public_root = diagnostic_runs_public_root(config_dir)
-        public_root.mkdir(parents=True, exist_ok=True)
-        # Only the redacted shareable copy is exposed through /local.
-        download_path = public_root / shareable_path.name
-        shutil.copy2(shareable_path, download_path)
-        download_url = diagnostic_run_download_url(shareable_path.name)
+        # The coordinator exposes this redacted file through a short-lived,
+        # authenticated API URL. Never copy it into unauthenticated /local.
+        download_path = shareable_path
 
     return DiagnosticExportResult(
         result_path=result_path,
         text_path=text_path,
         shareable_path=shareable_path,
         download_path=download_path,
-        download_url=download_url,
     )

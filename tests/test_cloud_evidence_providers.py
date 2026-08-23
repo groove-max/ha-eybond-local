@@ -31,7 +31,11 @@ from custom_components.eybond_local.support.cloud_evidence_providers import (  #
 )
 from custom_components.eybond_local.support.cloud_evidence import CloudEvidenceRecord  # noqa: E402
 from custom_components.eybond_local.support.cloud_learning_engines import (  # noqa: E402
-    resolve_cloud_learning_engine,
+    resolve_cloud_learning_selection,
+)
+from custom_components.eybond_local.support.cloud_learning_models import (  # noqa: E402
+    LEARNING_METHOD_ACTIVE_CORRELATION,
+    CloudLearningSelection,
 )
 from custom_components.eybond_local.smartess_cloud import SmartEssCloudError  # noqa: E402
 
@@ -69,7 +73,12 @@ class RegistryTests(unittest.TestCase):
 
 class ProviderIsolationTests(unittest.TestCase):
     def test_control_discovery_classifier_accepts_only_provider_owned_errors(self) -> None:
-        engine = resolve_cloud_learning_engine("smartess")
+        engine = resolve_cloud_learning_selection(
+            CloudLearningSelection(
+                method_id=LEARNING_METHOD_ACTIVE_CORRELATION,
+                source_id="smartess",
+            )
+        )
 
         self.assertEqual(
             engine.classify_error(

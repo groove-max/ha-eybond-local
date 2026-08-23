@@ -256,6 +256,27 @@ class WriteConfirmationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("confirm_write=true", result.output)
         self.assertEqual(transport.calls, 0)
 
+    async def test_ascii_is_fail_closed_without_confirm_write(self) -> None:
+        transport = _pi({"QPIGS": "1 2 3"})
+        result = await run_scenario(
+            "driver pi30\nascii QPIGS\n",
+            _ctx(transport, confirm_write=False),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("may change device settings", result.output)
+        self.assertEqual(transport.calls, 0)
+
+    async def test_ascii_runs_after_explicit_confirmation(self) -> None:
+        transport = _pi({"QPIGS": "1 2 3"})
+        result = await run_scenario(
+            "driver pi30\nascii QPIGS\n",
+            _ctx(transport, confirm_write=True),
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.results[0]["response"]["payload"], "1 2 3")
+
     async def test_read_only_scenario_allowed_without_confirm_write(self) -> None:
         transport = _modbus({171: 7})
         result = await run_scenario("read 171\n", _ctx(transport, confirm_write=False))

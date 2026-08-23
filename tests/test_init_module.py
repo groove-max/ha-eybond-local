@@ -2028,7 +2028,7 @@ class SetupOwnershipOrderingTests(unittest.TestCase):
                 patch("custom_components.eybond_local._async_cleanup_obsolete_entities", new=AsyncMock()),
                 patch("custom_components.eybond_local._async_finalize_expert_entity_migration", new=AsyncMock()),
                 patch("custom_components.eybond_local._async_ensure_listener_entry", new=AsyncMock()),
-                patch("custom_components.eybond_local.support.download.async_register_support_package_download_view"),
+                patch("custom_components.eybond_local.support.download.async_register_download_views"),
                 patch("custom_components.eybond_local.entity_setup_context", return_value=(None, None, False)),
                 patch.dict(
                     sys.modules,

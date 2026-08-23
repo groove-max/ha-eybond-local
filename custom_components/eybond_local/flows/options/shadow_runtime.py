@@ -9,10 +9,15 @@ from typing import Any
 
 from ...runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
 from ...support.cloud_learning_engines import (
-    CloudLearningSource,
-    compatible_cloud_learning_sources,
-    default_cloud_learning_source,
-    resolve_cloud_learning_engine,
+    CloudLearningEngine,
+    compatible_cloud_learning_methods_for_provider,
+    compatible_cloud_learning_sources_for_method,
+    resolve_cloud_learning_selection,
+)
+from ...support.cloud_learning_models import (
+    CloudApiSource,
+    CloudLearningMethod,
+    CloudLearningSelection,
 )
 from ...support.memory_guard import (
     read_available_memory_mib,
@@ -48,14 +53,26 @@ class ShadowLearningRuntimeMixin:
             .lower()
         )
 
-    def _control_discovery_learning_source(self, coordinator) -> str:
-        """Return the API surface selected for this run.
+    def _control_discovery_learning_method(self, coordinator) -> str:
+        """Return only an exact transient method compatible with the provider."""
 
-        A transient exact selection wins only while it remains compatible with
-        the trusted evidence provider.  Otherwise the registry's one declared
-        default is used.  No cloud family, hostname, or credential heuristic
-        selects an engine.
-        """
+        compatible = self._control_discovery_learning_methods(coordinator)
+        selected = self._shadow_learning_state.get("wizard_method")
+        if type(selected) is str and selected == selected.strip() and any(
+            method.method_id == selected for method in compatible
+        ):
+            return selected
+        return ""
+
+    def _control_discovery_learning_methods(
+        self, coordinator
+    ) -> tuple[CloudLearningMethod, ...]:
+        return compatible_cloud_learning_methods_for_provider(
+            self._control_discovery_cloud_provider(coordinator)
+        )
+
+    def _control_discovery_learning_source(self, coordinator) -> str:
+        """Return only an exact transient source for the selected method."""
 
         compatible = self._control_discovery_learning_sources(coordinator)
         selected = self._shadow_learning_state.get("wizard_source")
@@ -63,37 +80,59 @@ class ShadowLearningRuntimeMixin:
             source.source_id == selected for source in compatible
         ):
             return selected
-        return default_cloud_learning_source(
-            self._control_discovery_cloud_provider(coordinator)
-        )
+        return ""
 
     def _control_discovery_learning_sources(
         self, coordinator
-    ) -> tuple[CloudLearningSource, ...]:
-        """Return exact sources compatible with the trusted provider."""
+    ) -> tuple[CloudApiSource, ...]:
+        """Return sources compatible with the trusted provider and method."""
 
-        return compatible_cloud_learning_sources(
+        return compatible_cloud_learning_sources_for_method(
+            self._control_discovery_cloud_provider(coordinator),
+            self._control_discovery_learning_method(coordinator),
+        )
+
+    def _control_discovery_learning_selection(
+        self, coordinator
+    ) -> CloudLearningSelection | None:
+        method_id = self._control_discovery_learning_method(coordinator)
+        source_id = self._control_discovery_learning_source(coordinator)
+        if not method_id or not source_id:
+            return None
+        selection = CloudLearningSelection(
+            method_id=method_id,
+            source_id=source_id,
+        )
+        engine = resolve_cloud_learning_selection(selection)
+        if not engine.available or engine.source.provider_id != (
             self._control_discovery_cloud_provider(coordinator)
+        ):
+            return None
+        return selection
+
+    def _control_discovery_learning_engine(self, coordinator) -> CloudLearningEngine:
+        return resolve_cloud_learning_selection(
+            self._control_discovery_learning_selection(coordinator)
         )
 
     def _control_discovery_learning_source_label(self, coordinator) -> str:
-        source_id = self._control_discovery_learning_source(coordinator)
-        source = resolve_cloud_learning_engine(source_id).source
+        engine = self._control_discovery_learning_engine(coordinator)
+        source_id = engine.source.source_id
         labels = {
             "smartess": self._tr(
                 "common.dynamic.cloud_learning_source_smartess",
-                "SmartESS API — active local learning",
+                "SmartESS API",
             ),
             "dessmonitor": self._tr(
                 "common.dynamic.cloud_learning_source_dessmonitor",
-                "DESSMonitor API — read-only device analysis",
+                "DESSMonitor API",
             ),
             "valuecloud": self._tr(
                 "common.dynamic.cloud_learning_source_valuecloud",
-                "ValueCloud API — active local learning",
+                "ValueCloud API",
             ),
         }
-        return labels.get(source_id, source.label)
+        return labels.get(source_id, engine.source.label)
 
     def _control_discovery_requires_shadow_route(self, coordinator) -> bool:
         """Return whether the exact selected engine owns a temporary route.
@@ -104,10 +143,11 @@ class ShadowLearningRuntimeMixin:
         when its HTTP request fails or its flow task is cancelled.
         """
 
-        source_id = self._control_discovery_learning_source(coordinator)
-        engine = resolve_cloud_learning_engine(source_id)
+        engine = self._control_discovery_learning_engine(coordinator)
         return bool(
-            engine.available and engine.source.capabilities.requires_shadow_route
+            engine.available
+            and engine.method is not None
+            and engine.method.requires_shadow_route
         )
 
     def _control_discovery_cloud_provider_label(self, coordinator) -> str:

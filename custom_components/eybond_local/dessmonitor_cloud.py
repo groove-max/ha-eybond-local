@@ -1,13 +1,14 @@
-"""Read-only DESSMonitor public-API client and normalized evidence models.
+"""Typed DESSMonitor public-API client and normalized evidence models.
 
 This module deliberately does not import :mod:`smartess_cloud`.  Both services
 currently speak EyeBond's signed public protocol, but they are separate API
 authorities and separate learning sources.  Sharing one provider's execution
 code would make a hostname choice silently select parsing and trust policy.
 
-Only read actions are exposed here.  In particular, ``ctrlDevice`` is absent.
-The returned bundle is transient learning evidence; credentials and signed
-session material are never included in it.
+Read-only evidence collection and the documented ``ctrlDevice`` primitive are
+separate public boundaries. The evidence collector never calls the write
+primitive. Credentials and signed session material are never included in the
+returned bundle.
 """
 
 from __future__ import annotations
@@ -68,7 +69,7 @@ class DessMonitorCloudError(RuntimeError):
 
 
 class DessMonitorActionRejectedError(DessMonitorCloudError):
-    """A completed read action returned a definitive provider error."""
+    """A completed signed action returned a definitive provider error."""
 
     def __init__(self, *, err: int, action: str, desc: str) -> None:
         self.err = err
@@ -592,6 +593,50 @@ def _device_action(name: str, identity: DessMonitorDeviceIdentity) -> str:
     )
 
 
+def build_device_control_action(
+    *,
+    identity: DessMonitorDeviceIdentity,
+    field_id: str,
+    value: str,
+) -> str:
+    """Build one exact documented DESSMonitor ``ctrlDevice`` action."""
+
+    if type(identity) is not DessMonitorDeviceIdentity:
+        raise TypeError("dessmonitor_identity_invalid")
+    _required_token(field_id, "dessmonitor_control_id_invalid")
+    _required_token(value, "dessmonitor_control_value_invalid")
+    return _device_action("ctrlDevice", identity) + (
+        f"&id={quote(field_id, safe='')}&val={quote(value, safe='')}"
+    )
+
+
+def send_device_control(
+    *,
+    session: DessMonitorSession,
+    identity: DessMonitorDeviceIdentity,
+    field_id: str,
+    value: str,
+    base_url: str = DEFAULT_BASE_URL,
+    language: str = DEFAULT_LANGUAGE,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> DessMonitorApiEnvelope:
+    """Send one explicit DESSMonitor control action through a typed session."""
+
+    if type(session) is not DessMonitorSession:
+        raise TypeError("dessmonitor_session_invalid")
+    return fetch_signed_action(
+        action=build_device_control_action(
+            identity=identity,
+            field_id=field_id,
+            value=value,
+        ),
+        session=session,
+        base_url=base_url,
+        language=language,
+        timeout=timeout,
+    )
+
+
 def _resolve_identity(dat: Any, collector_pn: str) -> DessMonitorDeviceIdentity:
     if not isinstance(dat, dict) or not isinstance(dat.get("device"), list):
         raise DessMonitorCloudError("device_identity_missing")
@@ -786,12 +831,14 @@ def _with_control_values(
     identity: DessMonitorDeviceIdentity,
     fetch: Callable[[str], DessMonitorApiEnvelope],
     max_values: int,
+    progress_detail: Callable[[str, int, int], None] | None = None,
 ) -> tuple[tuple[DessMonitorControlField, ...], bool]:
     if type(max_values) is not int or isinstance(max_values, bool) or max_values < 0:
         raise ValueError("dessmonitor_max_control_values_invalid")
     output: list[DessMonitorControlField] = []
     unavailable = False
     transport_unavailable = False
+    planned_queries = min(len(fields), max_values)
     for index, item in enumerate(fields):
         current = ""
         if index < max_values and not transport_unavailable:
@@ -816,6 +863,12 @@ def _with_control_values(
             else:
                 if isinstance(envelope.dat, dict):
                     current = _text(envelope.dat.get("val"))
+            if progress_detail is not None:
+                progress_detail(
+                    "queryDeviceCtrlValue",
+                    index + 1,
+                    planned_queries,
+                )
         output.append(
             DessMonitorControlField(
                 field_id=item.field_id,
@@ -874,6 +927,8 @@ def fetch_read_only_evidence_for_session(
     timeout: float = DEFAULT_TIMEOUT,
     max_control_values: int = DEFAULT_MAX_CONTROL_VALUES,
     progress: Callable[[str], None] | None = None,
+    progress_detail: Callable[[str, int, int], None] | None = None,
+    required_actions: tuple[str, ...] = (),
 ) -> DessMonitorEvidenceBundle:
     """Fetch metadata through one exact already-authenticated session."""
 
@@ -882,6 +937,23 @@ def fetch_read_only_evidence_for_session(
     _required_token(collector_pn, "dessmonitor_collector_pn_invalid")
     if progress is not None and not callable(progress):
         raise TypeError("dessmonitor_progress_invalid")
+    if progress_detail is not None and not callable(progress_detail):
+        raise TypeError("dessmonitor_progress_detail_invalid")
+    if type(required_actions) is not tuple or any(
+        type(action) is not str for action in required_actions
+    ):
+        raise TypeError("dessmonitor_required_actions_invalid")
+    if (
+        len(set(required_actions)) != len(required_actions)
+        or any(
+            not action
+            or action != action.strip()
+            or action not in _OPTIONAL_METADATA_ACTIONS
+            for action in required_actions
+        )
+    ):
+        raise ValueError("dessmonitor_required_actions_invalid")
+    required = frozenset(required_actions)
 
     def report(action: str) -> None:
         if progress is not None:
@@ -913,7 +985,16 @@ def fetch_read_only_evidence_for_session(
     def optional_fetch(action_name: str, action: str) -> DessMonitorApiEnvelope:
         try:
             return fetch(action)
+        except DessMonitorActionRejectedError:
+            if action_name in required:
+                raise
+            unavailable.add(action_name)
+            return DessMonitorApiEnvelope(err=0, desc="", dat=None)
         except DessMonitorCloudError:
+            if action_name in required:
+                # One bounded retry handles a transient provider/network miss,
+                # but a second failure remains typed and keeps its exact stage.
+                return fetch(action)
             unavailable.add(action_name)
             return DessMonitorApiEnvelope(err=0, desc="", dat=None)
         finally:
@@ -955,6 +1036,7 @@ def fetch_read_only_evidence_for_session(
         identity=identity,
         fetch=fetch,
         max_values=max_control_values,
+        progress_detail=progress_detail,
     )
     if control_values_unavailable:
         unavailable.add("queryDeviceCtrlValue")
@@ -992,10 +1074,12 @@ __all__ = [
     "DessMonitorEvidenceBundle",
     "DessMonitorSession",
     "DessMonitorTelemetryField",
+    "build_device_control_action",
     "build_login_url",
     "build_signed_action_url",
     "fetch_read_only_evidence",
     "fetch_read_only_evidence_for_session",
     "fetch_signed_action",
     "login_with_password",
+    "send_device_control",
 ]

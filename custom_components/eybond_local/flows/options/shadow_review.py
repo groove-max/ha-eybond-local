@@ -29,8 +29,8 @@ from ...support.cloud_local_coverage import (
     CLOUD_LOCAL_STATUS_AVAILABLE_CARRIED,
     CLOUD_LOCAL_STATUS_AVAILABLE_FRESH,
 )
-from ...dessmonitor_collection import DessMonitorHistoryCollection
-from ...support.cloud_learning_engines import resolve_cloud_learning_engine
+from ...support.cloud_active_workflow import ACTIVE_CORRELATION_NO_SAFE_CONTROLS
+from ...support.cloud_history_evidence import CloudHistoryCollection
 from .shadow_metadata_review import (
     cloud_history_collection,
     cloud_history_summary,
@@ -135,15 +135,10 @@ class ShadowLearningReviewMixin:
             and not already_reads
             and not inconclusive_reads
         ):
-            source_id = self._shadow_learning_state.get("wizard_source")
-            learning_engine = resolve_cloud_learning_engine(
-                source_id
-                if type(source_id) is str and source_id == source_id.strip()
-                else ""
-            )
+            learning_engine = self._control_discovery_learning_engine(coordinator)
             collection_supported = bool(
                 learning_engine.available
-                and learning_engine.source.capabilities.local_register_series
+                and learning_engine.evidence_capabilities.local_register_series
                 and callable(
                     getattr(coordinator, "start_local_register_collection", None)
                 )
@@ -421,15 +416,15 @@ class ShadowLearningReviewMixin:
 
     def _control_discovery_history_collection(
         self,
-    ) -> DessMonitorHistoryCollection | None:
-        """Return only an exact, internally consistent DESS history record."""
+    ) -> CloudHistoryCollection | None:
+        """Return only exact, internally consistent normalized history."""
         return cloud_history_collection(
             self._shadow_learning_state.get("cloud_metadata")
         )
 
     def _control_discovery_history_summary(
         self,
-        collection: DessMonitorHistoryCollection | None,
+        collection: CloudHistoryCollection | None,
     ) -> str:
         """Render bounded history availability without exposing raw evidence."""
         return cloud_history_summary(collection, self._tr)
@@ -527,6 +522,7 @@ class ShadowLearningReviewMixin:
 
         reason = str(exc).strip()
         if reason in {
+            ACTIVE_CORRELATION_NO_SAFE_CONTROLS,
             CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED,
             CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE,
             CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
@@ -546,6 +542,10 @@ class ShadowLearningReviewMixin:
         )
         reason = reason.strip()
         defaults = {
+            ACTIVE_CORRELATION_NO_SAFE_CONTROLS: (
+                "The selected cloud API did not expose any safe controls that "
+                "could be checked for this device. Nothing was changed."
+            ),
             CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED: (
                 "The temporary cloud connection ended before all capabilities "
                 "could be checked. Home Assistant stopped safely and restored "

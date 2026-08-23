@@ -91,7 +91,7 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
     """Initialize shared loader state for the integration."""
 
     from .services import async_setup_services
-    from .support.download import async_register_support_package_download_view
+    from .support.download import async_register_download_views
     from .passive_discovery import async_start_passive_callback_discovery
 
     domain_data = hass.data.setdefault(DOMAIN, {})
@@ -122,7 +122,7 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
             _prime_metadata_caches, _eybond_config_data_root(hass)
         )
         await async_setup_services(hass)
-        async_register_support_package_download_view(hass)
+        async_register_download_views(hass)
         await async_start_passive_callback_discovery(hass)
     except Exception:
         remove_component_listener()
@@ -147,13 +147,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     from .runtime.coordinator import EybondLocalCoordinator
     from .services import async_setup_services
-    from .support.download import async_register_support_package_download_view
+    from .support.download import async_register_download_views
 
     coordinator = None
     try:
         _configure_local_metadata_roots(hass)
         await async_setup_services(hass)
-        async_register_support_package_download_view(hass)
+        async_register_download_views(hass)
         await _async_self_heal_server_ip(hass, entry)
         await _async_self_heal_collector_cloud_family(hass, entry)
         await _async_self_heal_valuecloud_driver_hint(hass, entry)

@@ -557,18 +557,19 @@
       },
       "diagnostic_commands": {
         "title": "Diagnostic Commands",
-        "description": "Paste the diagnostic scenario provided by the developer. Commands are executed directly on the device through the current collector connection and write commands can change inverter settings.\n\n**Local result:** `{diagnostic_result_path}`\n**Shareable result:** {diagnostic_download_markdown}",
+        "description": "Paste the diagnostic scenario provided by the developer. Commands are executed directly on the device through the current collector connection. Register writes and arbitrary ASCII commands can change inverter settings.\n\n**Local result:** `{diagnostic_result_path}`\n**Shareable result:** {diagnostic_download_markdown}",
         "data": {
           "diagnostic_commands": "Commands",
           "diagnostic_stop_on_error": "Stop after the first error",
-          "diagnostic_confirm_write": "Confirm device writes",
+          "diagnostic_confirm_write": "Confirm commands that may change settings",
           "diagnostic_publish_download_copy": "Create shareable download link",
           "diagnostic_result": "Result"
         },
         "data_description": {
           "diagnostic_commands": "Paste the complete multiline scenario, including driver or address overrides when provided.",
           "diagnostic_stop_on_error": "Disable this only when later commands should still run after a failed command.",
-          "diagnostic_publish_download_copy": "Copies the redacted shareable result to Home Assistant /local. Leave disabled unless you intend to download or share it.",
+          "diagnostic_confirm_write": "Required for register writes and all free-form ASCII commands because an arbitrary ASCII command may change device settings.",
+          "diagnostic_publish_download_copy": "Creates a short-lived signed link to the redacted result. Leave disabled unless you intend to download or share it.",
           "diagnostic_result": "Read-only output from the latest run. Copy it or use the shareable download link above."
         }
       },
@@ -576,10 +577,20 @@
         "title": "Expand support for this device",
         "description": "{control_discovery_hint}",
         "data": {
-          "learning_source": "Information source"
+          "learning_method": "What should Home Assistant do?"
         },
         "data_description": {
-          "learning_source": "Choose active local learning or read-only metadata and history analysis."
+          "learning_method": "Read-only analysis is recommended. Active verification can discover additional local controls."
+        }
+      },
+      "shadow_learning_source": {
+        "title": "Choose a cloud source",
+        "description": "{control_discovery_hint}",
+        "data": {
+          "learning_source": "Cloud source"
+        },
+        "data_description": {
+          "learning_source": "Choose which compatible cloud service Home Assistant should use for this check."
         }
       },
       "shadow_learning_consent": {

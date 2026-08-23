@@ -1,4 +1,4 @@
-"""Authenticated download endpoint helpers for support archives."""
+"""Authenticated download endpoint helpers for EyeBond support artifacts."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ from typing import Any
 
 from aiohttp import hdrs
 
-from ..const import DOMAIN
+from ..const import DOMAIN, LOCAL_DIAGNOSTIC_RUNS_DIR, LOCAL_METADATA_DIR
 from .package import support_packages_root
 from .proxy_capture.trace import proxy_trace_root
 
-_SUPPORT_PACKAGE_DOWNLOAD_VIEW_REGISTERED = "support_package_download_view_registered"
+_DOWNLOAD_VIEWS_REGISTERED = "download_views_registered"
 
 
 def support_package_authenticated_download_url(entry_id: str) -> str:
@@ -34,7 +34,10 @@ def sign_support_package_download_url(
         from homeassistant.components.http.auth import async_sign_path
     except ModuleNotFoundError:
         return path
-    return async_sign_path(hass, path, expiration)
+    return _absolute_download_url(
+        hass,
+        async_sign_path(hass, path, expiration),
+    )
 
 
 def proxy_capture_authenticated_download_url(
@@ -61,6 +64,58 @@ def sign_proxy_capture_download_url(
     except ModuleNotFoundError:
         return path
     signed_path = async_sign_path(hass, path, expiration)
+    return _absolute_download_url(hass, signed_path)
+
+
+def diagnostic_run_authenticated_download_url(
+    entry_id: str,
+    filename: str,
+) -> str:
+    """Return the authenticated HA API URL for one diagnostic result."""
+
+    return f"/api/{DOMAIN}/diagnostic_run/{entry_id}/{filename}"
+
+
+def sign_diagnostic_run_download_url(
+    hass: Any,
+    entry_id: str,
+    filename: str,
+    *,
+    expiration: timedelta = timedelta(minutes=15),
+) -> str:
+    """Return a browser-navigable signed URL for one diagnostic result."""
+
+    path = diagnostic_run_authenticated_download_url(entry_id, filename)
+    try:
+        from homeassistant.components.http.auth import async_sign_path
+    except ModuleNotFoundError:
+        return path
+    return _absolute_download_url(hass, async_sign_path(hass, path, expiration))
+
+
+def _absolute_download_url(hass: Any, signed_path: str) -> str:
+    """Keep signed downloads out of Home Assistant's SPA router.
+
+    Prefer the exact origin of the REST request that created the options-flow
+    result.  Configured HA URLs are only fallbacks: an administrator may open
+    the same instance through LAN, VPN, or reverse-proxy origins that are not
+    recorded in ``configuration.yaml``.
+    """
+
+    try:
+        from homeassistant.helpers.http import current_request
+    except ModuleNotFoundError:
+        request = None
+    else:
+        request = current_request.get()
+    if request is not None:
+        try:
+            origin = str(request.url.origin()).strip()
+        except (AttributeError, TypeError, ValueError):
+            origin = ""
+        if origin:
+            return f"{origin.rstrip('/')}{signed_path}"
+
     config = getattr(hass, "config", None)
     base_url = (
         str(getattr(config, "external_url", "") or "").strip()
@@ -129,7 +184,42 @@ def resolve_proxy_capture_download_path(
     return path if path.is_file() else None
 
 
-def support_package_download_request_allowed(request: Any) -> bool:
+def resolve_diagnostic_run_download_path(
+    *,
+    config_dir: Path,
+    entry_id: str,
+    filename: str,
+) -> Path | None:
+    """Resolve one entry-owned redacted diagnostic result."""
+
+    if (
+        type(entry_id) is not str
+        or not entry_id
+        or entry_id != entry_id.strip()
+        or type(filename) is not str
+        or not filename
+        or filename != filename.strip()
+    ):
+        return None
+    if Path(filename).name != filename:
+        return None
+    if (
+        not filename.startswith(f"diagnostic_{entry_id}_")
+        or not filename.endswith(".share.json")
+    ):
+        return None
+    try:
+        root = (
+            Path(config_dir) / LOCAL_METADATA_DIR / LOCAL_DIAGNOSTIC_RUNS_DIR
+        ).resolve()
+        path = (root / filename).resolve()
+        path.relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return path if path.is_file() else None
+
+
+def download_request_allowed(request: Any) -> bool:
     """Authorize a request after Home Assistant auth middleware accepted it.
 
     Signed browser navigation carries ``authSig`` without a bearer header.
@@ -145,8 +235,8 @@ def support_package_download_request_allowed(request: Any) -> bool:
     return hdrs.AUTHORIZATION not in request.headers and "authSig" in request.query
 
 
-def async_register_support_package_download_view(hass: Any) -> bool:
-    """Register the authenticated support package download endpoint once."""
+def async_register_download_views(hass: Any) -> bool:
+    """Register the authenticated artifact download endpoints once."""
 
     try:
         from aiohttp import web
@@ -159,7 +249,7 @@ def async_register_support_package_download_view(hass: Any) -> bool:
     if hass_data is None:
         return False
     data = hass_data.setdefault(DOMAIN, {})
-    if data.get(_SUPPORT_PACKAGE_DOWNLOAD_VIEW_REGISTERED):
+    if data.get(_DOWNLOAD_VIEWS_REGISTERED):
         return False
 
     class EybondSupportPackageDownloadView(HomeAssistantView):
@@ -176,7 +266,7 @@ def async_register_support_package_download_view(hass: Any) -> bool:
             # by Home Assistant specifically for navigation/download requests,
             # and may be backed by HA's content user when generated outside an
             # HTTP/WebSocket request context.
-            if not support_package_download_request_allowed(request):
+            if not download_request_allowed(request):
                 raise Unauthorized()
 
             entry = request_hass.config_entries.async_get_entry(entry_id)
@@ -207,7 +297,7 @@ def async_register_support_package_download_view(hass: Any) -> bool:
 
         async def get(self, request, entry_id: str, filename: str):
             request_hass = request.app["hass"]
-            if not support_package_download_request_allowed(request):
+            if not download_request_allowed(request):
                 raise Unauthorized()
             if request_hass.config_entries.async_get_entry(entry_id) is None:
                 raise web.HTTPNotFound()
@@ -225,7 +315,35 @@ def async_register_support_package_download_view(hass: Any) -> bool:
                 },
             )
 
+    class EybondDiagnosticRunDownloadView(HomeAssistantView):
+        """Serve one signed entry-owned redacted diagnostic result."""
+
+        url = f"/api/{DOMAIN}/diagnostic_run/{{entry_id}}/{{filename}}"
+        name = f"api:{DOMAIN}:diagnostic_run"
+        requires_auth = True
+
+        async def get(self, request, entry_id: str, filename: str):
+            request_hass = request.app["hass"]
+            if not download_request_allowed(request):
+                raise Unauthorized()
+            if request_hass.config_entries.async_get_entry(entry_id) is None:
+                raise web.HTTPNotFound()
+            path = resolve_diagnostic_run_download_path(
+                config_dir=Path(request_hass.config.config_dir),
+                entry_id=entry_id,
+                filename=filename,
+            )
+            if path is None:
+                raise web.HTTPNotFound()
+            return web.FileResponse(
+                path,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{path.name}"',
+                },
+            )
+
     hass.http.register_view(EybondSupportPackageDownloadView())
     hass.http.register_view(EybondProxyCaptureDownloadView())
-    data[_SUPPORT_PACKAGE_DOWNLOAD_VIEW_REGISTERED] = True
+    hass.http.register_view(EybondDiagnosticRunDownloadView())
+    data[_DOWNLOAD_VIEWS_REGISTERED] = True
     return True
