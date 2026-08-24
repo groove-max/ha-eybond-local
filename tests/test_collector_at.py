@@ -156,6 +156,66 @@ class CollectorAtTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_runtime_query_reads_connected_ssid_from_numbered_intpara_response(self) -> None:
+        class _Transport:
+            async def async_query(self, command: str):
+                if command == "INTPARA41":
+                    return parse_at_response("AT+INTPARA:41,Home WiFi")
+                return parse_at_response(f"AT+{command}:")
+
+        async def _run() -> None:
+            values = (await read_runtime_collector_at_values(_Transport())).values
+
+            self.assertEqual(values["collector_ssid"], "Home WiFi")
+
+        asyncio.run(_run())
+
+    def test_runtime_query_reads_connected_ssid_from_direct_response(self) -> None:
+        class _Transport:
+            async def async_query(self, command: str):
+                if command == "INTPARA41":
+                    return parse_at_response("AT+INTPARA41:Home WiFi")
+                return parse_at_response(f"AT+{command}:")
+
+        async def _run() -> None:
+            values = (await read_runtime_collector_at_values(_Transport())).values
+
+            self.assertEqual(values["collector_ssid"], "Home WiFi")
+
+        asyncio.run(_run())
+
+    def test_runtime_query_rejects_foreign_intpara_response_as_ssid(self) -> None:
+        class _Transport:
+            async def async_query(self, command: str):
+                if command == "INTPARA41":
+                    return parse_at_response("AT+INTPARA:49,[Foreign,-40]")
+                return parse_at_response(f"AT+{command}:")
+
+        async def _run() -> None:
+            values = (await read_runtime_collector_at_values(_Transport())).values
+
+            self.assertNotIn("collector_ssid", values)
+
+        asyncio.run(_run())
+
+    def test_runtime_query_does_not_publish_blank_optional_ssid(self) -> None:
+        class _Transport:
+            async def async_query(self, command: str):
+                if command == "DTUPN":
+                    return parse_at_response("AT+DTUPN:V0000000000001")
+                if command == "INTPARA41":
+                    return parse_at_response("AT+INTPARA41:")
+                return parse_at_response(f"AT+{command}:")
+
+        async def _run() -> None:
+            result = await read_runtime_collector_at_values(_Transport())
+
+            self.assertEqual(result.outcome, "success")
+            self.assertEqual(result.values["collector_pn"], "V0000000000001")
+            self.assertNotIn("collector_ssid", result.values)
+
+        asyncio.run(_run())
+
 
 class AtSweepTimeoutAbortTests(unittest.TestCase):
     def test_first_timeout_aborts_the_remaining_sweep(self) -> None:
@@ -171,7 +231,7 @@ class AtSweepTimeoutAbortTests(unittest.TestCase):
             transport = _DeadLinkTransport()
             result = await read_runtime_collector_at_values(transport)
             self.assertEqual(result.values, {})
-            # One strike ends the sweep instead of 12 consecutive timeouts.
+            # One strike ends the sweep instead of 13 consecutive timeouts.
             self.assertEqual(len(transport.commands), 1)
 
         asyncio.run(_run())

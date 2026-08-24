@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 from helpers.homeassistant_stubs import ensure_module, ensure_package
 
@@ -397,7 +398,11 @@ class SensorPrecisionTests(unittest.TestCase):
         sensor.entity_id = "sensor.battery_voltage"
         sensor.hass = types.SimpleNamespace(entity_registry=registry)
 
-        asyncio.run(sensor.async_added_to_hass())
+        with patch(
+            "homeassistant.helpers.entity_registry.async_get",
+            return_value=registry,
+        ):
+            asyncio.run(sensor.async_added_to_hass())
 
         self.assertEqual(
             registry.async_get("sensor.battery_voltage").options,

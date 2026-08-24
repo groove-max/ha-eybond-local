@@ -128,6 +128,12 @@ After a Wi-Fi change, re-adding the device can be the easiest way to pick up the
 
 Use this after changing collector networking, or when the collector stopped responding and you want a quick reconnect without power-cycling hardware.
 
+The action is available only when the collector's current connection has a
+negotiated local management channel. Home Assistant sends the restart through
+that exact active connection. Setup and connection-recovery flows additionally
+wait for the collector to disconnect and reconnect with the same identity before
+accepting the operation as a successful recovery.
+
 ### Capture collector traffic
 
 This is a support tool. Most users do not need it for normal operation.

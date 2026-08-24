@@ -15,6 +15,7 @@ from .metadata_result import (
     OUTCOME_SUCCESS,
     OUTCOME_TRANSPORT_ERROR,
     CollectorMetadataChannelReadResult,
+    present_metadata_values,
 )
 from .signal import merge_collector_signal_values, normalize_signal_strength
 
@@ -31,11 +32,6 @@ _AT_TRANSPORT_FAILURES = (
     asyncio.LimitOverrunError,
 )
 
-
-def _decoded_has_metadata(decoded: dict[str, object]) -> bool:
-    """Return whether a decoded response carries at least one non-blank value."""
-
-    return any(str(value).strip() != "" for value in decoded.values())
 
 class CollectorAtQueryTransport(Protocol):
     """Minimal read-only collector AT transport contract."""
@@ -54,11 +50,46 @@ class CollectorAtQueryDefinition:
     command: str
     description: str
     decode: CollectorAtDecoder
+    semantic_fields: frozenset[str] = frozenset()
 
 
 def _decode_text_value(key: str) -> CollectorAtDecoder:
     def _decode(response: CollectorAtResponse) -> dict[str, object]:
         return {key: str(response.value or "").strip()}
+
+    return _decode
+
+
+def _decode_intpara_value(parameter: int, key: str) -> CollectorAtDecoder:
+    """Decode one numbered ``INTPARA`` query without accepting a sibling reply.
+
+    Factory collectors have been observed using both response shapes for
+    ``AT+INTPARA<n>?``: ``AT+INTPARA<n>:value`` and
+    ``AT+INTPARA:<n>,value``.  The generic AT transport intentionally carries
+    either shape, so the parameter-specific decoder is the trust boundary that
+    verifies the response belongs to the requested number.
+    """
+
+    expected_command = f"INTPARA{parameter}"
+    expected_prefix = f"{parameter},"
+
+    def _decode(response: CollectorAtResponse) -> dict[str, object]:
+        if type(response.command) is not str or type(response.value) is not str:
+            return {}
+        command = response.command
+        raw = response.value.strip()
+        if command != command.strip().upper():
+            return {}
+        if command == "INTPARA":
+            if not raw.startswith(expected_prefix):
+                return {}
+            raw = raw[len(expected_prefix) :].strip()
+        elif command == expected_command:
+            if raw.startswith(expected_prefix):
+                raw = raw[len(expected_prefix) :].strip()
+        else:
+            return {}
+        return {key: raw}
 
     return _decode
 
@@ -89,63 +120,113 @@ def _decode_collector_server_endpoint(response: CollectorAtResponse) -> dict[str
 
 
 RUNTIME_COLLECTOR_AT_DEFINITIONS: tuple[CollectorAtQueryDefinition, ...] = (
-    CollectorAtQueryDefinition("DTUPN", "Collector PN / serial.", _decode_text_value("collector_pn")),
+    CollectorAtQueryDefinition(
+        "DTUPN",
+        "Collector PN / serial.",
+        _decode_text_value("collector_pn"),
+        frozenset({"collector_pn"}),
+    ),
     CollectorAtQueryDefinition(
         "ATVER",
         "AT interpreter / collector protocol version.",
         _decode_text_value("collector_protocol_version"),
+        frozenset({"collector_protocol_version"}),
     ),
     CollectorAtQueryDefinition(
         "ENUPMODE",
         "Collector upload mode flag.",
         _decode_text_value("collector_upload_mode"),
+        frozenset({"collector_upload_mode"}),
     ),
     CollectorAtQueryDefinition(
         "SYST",
         "Collector system time.",
         _decode_text_value("collector_system_time"),
+        frozenset({"collector_system_time"}),
     ),
-    CollectorAtQueryDefinition("WFSS", "Collector Wi-Fi RSSI.", _decode_signal_strength),
+    CollectorAtQueryDefinition(
+        "WFSS",
+        "Collector Wi-Fi RSSI.",
+        _decode_signal_strength,
+        frozenset(
+            {
+                "collector_signal_strength_raw",
+                "collector_signal_strength",
+                "collector_signal_strength_source",
+            }
+        ),
+    ),
     CollectorAtQueryDefinition(
         "UART",
         "Collector UART settings.",
         _decode_text_value("collector_serial_baudrate"),
+        frozenset({"collector_serial_baudrate"}),
     ),
     CollectorAtQueryDefinition(
         "DTUTYPE",
         "Collector model / type.",
         _decode_text_value("collector_type"),
+        frozenset({"collector_type"}),
     ),
     CollectorAtQueryDefinition(
         "FWVER",
         "Collector firmware version.",
         _decode_text_value("smartess_collector_version"),
+        frozenset({"smartess_collector_version"}),
     ),
     CollectorAtQueryDefinition(
         "CLDSRVHOST1",
         "Collector cloud callback endpoint.",
         _decode_collector_server_endpoint,
+        frozenset(
+            {
+                "collector_server_endpoint",
+                "collector_cloud_family",
+                "collector_cloud_family_source",
+                "collector_cloud_family_confidence",
+            }
+        ),
     ),
     CollectorAtQueryDefinition(
         "HTBT",
         "Collector cloud heartbeat value.",
         _decode_text_value("collector_cloud_heartbeat_value"),
+        frozenset({"collector_cloud_heartbeat_value"}),
     ),
     CollectorAtQueryDefinition(
         "LINK",
         "Collector link status from the newer communication path.",
         _decode_text_value("collector_link_status"),
+        frozenset({"collector_link_status"}),
     ),
     CollectorAtQueryDefinition(
         "INTPARA49",
         "Nearby Wi-Fi scan list reported by the collector.",
         _decode_text_value("collector_wifi_scan_list"),
+        frozenset({"collector_wifi_scan_list"}),
     ),
+    # Keep optional numbered queries after the established metadata set. An
+    # older collector that stays silent for this read still leaves every prior
+    # value available as a fresh partial result.
+    CollectorAtQueryDefinition(
+        "INTPARA41",
+        "Connected upstream Wi-Fi SSID reported by the collector.",
+        _decode_intpara_value(41, "collector_ssid"),
+        frozenset({"collector_ssid"}),
+    ),
+)
+
+RUNTIME_COLLECTOR_AT_SEMANTIC_FIELDS = frozenset(
+    field
+    for definition in RUNTIME_COLLECTOR_AT_DEFINITIONS
+    for field in definition.semantic_fields
 )
 
 
 async def read_runtime_collector_at_values(
     transport: CollectorAtQueryTransport,
+    *,
+    excluded_semantic_fields: frozenset[str] = frozenset(),
 ) -> CollectorMetadataChannelReadResult:
     """Read the read-only collector AT metadata set with a structured outcome.
 
@@ -159,7 +240,7 @@ async def read_runtime_collector_at_values(
       the link is unusable, not the commands unsupported);
     * a timeout/disconnect AFTER some metadata -> ``partial`` (fresh, no strike);
       one timeout ends the sweep so a dead link costs one request timeout, not
-      twelve;
+      thirteen;
     * every command delivered but none carried metadata -> ``empty`` (a strike:
       the collector answered but does not support this channel);
     * an individual unsupported/rejected command is skipped, not fatal.
@@ -175,6 +256,10 @@ async def read_runtime_collector_at_values(
     transport_failed = False
     safe_code = ""
     for definition in RUNTIME_COLLECTOR_AT_DEFINITIONS:
+        if definition.semantic_fields and definition.semantic_fields.issubset(
+            excluded_semantic_fields
+        ):
+            continue
         attempted += 1
         try:
             response = await transport.async_query(definition.command)
@@ -192,10 +277,15 @@ async def read_runtime_collector_at_values(
         except Exception:  # noqa: BLE001 - one unsupported command is skipped
             failed += 1
             continue
-        decoded = definition.decode(response)
-        if decoded:
-            merge_collector_signal_values(values, decoded)
-        if _decoded_has_metadata(decoded):
+        decoded = {
+            key: value
+            for key, value in definition.decode(response).items()
+            if key not in excluded_semantic_fields
+        }
+        present = present_metadata_values(decoded)
+        if present:
+            merge_collector_signal_values(values, present)
+        if present:
             successful += 1
     has_metadata = successful > 0
     if transport_failed and not has_metadata:

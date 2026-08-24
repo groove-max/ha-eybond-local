@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import monotonic
 from typing import Callable
 
@@ -75,6 +75,8 @@ class _CollectorSessionInventoryEntry:
     first_bytes_prefix_hex: str = ""
     collector_pn: str = ""
     collector_identity_source: str = ""
+    collector_identity_sources: set[str] = field(default_factory=set)
+    observed_protocol_shapes: set[str] = field(default_factory=set)
 
     def diagnostics(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -92,6 +94,14 @@ class _CollectorSessionInventoryEntry:
             result["collector_identity_masked"] = _mask_identity_token(self.collector_pn)
         if self.collector_identity_source:
             result["collector_identity_source"] = self.collector_identity_source
+        if self.collector_identity_sources:
+            result["collector_identity_sources"] = sorted(
+                self.collector_identity_sources
+            )
+        if self.observed_protocol_shapes:
+            result["observed_protocol_shapes"] = sorted(
+                self.observed_protocol_shapes
+            )
         return result
 
 
@@ -828,6 +838,12 @@ class _SharedEybondListener:
                     "protocol_shape": entry.protocol_shape,
                     "collector_pn": collector_pn,
                     "collector_identity_source": entry.collector_identity_source,
+                    "collector_identity_sources": tuple(
+                        sorted(entry.collector_identity_sources)
+                    ),
+                    "observed_protocol_shapes": tuple(
+                        sorted(entry.observed_protocol_shapes)
+                    ),
                 }
             )
         return tuple(sessions)
@@ -896,9 +912,17 @@ class _SharedEybondListener:
         entry = self._session_inventory.get(session_id)
         if entry is None:
             return
-        entry.first_bytes_len = len(chunk)
-        entry.first_bytes_prefix_hex = chunk[:4].hex()
-        entry.protocol_shape = _classify_initial_protocol_shape(chunk)
+        observed_shape = _classify_initial_protocol_shape(chunk)
+        if observed_shape != "unknown":
+            entry.observed_protocol_shapes.add(observed_shape)
+        # ``protocol_shape`` is the PRIMARY activation observation.  A later
+        # AT/FC identity response on the same hybrid socket is additional
+        # capability evidence and must never rewrite those actual first bytes.
+        if entry.protocol_shape in {"", "unknown"}:
+            entry.first_bytes_len = len(chunk)
+            entry.first_bytes_prefix_hex = chunk[:4].hex()
+            if observed_shape != "unknown":
+                entry.protocol_shape = observed_shape
 
     def _mark_session_identity(
         self,
@@ -916,6 +940,7 @@ class _SharedEybondListener:
                 normalized_pn,
             )
             if source:
+                entry.collector_identity_sources.add(source)
                 entry.collector_identity_source = prefer_identity_source(
                     entry.collector_identity_source,
                     source,

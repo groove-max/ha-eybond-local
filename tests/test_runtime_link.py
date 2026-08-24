@@ -158,6 +158,19 @@ class _HeartbeatReplacementTransport(_FakeTransport):
         return True
 
 
+class _CorrelatedLivenessTransport(_FakeTransport):
+    """Framed transport with live request traffic but no fresh FC=1 sample."""
+
+    def __init__(self, *, liveness_result: bool) -> None:
+        super().__init__(connected=True, heartbeat_result=False)
+        self._liveness_result = liveness_result
+        self.liveness_waits: list[float] = []
+
+    async def wait_until_liveness(self, timeout: float) -> bool:
+        self.liveness_waits.append(timeout)
+        return self._liveness_result
+
+
 class _FakeAnnouncer:
     def __init__(self, *, running: bool = False) -> None:
         self.last_reply = "set>server=192.168.1.10:8899;"
@@ -345,16 +358,51 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_heartbeat_wait_follows_replacement_socket_through_short_gap(self) -> None:
+    def test_liveness_wait_follows_replacement_socket_through_short_gap(self) -> None:
         async def _run() -> None:
             manager = self._build_manager()
             transport = _HeartbeatReplacementTransport()
             manager._transport = transport  # type: ignore[assignment]
 
-            ok = await manager._async_wait_for_payload_heartbeat(timeout=0.2)
+            ok = await manager._async_wait_for_payload_liveness(timeout=0.2)
 
             self.assertTrue(ok)
             self.assertGreaterEqual(len(transport.heartbeat_waits), 2)
+            self.assertTrue(transport.connected)
+
+        asyncio.run(_run())
+
+    def test_runtime_accepts_correlated_liveness_without_claiming_heartbeat(self) -> None:
+        async def _run() -> None:
+            manager = self._build_manager()
+            transport = _CorrelatedLivenessTransport(liveness_result=True)
+            manager._transport = transport  # type: ignore[assignment]
+
+            ok = await manager.async_try_connect(
+                timeout=0.5,
+                require_heartbeat=True,
+            )
+
+            self.assertTrue(ok)
+            self.assertEqual(transport.liveness_waits, [0.5])
+            self.assertEqual(transport.heartbeat_waits, [])
+            self.assertFalse(transport.collector_info.heartbeat_fresh)
+
+        asyncio.run(_run())
+
+    def test_runtime_rejects_stale_correlated_liveness(self) -> None:
+        async def _run() -> None:
+            manager = self._build_manager()
+            transport = _CorrelatedLivenessTransport(liveness_result=False)
+            manager._transport = transport  # type: ignore[assignment]
+
+            ok = await manager.async_try_connect(
+                timeout=0.5,
+                require_heartbeat=True,
+            )
+
+            self.assertFalse(ok)
+            self.assertEqual(transport.liveness_waits, [0.5])
             self.assertTrue(transport.connected)
 
         asyncio.run(_run())

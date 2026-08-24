@@ -368,6 +368,47 @@ class SharedEybondTransport:
                 return False
             await asyncio.sleep(min(0.1, remaining))
 
+    async def wait_until_liveness(self, timeout: float) -> bool:
+        """Wait for recent correlated traffic on the exact selected session."""
+
+        if self._listener is None:
+            return False
+
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            connection = self._connection(create_placeholder=bool(self._collector_ip))
+            if connection is not None and connection.connected:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    return False
+                return await connection.wait_until_liveness(timeout=remaining)
+
+            claimed_session_id = self._resolve_claimed_session_id()
+            if self._collector_ip or self._collector_pn or claimed_session_id:
+                pending = await self._listener.pop_pending_socket_for_route(
+                    collector_ip=self._collector_ip,
+                    collector_pn=self._collector_pn,
+                    session_protocol=self._collector_session_protocol,
+                    session_id=claimed_session_id,
+                )
+                if pending is not None:
+                    connection = await self._listener.activate_pending_connection(
+                        pending,
+                        collector_ip=self._collector_ip,
+                        collector_pn=self._collector_pn,
+                        heartbeat_interval=self._heartbeat_interval,
+                        write_timeout=self._write_timeout,
+                    )
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        return False
+                    return await connection.wait_until_liveness(timeout=remaining)
+
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(0.1, remaining))
+
     async def async_send_forward(
         self,
         payload: bytes,

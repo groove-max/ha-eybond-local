@@ -105,7 +105,10 @@ def _install_sensor_stubs() -> None:
 _install_sensor_stubs()
 
 
-from custom_components.eybond_local.collector.entity_scope import is_collector_entity_key  # noqa: E402
+from custom_components.eybond_local.collector.entity_scope import (  # noqa: E402
+    filter_measurements_for_collector_session,
+    is_collector_entity_key,
+)
 from custom_components.eybond_local.models import MeasurementDescription, RuntimeSnapshot  # noqa: E402
 from custom_components.eybond_local.sensor import EybondValueSensor  # noqa: E402
 
@@ -127,6 +130,39 @@ class CollectorEntityScopeTests(unittest.TestCase):
         self.assertFalse(is_collector_entity_key("inverter_route_device_addr"))
         self.assertFalse(is_collector_entity_key("model_name"))
         self.assertFalse(is_collector_entity_key("driver_key"))
+
+    def test_at_session_omits_only_impossible_framed_heartbeat_entities(self) -> None:
+        descriptions = (
+            MeasurementDescription(key="collector_heartbeat_devcode", name="Heartbeat"),
+            MeasurementDescription(key="collector_devcode", name="Devcode"),
+            MeasurementDescription(key="collector_ssid", name="SSID"),
+            MeasurementDescription(key="battery_voltage", name="Battery Voltage"),
+        )
+
+        filtered = filter_measurements_for_collector_session(descriptions, "at_text")
+
+        self.assertEqual(
+            tuple(item.key for item in filtered),
+            ("collector_ssid", "battery_voltage"),
+        )
+
+    def test_unknown_or_framed_session_preserves_the_entity_inventory(self) -> None:
+        descriptions = (
+            MeasurementDescription(key="collector_heartbeat_devcode", name="Heartbeat"),
+        )
+
+        self.assertEqual(
+            filter_measurements_for_collector_session(descriptions, "eybond_framed"),
+            descriptions,
+        )
+        self.assertEqual(
+            filter_measurements_for_collector_session(descriptions, ""),
+            descriptions,
+        )
+        self.assertEqual(
+            filter_measurements_for_collector_session(descriptions, object()),
+            descriptions,
+        )
 
 
 class RuntimeSensorRoutingTests(unittest.TestCase):

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "model_key": "anenji_hhs_11kw_wifi_no_parallel",
+  "manufacturer": "Anenji",
+  "model": "HHS-11kW-WIFI (without parallel)",
+  "aliases": [],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "layout3_model29440",
+      "label": "Anenji HHS 11kW non-parallel variant",
+      "device_descriptor_keys": [
+        "anenji_hhs_11kw"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "partial",
+    "controls": "none"
+  },
+  "coverage": {
+    "runtime_control_surface": "read_only",
+    "smartess_control_surface": "unknown",
+    "vendor_register_map": "documented",
+    "notes": [
+      "The exact layout/model fingerprint is captured from a beta.3 support archive.",
+      "The compatible protocol 3-10 telemetry schema is enabled read-only.",
+      "No ANJ-11KW writable capability is inherited until this exact HHS model is write-validated."
+    ]
+  },
+  "known_limitations": [
+    "Local controls remain unavailable pending model-specific hardware validation."
+  ],
+  "knowledge_summary": "An Anenji HHS 11kW non-parallel inverter with an exact captured protocol-3 fingerprint. The integration exposes the compatible telemetry schema read-only and deliberately withholds ANJ write controls.",
+  "source_keys": [
+    "github_issue_13_hhs_11kw_beta3"
+  ]
+}

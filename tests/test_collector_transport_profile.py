@@ -42,8 +42,23 @@ class CollectorTransportProfileTests(unittest.TestCase):
         )
 
         self.assertEqual(profile.cloud_family, "smartess_at")
+        self.assertEqual(profile.identity_challenge_protocol, "at_text")
         self.assertEqual(profile.session_protocol, "")
         self.assertEqual(profile.identity_strategy, "")
+
+    def test_cloud_family_selects_only_a_read_only_identity_challenge(self) -> None:
+        expected = {
+            "legacy_binary": "eybond_framed",
+            "smartess_at": "at_text",
+            "smartvalue_at": "at_text",
+            "valuecloud_at": "at_text",
+        }
+        for family, challenge in expected.items():
+            profile = resolve_collector_transport_profile(cloud_family=family)
+            self.assertEqual(profile.identity_challenge_protocol, challenge, family)
+            self.assertEqual(profile.session_protocol, "", family)
+            self.assertEqual(profile.identity_strategy, "", family)
+            self.assertEqual(profile.raw_passthrough_bootstrap, "", family)
 
     def test_metadata_never_chooses_bootstrap_transport(self) -> None:
         # Neither the inverter driver nor the collector's cloud family is wire
@@ -54,6 +69,7 @@ class CollectorTransportProfileTests(unittest.TestCase):
                 runtime_owner_key=owner,
             )
             self.assertEqual(profile.runtime_owner_key, owner)
+            self.assertEqual(profile.identity_challenge_protocol, "at_text")
             self.assertEqual(profile.session_protocol, "")
             self.assertEqual(profile.identity_strategy, "")
 
@@ -66,6 +82,7 @@ class CollectorTransportProfileTests(unittest.TestCase):
                 runtime_owner_key=owner,
             )
             self.assertEqual(profile.runtime_owner_key, owner)
+            self.assertEqual(profile.identity_challenge_protocol, "")
             self.assertEqual(profile.session_protocol, "")
             self.assertEqual(profile.identity_strategy, "")
 
@@ -159,6 +176,10 @@ class ObservedSessionProtocolOverrideTests(unittest.TestCase):
         # Diagnostic provenance fields are preserved.
         self.assertEqual(profile.cloud_family, base.cloud_family)
         self.assertEqual(profile.runtime_owner_key, base.runtime_owner_key)
+        self.assertEqual(
+            profile.identity_challenge_protocol,
+            base.identity_challenge_protocol,
+        )
 
     def test_observed_at_text_does_not_inherit_unrelated_cloud_dialect(self) -> None:
         base = self._base("legacy_binary")

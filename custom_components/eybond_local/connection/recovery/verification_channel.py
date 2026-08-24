@@ -21,9 +21,8 @@ class ObservedSessionRestartChannel:
     * the REBOOT goes through :func:`select_collector_management_adapter`,
       keyed ONLY by the live ``SessionHandle.collector_management_adapter``
       resolved from ``handle_provider`` -- a framed session reboots via the
-      framed adapter (FC parameter details live inside it); an AT session whose
-      adapter honestly reports ``reboot=False`` raises the typed unsupported
-      error without touching the wire;
+      framed adapter and an AT-text session through its negotiated AT adapter;
+      all wire-specific command details remain inside those adapters;
     * the IDENTITY probe goes through the shared
       :class:`collector.session_identity_reader.SessionPinnedIdentityReader`
       on the negotiated wire.

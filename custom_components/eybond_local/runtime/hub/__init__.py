@@ -60,6 +60,9 @@ class EybondHub(
             advertised_server_ip=connection.advertised_server_ip,
             collector_ip=connection.collector_ip,
             collector_pn=connection.collector_pn,
+            collector_identity_challenge_protocol=(
+                connection.collector_identity_challenge_protocol
+            ),
             collector_configured_session_protocol=(
                 connection.collector_configured_session_protocol
             ),

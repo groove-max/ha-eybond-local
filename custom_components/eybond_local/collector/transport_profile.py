@@ -42,6 +42,7 @@ class CollectorTransportProfile:
 
     cloud_family: str
     runtime_owner_key: str
+    identity_challenge_protocol: str
     session_protocol: str
     identity_strategy: str
     raw_passthrough_bootstrap: str
@@ -162,8 +163,10 @@ def resolve_collector_transport_profile(
     The ``runtime_owner_key`` (the local inverter driver key) is retained ONLY as
     a diagnostic provenance field; it must never influence ``session_protocol``,
     ``identity_strategy``, or any wire/adapter selection.  The cloud family is
-    likewise metadata only at this boundary: no live/confirmed wire means no
-    transport profile.
+    likewise unable to select a transport.  A known cloud family may select only
+    the format of a bounded, read-only identity challenge.  That candidate is
+    not a wire observation and cannot route or own a socket; only the strong PN
+    returned by the exact-session challenge may establish the live wire.
     """
 
     normalized_family = known_collector_cloud_family(cloud_family)
@@ -171,6 +174,9 @@ def resolve_collector_transport_profile(
     return CollectorTransportProfile(
         cloud_family=normalized_family,
         runtime_owner_key=normalized_owner,
+        identity_challenge_protocol=resolve_collector_cloud_session_protocol(
+            normalized_family
+        ),
         session_protocol="",
         identity_strategy="",
         raw_passthrough_bootstrap="",
@@ -231,6 +237,7 @@ def apply_observed_collector_session_protocol(
     return CollectorTransportProfile(
         cloud_family=base.cloud_family,
         runtime_owner_key=base.runtime_owner_key,
+        identity_challenge_protocol=base.identity_challenge_protocol,
         session_protocol=protocol,
         identity_strategy=str(override["identity_strategy"]),
         raw_passthrough_bootstrap=raw_bootstrap,
@@ -249,6 +256,7 @@ def framed_collector_transport_profile(
     return CollectorTransportProfile(
         cloud_family=known_collector_cloud_family(cloud_family),
         runtime_owner_key=str(runtime_owner_key or "").strip().lower(),
+        identity_challenge_protocol="eybond_framed",
         session_protocol="eybond_framed",
         identity_strategy="framed_heartbeat_then_fc2_pn",
         raw_passthrough_bootstrap="",

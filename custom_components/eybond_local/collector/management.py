@@ -569,8 +569,9 @@ class AtTextCollectorManagementAdapter(CollectorManagementAdapter):
     """Collector management over the AT-text wire (CLDSRVHOST1 / INTPARA).
 
     The AT command strings live only inside this class. Endpoint read/write and
-    apply are real and confirmed (command echo); reboot has no confirmed AT
-    command yet, so it stays honestly unsupported.
+    apply/reboot are real and confirmed by the command response. The vendor's
+    collector-restart flow uses ``AT+INTPARA=29,1``; a recovery transaction
+    separately proves the resulting disconnect and same-identity reconnect.
     """
 
     adapter_id = ADAPTER_COLLECTOR_AT_COMMANDS
@@ -578,8 +579,12 @@ class AtTextCollectorManagementAdapter(CollectorManagementAdapter):
         "collector AT endpoint write accepted; the current session may disconnect "
         "before the next refresh"
     )
-    _ACTION_WARNING = (
+    _APPLY_ACTION_WARNING = (
         "collector AT apply accepted; the current session may disconnect before "
+        "the next refresh"
+    )
+    _REBOOT_ACTION_WARNING = (
+        "collector AT restart accepted; the current session may disconnect before "
         "the next refresh"
     )
 
@@ -592,7 +597,7 @@ class AtTextCollectorManagementAdapter(CollectorManagementAdapter):
             read_endpoint_state=True,
             write_endpoint=True,
             apply_changes=True,
-            reboot=False,
+            reboot=True,
         )
 
     def _resolve_transport(self, *, needs_write: bool = False) -> object:
@@ -721,16 +726,18 @@ class AtTextCollectorManagementAdapter(CollectorManagementAdapter):
             reboot_required_before="",
             performed=True,
             adapter_id=self.adapter_id,
-            warnings=(self._ACTION_WARNING,),
+            warnings=(
+                self._REBOOT_ACTION_WARNING
+                if action == "reboot"
+                else self._APPLY_ACTION_WARNING,
+            ),
         )
 
     async def async_apply_changes(self) -> CollectorSystemActionResult:
         return await self._system_action("apply")
 
     async def async_reboot(self) -> CollectorSystemActionResult:
-        raise CollectorManagementUnsupportedError(
-            "collector_reboot_unsupported_on_at_wire"
-        )
+        return await self._system_action("reboot")
 
     async def async_query_parameters(
         self,

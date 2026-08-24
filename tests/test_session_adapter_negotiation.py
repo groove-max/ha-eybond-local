@@ -103,9 +103,23 @@ def _bare_link(
     link = object.__new__(EybondRuntimeLinkManager)
     link._collector_pn = collector_pn
     link._collector_ip = collector_ip
+    link._tcp_port = 18899
+    link._effective_server_ip = "192.0.2.10"
+    link._configured_advertised_server_ip = ""
+    link._configured_advertised_tcp_port = 0
+    link._listener_bind_host = "0.0.0.0"
+    link._listener_status = "listening"
+    link._listener_rebind_count = 0
+    link._listener_last_error = ""
     # persisted_protocol is the INFERRED (cloud-family) expected hint: diagnostic
     # only, it must never drive the adapter/probe/owner.
     link._configured_collector_session_protocol = persisted_protocol
+    link._configured_identity_challenge_protocol = ""
+    link._active_identity_challenge_protocol = ""
+    link._collector_identity_strategy = ""
+    link._collector_raw_passthrough_bootstrap = ""
+    link._collector_raw_passthrough_frame_format = ""
+    link._collector_raw_passthrough_min_interval_ms = 0
     link._transport = _FakeTransport(sessions)
     link._at_transport = _FakeAtTransport()
     link._unavailable_payload_transport = _UnavailablePayloadTransport()
@@ -118,6 +132,11 @@ def _bare_link(
     link._session_registry = CallbackSessionRegistry(
         sessions_source=link._iter_observed_sessions,
     )
+    # Keep this unit fixture independent of ownership/ledger diagnostics while
+    # still exercising the real session/capability projection.
+    link._session_ownership_diagnostics = lambda: {}
+    link._session_inventory_diagnostics = lambda: {}
+    link.callback_trigger_diagnostics = lambda: {}
     # Exercise the REAL evidence validator + seeding + PN validation exactly as
     # the branch registry does: a persisted record only bootstraps when it is a
     # validated ``live_session`` confirmed-protocol record for the same durable
@@ -174,8 +193,114 @@ class SessionHandleNegotiationTests(unittest.TestCase):
         )
         self.assertEqual(handle.wire_framing, WIRE_FRAMED)
         self.assertIn("at_dtupn", handle.identity_sources)
+        self.assertTrue(handle.supports(ADAPTER_COLLECTOR_AT_COMMANDS))
         self.assertEqual(handle.inverter_forward_adapter, ADAPTER_INVERTER_FRAMED_FC4)
         self.assertFalse(handle.supports(ADAPTER_INVERTER_RAW_PASSTHROUGH))
+
+    def test_hybrid_session_keeps_one_framed_route_and_two_management_capabilities(self) -> None:
+        observed = _observed(
+            "hybrid",
+            FULL_PN,
+            state="routed_framed",
+            shape="eybond_framed",
+            source="fc2_parameter_2",
+        )
+        observed["collector_identity_sources"] = (
+            "fc2_parameter_2",
+            "at_dtupn",
+        )
+        observed["observed_protocol_shapes"] = (
+            "eybond_framed",
+            "at_text",
+        )
+
+        handle = negotiate_session_adapters(observed)
+
+        self.assertTrue(handle.uses_framed_wire)
+        self.assertEqual(
+            handle.collector_management_adapter,
+            ADAPTER_COLLECTOR_FRAMED_COMMANDS,
+        )
+        self.assertEqual(
+            handle.capabilities.collector_management_adapters,
+            frozenset(
+                {
+                    ADAPTER_COLLECTOR_FRAMED_COMMANDS,
+                    ADAPTER_COLLECTOR_AT_COMMANDS,
+                }
+            ),
+        )
+        self.assertEqual(
+            handle.capabilities.inverter_forward_adapters,
+            frozenset({ADAPTER_INVERTER_FRAMED_FC4}),
+        )
+        self.assertFalse(handle.supports(ADAPTER_INVERTER_RAW_PASSTHROUGH))
+
+    def test_confirmed_binding_does_not_carry_supplemental_capability_across_reconnect(self) -> None:
+        observed = _observed(
+            "hybrid",
+            FULL_PN,
+            state="routed_framed",
+            shape="eybond_framed",
+            source="fc2_parameter_2",
+        )
+        observed["collector_identity_sources"] = (
+            "fc2_parameter_2",
+            "at_dtupn",
+        )
+        observed["observed_protocol_shapes"] = (
+            "eybond_framed",
+            "at_text",
+        )
+        handle = negotiate_session_adapters(observed)
+
+        binding = ConfirmedWireBinding.from_handle(
+            handle,
+            collector_pn=FULL_PN,
+        )
+
+        assert binding is not None
+        self.assertTrue(
+            binding.capabilities.supports(ADAPTER_COLLECTOR_FRAMED_COMMANDS)
+        )
+        self.assertFalse(
+            binding.capabilities.supports(ADAPTER_COLLECTOR_AT_COMMANDS)
+        )
+
+    def test_framed_only_session_does_not_invent_at_capability(self) -> None:
+        observed = _observed(
+            "v0010",
+            FULL_PN,
+            state="routed_framed",
+            shape="eybond_framed",
+            source="fc2_parameter_2",
+        )
+        observed["collector_identity_sources"] = ("fc2_parameter_2",)
+        observed["observed_protocol_shapes"] = ("eybond_framed",)
+
+        handle = negotiate_session_adapters(observed)
+
+        self.assertTrue(handle.supports(ADAPTER_COLLECTOR_FRAMED_COMMANDS))
+        self.assertFalse(handle.supports(ADAPTER_COLLECTOR_AT_COMMANDS))
+
+    def test_non_exact_scalar_identity_source_cannot_mint_capability(self) -> None:
+        class _LooksLikeAt:
+            def __str__(self) -> str:
+                return "at_dtupn"
+
+        observed = _observed(
+            "v0010",
+            FULL_PN,
+            state="routed_framed",
+            shape="eybond_framed",
+            source="fc2_parameter_2",
+        )
+        observed["collector_identity_source"] = _LooksLikeAt()
+
+        handle = negotiate_session_adapters(observed)
+
+        self.assertTrue(handle.supports(ADAPTER_COLLECTOR_FRAMED_COMMANDS))
+        self.assertFalse(handle.supports(ADAPTER_COLLECTOR_AT_COMMANDS))
 
     def test_at_text_negotiates_raw_passthrough_and_at_commands(self) -> None:
         handle = negotiate_session_adapters(
@@ -1657,6 +1782,11 @@ class CollectorMetadataRouteAuthorityTests(unittest.TestCase):
         )
         routes = link.collector_metadata_routes()
         self.assertIsNotNone(routes.framed)
+        self.assertIsNotNone(routes.at)
+        assert routes.at is not None
+        # The AT facade can multiplex over the framed parser, but that is not
+        # device capability evidence. First route is one read-only DTUPN probe.
+        self.assertTrue(routes.at.capability_probe)
         # A framed wire reads param 6 in its normal sweep -> no separate bootstrap
         # channel (the bootstrap probe exists only for an AT-shaped ESP bridge).
         self.assertIsNone(routes.bootstrap)
@@ -1666,6 +1796,58 @@ class CollectorMetadataRouteAuthorityTests(unittest.TestCase):
         self.assertEqual(routes.session_id, "s1")
         self.assertEqual(routes.framed.session_id, "s1")
         self.assertFalse(hasattr(routes.framed, "peer_ip"))
+
+    def test_hybrid_identity_history_enables_supplemental_at_without_changing_primary(self) -> None:
+        observed = _observed(
+            "hybrid",
+            FULL_PN,
+            state="routed_framed",
+            shape="eybond_framed",
+            source="framed_heartbeat",
+        )
+        observed["collector_identity_sources"] = (
+            "framed_heartbeat",
+            "at_dtupn",
+        )
+        observed["observed_protocol_shapes"] = (
+            "eybond_framed",
+            "at_text",
+        )
+        link = _bare_link(
+            collector_pn=FULL_PN,
+            collector_ip="",
+            persisted_protocol="",
+            sessions=[observed],
+        )
+
+        routes = link.collector_metadata_routes()
+        diagnostics = link.listener_diagnostics()
+
+        self.assertTrue(link.session_handle.uses_framed_wire)
+        self.assertIsNotNone(routes.framed)
+        self.assertIsNotNone(routes.at)
+        assert routes.at is not None
+        self.assertFalse(routes.at.capability_probe)
+        self.assertIn("collector_ssid", routes.at.excluded_semantic_fields)
+        self.assertEqual(
+            set(
+                diagnostics[
+                    "collector_callback_collector_management_capabilities"
+                ].split(", ")
+            ),
+            {
+                ADAPTER_COLLECTOR_FRAMED_COMMANDS,
+                ADAPTER_COLLECTOR_AT_COMMANDS,
+            },
+        )
+        self.assertEqual(
+            diagnostics["collector_callback_inverter_forward_capabilities"],
+            ADAPTER_INVERTER_FRAMED_FC4,
+        )
+        self.assertNotIn(
+            ADAPTER_INVERTER_RAW_PASSTHROUGH,
+            diagnostics["collector_callback_inverter_forward_capabilities"],
+        )
 
     def test_at_text_live_session_routes_at_and_bootstrap(self) -> None:
         link = _bare_link(
@@ -1680,6 +1862,8 @@ class CollectorMetadataRouteAuthorityTests(unittest.TestCase):
         self.assertIsNone(routes.framed)
         self.assertIsNotNone(routes.at)
         self.assertIsNotNone(routes.bootstrap)
+        assert routes.at is not None
+        self.assertFalse(routes.at.capability_probe)
         self.assertEqual(routes.provenance, "live")
 
     def test_conflicting_live_session_routes_no_metadata_channels(self) -> None:

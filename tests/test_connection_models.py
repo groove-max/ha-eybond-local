@@ -95,6 +95,7 @@ class ConnectionModelsTests(unittest.TestCase):
         self.assertEqual(spec.server_ip, "192.168.1.50")
         self.assertEqual(spec.collector_pn, "E5000020000000")
         self.assertEqual(spec.collector_cloud_family, "smartess_at")
+        self.assertEqual(spec.collector_identity_challenge_protocol, "at_text")
         self.assertEqual(spec.collector_configured_session_protocol, "")
         self.assertEqual(spec.collector_identity_strategy, "")
         self.assertEqual(spec.effective_advertised_server_ip, "203.0.113.10")
@@ -117,6 +118,7 @@ class ConnectionModelsTests(unittest.TestCase):
         )
 
         self.assertEqual(spec.collector_cloud_family, "smartess_at")
+        self.assertEqual(spec.collector_identity_challenge_protocol, "at_text")
         self.assertEqual(spec.collector_configured_session_protocol, "")
         self.assertEqual(spec.collector_identity_strategy, "")
 

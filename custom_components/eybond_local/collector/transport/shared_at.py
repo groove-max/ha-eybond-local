@@ -432,6 +432,7 @@ class SharedCollectorAtTransport:
             return await connection.async_send_raw_payload(
                 payload,
                 request_timeout=effective_request_timeout,
+                payload_protocol=route.protocol,
             )
 
         if self._listener is None:
@@ -460,6 +461,7 @@ class SharedCollectorAtTransport:
                 return await connection.async_send_raw_payload(
                     payload,
                     request_timeout=effective_request_timeout,
+                    payload_protocol=route.protocol,
                 )
 
         raise ConnectionError("collector_not_connected")

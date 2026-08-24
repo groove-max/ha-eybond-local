@@ -32,11 +32,19 @@ _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         "custom_components/eybond_local/runtime/link",
-        ("test_runtime_link.py", "test_link_module_boundaries.py"),
+        (
+            "test_runtime_link.py",
+            "test_link_module_boundaries.py",
+            "test_runtime_silent_identity_bootstrap.py",
+        ),
     ),
     (
         "custom_components/eybond_local/collector/transport",
-        ("test_shared_transport.py", "test_transport_module_boundaries.py"),
+        (
+            "test_shared_transport.py",
+            "test_transport_module_boundaries.py",
+            "test_runtime_silent_identity_bootstrap.py",
+        ),
     ),
     (
         "custom_components/eybond_local/connection/recovery",
@@ -99,6 +107,24 @@ _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # these entries prevent a cheap ``affected`` run from silently missing a typed
 # boundary or neutral wire contract.
 _EXACT_TESTS: dict[str, tuple[str, ...]] = {
+    "custom_components/eybond_local/collector/entity_scope.py": (
+        "test_collector_device_routing.py",
+        "test_init_module.py",
+    ),
+    "custom_components/eybond_local/integration_entities.py": (
+        "test_init_module.py",
+        "test_collector_device_routing.py",
+    ),
+    "custom_components/eybond_local/sensor.py": (
+        "test_collector_device_routing.py",
+        "test_sensor_precision.py",
+        "test_init_module.py",
+    ),
+    "custom_components/eybond_local/payload/modbus.py": (
+        "test_modbus_payload.py",
+        "test_smg_driver.py",
+        "test_runtime_silent_identity_bootstrap.py",
+    ),
     "custom_components/eybond_local/support/shadow_learning/read_evidence.py": (
         "test_read_learning_binder.py",
         "test_shadow_learning_backend.py",
@@ -528,9 +554,14 @@ def run_affected(base: str) -> None:
     if not tests:
         print("No affected unit tests were selected.")
         return
-    modules = tuple(path.stem for path in tests)
     print("Affected tests: " + ", ".join(path.name for path in tests))
-    _run((sys.executable, "-m", "unittest", "-v", *modules), cwd=TEST_ROOT)
+    # Several bare unittest files install intentionally minimal Home Assistant
+    # module stubs at import time. Loading every selected module into one process
+    # lets one harness contaminate another before either suite starts. Keep the
+    # affected lane deterministic by isolating files while still running only the
+    # selected subset (far cheaper than the full discovery gate).
+    for path in tests:
+        _run((sys.executable, path.name), cwd=TEST_ROOT)
 
 
 def run_ha(python_executable: str) -> None:

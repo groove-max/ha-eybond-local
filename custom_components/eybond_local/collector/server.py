@@ -56,6 +56,7 @@ class EybondServer:
         self._tid = TIDCounter()
         self._collector = CollectorInfo()
         self._last_heartbeat_monotonic: float | None = None
+        self._last_liveness_monotonic: float | None = None
 
     @property
     def connected(self) -> bool:
@@ -114,6 +115,12 @@ class EybondServer:
         age = self._heartbeat_age_seconds()
         return age is not None and age <= self._heartbeat_freshness_window()
 
+    def _has_fresh_liveness(self) -> bool:
+        if self._last_liveness_monotonic is None:
+            return False
+        age = max(0.0, monotonic() - self._last_liveness_monotonic)
+        return age <= self._heartbeat_freshness_window()
+
     async def start(self) -> None:
         """Start listening for collector connections."""
 
@@ -151,6 +158,22 @@ class EybondServer:
         deadline = monotonic() + max(timeout, 0.0)
         while True:
             if self._has_fresh_heartbeat():
+                return True
+            if not self.connected:
+                return False
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(0.1, remaining))
+
+    async def wait_until_liveness(self, timeout: float) -> bool:
+        """Wait for recent heartbeat or correlated response traffic."""
+
+        if self._has_fresh_liveness():
+            return True
+        deadline = monotonic() + max(timeout, 0.0)
+        while True:
+            if self._has_fresh_liveness():
                 return True
             if not self.connected:
                 return False
@@ -234,6 +257,7 @@ class EybondServer:
         self._collector.remote_ip = peer[0] or ""
         self._collector.remote_port = peer[1]
         self._last_heartbeat_monotonic = None
+        self._last_liveness_monotonic = None
         self._reader = reader
         self._writer = writer
         self._connected.set()
@@ -299,6 +323,10 @@ class EybondServer:
                     self._collector.heartbeat_payload_hex = payload.hex()
                     self._last_heartbeat_monotonic = monotonic()
                 future = self._pending.get(header.tid)
+                if header.fcode == FC_HEARTBEAT or (
+                    future is not None and not future.done()
+                ):
+                    self._last_liveness_monotonic = monotonic()
                 if future and not future.done():
                     future.set_result((header, payload))
                     continue
@@ -344,6 +372,7 @@ class EybondServer:
         self._writer = None
         self._connected.clear()
         self._last_heartbeat_monotonic = None
+        self._last_liveness_monotonic = None
 
         if writer:
             writer.close()

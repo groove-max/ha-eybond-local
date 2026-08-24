@@ -237,7 +237,10 @@ def _build_diagnostics_split(
             values,
             "collector_remote_ip",
             # Protocol authority is intentionally split into configured
-            # PN-bound evidence, current confirmed binding, and live wire.
+            # PN-bound evidence, read-only bootstrap candidate, current
+            # confirmed binding, and live wire.
+            "collector_identity_challenge_protocol",
+            "collector_identity_challenge_active",
             "collector_configured_session_protocol",
             "collector_confirmed_session_protocol",
             "collector_live_session_protocol",
@@ -247,8 +250,11 @@ def _build_diagnostics_split(
             "collector_callback_wire_framing",
             "collector_callback_identity_sources",
             "collector_callback_collector_management_adapter",
+            "collector_callback_collector_management_capabilities",
             "collector_callback_inverter_forward_adapter",
+            "collector_callback_inverter_forward_capabilities",
             "collector_callback_proxy_adapter",
+            "collector_callback_proxy_capabilities",
             "collector_callback_adapter_conflict",
             "collector_connection_count",
             "collector_disconnect_count",
@@ -316,6 +322,11 @@ def _build_diagnostics_split(
                 "collector_metadata_channel_commands",
                 "collector_metadata_channel_failures",
                 "collector_metadata_partial_channels",
+                "collector_metadata_effective_exclusions",
+                "collector_metadata_unsupported_fields",
+                "collector_metadata_semantic_binding_generation",
+                "collector_metadata_at_owned_fields",
+                "collector_metadata_framed_unsupported_fields",
                 "collector_metadata_cache_dirty",
                 "collector_metadata_framed_cache_keys",
                 "collector_metadata_at_cache_keys",
@@ -487,6 +498,7 @@ def build_support_bundle_payload(
     smartess_profile_key: str = "",
     support_marker: dict[str, Any] | None = None,
     cloud_evidence: dict[str, Any] | None = None,
+    device_registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one machine-readable support bundle payload.
 
@@ -542,6 +554,7 @@ def build_support_bundle_payload(
             "options": options,
         },
         "source_metadata": source_metadata,
+        "device_registry": device_registry or {"available": False},
         "runtime": runtime_payload,
         "roles": _build_role_payloads(
             collector=collector,
@@ -584,6 +597,7 @@ def export_support_bundle(
     smartess_profile_key: str = "",
     support_marker: dict[str, Any] | None = None,
     cloud_evidence: dict[str, Any] | None = None,
+    device_registry: dict[str, Any] | None = None,
     overwrite: bool = False,
 ) -> Path:
     """Build and export one JSON support bundle payload for the current entry."""
@@ -610,6 +624,7 @@ def export_support_bundle(
         smartess_profile_key=smartess_profile_key,
         support_marker=support_marker,
         cloud_evidence=cloud_evidence,
+        device_registry=device_registry,
     )
 
     output_root = config_dir / LOCAL_METADATA_DIR / LOCAL_SUPPORT_PACKAGES_DIR

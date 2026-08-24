@@ -268,9 +268,18 @@ class AtTextCollectorManagementAdapterTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(CollectorManagementConfirmationError):
             await self._adapter(transport).async_apply_changes()
 
-    async def test_reboot_unsupported(self) -> None:
-        with self.assertRaises(CollectorManagementUnsupportedError):
-            await self._adapter(_FakeAtTransport()).async_reboot()
+    async def test_reboot_uses_vendor_intpara_restart_command(self) -> None:
+        transport = _FakeAtTransport()
+
+        result = await self._adapter(transport).async_reboot()
+
+        self.assertEqual(transport.queries, ["CLDSRVHOST1"])
+        self.assertEqual(transport.writes, [("INTPARA", "29,1")])
+        self.assertEqual(result.action, "reboot")
+        self.assertTrue(result.performed)
+        self.assertEqual(result.current_endpoint, "iot.eybond.com,18899,TCP")
+        self.assertEqual(result.adapter_id, ADAPTER_COLLECTOR_AT_COMMANDS)
+        self.assertIn("restart accepted", result.warnings[0])
 
     async def test_uart_write_unsupported(self) -> None:
         with self.assertRaises(CollectorManagementUnsupportedError):
@@ -281,7 +290,7 @@ class AtTextCollectorManagementAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(caps.read_endpoint_state)
         self.assertTrue(caps.write_endpoint)
         self.assertTrue(caps.apply_changes)
-        self.assertFalse(caps.reboot)
+        self.assertTrue(caps.reboot)
 
     async def test_transport_error_is_wrapped_typed(self) -> None:
         class _Boom:

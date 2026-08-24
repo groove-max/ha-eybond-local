@@ -108,6 +108,9 @@ def _build_eybond_connection_spec(
         collector_ip=str(options.get(CONF_COLLECTOR_IP, data.get(CONF_COLLECTOR_IP, DEFAULT_COLLECTOR_IP))),
         collector_pn=str(data.get(CONF_COLLECTOR_PN, "") or ""),
         collector_cloud_family=transport_profile.cloud_family,
+        collector_identity_challenge_protocol=(
+            transport_profile.identity_challenge_protocol
+        ),
         collector_configured_session_protocol=transport_profile.session_protocol,
         collector_identity_strategy=transport_profile.identity_strategy,
         collector_raw_passthrough_bootstrap=transport_profile.raw_passthrough_bootstrap,

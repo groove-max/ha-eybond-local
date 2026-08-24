@@ -231,6 +231,7 @@ def _short_ascii(value: bytes, *, limit: int = 160) -> str:
 
 
 _AT_TEXT_MIXED_FRAME_READ_TIMEOUT = 0.05
+_AT_TEXT_RESPONSE_IDLE_TIMEOUT = 0.2
 _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN = 4096
 _AT_TEXT_MIXED_FRAME_FCODES = {
     FC_HEARTBEAT,
@@ -480,6 +481,58 @@ class _PrefixedAsyncReader:
         self._buffer.clear()
         return data + await self._reader.readuntil(separator)
 
+    async def read_at_response(self) -> bytes:
+        """Read one AT response terminated by newline or a bounded idle gap.
+
+        Some collector firmware omits CR/LF for otherwise valid AT responses
+        (observed for ``AT+INTPARA:41,...``). Waiting unconditionally for a
+        newline consumes every later framed response into the AT record and
+        permanently desynchronizes the shared stream. A complete plausible
+        EyeBond header is kept for the next parser iteration; otherwise a short
+        inter-byte idle gap is the only framing information such firmware
+        provides.
+        """
+
+        data = bytearray()
+        binary_suspected = False
+        while len(data) < _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN:
+            try:
+                byte = await asyncio.wait_for(
+                    self.readexactly(1),
+                    timeout=_AT_TEXT_RESPONSE_IDLE_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                return bytes(data)
+
+            data.extend(byte)
+
+            # Do not assume that a framed packet starts with NUL: after enough
+            # requests its two-byte transaction id can be entirely printable.
+            # Wait for a complete, plausible EyeBond header and push the whole
+            # header back atomically so no binary prefix is lost.
+            if len(data) >= HEADER_SIZE:
+                frame_start = len(data) - HEADER_SIZE
+                candidate = bytes(data[frame_start:])
+                if _looks_like_eybond_frame_start(candidate):
+                    self._buffer[:0] = candidate
+                    return bytes(data[:frame_start])
+
+            if byte == b"\n":
+                if not binary_suspected and data.endswith(b"\r\n"):
+                    return bytes(data)
+                # LF-only firmware remains supported through the idle-gap
+                # boundary. A lone LF may also be the high TID byte of the
+                # following binary frame and therefore is not consumed early.
+                binary_suspected = True
+                continue
+            if byte and byte[0] < 0x20 and byte not in (b"\r", b"\t"):
+                binary_suspected = True
+
+        raise asyncio.LimitOverrunError(
+            "collector_at_response_too_large",
+            len(data),
+        )
+
 
 class CollectorTransport(PayloadLinkTransport, Protocol):
     @property
@@ -494,6 +547,9 @@ class CollectorTransport(PayloadLinkTransport, Protocol):
         ...
 
     async def wait_until_heartbeat(self, timeout: float) -> bool:
+        ...
+
+    async def wait_until_liveness(self, timeout: float) -> bool:
         ...
 
     async def disconnect(self) -> None:

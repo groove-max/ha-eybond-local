@@ -43,6 +43,31 @@ from .common import (
 
 logger = logging.getLogger(__name__)
 
+
+def _modbus_rtu_response_length(prefix: bytes) -> int | None:
+    """Return the complete RTU response length for a three-byte prefix.
+
+    This is framing only; ``ModbusSession`` remains the authority that validates
+    slave id, function, payload length and CRC.  The parser is enabled solely
+    while a typed ``raw_serial/modbus_rtu`` request is pending, so arbitrary AT
+    or mixed EyeBond traffic can never be reclassified as Modbus.
+    """
+
+    if len(prefix) < 3:
+        return None
+    function = prefix[1]
+    if function & 0x80:
+        return 5
+    if function in (0x03, 0x04):
+        byte_count = prefix[2]
+        if byte_count > 250:
+            return None
+        return 3 + byte_count + 2
+    if function in (0x06, 0x10):
+        return 8
+    return None
+
+
 class _CollectorConnection:
     def __init__(
         self,
@@ -65,6 +90,7 @@ class _CollectorConnection:
         self._tid = TIDCounter()
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
         self._last_heartbeat_monotonic: float | None = None
+        self._last_liveness_monotonic: float | None = None
         self._session_id = ""
         self._session_identity_callback: Callable[[str, str, str], None] | None = None
         self._run_epoch = 0
@@ -101,6 +127,15 @@ class _CollectorConnection:
         age = self._heartbeat_age_seconds()
         return age is not None and age <= self._heartbeat_freshness_window()
 
+    def _liveness_age_seconds(self) -> float | None:
+        if self._last_liveness_monotonic is None:
+            return None
+        return max(0.0, monotonic() - self._last_liveness_monotonic)
+
+    def _has_fresh_liveness(self) -> bool:
+        age = self._liveness_age_seconds()
+        return age is not None and age <= self._heartbeat_freshness_window()
+
     async def wait_until_connected(self, timeout: float) -> bool:
         if self.connected:
             return True
@@ -117,6 +152,23 @@ class _CollectorConnection:
         deadline = monotonic() + max(timeout, 0.0)
         while True:
             if self._has_fresh_heartbeat():
+                return True
+            if not self.connected:
+                return False
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(0.1, remaining))
+
+    async def wait_until_liveness(self, timeout: float) -> bool:
+        """Wait for recent correlated traffic on this exact framed session."""
+
+        if self._has_fresh_liveness():
+            return True
+
+        deadline = monotonic() + max(timeout, 0.0)
+        while True:
+            if self._has_fresh_liveness():
                 return True
             if not self.connected:
                 return False
@@ -258,6 +310,7 @@ class _CollectorConnection:
         self._collector.connection_count += 1
         self._collector.last_disconnect_reason = ""
         self._last_heartbeat_monotonic = None
+        self._last_liveness_monotonic = None
         self._reader = reader
         self._writer = writer
         self._session_id = str(session_id or "").strip()
@@ -349,6 +402,7 @@ class _CollectorConnection:
 
         future = self._pending_at_response
         if future is not None and not future.done():
+            self._last_liveness_monotonic = monotonic()
             future.set_result(response)
             return
 
@@ -360,12 +414,17 @@ class _CollectorConnection:
             response.value,
         )
 
-    async def _read_loop(self, reader: asyncio.StreamReader) -> None:
+    async def _read_loop(
+        self,
+        reader: asyncio.StreamReader | _PrefixedAsyncReader,
+    ) -> None:
+        if not isinstance(reader, _PrefixedAsyncReader):
+            reader = _PrefixedAsyncReader(reader)
         try:
             while True:
                 prefix = await reader.readexactly(3)
                 if prefix == b"AT+":
-                    line = prefix + await reader.readuntil(b"\n")
+                    line = prefix + await reader.read_at_response()
                     self._handle_at_response(line)
                     continue
 
@@ -386,6 +445,7 @@ class _CollectorConnection:
                     header.payload_len,
                 )
 
+                observed_at = monotonic()
                 if header.fcode == FC_HEARTBEAT:
                     pn = parse_heartbeat_pn(payload)
                     if pn:
@@ -396,7 +456,7 @@ class _CollectorConnection:
                         self._record_session_identity(pn, "framed_heartbeat")
                     self._collector.heartbeat_devcode = header.devcode
                     self._collector.heartbeat_payload_hex = payload.hex()
-                    self._last_heartbeat_monotonic = monotonic()
+                    self._last_heartbeat_monotonic = observed_at
                 elif header.fcode == FC_QUERY_COLLECTOR:
                     pn = _parse_fc2_collector_pn(payload)
                     if pn:
@@ -406,6 +466,10 @@ class _CollectorConnection:
                         )
                         self._record_session_identity(pn, "fc2_parameter_2")
                 future = self._pending.get(header.tid)
+                if header.fcode == FC_HEARTBEAT or (
+                    future is not None and not future.done()
+                ):
+                    self._last_liveness_monotonic = observed_at
                 if future and not future.done():
                     future.set_result((header, payload))
                     continue
@@ -469,6 +533,7 @@ class _CollectorConnection:
         self._writer = None
         self._connected.clear()
         self._last_heartbeat_monotonic = None
+        self._last_liveness_monotonic = None
         self._session_id = ""
         self._session_identity_callback = None
 
@@ -511,6 +576,7 @@ class _CollectorAtConnection:
         self._write_lock = asyncio.Lock()
         self._pending_response: asyncio.Future[CollectorAtResponse] | None = None
         self._pending_raw_response: asyncio.Future[bytes] | None = None
+        self._pending_raw_protocol = ""
         self._pending_framed_response: dict[int, asyncio.Future[tuple[EybondHeader, bytes]]] = {}
         self._tid = TIDCounter()
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
@@ -575,12 +641,18 @@ class _CollectorAtConnection:
                 request_timeout=request_timeout,
             )
 
-    async def async_send_raw_payload(self, payload: bytes, *, request_timeout: float) -> bytes:
+    async def async_send_raw_payload(
+        self,
+        payload: bytes,
+        *,
+        request_timeout: float,
+        payload_protocol: str = "",
+    ) -> bytes:
         """Send one raw inverter payload over a plain AT callback stream.
 
         Some DTU/AT collectors do not wrap inverter traffic in the legacy EyeBond
-        FC=4 tunnel. The cloud writes PI-style ASCII commands directly to the same
-        TCP stream after the AT bootstrap and receives raw ``(...\r`` responses.
+        FC=4 tunnel. The cloud writes typed raw payloads (for example PI ASCII or
+        Modbus RTU) directly to the same TCP stream after the AT bootstrap.
         """
 
         if not self.connected or not self._writer:
@@ -594,6 +666,7 @@ class _CollectorAtConnection:
             loop = asyncio.get_running_loop()
             future: asyncio.Future[bytes] = loop.create_future()
             self._pending_raw_response = future
+            self._pending_raw_protocol = str(payload_protocol or "").strip().lower()
             self._collector.raw_request_count += 1
             self._collector.raw_last_request_hex = payload.hex()
             self._collector.raw_last_request_ascii = _short_ascii(payload)
@@ -651,6 +724,7 @@ class _CollectorAtConnection:
             finally:
                 if self._pending_raw_response is future:
                     self._pending_raw_response = None
+                    self._pending_raw_protocol = ""
 
     async def async_send_bridge_identity_probe(
         self,
@@ -854,7 +928,12 @@ class _CollectorAtConnection:
             except asyncio.TimeoutError as exc:
                 raise ConnectionError("collector_write_timeout") from exc
 
-    async def _read_loop(self, reader: asyncio.StreamReader) -> None:
+    async def _read_loop(
+        self,
+        reader: asyncio.StreamReader | _PrefixedAsyncReader,
+    ) -> None:
+        if not isinstance(reader, _PrefixedAsyncReader):
+            reader = _PrefixedAsyncReader(reader)
         try:
             buffered_prefix = b""
             while True:
@@ -867,12 +946,36 @@ class _CollectorAtConnection:
                 if first == b"A":
                     prefix = first + await reader.readexactly(2)
                     if prefix == b"AT+":
-                        line = prefix + await reader.readuntil(b"\n")
+                        line = prefix + await reader.read_at_response()
                         self._handle_at_response_line(line)
                         continue
                     buffered_prefix = prefix + buffered_prefix
 
                 raw_future = self._pending_raw_response
+                raw_protocol = self._pending_raw_protocol
+                if (
+                    raw_future is not None
+                    and not raw_future.done()
+                    and raw_protocol == "modbus_rtu"
+                ):
+                    prefix = buffered_prefix or first
+                    buffered_prefix = b""
+                    if len(prefix) < 3:
+                        prefix += await reader.readexactly(3 - len(prefix))
+                    frame_length = _modbus_rtu_response_length(prefix[:3])
+                    if frame_length is None or len(prefix) > frame_length:
+                        self._record_unhandled_raw_fragment(
+                            prefix,
+                            parser="raw_modbus_rtu_prefix_invalid",
+                        )
+                        continue
+                    frame = prefix
+                    if len(frame) < frame_length:
+                        frame += await reader.readexactly(frame_length - len(frame))
+                    self._collector.raw_last_parser = "raw_modbus_rtu"
+                    raw_future.set_result(frame)
+                    continue
+
                 if (
                     raw_future is not None
                     and not raw_future.done()
@@ -1175,5 +1278,6 @@ class _CollectorAtConnection:
 
         raw_future = self._pending_raw_response
         self._pending_raw_response = None
+        self._pending_raw_protocol = ""
         if raw_future is not None and not raw_future.done():
             raw_future.set_exception(ConnectionError("collector_disconnected"))

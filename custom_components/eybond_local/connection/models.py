@@ -30,6 +30,10 @@ class EybondConnectionSpec(ConnectionSpec):
     collector_ip: str
     collector_pn: str
     collector_cloud_family: str
+    # Metadata-derived candidate for one exact-session, read-only identity
+    # challenge. It is deliberately separate from the confirmed wire below and
+    # can never route or own a socket by itself.
+    collector_identity_challenge_protocol: str
     # Session profile selected from validated, PN-bound live wire evidence.
     # Cloud/driver/endpoint metadata can never populate this field by itself.
     collector_configured_session_protocol: str
@@ -59,6 +63,7 @@ class EybondConnectionSpec(ConnectionSpec):
         collector_ip: str = "",
         collector_pn: str = "",
         collector_cloud_family: str = "",
+        collector_identity_challenge_protocol: str = "",
         collector_configured_session_protocol: str = "",
         collector_identity_strategy: str = "",
         collector_raw_passthrough_bootstrap: str = "",
@@ -79,6 +84,11 @@ class EybondConnectionSpec(ConnectionSpec):
         object.__setattr__(self, "collector_ip", collector_ip)
         object.__setattr__(self, "collector_pn", collector_pn)
         object.__setattr__(self, "collector_cloud_family", collector_cloud_family)
+        object.__setattr__(
+            self,
+            "collector_identity_challenge_protocol",
+            collector_identity_challenge_protocol,
+        )
         object.__setattr__(
             self,
             "collector_configured_session_protocol",

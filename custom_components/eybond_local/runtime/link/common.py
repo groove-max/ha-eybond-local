@@ -23,6 +23,7 @@ from ...collector.metadata import (
 )
 from ...connection.confirmed_session_protocol import ConfirmedSessionProtocolEvidence
 from ...connection.session_handle import (
+    ADAPTER_COLLECTOR_AT_COMMANDS,
     ADAPTER_NONE,
     ADAPTER_INVERTER_FRAMED_FC4,
     ADAPTER_INVERTER_RAW_PASSTHROUGH,

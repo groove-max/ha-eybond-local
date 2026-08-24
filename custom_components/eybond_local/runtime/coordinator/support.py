@@ -284,6 +284,7 @@ class CoordinatorSupportMixin:
                 profile_name=support_bundle_payload["source_metadata"]["profile_name"],
                 register_schema_name=support_bundle_payload["source_metadata"]["register_schema_name"],
                 cloud_evidence=support_bundle_payload["evidence"]["cloud"],
+                device_registry=support_bundle_payload["device_registry"],
             )
         )
         self._publish_tooling_values(

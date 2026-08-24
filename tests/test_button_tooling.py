@@ -1022,7 +1022,8 @@ class CollectorManagementCapabilityGatingTests(unittest.TestCase):
         )
 
     def test_reboot_button_unavailable_when_reboot_capability_absent(self) -> None:
-        # AT wire: apply available, reboot not.
+        # Capability absence remains independently load-bearing for an
+        # unavailable or future adapter that cannot confirm restart.
         coordinator = _CoordinatorStub()
         coordinator.management_actions["reboot"] = False
         self.assertFalse(self._button(coordinator, "reboot_collector").available)

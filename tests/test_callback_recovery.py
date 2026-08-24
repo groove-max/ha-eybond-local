@@ -975,7 +975,7 @@ class CallbackRecoveryFailureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome.failure_reason, FAILURE_CALLBACK_PROOF_INVALID)
         self.assertEqual(retargets, [])
 
-    async def test_at_unsupported_reboot_means_no_trigger(self) -> None:
+    async def test_unsupported_negotiated_reboot_means_no_trigger(self) -> None:
         from custom_components.eybond_local.collector.management import (
             CollectorManagementUnsupportedError,
         )
@@ -984,7 +984,7 @@ class CallbackRecoveryFailureTests(unittest.IsolatedAsyncioTestCase):
         inventory = _Inventory(_strong_old())
         channel = _FakeChannel(
             restart_error=CollectorManagementUnsupportedError(
-                "collector_reboot_unsupported_on_at_wire"
+                "collector_reboot_unsupported_on_negotiated_wire"
             )
         )
         sender = _Sender(ledger=ledger)

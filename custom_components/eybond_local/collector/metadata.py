@@ -27,7 +27,10 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from .at_runtime import read_runtime_collector_at_values
+from .at_runtime import (
+    RUNTIME_COLLECTOR_AT_SEMANTIC_FIELDS,
+    read_runtime_collector_at_values,
+)
 from .collector_wire import (
     CollectorWireError,
     CollectorWireManagementSession,
@@ -43,6 +46,7 @@ from .metadata_result import (
 )
 from .parameter_registry import (
     COLLECTOR_PARAMETER_DEFINITION_BY_ID,
+    RUNTIME_COLLECTOR_SEMANTIC_FIELDS,
     read_runtime_collector_values,
 )
 
@@ -71,9 +75,30 @@ METADATA_CHANNEL_IDS: tuple[str, ...] = (
 # to the OWNED transport by the route authority so the service never selects a
 # transport itself. Each reader returns a structured channel-read result.
 MetadataReader = Callable[[], Awaitable[CollectorMetadataChannelReadResult]]
+MetadataReaderForExclusions = Callable[
+    [frozenset[str]],
+    Awaitable[CollectorMetadataChannelReadResult],
+]
+
+# Explicit exceptions to the default "newer framed management owns overlaps"
+# rule. FC=2 parameter 55 is cellular CSQ while AT ``WFSS`` is Wi-Fi RSSI; the
+# generic UI signal fields should use the Wi-Fi observation when that exact
+# session has positively confirmed AT management. They are still single-owner:
+# the framed decoder receives the same fields as exclusions for that generation.
+_AT_PREFERRED_SHARED_SEMANTIC_FIELDS = frozenset(
+    {
+        "collector_signal_strength_raw",
+        "collector_signal_strength",
+        "collector_signal_strength_source",
+    }
+)
 
 
-async def async_read_framed_metadata(transport: object) -> CollectorMetadataChannelReadResult:
+async def async_read_framed_metadata(
+    transport: object,
+    *,
+    excluded_semantic_fields: frozenset[str] = frozenset(),
+) -> CollectorMetadataChannelReadResult:
     """Read the FC=2 read-only collector metadata sweep over the neutral wire.
 
     ``parameter_registry`` remains the owner of the FC parameter definitions and
@@ -81,13 +106,62 @@ async def async_read_framed_metadata(transport: object) -> CollectorMetadataChan
     collector-wire session. No SmartESS catalog resolution happens here.
     """
 
-    return await read_runtime_collector_values(CollectorWireManagementSession(transport))
+    return await read_runtime_collector_values(
+        CollectorWireManagementSession(transport),
+        excluded_semantic_fields=excluded_semantic_fields,
+    )
 
 
-async def async_read_at_metadata(transport: object) -> CollectorMetadataChannelReadResult:
+async def async_read_at_metadata(
+    transport: object,
+    *,
+    excluded_semantic_fields: frozenset[str] = frozenset(),
+) -> CollectorMetadataChannelReadResult:
     """Read the read-only SmartESS AT-text collector metadata sweep."""
 
-    return await read_runtime_collector_at_values(transport)
+    return await read_runtime_collector_at_values(
+        transport,
+        excluded_semantic_fields=excluded_semantic_fields,
+    )
+
+
+async def async_probe_at_metadata_capability(
+    transport: object,
+) -> CollectorMetadataChannelReadResult:
+    """Probe only the read-only AT identity capability on a framed session.
+
+    The shared framed parser can multiplex AT replies, but parser support is not
+    device evidence.  One exact-session ``DTUPN`` read establishes that evidence
+    through the listener's existing identity callback.  A silent response is an
+    honest unsupported-capability observation, not a reason to switch the
+    session's primary wire.
+    """
+
+    try:
+        response = await transport.async_query("DTUPN")
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - bounded capability absence, no payload leak
+        return CollectorMetadataChannelReadResult(
+            outcome=OUTCOME_EMPTY,
+            attempted_commands=1,
+            failed_commands=1,
+        )
+    pn = str(getattr(response, "value", "") or "").strip()
+    if not pn:
+        return CollectorMetadataChannelReadResult(
+            outcome=OUTCOME_EMPTY,
+            attempted_commands=1,
+        )
+    # The transport applies DTUPN to the exact-session inventory before it
+    # returns.  This result deliberately publishes no duplicate collector_pn;
+    # the next route snapshot sees the confirmed AT capability and may run the
+    # supplemental sweep.
+    return CollectorMetadataChannelReadResult(
+        outcome=OUTCOME_SUCCESS,
+        attempted_commands=1,
+        successful_commands=1,
+    )
 
 
 async def async_read_framed_hardware_bootstrap(
@@ -160,6 +234,9 @@ class CollectorMetadataRoute:
     generation: int = 0
     supports_liveness: bool = False
     is_bootstrap: bool = False
+    excluded_semantic_fields: frozenset[str] = frozenset()
+    capability_probe: bool = False
+    reader_for_exclusions: MetadataReaderForExclusions | None = None
 
 
 @dataclass(frozen=True)
@@ -167,7 +244,8 @@ class CollectorMetadataRouteSet:
     """The metadata channels available for one entry's owned collector session.
 
     Dual-channel: ``framed`` base metadata and ``at`` supplemental metadata can
-    both be present at once. ``bootstrap`` is the collector-only FC=2 param-6
+    both be present at once, with route-bound semantic exclusions ensuring one
+    polling owner per field. ``bootstrap`` is the collector-only FC=2 param-6
     identity probe used before an inverter heartbeat exists; it is only ever
     populated when no framed metadata channel is available (a framed wire reads
     param 6 in the normal sweep).
@@ -211,11 +289,15 @@ def build_collector_metadata_routes(
     framed_provenance: str = "",
     at_provenance: str = "",
     bootstrap_provenance: str = "",
+    at_capability_confirmed: bool = False,
 ) -> CollectorMetadataRouteSet:
     """Bind owned transports to metadata channels.
 
     The caller (route authority) decides WHICH transports are owned/claimable and
     passes only those; this helper never inspects a transport to decide the wire.
+    AT capability is fail-closed by default: the mere presence of an AT facade
+    over a framed parser authorizes only the one read-only identity probe, not a
+    supplemental metadata sweep.
     ``bootstrap_transport`` is honoured only when no ``framed_transport`` is given
     (a framed wire already reads param 6 in the normal sweep).
     """
@@ -224,24 +306,86 @@ def build_collector_metadata_routes(
     at_route: CollectorMetadataRoute | None = None
     bootstrap_route: CollectorMetadataRoute | None = None
 
+    # The newer framed management dialect owns overlapping fields by default;
+    # the explicit source-quality table above assigns Wi-Fi signal fields to AT.
+    # Losing readers receive exclusions, so no field is queried or merged twice.
+    # The plan is rebuilt for every owned-session generation and is independent
+    # of model/cloud/peer-IP heuristics.
+    shared_fields = frozenset(
+        RUNTIME_COLLECTOR_SEMANTIC_FIELDS
+        & RUNTIME_COLLECTOR_AT_SEMANTIC_FIELDS
+    )
+    at_metadata_available = at_capability_confirmed or framed_transport is None
+    framed_excluded_fields = (
+        shared_fields & _AT_PREFERRED_SHARED_SEMANTIC_FIELDS
+        if framed_transport is not None and at_metadata_available
+        else frozenset()
+    )
+    framed_owned_fields = (
+        RUNTIME_COLLECTOR_SEMANTIC_FIELDS - framed_excluded_fields
+        if framed_transport is not None
+        else frozenset()
+    )
+    at_excluded_fields = (
+        frozenset(framed_owned_fields & RUNTIME_COLLECTOR_AT_SEMANTIC_FIELDS)
+        if at_metadata_available
+        else RUNTIME_COLLECTOR_AT_SEMANTIC_FIELDS
+    )
+
     if framed_transport is not None:
+        framed_reader_for_exclusions = (
+            lambda excluded, t=framed_transport: async_read_framed_metadata(
+                t,
+                excluded_semantic_fields=excluded,
+            )
+        )
         framed_route = CollectorMetadataRoute(
             channel_id=FRAMED_METADATA_CHANNEL,
-            reader=lambda t=framed_transport: async_read_framed_metadata(t),
+            reader=lambda t=framed_transport, excluded=framed_excluded_fields: async_read_framed_metadata(
+                t,
+                excluded_semantic_fields=excluded,
+            ),
             provenance=framed_provenance or provenance,
             session_id=session_id,
             generation=generation,
             supports_liveness=True,
+            excluded_semantic_fields=framed_excluded_fields,
+            reader_for_exclusions=framed_reader_for_exclusions,
         )
 
     if at_transport is not None:
+        at_reader_for_exclusions = (
+            None
+            if not at_metadata_available
+            else (
+                lambda excluded, t=at_transport: async_read_at_metadata(
+                    t,
+                    excluded_semantic_fields=excluded,
+                )
+            )
+        )
+        at_reader = (
+            (lambda t=at_transport: async_probe_at_metadata_capability(t))
+            if not at_metadata_available
+            else (
+                lambda t=at_transport, excluded=at_excluded_fields: async_read_at_metadata(
+                    t,
+                    excluded_semantic_fields=excluded,
+                )
+            )
+        )
         at_route = CollectorMetadataRoute(
             channel_id=AT_METADATA_CHANNEL,
-            reader=lambda t=at_transport: async_read_at_metadata(t),
+            reader=at_reader,
             provenance=at_provenance or provenance,
             session_id=session_id,
             generation=generation,
             supports_liveness=True,
+            excluded_semantic_fields=at_excluded_fields,
+            capability_probe=(
+                not at_metadata_available
+            ),
+            reader_for_exclusions=at_reader_for_exclusions,
         )
 
     if framed_transport is None and bootstrap_transport is not None:

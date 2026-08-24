@@ -287,8 +287,21 @@ async def async_detect_inverter(
             silent=silent,
             probe_log=tuple(probe_log),
         )
+    answered_no_match = next(
+        (
+            str(entry.get("driver") or "")
+            for entry in probe_log
+            if entry.get("outcome") == "no_match"
+            and entry.get("saw_response") is True
+        ),
+        "",
+    )
     raise DriverSweepNoMatch(
-        errors[-1] if errors else "no_supported_driver_matched",
+        (
+            f"{answered_no_match}:no_match"
+            if answered_no_match
+            else (errors[-1] if errors else "no_supported_driver_matched")
+        ),
         silent=silent,
         probe_log=tuple(probe_log),
     )
@@ -424,8 +437,21 @@ async def async_detect_inverter_candidates(
         raise DriverSweepNoMatch(
             ERROR_INVERTER_LINK_DOWN, silent=silent, probe_log=tuple(probe_log)
         )
+    answered_no_match = next(
+        (
+            str(entry.get("driver") or "")
+            for entry in probe_log
+            if entry.get("outcome") == "no_match"
+            and entry.get("saw_response") is True
+        ),
+        "",
+    )
     raise DriverSweepNoMatch(
-        errors[-1] if errors else "no_supported_driver_matched",
+        (
+            f"{answered_no_match}:no_match"
+            if answered_no_match
+            else (errors[-1] if errors else "no_supported_driver_matched")
+        ),
         silent=silent,
         probe_log=tuple(probe_log),
     )

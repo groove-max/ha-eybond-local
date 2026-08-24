@@ -25,6 +25,21 @@ _FRESH_OUTCOMES = frozenset({OUTCOME_SUCCESS, OUTCOME_PARTIAL})
 _DELIVERY_FAILURE_OUTCOMES = frozenset({OUTCOME_TRANSPORT_ERROR, OUTCOME_COMMAND_ERROR})
 
 
+def present_metadata_values(values: dict[str, object]) -> dict[str, object]:
+    """Return only fields for which this channel observed an actual value.
+
+    An answered optional command with a blank value is valid evidence that the
+    wire is alive, but it is not a metadata observation and must not leave the
+    wire reader as a key carrying an empty string.
+    """
+
+    return {
+        key: value
+        for key, value in values.items()
+        if str(value).strip() != ""
+    }
+
+
 @dataclass(frozen=True)
 class CollectorMetadataChannelReadResult:
     """One channel read: its values and an honest, non-sensitive outcome.
@@ -41,6 +56,7 @@ class CollectorMetadataChannelReadResult:
     successful_commands: int = 0
     failed_commands: int = 0
     timed_out: bool = False
+    unsupported_semantic_fields: frozenset[str] = frozenset()
 
     @property
     def has_values(self) -> bool:

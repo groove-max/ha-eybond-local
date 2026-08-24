@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .common import (
+    ADAPTER_COLLECTOR_AT_COMMANDS,
     ADAPTER_INVERTER_RAW_PASSTHROUGH,
     ADAPTER_NONE,
     CollectorAtTransport,
@@ -403,10 +404,11 @@ class LinkWireAuthorityMixin:
         cloud family, hostname, peer IP, driver key, or an inferred/persisted
         protocol without confirmed evidence.
 
-        Dual-channel: a framed base metadata channel and an AT supplemental
-        metadata channel can be routed simultaneously. The bootstrap channel is
-        offered only when no framed metadata channel is available (a framed wire
-        reads param 6 in its normal sweep).
+        Dual-channel: a framed base metadata channel and a positively observed
+        AT supplemental capability can be routed simultaneously.  Before AT is
+        confirmed on a framed primary session, the AT route is one read-only
+        exact-session identity probe. The bootstrap channel is offered only when
+        no framed metadata channel is available.
         """
 
         generation = self._owned_session_generation
@@ -429,13 +431,25 @@ class LinkWireAuthorityMixin:
             provenance = "unavailable"
 
         # ``active_transport`` is the connected framed payload transport (None on
-        # an at_text/raw wire, since the payload rides the AT session there);
-        # ``active_collector_at_transport`` is the connected AT transport. Their
-        # presence already encodes the negotiated wire via the fail-closed
-        # inverter-forward adapter, so metadata channel selection follows the wire
-        # without re-deriving it from any discriminator.
+        # an at_text/raw wire, since the payload rides the AT session there).
+        # ``active_collector_at_transport`` is a facade that may multiplex AT over
+        # that same framed parser, so facade presence alone is NOT capability
+        # evidence; the exact-session handle/binding below owns that decision.
         framed_transport = self.active_transport
         at_transport = self.active_collector_at_transport
+        effective_capabilities = (
+            handle.capabilities
+            if handle.observed
+            else (
+                self._effective_wire_binding().capabilities
+                if self._effective_wire_binding() is not None
+                else None
+            )
+        )
+        at_capability_confirmed = bool(
+            effective_capabilities is not None
+            and effective_capabilities.supports(ADAPTER_COLLECTOR_AT_COMMANDS)
+        )
 
         if (
             framed_transport is None
@@ -460,6 +474,7 @@ class LinkWireAuthorityMixin:
             # short PN later enriched to the full PN is the SAME identity. Never
             # the peer IP.
             identity=str(self._collector_pn or "").strip(),
+            at_capability_confirmed=at_capability_confirmed,
         )
 
     @property
@@ -705,7 +720,16 @@ class LinkWireAuthorityMixin:
                 if ok and self._connected_payload_transport() is not None:
                     return True
 
-    async def _async_wait_for_payload_heartbeat(self, *, timeout: float) -> bool:
+    async def _async_wait_for_payload_liveness(self, *, timeout: float) -> bool:
+        """Wait for fresh correlated traffic on the owned framed session.
+
+        A collector heartbeat remains identity/diagnostic evidence, but some
+        framed collectors do not answer every periodic FC=1 request. A valid
+        response to an outstanding request on the same exact session is enough
+        to prove that the transport is alive without manufacturing heartbeat
+        freshness.
+        """
+
         deadline = asyncio.get_running_loop().time() + timeout
         first_pass = True
         while True:
@@ -740,10 +764,15 @@ class LinkWireAuthorityMixin:
                     return False
 
                 wait_timeout = timeout if first_pass else remaining
-                ok = await transport.wait_until_heartbeat(timeout=wait_timeout)
+                waiter = getattr(transport, "wait_until_liveness", None)
+                if not callable(waiter):
+                    # Compatibility for a legacy/test transport. Production
+                    # framed transports expose the stricter liveness boundary.
+                    waiter = transport.wait_until_heartbeat
+                ok = await waiter(timeout=wait_timeout)
                 if ok:
                     return True
-                # A connected transport returning False exhausted its heartbeat
+                # A connected transport returning False exhausted its liveness
                 # wait normally. Only a socket that vanished during the wait is
                 # handover evidence and warrants re-resolving a replacement.
                 if transport.connected:

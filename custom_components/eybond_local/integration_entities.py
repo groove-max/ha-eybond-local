@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from .collector.signal import is_legacy_disabled_signal_entity_key
+from .collector.entity_scope import filter_measurements_for_collector_session
 from .const import (
     CONF_COLLECTOR_OPERATION_MODE,
     CONF_CONTROL_MODE,
@@ -148,6 +149,10 @@ def _default_enabled_unique_ids_for_current_runtime(
         measurement_descriptions,
         entry_data=getattr(getattr(coordinator, "config_entry", None), "data", None),
         entry_options=getattr(getattr(coordinator, "config_entry", None), "options", None),
+    )
+    measurement_descriptions = filter_measurements_for_collector_session(
+        measurement_descriptions,
+        getattr(coordinator, "collector_session_protocol", ""),
     )
     binary_sensor_descriptions = binary_sensors_for_runtime(
         driver_key=driver_key,
@@ -411,6 +416,10 @@ async def _async_cleanup_obsolete_entities(
         measurement_descriptions,
         entry_data=getattr(entry, "data", None),
         entry_options=getattr(entry, "options", None),
+    )
+    measurement_descriptions = filter_measurements_for_collector_session(
+        measurement_descriptions,
+        getattr(coordinator, "collector_session_protocol", ""),
     )
     binary_sensor_descriptions = binary_sensors_for_runtime(
         driver_key=driver_key,

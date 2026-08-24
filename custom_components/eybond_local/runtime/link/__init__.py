@@ -56,6 +56,7 @@ class EybondRuntimeLinkManager(
         advertised_server_ip: str = "",
         advertised_tcp_port: int = 0,
         collector_pn: str = "",
+        collector_identity_challenge_protocol: str = "",
         collector_configured_session_protocol: str = "",
         collector_identity_strategy: str = "",
         collector_raw_passthrough_bootstrap: str = "",
@@ -67,6 +68,15 @@ class EybondRuntimeLinkManager(
         self._configured_advertised_server_ip = advertised_server_ip.strip()
         self._collector_ip = collector_ip
         self._collector_pn = str(collector_pn or "").strip()
+        challenge_protocol = str(
+            collector_identity_challenge_protocol or ""
+        ).strip().lower()
+        self._configured_identity_challenge_protocol = (
+            challenge_protocol
+            if challenge_protocol in ("at_text", "eybond_framed")
+            else ""
+        )
+        self._active_identity_challenge_protocol = ""
         # Configuration derived only from PN-bound confirmed live evidence.
         # The evidence object below remains the authority handed to transports.
         self._configured_collector_session_protocol = str(

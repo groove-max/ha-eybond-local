@@ -44,6 +44,7 @@ def _install_coordinator_stubs() -> None:
     ha_const = ensure_module("homeassistant.const")
     helpers = ensure_module("homeassistant.helpers")
     device_registry = ensure_module("homeassistant.helpers.device_registry")
+    entity_registry = ensure_module("homeassistant.helpers.entity_registry")
     network = ensure_module("homeassistant.helpers.network")
     update_coordinator = ensure_module("homeassistant.helpers.update_coordinator")
     util = ensure_module("homeassistant.util")
@@ -73,6 +74,8 @@ def _install_coordinator_stubs() -> None:
     ha_const.EVENT_COMPONENT_LOADED = "component_loaded"
     device_registry.DeviceInfo = DeviceInfo
     device_registry.async_get = lambda hass: None
+    entity_registry.async_get = lambda hass: None
+    entity_registry.async_entries_for_device = lambda *args, **kwargs: ()
     update_coordinator.DataUpdateCoordinator = DataUpdateCoordinator
     util.dt = dt
     util.logging = util_logging
@@ -96,6 +99,7 @@ def _install_coordinator_stubs() -> None:
     components_network.util = components_network_util
     components_network_util.async_get_source_ip = lambda *args, **kwargs: "10.10.10.10"
     helpers.device_registry = device_registry
+    helpers.entity_registry = entity_registry
     helpers.network = network
     helpers.update_coordinator = update_coordinator
     network.NoURLAvailableError = RuntimeError
@@ -780,6 +784,8 @@ class FakeDevice:
         self.sw_version = None
         self.hw_version = None
         self.via_device_id = None
+        self.config_entries: set[str] = set()
+        self.name_by_user = None
 
 
 class FakeRegistry:
@@ -788,6 +794,10 @@ class FakeRegistry:
         self._counter = 0
         self.removed_device_ids: list[str] = []
 
+    @property
+    def devices(self):
+        return {device.id: device for device in self._devices_by_key.values()}
+
     def async_get_device(self, identifiers=None, connections=None):
         del connections
         if not identifiers:
@@ -795,7 +805,6 @@ class FakeRegistry:
         return self._devices_by_key.get(frozenset(identifiers))
 
     def async_get_or_create(self, config_entry_id=None, **info):
-        del config_entry_id
         identifiers = set(info.get("identifiers") or set())
         key = frozenset(identifiers)
         device = self._devices_by_key.get(key)
@@ -803,6 +812,9 @@ class FakeRegistry:
             self._counter += 1
             device = FakeDevice(f"device-{self._counter}", identifiers)
             self._devices_by_key[key] = device
+
+        if type(config_entry_id) is str and config_entry_id:
+            device.config_entries.add(config_entry_id)
 
         device.name = info.get("name")
         device.model = info.get("model")
@@ -1907,7 +1919,13 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.coordinator_module.dr.async_get = lambda hass: registry
 
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
-        coordinator.hass = object()
+        coordinator.hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(
+                async_get_entry=lambda entry_id: (
+                    object() if entry_id == "entry-1" else None
+                )
+            )
+        )
         coordinator.config_entry = types.SimpleNamespace(
             entry_id="entry-1",
             data={},
@@ -1946,6 +1964,192 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(collector.model, "Wi-Fi.DTU")
         self.assertEqual(collector.hw_version, "HW-7")
         self.assertEqual(inverter.via_device_id, collector.id)
+
+    def test_device_registry_diagnostics_exposes_duplicate_children_without_identifiers(self) -> None:
+        registry = FakeRegistry()
+        self.coordinator_module.dr.async_get = lambda hass: registry
+
+        collector = registry.async_get_or_create(
+            config_entry_id="entry-1",
+            identifiers={("eybond_local", "entry-1:collector")},
+            name="Collector PN SECRET",
+        )
+        inverter = registry.async_get_or_create(
+            config_entry_id="entry-1",
+            identifiers={("eybond_local", "entry-1")},
+            name="Anenji SECRET",
+            model="Anenji ANJ-11KW-48V-WIFI-P",
+            serial_number="SECRET-SERIAL",
+            via_device=("eybond_local", "entry-1:collector"),
+        )
+        duplicate = registry.async_get_or_create(
+            config_entry_id="legacy-entry",
+            identifiers={("eybond_local", "legacy-inverter")},
+            name="User Secret Name",
+            model="Anenji ANJ-11KW-48V-WIFI-P",
+            via_device=("eybond_local", "entry-1:collector"),
+        )
+
+        class _EntityRegistry:
+            entries_by_device = {
+                inverter.id: (
+                    types.SimpleNamespace(disabled_by=None),
+                    types.SimpleNamespace(disabled_by="integration"),
+                ),
+                duplicate.id: (),
+            }
+
+        entity_registry_module = sys.modules["homeassistant.helpers.entity_registry"]
+        entity_registry_module.async_get = lambda hass: _EntityRegistry()
+        entity_registry_module.async_entries_for_device = (
+            lambda entity_registry, device_id, **kwargs: (
+                entity_registry.entries_by_device.get(device_id, ())
+            )
+        )
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(
+                async_get_entry=lambda entry_id: (
+                    object() if entry_id == "entry-1" else None
+                )
+            )
+        )
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={},
+            options={},
+            title="Anenji",
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            inverter=types.SimpleNamespace(
+                model_name="Anenji ANJ-11KW-48V-WIFI-P",
+                serial_number="92632500000001",
+            )
+        )
+
+        diagnostics = coordinator.device_registry_diagnostics()
+
+        self.assertEqual(
+            diagnostics["topology_status"],
+            "duplicate_inverter_children",
+        )
+        self.assertEqual(diagnostics["direct_child_count"], 2)
+        self.assertEqual(diagnostics["unexpected_direct_child_count"], 1)
+        self.assertEqual(diagnostics["relevant_device_count"], 3)
+        self.assertEqual(
+            [record["role"] for record in diagnostics["devices"]],
+            [
+                "canonical_collector",
+                "canonical_inverter",
+                "unexpected_collector_child",
+            ],
+        )
+        self.assertEqual(diagnostics["devices"][1]["entity_count"], 2)
+        self.assertEqual(diagnostics["devices"][1]["disabled_entity_count"], 1)
+        self.assertFalse(diagnostics["devices"][2]["belongs_to_current_entry"])
+        self.assertEqual(diagnostics["devices"][2]["live_config_entry_count"], 0)
+        self.assertEqual(diagnostics["devices"][2]["missing_config_entry_count"], 1)
+        self.assertTrue(diagnostics["devices"][2]["safe_cleanup_candidate"])
+        serialized = str(diagnostics)
+        self.assertNotIn("SECRET", serialized)
+        self.assertNotIn("entry-1", serialized)
+        self.assertNotIn("legacy-entry", serialized)
+
+    def test_sync_removes_only_empty_orphaned_inverter_children(self) -> None:
+        registry = FakeRegistry()
+        self.coordinator_module.dr.async_get = lambda hass: registry
+
+        collector = registry.async_get_or_create(
+            config_entry_id="entry-1",
+            identifiers={("eybond_local", "entry-1:collector")},
+            name="Collector",
+        )
+        orphan = registry.async_get_or_create(
+            config_entry_id="removed-entry",
+            identifiers={("eybond_local", "removed-entry")},
+            name="Old inverter",
+            via_device=("eybond_local", "entry-1:collector"),
+        )
+        live_foreign = registry.async_get_or_create(
+            config_entry_id="live-entry",
+            identifiers={("eybond_local", "live-entry")},
+            name="Live inverter",
+            via_device=("eybond_local", "entry-1:collector"),
+        )
+        orphan_with_entity = registry.async_get_or_create(
+            config_entry_id="removed-with-entity",
+            identifiers={("eybond_local", "removed-with-entity")},
+            name="Old inverter with entity",
+            via_device=("eybond_local", "entry-1:collector"),
+        )
+        customized_orphan = registry.async_get_or_create(
+            config_entry_id="removed-customized",
+            identifiers={("eybond_local", "removed-customized")},
+            name="Customized old inverter",
+            via_device=("eybond_local", "entry-1:collector"),
+        )
+        customized_orphan.name_by_user = "Keep me"
+
+        class _EntityRegistry:
+            entries_by_device = {
+                orphan_with_entity.id: (types.SimpleNamespace(disabled_by=None),),
+            }
+
+        entity_registry_module = sys.modules["homeassistant.helpers.entity_registry"]
+        entity_registry_module.async_get = lambda hass: _EntityRegistry()
+        entity_registry_module.async_entries_for_device = (
+            lambda entity_registry, device_id, **kwargs: (
+                entity_registry.entries_by_device.get(device_id, ())
+            )
+        )
+
+        live_entries = {"entry-1", "live-entry"}
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(
+                async_get_entry=lambda entry_id: (
+                    object() if entry_id in live_entries else None
+                )
+            )
+        )
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-1",
+            data={
+                "detected_model": "Anenji ANJ-11KW-48V-WIFI-P",
+                "detected_serial": "INV-001",
+            },
+            options={},
+            title="Anenji",
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            inverter=types.SimpleNamespace(
+                model_name="Anenji ANJ-11KW-48V-WIFI-P",
+                serial_number="INV-001",
+                details={},
+            )
+        )
+        coordinator._last_synced_device_meta = ("", "", "", "", "")
+
+        coordinator._async_sync_inverter_device_registry()
+
+        inverter = registry.async_get_device(
+            identifiers={("eybond_local", "entry-1")}
+        )
+        self.assertIsNotNone(inverter)
+        self.assertEqual(inverter.via_device_id, collector.id)
+        self.assertEqual(registry.removed_device_ids, [orphan.id])
+        self.assertIsNone(
+            registry.async_get_device(
+                identifiers={("eybond_local", "removed-entry")}
+            )
+        )
+        for retained in (live_foreign, orphan_with_entity, customized_orphan):
+            retained_device = registry.async_get_device(
+                identifiers=retained.identifiers
+            )
+            self.assertIsNotNone(retained_device)
+            self.assertIsNone(retained_device.via_device_id)
 
     def test_sync_device_registry_clears_untrusted_pi30_placeholder(self) -> None:
         class _PreservingRegistry(FakeRegistry):

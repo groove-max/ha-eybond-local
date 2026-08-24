@@ -1,6 +1,6 @@
 {
  "schema_version": 2,
- "catalog_version": "2026.08.3",
+ "catalog_version": "2026.08.4",
  "description": "Universal offline inverter catalog with reusable protocol actions, runtime surfaces, and deterministic identity evidence.",
  "protocols": [
   {
@@ -1279,6 +1279,17 @@
    "support_capture_policy": "smg_anenji_11k"
   },
   {
+   "key": "anenji_hhs_11kw_read_only",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "anenji_hhs_11kw_wifi_no_parallel",
+   "profile_name": "",
+   "register_schema_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+   "tier": "partial",
+   "read_only": true,
+   "support_capture_policy": "smg_anenji_11k"
+  },
+  {
    "key": "anenji_op2_6200_full",
    "protocol_key": "modbus_smg",
    "driver_key": "modbus_smg",
@@ -1843,6 +1854,45 @@
     "sources": [
      "corpus:donor …4544 (3 captures)",
      "catalog-migration:anenji_anj_11kw_48v_wifi_p"
+    ],
+    "confidence": "capture-derived"
+   }
+  },
+  {
+   "entry_key": "anenji_hhs_11kw",
+   "fingerprint": {
+    "layout_code": 3,
+    "model_code": 29440
+   },
+   "structural": [
+    "serial_ascii_plausible"
+   ],
+   "model_name": "Anenji HHS-11kW-WIFI (without parallel)",
+   "surface_key": "anenji_hhs_11kw_read_only",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "protocol_number",
+      "one_of": [
+       3
+      ]
+     }
+    ]
+   },
+   "cloud_hints": {
+    "devcodes": []
+   },
+   "provenance": {
+    "sources": [
+     "project-issue:13 support archive (2026-08-24): layout_code=3, model_code=29440, valid serial"
     ],
     "confidence": "capture-derived"
    }

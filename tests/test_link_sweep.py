@@ -113,6 +113,45 @@ class StructuredSilenceTests(unittest.IsolatedAsyncioTestCase):
             await async_detect_inverter_candidates(transport, driver_hint="modbus_catalog")
         self.assertTrue(ctx.exception.silent)
 
+    async def test_answered_no_match_is_not_hidden_by_later_timeout(self) -> None:
+        from custom_components.eybond_local.runtime import driver_detection
+
+        class AnsweredNoMatch:
+            key = "modbus_smg"
+            probe_timeout = 1.0
+
+            async def async_probe(self, transport, target):
+                await transport.async_send_payload(b"query", route=object())
+                return None
+
+        class SilentLater:
+            key = "smartess_local"
+            probe_timeout = 0.01
+
+            async def async_probe(self, transport, target):
+                await asyncio.sleep(1)
+
+        class Transport:
+            async def async_send_payload(self, payload, **kwargs):
+                return b"answer"
+
+        with patch.object(
+            driver_detection,
+            "_ordered_driver_targets",
+            return_value=(
+                (AnsweredNoMatch(), (SimpleNamespace(),)),
+                (SilentLater(), (SimpleNamespace(),)),
+            ),
+        ):
+            with self.assertRaises(driver_detection.DriverSweepNoMatch) as ctx:
+                await driver_detection.async_detect_inverter(
+                    Transport(),
+                    driver_hint="auto",
+                )
+
+        self.assertEqual(str(ctx.exception), "modbus_smg:no_match")
+        self.assertFalse(ctx.exception.silent)
+
 
 class SilenceClassifierTests(unittest.TestCase):
     def test_link_down_is_silence(self) -> None:

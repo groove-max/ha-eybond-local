@@ -43,6 +43,7 @@ from custom_components.eybond_local.drivers.local_register_evidence import (
 )
 from custom_components.eybond_local.payload.modbus import ModbusError
 from custom_components.eybond_local.runtime.hub import EybondHub
+from custom_components.eybond_local.runtime.hub.common import _write_readback_matches
 from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
 from custom_components.eybond_local.const import DRIVER_DETECTION_FULL_SCAN
 
@@ -123,6 +124,9 @@ class _FakeLinkManager:
             bootstrap_transport=bootstrap,
             generation=int(getattr(self, "owned_session_generation", 0) or 0),
             provenance="live" if self.connected else "bootstrap_claimable",
+            # This test double exposes an AT transport only when its scripted
+            # session is intended to have confirmed that management dialect.
+            at_capability_confirmed=at is not None,
         )
 
     async def async_ensure_connected(
@@ -446,6 +450,44 @@ class _WriteUnconfirmedDriver:
         value,
     ):
         self.write_calls += 1
+        return value
+
+
+class _AdvancingClockWriteDriver:
+    def __init__(self, *, readback: str) -> None:
+        self.read_calls = 0
+        self.write_calls = 0
+        self._written = False
+        self._readback = readback
+
+    async def async_read_values(
+        self,
+        transport,
+        inverter,
+        *,
+        runtime_state=None,
+        poll_interval=None,
+        now_monotonic=None,
+    ):
+        self.read_calls += 1
+        return {
+            "battery_connected": True,
+            "utility_charging_allowed": True,
+            "charging_active": False,
+            "charging_inactive": True,
+            "operating_mode": "Off-Grid",
+            "inverter_time": self._readback if self._written else "19:04:03",
+        }
+
+    async def async_write_capability(
+        self,
+        transport,
+        inverter,
+        capability_key,
+        value,
+    ):
+        self.write_calls += 1
+        self._written = True
         return value
 
 
@@ -1432,7 +1474,7 @@ class HubSnapshotTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_async_refresh_prefers_at_signal_queries_over_fc_values(self) -> None:
+    def test_async_refresh_uses_framed_owner_and_at_only_for_supplemental_fields(self) -> None:
         async def _run() -> None:
             hub = EybondHub(
                 connection=EybondConnectionSpec(
@@ -1464,6 +1506,7 @@ class HubSnapshotTests(unittest.TestCase):
                     "ENUPMODE": "ON",
                     "FWVER": "8.50.12.3",
                     "HTBT": "60",
+                    "INTPARA41": "MyWiFi",
                     "INTPARA49": "ssid1,-55;ssid2,-71",
                     "LINK": "STA,CONNECTED",
                     "SYST": "20250120120000",
@@ -1485,7 +1528,7 @@ class HubSnapshotTests(unittest.TestCase):
 
             snapshot = await hub.async_refresh(poll_interval=3.0)
 
-            self.assertEqual(snapshot.values["collector_server_endpoint"], "at.example,18899,TCP")
+            self.assertEqual(snapshot.values["collector_server_endpoint"], "fc.example,18899,TCP")
             self.assertEqual(snapshot.values["collector_signal_strength"], -55)
             self.assertEqual(snapshot.values["collector_signal_strength_raw"], "-55")
             self.assertEqual(snapshot.values["collector_signal_strength_source"], "Wi-Fi RSSI")
@@ -1523,6 +1566,7 @@ class HubSnapshotTests(unittest.TestCase):
                     "ENUPMODE": "ON",
                     "FWVER": "8.50.12.3",
                     "HTBT": "60",
+                    "INTPARA41": "MyWiFi",
                     "INTPARA49": "ssid1,-55;ssid2,-71",
                     "LINK": "STA,CONNECTED",
                     "SYST": "20250120120000",
@@ -1545,7 +1589,7 @@ class HubSnapshotTests(unittest.TestCase):
             self.assertEqual(snapshot.values["collector_type"], "Wi-Fi.DTU")
             self.assertEqual(snapshot.values["collector_upload_mode"], "ON")
             self.assertEqual(snapshot.values["collector_cloud_heartbeat_value"], "60")
-            self.assertNotIn("collector_ssid", snapshot.values)
+            self.assertEqual(snapshot.values["collector_ssid"], "MyWiFi")
             self.assertEqual(snapshot.values["collector_link_status"], "STA,CONNECTED")
             self.assertEqual(snapshot.values["collector_wifi_scan_list"], "ssid1,-55;ssid2,-71")
 
@@ -2101,6 +2145,141 @@ class HubSnapshotTests(unittest.TestCase):
         asyncio.run(_run())
 
 
+class WriteReadbackConfirmationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        profile = load_driver_profile(
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json"
+        )
+        self.time_capability = profile.get_capability("inverter_time_write")
+        self.scalar_capability = profile.get_capability("max_ac_charge_current")
+
+    def test_running_clock_confirms_within_measured_operation_time(self) -> None:
+        self.assertTrue(
+            _write_readback_matches(
+                self.time_capability,
+                requested_value="19:04:04",
+                written_value="19:04:04",
+                readback_value="19:04:08",
+                confirmation_elapsed_seconds=3.0,
+            )
+        )
+
+    def test_running_clock_rejects_values_outside_measured_operation_time(self) -> None:
+        self.assertFalse(
+            _write_readback_matches(
+                self.time_capability,
+                requested_value="19:04:04",
+                written_value="19:04:04",
+                readback_value="19:04:09",
+                confirmation_elapsed_seconds=3.0,
+            )
+        )
+        self.assertFalse(
+            _write_readback_matches(
+                self.time_capability,
+                requested_value="19:04:04",
+                written_value="19:04:04",
+                readback_value="19:04:03",
+                confirmation_elapsed_seconds=3.0,
+            )
+        )
+
+    def test_running_clock_confirmation_handles_midnight_rollover(self) -> None:
+        self.assertTrue(
+            _write_readback_matches(
+                self.time_capability,
+                requested_value="23:59:59",
+                written_value="23:59:59",
+                readback_value="00:00:03",
+                confirmation_elapsed_seconds=3.0,
+            )
+        )
+
+    def test_running_clock_confirmation_fails_closed_on_malformed_inputs(self) -> None:
+        for malformed in ("19:04", " 19:04:04", "24:00:00", object(), None):
+            with self.subTest(malformed=malformed):
+                self.assertFalse(
+                    _write_readback_matches(
+                        self.time_capability,
+                        requested_value="19:04:04",
+                        written_value="19:04:04",
+                        readback_value=malformed,
+                        confirmation_elapsed_seconds=3.0,
+                    )
+                )
+        for malformed_elapsed in (True, "3", float("nan"), float("inf")):
+            with self.subTest(malformed_elapsed=malformed_elapsed):
+                self.assertFalse(
+                    _write_readback_matches(
+                        self.time_capability,
+                        requested_value="19:04:04",
+                        written_value="19:04:04",
+                        readback_value="19:04:08",
+                        confirmation_elapsed_seconds=malformed_elapsed,
+                    )
+                )
+
+    def test_elapsed_confirmation_does_not_relax_scalar_writes(self) -> None:
+        self.assertFalse(
+            _write_readback_matches(
+                self.scalar_capability,
+                requested_value=30,
+                written_value=30,
+                readback_value=31,
+                confirmation_elapsed_seconds=300.0,
+            )
+        )
+
+    def test_hub_accepts_clock_that_advanced_during_real_readback_path(self) -> None:
+        async def _run() -> None:
+            profile = load_driver_profile(
+                "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json"
+            )
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            hub._link_manager = _FakeLinkManager()
+            hub._driver = _AdvancingClockWriteDriver(readback="19:04:08")
+            hub._inverter = DetectedInverter(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="Anenji ANJ-11KW-48V-WIFI-P",
+                serial_number="92632500000001",
+                probe_target=ProbeTarget(
+                    devcode=0x0001,
+                    collector_addr=0x02,
+                    device_addr=0x01,
+                ),
+                capabilities=profile.capabilities,
+                capability_groups=profile.groups,
+                capability_presets=profile.presets,
+            )
+
+            with patch(
+                "custom_components.eybond_local.runtime.hub.management.monotonic",
+                side_effect=(100.0, 104.0),
+            ):
+                written = await hub.async_write_capability(
+                    "inverter_time_write",
+                    "19:04:04",
+                )
+
+            self.assertEqual(written, "19:04:04")
+            self.assertEqual(hub._driver.write_calls, 1)
+            self.assertEqual(hub._driver.read_calls, 2)
+
+        asyncio.run(_run())
+
+
 class HubWriteBlockerTests(unittest.TestCase):
     def test_exception_code_3_returns_friendly_error_without_persistent_blocker(self) -> None:
         async def _run() -> None:
@@ -2522,7 +2701,7 @@ class HubWriteBlockerTests(unittest.TestCase):
                     if not self._pending:
                         self.sweeps += 1
                         self._pending = True
-                    if command == "INTPARA49":  # last command in the sweep
+                    if command == "INTPARA49":  # last non-overlapping command
                         self._pending = False
                     return CollectorAtResponse(command=command, value="", raw=f"AT+{command}:")
 
@@ -3932,6 +4111,56 @@ class CollectorDevcodeDiagnosticsTests(unittest.TestCase):
             snapshot.values["collector_last_frame_devcode"],
         )
 
+    def test_metadata_semantic_ownership_is_flattened_for_support(self) -> None:
+        hub = self._hub()
+        hub.collector_metadata_diagnostics = lambda: {
+            "routes": [
+                {
+                    "channel_id": "collector:fc_metadata",
+                    "effective_excluded_semantic_fields": ["collector_ssid"],
+                    "unsupported_semantic_fields": ["collector_ssid"],
+                },
+                {
+                    "channel_id": "collector:at_metadata",
+                    "effective_excluded_semantic_fields": [
+                        "collector_wifi_gateway",
+                        "collector_wifi_ip",
+                    ],
+                    "unsupported_semantic_fields": [],
+                },
+            ],
+            "semantic_ownership": {
+                "binding_generation": 4,
+                "at_owned_fields": [
+                    "collector_signal_strength",
+                    "collector_signal_strength_raw",
+                ],
+                "framed_unsupported_fields": ["collector_ssid"],
+            },
+        }
+        values: dict[str, object] = {}
+
+        hub._apply_collector_metadata_diagnostics(values)
+
+        self.assertEqual(
+            values["collector_metadata_effective_exclusions"],
+            "collector:fc_metadata=collector_ssid, "
+            "collector:at_metadata=collector_wifi_gateway|collector_wifi_ip",
+        )
+        self.assertEqual(
+            values["collector_metadata_unsupported_fields"],
+            "collector:fc_metadata=collector_ssid",
+        )
+        self.assertEqual(values["collector_metadata_semantic_binding_generation"], 4)
+        self.assertEqual(
+            values["collector_metadata_at_owned_fields"],
+            "collector_signal_strength, collector_signal_strength_raw",
+        )
+        self.assertEqual(
+            values["collector_metadata_framed_unsupported_fields"],
+            "collector_ssid",
+        )
+
 
 class HubCollectorManagementTests(unittest.TestCase):
     """Hub delegation of collector-management ACTIONS to the negotiated adapter."""
@@ -4064,24 +4293,24 @@ class HubCollectorManagementTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_at_capabilities_have_no_reboot(self) -> None:
+    def test_at_capabilities_include_vendor_restart(self) -> None:
         hub, _ = self._at_hub()
         caps = hub.collector_management_capabilities()
         self.assertTrue(caps.read_endpoint_state)
         self.assertTrue(caps.write_endpoint)
         self.assertTrue(caps.apply_changes)
-        self.assertFalse(caps.reboot)
+        self.assertTrue(caps.reboot)
 
     def test_capabilities_follow_live_handover_without_reload(self) -> None:
-        # Start framed (reboot capable), then the SAME hub sees the wire hand over
-        # to AT: capabilities update immediately, no config-entry reload.
+        # Start framed, then the SAME hub sees the wire hand over to AT:
+        # capabilities remain live and update without a config-entry reload.
         hub, link = self._framed_hub()
         self.assertTrue(hub.collector_management_capabilities().reboot)
         link.transport = object()
         link.collector_at_transport = _CollectorAtQueryTransport(
             {"CLDSRVHOST1": "iot.eybond.com,18899,TCP"}
         )
-        self.assertFalse(hub.collector_management_capabilities().reboot)
+        self.assertTrue(hub.collector_management_capabilities().reboot)
         self.assertTrue(hub.collector_management_capabilities().write_endpoint)
 
     def test_unavailable_when_adapter_is_none(self) -> None:
@@ -4145,11 +4374,18 @@ class HubCollectorManagementTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_at_reboot_is_unsupported(self) -> None:
+    def test_at_reboot_uses_intpara_and_returns_confirmed_result(self) -> None:
         async def _run() -> None:
-            hub, _ = self._at_hub()
-            with self.assertRaises(CollectorManagementUnsupportedError):
-                await hub.async_reboot_collector()
+            hub, link = self._at_hub()
+
+            result = await hub.async_reboot_collector()
+
+            self.assertEqual(result["status"], "reboot_triggered")
+            self.assertEqual(result["action"], "reboot")
+            self.assertIn("CLDSRVHOST1", link.collector_at_transport.queries)
+            self.assertIn(
+                ("INTPARA", "29,1"), link.collector_at_transport.writes
+            )
 
         asyncio.run(_run())
 
@@ -4182,15 +4418,14 @@ class HubCollectorManagementTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_last_operation_records_typed_error(self) -> None:
+    def test_last_operation_records_at_reboot_success(self) -> None:
         async def _run() -> None:
             hub, _ = self._at_hub()
-            with self.assertRaises(CollectorManagementUnsupportedError):
-                await hub.async_reboot_collector()
+            await hub.async_reboot_collector()
             op = hub.collector_management_diagnostics()["collector_management_last_operation"]
             self.assertEqual(op["operation"], "reboot")
-            self.assertEqual(op["status"], "error")
-            self.assertEqual(op["error_class"], "CollectorManagementUnsupportedError")
+            self.assertEqual(op["status"], "ok")
+            self.assertEqual(op["error_class"], "")
 
         asyncio.run(_run())
 

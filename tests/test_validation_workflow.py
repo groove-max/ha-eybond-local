@@ -32,6 +32,68 @@ class AffectedValidationSelectionTests(unittest.TestCase):
             }.issubset(selected)
         )
 
+    def test_at_transport_selects_exact_session_inverter_bootstrap(self) -> None:
+        selected = self._selected(
+            "custom_components/eybond_local/collector/transport/shared_at.py"
+        )
+
+        self.assertTrue(
+            {
+                "test_shared_transport.py",
+                "test_transport_module_boundaries.py",
+                "test_runtime_silent_identity_bootstrap.py",
+            }.issubset(selected)
+        )
+
+    def test_collector_entity_scope_selects_runtime_reconciliation_tests(self) -> None:
+        selected = self._selected(
+            "custom_components/eybond_local/collector/entity_scope.py"
+        )
+
+        self.assertTrue(
+            {
+                "test_collector_device_routing.py",
+                "test_init_module.py",
+            }.issubset(selected)
+        )
+
+    def test_sensor_inventory_selects_protocol_scope_and_cleanup_tests(self) -> None:
+        selected = self._selected("custom_components/eybond_local/sensor.py")
+
+        self.assertTrue(
+            {
+                "test_collector_device_routing.py",
+                "test_sensor_precision.py",
+                "test_init_module.py",
+            }.issubset(selected)
+        )
+
+    def test_modbus_payload_selects_at_callback_inverter_bootstrap(self) -> None:
+        selected = self._selected(
+            "custom_components/eybond_local/payload/modbus.py"
+        )
+
+        self.assertTrue(
+            {
+                "test_modbus_payload.py",
+                "test_smg_driver.py",
+                "test_runtime_silent_identity_bootstrap.py",
+            }.issubset(selected)
+        )
+
+    def test_runtime_link_selects_silent_identity_and_inverter_bootstrap(self) -> None:
+        selected = self._selected(
+            "custom_components/eybond_local/runtime/link/connection.py"
+        )
+
+        self.assertTrue(
+            {
+                "test_runtime_link.py",
+                "test_link_module_boundaries.py",
+                "test_runtime_silent_identity_bootstrap.py",
+            }.issubset(selected)
+        )
+
     def test_shadow_read_route_boundary_selects_capture_binding_and_activation(self) -> None:
         selected = self._selected(
             "custom_components/eybond_local/support/shadow_learning/read_evidence.py"

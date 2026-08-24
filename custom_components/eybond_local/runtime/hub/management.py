@@ -16,6 +16,7 @@ from .common import (
     _write_readback_matches,
     asyncio,
     logger,
+    monotonic,
     select_collector_management_adapter,
 )
 
@@ -46,9 +47,11 @@ class HubManagementMixin:
             raise ValueError(f"capability_not_editable:{capability_key}:{reasons}")
 
         written_value: object | None = None
+        confirmation_started_at = 0.0
         last_error: Exception | None = None
         for attempt in range(2):
             try:
+                confirmation_started_at = monotonic()
                 written_value = await self._driver.async_write_capability(
                     self._link_manager.transport,
                     self._inverter,
@@ -105,6 +108,10 @@ class HubManagementMixin:
                 requested_value=value,
                 written_value=written_value,
                 readback_value=readback_value,
+                confirmation_elapsed_seconds=max(
+                    0.0,
+                    monotonic() - confirmation_started_at,
+                ),
             ):
                 logger.warning(
                     "Write %s was accepted but did not confirm by readback; expected=%r readback=%r refresh_error=%s",
@@ -335,6 +342,51 @@ class HubManagementMixin:
         ]
         if partial:
             values["collector_metadata_partial_channels"] = _join(partial)
+        effective_exclusions = [
+            f"{r['channel_id']}="
+            + "|".join(
+                str(field)
+                for field in (r.get("effective_excluded_semantic_fields") or [])
+            )
+            for r in routes
+            if r.get("channel_id") and r.get("effective_excluded_semantic_fields")
+        ]
+        if effective_exclusions:
+            values["collector_metadata_effective_exclusions"] = _join(
+                effective_exclusions
+            )
+        unsupported_fields = [
+            f"{r['channel_id']}="
+            + "|".join(
+                str(field) for field in (r.get("unsupported_semantic_fields") or [])
+            )
+            for r in routes
+            if r.get("channel_id") and r.get("unsupported_semantic_fields")
+        ]
+        if unsupported_fields:
+            values["collector_metadata_unsupported_fields"] = _join(
+                unsupported_fields
+            )
+
+        semantic_ownership = diagnostics.get("semantic_ownership") or {}
+        if isinstance(semantic_ownership, dict):
+            binding_generation = semantic_ownership.get("binding_generation")
+            if binding_generation is not None:
+                values["collector_metadata_semantic_binding_generation"] = (
+                    binding_generation
+                )
+            at_owned_fields = semantic_ownership.get("at_owned_fields") or []
+            if at_owned_fields:
+                values["collector_metadata_at_owned_fields"] = ", ".join(
+                    str(field) for field in at_owned_fields
+                )
+            framed_unsupported_fields = (
+                semantic_ownership.get("framed_unsupported_fields") or []
+            )
+            if framed_unsupported_fields:
+                values["collector_metadata_framed_unsupported_fields"] = ", ".join(
+                    str(field) for field in framed_unsupported_fields
+                )
 
         refresh = diagnostics.get("refresh") or {}
         if isinstance(refresh, dict):

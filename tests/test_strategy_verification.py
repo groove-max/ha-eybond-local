@@ -583,7 +583,7 @@ class InboundRecoveryVerifierTests(unittest.TestCase):
     def test_restart_not_supported_fails(self) -> None:
         channel = _FakeChannel(
             restart_error=CollectorManagementUnsupportedError(
-                "collector_reboot_unsupported_on_at_wire"
+                "collector_reboot_unsupported_on_negotiated_wire"
             )
         )
         sessions = _ScriptedSessions((_strong_old(),))
@@ -1205,18 +1205,47 @@ class ObservedSessionRestartChannelTests(unittest.TestCase):
         )
         self.assertIn((FC_SET_COLLECTOR, bytes((29,)) + b"1"), wire.calls)
 
-    def test_at_adapter_reboot_is_typed_unsupported_without_wire_io(self) -> None:
-        # An AT-text live session: the negotiated management adapter honestly
-        # reports reboot=False, so the channel raises the typed unsupported
-        # error BEFORE claiming any socket or writing any byte -- no simulated
-        # reboot, no invented AT command.
+    def test_at_adapter_reboot_uses_exact_session_vendor_command(self) -> None:
+        from custom_components.eybond_local.collector.at import CollectorAtResponse
+
+        class _AtWire:
+            connected = True
+
+            def __init__(self) -> None:
+                self.queries: list[str] = []
+                self.writes: list[tuple[str, str]] = []
+
+            async def async_query(self, command: str) -> CollectorAtResponse:
+                self.queries.append(command)
+                return CollectorAtResponse(
+                    command=command,
+                    value="iot.eybond.com,18899,TCP",
+                    raw="",
+                )
+
+            async def async_write(
+                self, command: str, value: str
+            ) -> CollectorAtResponse:
+                self.writes.append((command, value))
+                return CollectorAtResponse(command=command, value="W000", raw="")
+
         handle = _real_handle("at_text", "at_commands", state="routed_at_text")
         channel = self._channel(handle_provider=lambda: handle)
+        wire = _AtWire()
 
-        with self.assertRaises(CollectorManagementUnsupportedError):
-            asyncio.run(channel.async_send_restart())
+        async def _exact_transport():
+            return wire
 
-        self._assert_no_transport(channel)
+        channel._async_ensure_at_transport = _exact_transport
+
+        receipt = asyncio.run(channel.async_send_restart())
+
+        self.assertEqual(wire.queries, ["CLDSRVHOST1"])
+        self.assertEqual(wire.writes, [("INTPARA", "29,1")])
+        self.assertEqual(receipt["status"], "reboot_requested")
+        self.assertEqual(receipt["action"], "reboot")
+        self.assertTrue(receipt["performed"])
+        self.assertEqual(receipt["management_session_id"], OLD_SESSION)
 
     def test_unknown_adapter_handle_fails_closed(self) -> None:
         # An unobserved/unknown handle is untrusted BEFORE the adapter switch.
@@ -1259,18 +1288,17 @@ class ObservedSessionRestartChannelTests(unittest.TestCase):
             asyncio.run(channel.async_send_restart())
         self._assert_no_transport(channel)
 
-    def test_at_unsupported_reboot_maps_to_typed_verifier_failure(self) -> None:
-        # End to end through the verifier: an AT session fails as
-        # restart_not_supported, with no proof and no disconnect wait.
-        handle = _real_handle("at_text", "at_commands", state="routed_at_text")
-        channel = self._channel(handle_provider=lambda: handle)
+    def test_at_restart_ack_alone_does_not_bypass_reconnect_proof(self) -> None:
+        # The AT command ACK authorizes the reset attempt, not the success
+        # outcome: without observable reset activity/reconnect, no proof exists.
+        channel = _FakeChannel(drops_on_restart=False)
         sessions = _ScriptedSessions((_strong_old(),))
 
         result = asyncio.run(_verifier(channel, sessions).async_verify())
 
         self.assertFalse(result.inbound_verified)
         self.assertIsNone(result.proof)
-        self.assertEqual(result.failure_reason, FAILURE_RESTART_NOT_SUPPORTED)
+        self.assertEqual(result.failure_reason, FAILURE_DISCONNECT_NOT_OBSERVED)
 
 
 class VerifierArchitectureGuardTests(unittest.TestCase):

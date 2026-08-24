@@ -365,16 +365,21 @@ class LinkSessionProjectionMixin:
             eff_sources = live_handle.identity_sources
             eff_forward = live_handle.inverter_forward_adapter
             eff_proxy = live_handle.proxy_adapter
+            eff_capabilities = live_handle.capabilities
         elif binding is not None:
             eff_wire = binding.wire_framing
             eff_sources = binding.identity_sources
             eff_forward = binding.inverter_forward_adapter
             eff_proxy = binding.proxy_adapter
+            eff_capabilities = binding.capabilities
         else:
             eff_wire = live_handle.wire_framing
             eff_sources = live_handle.identity_sources
             eff_forward = live_handle.inverter_forward_adapter
             eff_proxy = live_handle.proxy_adapter
+            # An unresolved/conflicting socket may carry observations, but none
+            # is an effective runtime capability until the live route is trusted.
+            eff_capabilities = None
         # Collector management is resolved by its OWN single resolver (conflict ->
         # none/"conflict"), NOT the shared wire/forward selection above.
         _mgmt_adapter_id, _mgmt_provenance = self._collector_management_selection()
@@ -396,6 +401,12 @@ class LinkSessionProjectionMixin:
             # cloud-derived preliminary/expected protocol tier.
             "collector_configured_session_protocol": (
                 self._configured_collector_session_protocol
+            ),
+            "collector_identity_challenge_protocol": (
+                self._configured_identity_challenge_protocol
+            ),
+            "collector_identity_challenge_active": (
+                self._active_identity_challenge_protocol
             ),
             "collector_confirmed_session_protocol": (
                 binding.session_protocol if binding is not None else ""
@@ -421,10 +432,31 @@ class LinkSessionProjectionMixin:
             # binding is never shown as the effective management adapter, and the
             # id/provenance can never disagree.
             "collector_callback_collector_management_adapter": _mgmt_adapter_id,
+            "collector_callback_collector_management_capabilities": ", ".join(
+                sorted(
+                    eff_capabilities.collector_management_adapters
+                    if eff_capabilities is not None
+                    else ()
+                )
+            ),
             "collector_management_adapter_id": _mgmt_adapter_id,
             "collector_management_adapter_provenance": _mgmt_provenance,
             "collector_callback_inverter_forward_adapter": eff_forward,
+            "collector_callback_inverter_forward_capabilities": ", ".join(
+                sorted(
+                    eff_capabilities.inverter_forward_adapters
+                    if eff_capabilities is not None
+                    else ()
+                )
+            ),
             "collector_callback_proxy_adapter": eff_proxy,
+            "collector_callback_proxy_capabilities": ", ".join(
+                sorted(
+                    eff_capabilities.proxy_adapters
+                    if eff_capabilities is not None
+                    else ()
+                )
+            ),
             "collector_callback_adapter_conflict": live_handle.conflict,
             "collector_callback_identity_strategy": self._collector_identity_strategy,
             "collector_callback_raw_passthrough_bootstrap": (

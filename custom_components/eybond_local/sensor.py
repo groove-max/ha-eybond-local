@@ -20,6 +20,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .collector.signal import is_legacy_disabled_signal_entity_key
+from .collector.entity_scope import filter_measurements_for_collector_session
 from .runtime.coordinator import EybondLocalCoordinator
 from .device_scoped_overlay import filter_learned_read_measurements_for_activation
 from .derived_energy import (
@@ -222,6 +223,10 @@ async def async_setup_entry(
         measurement_descriptions,
         entry_data=entry.data,
         entry_options=entry.options,
+    )
+    measurement_descriptions = filter_measurements_for_collector_session(
+        measurement_descriptions,
+        getattr(coordinator, "collector_session_protocol", ""),
     )
     measurement_descriptions = tuple(
         description

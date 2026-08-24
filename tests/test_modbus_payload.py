@@ -14,9 +14,11 @@ if str(REPO_ROOT) not in sys.path:
 from custom_components.eybond_local.payload.modbus import (
     ModbusError,
     ModbusSession,
+    crc16_modbus,
     merge_register_bit,
     merge_register_field,
 )
+from custom_components.eybond_local.link_models import RawSerialLinkRoute
 
 
 class _TimeoutTransport:
@@ -26,6 +28,20 @@ class _TimeoutTransport:
     async def async_send_payload(self, payload: bytes, *, route) -> bytes:
         self.calls += 1
         raise asyncio.TimeoutError()
+
+
+class _RawSerialSelectingTransport:
+    def __init__(self) -> None:
+        self.routes = []
+
+    def select_payload_route(self, route, *, payload_family: str = ""):
+        return RawSerialLinkRoute(protocol=payload_family)
+
+    async def async_send_payload(self, payload: bytes, *, route) -> bytes:
+        self.routes.append(route)
+        frame = bytearray((1, 3, 2, 0x73, 0x00))
+        frame.extend(crc16_modbus(frame).to_bytes(2, "little"))
+        return bytes(frame)
 
 
 class ModbusPayloadTests(unittest.IsolatedAsyncioTestCase):
@@ -43,6 +59,23 @@ class ModbusPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(str(ctx.exception), "request_timeout")
         self.assertEqual(transport.calls, 2)
+
+    async def test_modbus_session_selects_typed_raw_serial_route(self) -> None:
+        transport = _RawSerialSelectingTransport()
+        session = ModbusSession(
+            transport,
+            devcode=1,
+            collector_addr=255,
+            slave_id=1,
+        )
+
+        values = await session.read_holding(171, 1)
+
+        self.assertEqual(values, [29440])
+        self.assertEqual(
+            transport.routes,
+            [RawSerialLinkRoute(protocol="modbus_rtu")],
+        )
 
 
 class MergeRegisterBitTests(unittest.TestCase):

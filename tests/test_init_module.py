@@ -481,6 +481,48 @@ class InitModuleTests(unittest.TestCase):
         self.assertNotIn("entry123_collector_signal_quality", unique_ids)
         self.assertIn("entry123_collector_onboarding_status", unique_ids)
 
+    def test_at_runtime_default_ids_omit_framed_heartbeat_entities(self) -> None:
+        coordinator = types.SimpleNamespace(
+            collector_session_protocol="at_text",
+            async_set_proxy_capture_duration_minutes=AsyncMock(),
+            data=types.SimpleNamespace(inverter=None),
+        )
+
+        with (
+            patch(
+                "custom_components.eybond_local.drivers.registry.measurements_for_runtime",
+                return_value=(
+                    MeasurementDescription(
+                        key="collector_heartbeat_devcode",
+                        name="Collector Heartbeat Devcode",
+                        enabled_default=True,
+                    ),
+                    MeasurementDescription(
+                        key="collector_ssid",
+                        name="Connected Wi-Fi SSID",
+                        enabled_default=True,
+                    ),
+                ),
+            ),
+            patch(
+                "custom_components.eybond_local.drivers.registry.binary_sensors_for_runtime",
+                return_value=(),
+            ),
+            patch.dict(sys.modules, _runtime_entity_key_module_stubs()),
+        ):
+            unique_ids = _default_enabled_unique_ids_for_current_runtime(
+                "entry123",
+                coordinator,
+                None,
+                None,
+                lambda _capability: True,
+                lambda _preset: True,
+                has_inverter_identity=False,
+            )
+
+        self.assertNotIn("entry123_collector_heartbeat_devcode", unique_ids)
+        self.assertIn("entry123_collector_ssid", unique_ids)
+
     def test_tooling_button_keys_only_include_clock_sync_for_allowed_profile(self) -> None:
         self.assertEqual(
             tooling_button_keys_for_runtime(

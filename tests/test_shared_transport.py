@@ -40,6 +40,10 @@ from custom_components.eybond_local.collector.protocol import (
 from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
 from custom_components.eybond_local.models import CollectorInfo
 from custom_components.eybond_local.payload.ascii_line import build_ascii_line_request
+from custom_components.eybond_local.payload.modbus import (
+    build_read_request,
+    crc16_modbus,
+)
 from custom_components.eybond_local.payload.pi30 import build_request, crc16_xmodem
 from custom_components.eybond_local.runtime.link import EybondRuntimeLinkManager
 
@@ -206,6 +210,190 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await connection.wait_until_heartbeat(0.02))
         self.assertTrue(connection.collector_info.heartbeat_fresh)
         self.assertIsNotNone(connection.collector_info.heartbeat_age_seconds)
+
+    async def test_correlated_framed_response_proves_liveness_not_heartbeat(self) -> None:
+        connection = _CollectorConnection(
+            remote_ip_hint="127.0.0.1",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        connection._writer = _FakeWriter()  # type: ignore[assignment]
+        future = asyncio.get_running_loop().create_future()
+        connection._pending[23] = future
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            build_collector_request(
+                23,
+                b"valid-inverter-response",
+                devcode=2376,
+                collector_addr=1,
+                fcode=4,
+            )
+        )
+        reader.feed_eof()
+
+        await connection._read_loop(reader)
+
+        self.assertEqual((await future)[1], b"valid-inverter-response")
+        self.assertTrue(await connection.wait_until_liveness(0.02))
+        self.assertFalse(await connection.wait_until_heartbeat(0.02))
+        self.assertFalse(connection.collector_info.heartbeat_fresh)
+        self.assertIsNone(connection.collector_info.heartbeat_age_seconds)
+
+    async def test_unmatched_framed_response_does_not_prove_liveness(self) -> None:
+        connection = _CollectorConnection(
+            remote_ip_hint="127.0.0.1",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        connection._writer = _FakeWriter()  # type: ignore[assignment]
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            build_collector_request(
+                24,
+                b"unsolicited",
+                devcode=2376,
+                collector_addr=1,
+                fcode=4,
+            )
+        )
+        reader.feed_eof()
+
+        await connection._read_loop(reader)
+
+        self.assertFalse(await connection.wait_until_liveness(0.02))
+
+    async def test_correlated_at_response_proves_framed_session_liveness(self) -> None:
+        connection = _CollectorConnection(
+            remote_ip_hint="127.0.0.1",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        connection._writer = _FakeWriter()  # type: ignore[assignment]
+        future = asyncio.get_running_loop().create_future()
+        connection._pending_at_response = future
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"AT+DTUPN:E50000200000000001\r\n")
+        reader.feed_eof()
+
+        await connection._read_loop(reader)
+
+        self.assertEqual((await future).value, "E50000200000000001")
+        self.assertTrue(await connection.wait_until_liveness(0.02))
+        self.assertFalse(connection.collector_info.heartbeat_fresh)
+
+    async def test_delimiterless_at_response_preserves_following_framed_response(
+        self,
+    ) -> None:
+        connection = _CollectorConnection(
+            remote_ip_hint="127.0.0.1",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        at_future = asyncio.get_running_loop().create_future()
+        framed_future = asyncio.get_running_loop().create_future()
+        connection._pending_at_response = at_future
+        # A long-running connection can have a transaction id whose two bytes
+        # are printable. The decoder must preserve the complete binary header,
+        # not merely the first control byte it happens to encounter later.
+        printable_tid = 0x4142
+        connection._pending[printable_tid] = framed_future
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            b"AT+INTPARA:41,GRooVE"
+            + build_collector_request(
+                printable_tid,
+                b"framed-after-delimiterless-at",
+                devcode=2376,
+                collector_addr=1,
+                fcode=4,
+            )
+        )
+        reader.feed_eof()
+
+        await connection._read_loop(reader)
+
+        self.assertEqual((await at_future).command, "INTPARA")
+        self.assertEqual((await at_future).value, "41,GRooVE")
+        self.assertEqual(
+            (await framed_future)[1],
+            b"framed-after-delimiterless-at",
+        )
+        self.assertTrue(await connection.wait_until_liveness(0.02))
+
+    async def test_delimiterless_at_response_completes_after_idle_gap(self) -> None:
+        connection = _CollectorConnection(
+            remote_ip_hint="127.0.0.1",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        future = asyncio.get_running_loop().create_future()
+        connection._pending_at_response = future
+        reader = asyncio.StreamReader()
+        task = asyncio.create_task(connection._read_loop(reader))
+        try:
+            reader.feed_data(b"AT+INTPARA:41,GRooVE")
+            response = await asyncio.wait_for(future, timeout=0.5)
+            self.assertEqual(response.value, "41,GRooVE")
+        finally:
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+    async def test_at_transport_delimiterless_response_keeps_mixed_frame_aligned(
+        self,
+    ) -> None:
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+        )
+        at_future = asyncio.get_running_loop().create_future()
+        framed_future = asyncio.get_running_loop().create_future()
+        connection._pending_response = at_future
+        connection._pending_framed_response[32] = framed_future
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            b"AT+INTPARA:41,Home WiFi"
+            + build_collector_request(
+                32,
+                b"\x00\x02E50000253745448949",
+                devcode=2376,
+                collector_addr=1,
+                fcode=2,
+            )
+        )
+        reader.feed_eof()
+
+        await connection._read_loop(reader)
+
+        self.assertEqual((await at_future).value, "41,Home WiFi")
+        self.assertEqual(
+            (await framed_future)[1],
+            b"\x00\x02E50000253745448949",
+        )
+
+    async def test_actual_heartbeat_proves_both_heartbeat_and_liveness(self) -> None:
+        connection = _CollectorConnection(
+            remote_ip_hint="127.0.0.1",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            build_collector_request(
+                25,
+                b"E5000020000000",
+                devcode=2376,
+                collector_addr=1,
+                fcode=1,
+            )
+        )
+        reader.feed_eof()
+
+        await connection._read_loop(reader)
+
+        self.assertTrue(await connection.wait_until_heartbeat(0.02))
+        self.assertTrue(await connection.wait_until_liveness(0.02))
 
     async def test_collector_connection_passively_reports_at_dtupn_identity(self) -> None:
         seen: list[tuple[str, str, str]] = []
@@ -2874,6 +3062,44 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             await connection.disconnect()
             run_task.cancel()
 
+    async def test_at_connection_supports_typed_raw_modbus_response(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+            raw_passthrough_bootstrap="none",
+            raw_passthrough_frame_format="transparent",
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_modbus_raw_payload",
+        )
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+            request = build_read_request(1, 171, 1)
+            query_task = asyncio.create_task(
+                connection.async_send_raw_payload(
+                    request,
+                    request_timeout=1.0,
+                    payload_protocol="modbus_rtu",
+                )
+            )
+            await _wait_for_writer_buffer(writer, request)
+
+            response = bytearray((1, 3, 2, 0x73, 0x00))
+            response.extend(crc16_modbus(response).to_bytes(2, "little"))
+            reader.feed_data(bytes(response))
+
+            self.assertEqual(await query_task, bytes(response))
+            self.assertEqual(
+                connection.collector_info.raw_last_parser,
+                "raw_modbus_rtu",
+            )
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+
     async def test_at_connection_supports_eybond_g_ascii_raw_payload_response(self) -> None:
         reader = asyncio.StreamReader()
         writer = _FakeWriter()
@@ -4762,6 +4988,53 @@ class OnboardingTransportNoConfirmedOwnerTests(unittest.IsolatedAsyncioTestCase)
             self.assertEqual(listener._single_registered_session_protocol(), "")
         finally:
             await transport.stop()
+
+
+class SessionCapabilityInventoryTests(unittest.TestCase):
+    def test_later_at_identity_is_supplemental_and_never_rewrites_framed_primary(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=8899)
+        session_id = "hybrid-e500"
+        pn = "E50000200000000001"
+        listener._remember_session(
+            session_id=session_id,
+            remote_ip="192.0.2.55",
+            remote_port=41000,
+        )
+        listener._mark_session_first_bytes(
+            session_id,
+            build_collector_request(
+                1,
+                pn[:16].encode("ascii"),
+                devcode=2376,
+                collector_addr=1,
+                fcode=1,
+            ),
+        )
+        listener._mark_session_identity(session_id, pn, "framed_heartbeat")
+        first_prefix = listener._session_inventory[session_id].first_bytes_prefix_hex
+        listener._mark_session_first_bytes(
+            session_id,
+            f"AT+DTUPN:{pn}\r\n".encode("ascii"),
+        )
+        listener._mark_session_identity(session_id, pn, "at_dtupn")
+
+        entry = listener._session_inventory[session_id]
+        self.assertEqual(entry.protocol_shape, "eybond_framed")
+        self.assertEqual(entry.first_bytes_prefix_hex, first_prefix)
+        self.assertEqual(
+            entry.observed_protocol_shapes,
+            {"eybond_framed", "at_text"},
+        )
+        self.assertEqual(
+            entry.collector_identity_sources,
+            {"framed_heartbeat", "at_dtupn"},
+        )
+        observed = listener.discovered_collector_sessions()[0]
+        self.assertEqual(observed["protocol_shape"], "eybond_framed")
+        self.assertEqual(
+            set(observed["collector_identity_sources"]),
+            {"framed_heartbeat", "at_dtupn"},
+        )
 
 
 if __name__ == "__main__":

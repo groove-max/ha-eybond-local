@@ -153,6 +153,36 @@ class SupportBundleTests(unittest.TestCase):
             "Off-Grid",
         )
         self.assertEqual(raw["evidence"]["cloud"]["source"], "smartess_cloud_probe")
+        self.assertEqual(raw["device_registry"], {"available": False})
+
+    def test_embeds_redacted_device_registry_topology(self) -> None:
+        topology = {
+            "available": True,
+            "topology_status": "duplicate_inverter_children",
+            "direct_child_count": 3,
+            "unexpected_direct_child_count": 2,
+            "devices": [
+                {
+                    "role": "canonical_inverter",
+                    "entity_count": 244,
+                }
+            ],
+        }
+        raw = build_support_bundle_payload(
+            entry_id="entry123",
+            entry_title="Anenji",
+            connected=True,
+            collector=None,
+            inverter={"driver_key": "modbus_smg"},
+            values={},
+            data={},
+            options={},
+            profile_name="",
+            register_schema_name="",
+            device_registry=topology,
+        )
+
+        self.assertEqual(raw["device_registry"], topology)
 
     def test_typed_telemetry_is_split_from_broad_support_metadata(self) -> None:
         telemetry = fold_driver_telemetry(

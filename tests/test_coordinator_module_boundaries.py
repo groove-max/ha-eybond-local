@@ -58,7 +58,7 @@ EXPECTED_MRO = [
 ]
 
 EXPECTED_METHOD_SET_SHA256 = (
-    "9d17b51adf622a7bc92670f8d0997e52136e445cd6ede261a738f5b9b8f3287e"
+    "d4a54a7937e620ab32f53ce7dcc9ea6d26c52303140d459c388a3c992f07d49b"
 )
 
 
@@ -120,7 +120,7 @@ class CoordinatorCompositionBoundaryTests(unittest.TestCase):
         duplicates = {name: paths for name, paths in owners.items() if len(paths) != 1}
         self.assertEqual(duplicates, {})
         digest = hashlib.sha256("\n".join(sorted(owners)).encode()).hexdigest()
-        self.assertEqual(len(owners), 288)
+        self.assertEqual(len(owners), 289)
         self.assertEqual(digest, EXPECTED_METHOD_SET_SHA256)
 
     def test_provider_neutral_cloud_evidence_surface_has_no_smartess_wrapper(self) -> None:

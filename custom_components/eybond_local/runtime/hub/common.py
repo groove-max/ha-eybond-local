@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
+from math import ceil, isfinite
 from time import monotonic, time as _wall_time
 from typing import Any, Callable
 
@@ -369,6 +370,7 @@ def _write_readback_matches(
     requested_value: object,
     written_value: object,
     readback_value: object,
+    confirmation_elapsed_seconds: float = 0.0,
 ) -> bool:
     """Return whether one refreshed value confirms the requested write."""
 
@@ -380,7 +382,59 @@ def _write_readback_matches(
         if expected_label is not None and readback_value == expected_label:
             return True
 
+    if capability.value_kind == "time_words":
+        expected_seconds = _clock_seconds_since_midnight(written_value)
+        if expected_seconds is None:
+            expected_seconds = _clock_seconds_since_midnight(requested_value)
+        readback_seconds = _clock_seconds_since_midnight(readback_value)
+        if expected_seconds is None or readback_seconds is None:
+            return False
+
+        # An inverter clock advances while the post-write refresh is in flight.
+        # Confirm only a forward movement covered by the measured operation
+        # duration.  One additional second accounts for the register clock tick
+        # occurring on either side of our monotonic measurements.  Modulo one
+        # day preserves the same rule across midnight.
+        if (
+            type(confirmation_elapsed_seconds) not in (int, float)
+            or not isfinite(confirmation_elapsed_seconds)
+        ):
+            return False
+        elapsed = max(0.0, confirmation_elapsed_seconds)
+        maximum_forward_seconds = ceil(elapsed) + 1
+        forward_seconds = (readback_seconds - expected_seconds) % (24 * 60 * 60)
+        return forward_seconds <= maximum_forward_seconds
+
     return False
+
+
+def _clock_seconds_since_midnight(value: object) -> int | None:
+    """Parse one exact ``HH:MM:SS`` clock value without coercion."""
+
+    if type(value) is not str or len(value) != 8:
+        return None
+    hour_text, separator_1, remainder = value.partition(":")
+    minute_text, separator_2, second_text = remainder.partition(":")
+    if (
+        separator_1 != ":"
+        or separator_2 != ":"
+        or len(hour_text) != 2
+        or len(minute_text) != 2
+        or len(second_text) != 2
+        or not hour_text.isascii()
+        or not minute_text.isascii()
+        or not second_text.isascii()
+        or not hour_text.isdecimal()
+        or not minute_text.isdecimal()
+        or not second_text.isdecimal()
+    ):
+        return None
+    hour = int(hour_text)
+    minute = int(minute_text)
+    second = int(second_text)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+        return None
+    return (hour * 60 + minute) * 60 + second
 
 
 def _write_not_confirmed_error(

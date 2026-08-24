@@ -12,6 +12,7 @@ import asyncio
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -176,6 +177,49 @@ async def test_offline_persisted_model_creates_model_specific_entities_before_re
     }
     assert unique_ids <= reloaded_unique_ids
     assert "Timed out waiting to finalize EyeBond expert entity migration" not in caplog.text
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_setup_unlinks_a_foreign_inverter_child_from_current_collector(
+    hass: HomeAssistant,
+    fake_runtime,
+) -> None:
+    """A re-added inverter removes foreign rows through the real HA registry."""
+
+    entry = _persisted_anenji_entry(hass)
+    foreign_entry = MockConfigEntry(domain="test", title="Old entry")
+    foreign_entry.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    collector_identifier = (DOMAIN, f"{entry.entry_id}:collector")
+    registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={collector_identifier},
+        name="Current collector",
+    )
+    foreign_identifier = (DOMAIN, foreign_entry.entry_id)
+    stale = registry.async_get_or_create(
+        config_entry_id=foreign_entry.entry_id,
+        identifiers={foreign_identifier},
+        name="Old inverter",
+        via_device=collector_identifier,
+    )
+    assert hass.config_entries.async_get_entry(foreign_entry.entry_id) is foreign_entry
+    assert stale is not None
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    retained_foreign = registry.async_get_device(identifiers={foreign_identifier})
+    assert retained_foreign is not None
+    assert retained_foreign.via_device_id is None
+    assert retained_foreign.config_entries == {foreign_entry.entry_id}
+    canonical = registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    assert canonical is not None
+    collector = registry.async_get_device(identifiers={collector_identifier})
+    assert collector is not None
+    assert canonical.via_device_id == collector.id
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()

@@ -175,6 +175,9 @@ class CoordinatorSnapshotProjectionMixin:
         values: dict[str, Any] = {
             "collector_resolved_cloud_family": profile.cloud_family,
             "collector_resolved_runtime_owner_key": profile.runtime_owner_key,
+            "collector_resolved_identity_challenge_protocol": (
+                profile.identity_challenge_protocol
+            ),
             "collector_resolved_session_protocol": profile.session_protocol,
             "collector_resolved_identity_strategy": profile.identity_strategy,
         }
@@ -184,6 +187,14 @@ class CoordinatorSnapshotProjectionMixin:
                 {
                     "collector_connection_cloud_family": str(
                         getattr(connection, "collector_cloud_family", "") or ""
+                    ),
+                    "collector_connection_identity_challenge_protocol": str(
+                        getattr(
+                            connection,
+                            "collector_identity_challenge_protocol",
+                            "",
+                        )
+                        or ""
                     ),
                     "collector_connection_session_protocol": str(
                         getattr(
@@ -208,6 +219,12 @@ class CoordinatorSnapshotProjectionMixin:
             else:
                 values["collector_runtime_link_session_protocol"] = str(
                     diagnostics.get("collector_configured_session_protocol") or ""
+                )
+                values["collector_runtime_identity_challenge_protocol"] = str(
+                    diagnostics.get("collector_identity_challenge_protocol") or ""
+                )
+                values["collector_runtime_identity_challenge_active"] = str(
+                    diagnostics.get("collector_identity_challenge_active") or ""
                 )
                 values["collector_runtime_link_identity_strategy"] = str(
                     diagnostics.get("collector_callback_identity_strategy") or ""
@@ -358,6 +375,7 @@ class CoordinatorSnapshotProjectionMixin:
             smartess_profile_key=getattr(smartess_protocol, "profile_key", ""),
             support_marker=marker.as_payload() if marker is not None else None,
             cloud_evidence=cloud_evidence,
+            device_registry=self.device_registry_diagnostics(),
         )
 
     @staticmethod

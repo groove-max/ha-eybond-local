@@ -5,7 +5,9 @@ from __future__ import annotations
 from .common import (
     ADAPTER_INVERTER_RAW_PASSTHROUGH,
     _RUNTIME_CAUSALITY_LEASE_WAIT,
+    asyncio,
     logger,
+    pn_is_same_identity,
 )
 
 
@@ -212,16 +214,171 @@ class LinkConnectionMixin:
             async with get_callback_trigger_ledger().causality_lease(
                 attempt_id, timeout=_RUNTIME_CAUSALITY_LEASE_WAIT
             ):
-                await self._send_callback_trigger()
-                return await self._async_await_callback_session(
-                    timeout=timeout, require_heartbeat=require_heartbeat
+                challenge = self._identity_challenge_candidate()
+                if not challenge:
+                    # Preserve the established callback timing exactly when no
+                    # metadata-backed challenge capability exists.
+                    await self._send_callback_trigger()
+                    return await self._async_await_callback_session(
+                        timeout=timeout,
+                        require_heartbeat=require_heartbeat,
+                    )
+                probe_channel = None
+                deadline = asyncio.get_running_loop().time() + max(
+                    0.0, float(timeout)
                 )
+                try:
+                    baseline: frozenset[str] = frozenset()
+                    if challenge:
+                        from ...collector.silent_session_probe import (
+                            SilentSessionIdentityProbeChannel,
+                        )
+
+                        probe_channel = SilentSessionIdentityProbeChannel(
+                            host=self._listener_bind_host,
+                            port=self._tcp_port,
+                        )
+                        await probe_channel.async_open()
+                        if probe_channel.available:
+                            baseline = frozenset(
+                                observation.session_id
+                                for observation in (
+                                    probe_channel.snapshot_session_observations()
+                                )
+                                if observation.session_id
+                            )
+                            self._active_identity_challenge_protocol = challenge
+
+                    await self._send_callback_trigger()
+
+                    if probe_channel is not None and probe_channel.available:
+                        identified = await self._async_identify_callback_session(
+                            probe_channel=probe_channel,
+                            session_protocol=challenge,
+                            baseline=baseline,
+                            deadline=deadline,
+                        )
+                        if identified:
+                            # The exact-session challenge wrote only a strong PN
+                            # into the public inventory. The ordinary registry
+                            # now negotiates/owns/routes that socket; the cloud
+                            # candidate itself never reaches transport authority.
+                            self._apply_live_wire_to_transports()
+
+                    remaining = max(
+                        0.0, deadline - asyncio.get_running_loop().time()
+                    )
+                    return await self._async_await_callback_session(
+                        timeout=remaining,
+                        require_heartbeat=require_heartbeat,
+                    )
+                finally:
+                    self._active_identity_challenge_protocol = ""
+                    if probe_channel is not None:
+                        await probe_channel.async_close()
         except CallbackCausalityBusyError:
             # Someone else owns causality (an onboarding attempt, an inbound
             # verification). We did NOT trigger, so this is not a collector
             # failure: stay silent and let Home Assistant retry.
             logger.debug("Runtime callback deferred: causality is owned elsewhere")
             return False
+
+    def _identity_challenge_candidate(self) -> str:
+        """Return a read-only challenge candidate when no wire is trusted yet.
+
+        The candidate is metadata, not evidence. A live handle or a confirmed
+        binding always owns the established path and suppresses this bootstrap.
+        """
+
+        handle = self._live_session_handle()
+        if handle.observed and not handle.conflict:
+            return ""
+        if self._effective_wire_binding() is not None:
+            return ""
+        return self._configured_identity_challenge_protocol
+
+    async def _async_identify_callback_session(
+        self,
+        *,
+        probe_channel,
+        session_protocol: str,
+        baseline: frozenset[str],
+        deadline: float,
+    ) -> bool:
+        """Find this entry's PN using exact-session read-only challenges only.
+
+        Post-trigger sockets are attempted first. Already-open silent sockets
+        are still eligible because many collectors keep one callback TCP stream
+        open and do not create a second stream for another set>server request.
+        Every socket is keyed by session id, queried at most once, and accepted
+        only after the channel records a strong PN matching the durable entry.
+        Peer IP and arrival order never establish identity or ownership.
+        """
+
+        from ...collector_identity import identity_source_is_strong
+
+        expected_pn = str(self._collector_pn or "").strip()
+        if not expected_pn or not session_protocol:
+            return False
+
+        attempted: set[str] = set()
+        loop = asyncio.get_running_loop()
+        while True:
+            observations = tuple(probe_channel.snapshot_session_observations())
+            for observation in observations:
+                observed_pn = str(observation.collector_pn or "").strip()
+                if (
+                    observed_pn
+                    and identity_source_is_strong(observation.identity_source)
+                    and pn_is_same_identity(expected_pn, observed_pn)
+                ):
+                    return True
+
+            fresh = tuple(
+                observation
+                for observation in observations
+                if observation.session_id not in baseline
+            )
+            existing = tuple(
+                observation
+                for observation in observations
+                if observation.session_id in baseline
+            )
+            for observation in (*fresh, *existing):
+                session_id = str(observation.session_id or "").strip()
+                if not session_id or session_id in attempted:
+                    continue
+                observed_pn = str(observation.collector_pn or "").strip()
+                if observed_pn and identity_source_is_strong(
+                    observation.identity_source
+                ):
+                    # Strong foreign identity is useful negative evidence; it is
+                    # never re-probed with a metadata-selected protocol.
+                    attempted.add(session_id)
+                    continue
+
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return False
+                attempted.add(session_id)
+                try:
+                    identified_pn = await asyncio.wait_for(
+                        probe_channel.async_identify_exact_session(
+                            session_id,
+                            session_protocol=session_protocol,
+                        ),
+                        timeout=remaining,
+                    )
+                except asyncio.TimeoutError:
+                    return False
+                if identified_pn and pn_is_same_identity(
+                    expected_pn, identified_pn
+                ):
+                    return True
+
+            if loop.time() >= deadline:
+                return False
+            await asyncio.sleep(min(0.05, max(0.0, deadline - loop.time())))
 
     async def _async_await_callback_session(
         self, *, timeout: float, require_heartbeat: bool
@@ -255,8 +412,10 @@ class LinkConnectionMixin:
         self._adopt_trusted_live_binding()
 
         if require_heartbeat:
-            heartbeat_ok = await self._async_wait_for_payload_heartbeat(timeout=min(timeout, 1.5))
-            if not heartbeat_ok:
+            liveness_ok = await self._async_wait_for_payload_liveness(
+                timeout=min(timeout, 1.5)
+            )
+            if not liveness_ok:
                 return False
 
         await self._announcer.stop()

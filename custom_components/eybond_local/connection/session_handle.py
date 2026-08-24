@@ -24,9 +24,11 @@ Adapters (what the payload/driver can ride on this session):
 - ``raw_passthrough`` -- raw serial passthrough over the AT-text session, used by
   G-ASCII / ValueCloud style drivers.
 
-The negotiated *wire* is the one thing runtime transport selection turns on:
+The negotiated *wire* remains the one thing runtime payload routing turns on:
 ``framed`` (use the framed transport) vs ``at_text`` (use the AT transport) vs
-``""`` (nothing observed yet -> fall back to the persisted hint).
+``""`` (nothing observed yet -> fail closed).  Independent exact-session
+capabilities record additional management dialects without changing that
+primary parser/forwarding route.
 """
 
 from __future__ import annotations
@@ -90,6 +92,38 @@ _TRANSPORT_WIRE_BY_WIRE_FRAMING: dict[str, str] = {
 
 
 @dataclass(frozen=True, slots=True)
+class SessionCapabilities:
+    """Independently observed roles supported by one physical TCP session.
+
+    ``wire_framing`` remains the single primary parser/activation route.  These
+    sets deliberately answer a different question: which role-specific
+    operations have positive evidence on that exact session.  A hybrid
+    collector can therefore keep a framed primary route while also exposing an
+    AT collector-management capability; that does not turn inverter forwarding
+    into raw passthrough and does not create a second session owner.
+    """
+
+    collector_management_adapters: frozenset[str] = field(default_factory=frozenset)
+    inverter_forward_adapters: frozenset[str] = field(default_factory=frozenset)
+    proxy_adapters: frozenset[str] = field(default_factory=frozenset)
+
+    @property
+    def available_adapters(self) -> frozenset[str]:
+        """Return the union of every role-specific observed adapter."""
+
+        return frozenset(
+            self.collector_management_adapters
+            | self.inverter_forward_adapters
+            | self.proxy_adapters
+        )
+
+    def supports(self, adapter: str) -> bool:
+        """Return whether positive session evidence supports ``adapter``."""
+
+        return adapter in self.available_adapters
+
+
+@dataclass(frozen=True, slots=True)
 class SessionHandle:
     """One entry's claimed inbound session and its negotiated live adapters."""
 
@@ -102,6 +136,7 @@ class SessionHandle:
     collector_management_adapter: str = ADAPTER_NONE
     inverter_forward_adapter: str = ADAPTER_NONE
     proxy_adapter: str = ADAPTER_NONE
+    capabilities: SessionCapabilities = field(default_factory=SessionCapabilities)
     conflict: str = ""
     state: str = ""
 
@@ -126,7 +161,10 @@ class SessionHandle:
     def available_adapters(self) -> frozenset[str]:
         """Return all non-empty negotiated adapters."""
 
-        return frozenset(
+        # Scalar adapters remain the compatibility projection consumed by the
+        # existing runtime route selectors.  Include them for direct
+        # SessionHandle constructors as well as the richer capability sets.
+        projected = frozenset(
             adapter
             for adapter in (
                 self.collector_management_adapter,
@@ -135,6 +173,7 @@ class SessionHandle:
             )
             if adapter and adapter != ADAPTER_NONE
         )
+        return frozenset(self.capabilities.available_adapters | projected)
 
     @property
     def observed(self) -> bool:
@@ -168,10 +207,12 @@ class ConfirmedWireBinding:
     ``session_id`` / ``peer_ip`` / ``listener_port`` / live ``state`` /
     ``observed`` flag). Storing a whole SessionHandle as the "confirmed binding"
     would carry stale socket metadata across a reconnect. This immutable model
-    carries ONLY the durable wire facts that a same-collector session handover
-    must preserve -- never a socket identity or a live-observation flag. It is
-    adopted from a trusted observed handle by an explicit lifecycle step, never
-    as a side effect of reading diagnostics.
+    carries ONLY the durable primary-wire facts that a same-collector session
+    handover must preserve -- never a socket identity, a live-observation flag,
+    or supplemental capabilities learned on the old physical socket. A new
+    socket must prove hybrid AT/framed support again. The binding is adopted
+    from a trusted observed handle by an explicit lifecycle step, never as a
+    side effect of reading diagnostics.
     """
 
     collector_pn: str
@@ -179,6 +220,7 @@ class ConfirmedWireBinding:
     collector_management_adapter: str = ADAPTER_NONE
     inverter_forward_adapter: str = ADAPTER_NONE
     proxy_adapter: str = ADAPTER_NONE
+    capabilities: SessionCapabilities = field(default_factory=SessionCapabilities)
     identity_sources: frozenset[str] = field(default_factory=frozenset)
 
     @property
@@ -240,12 +282,18 @@ class ConfirmedWireBinding:
             return None
         if not str(getattr(handle, "collector_pn", "") or "").strip():
             return None
+        durable_capabilities = _capabilities_for_observation(
+            wire=handle.wire_framing,
+            observed_wires=frozenset({handle.wire_framing}),
+            identity_sources=frozenset(),
+        )
         return cls(
             collector_pn=durable,
             wire_framing=handle.wire_framing,
             collector_management_adapter=handle.collector_management_adapter,
             inverter_forward_adapter=handle.inverter_forward_adapter,
             proxy_adapter=handle.proxy_adapter,
+            capabilities=durable_capabilities,
             identity_sources=handle.identity_sources,
         )
 
@@ -276,12 +324,18 @@ class ConfirmedWireBinding:
         else:
             return None
         collector_adapter, inverter_adapter, proxy_adapter = _adapters_for_wire(wire)
+        capabilities = _capabilities_for_observation(
+            wire=wire,
+            observed_wires=frozenset({wire}),
+            identity_sources=frozenset(),
+        )
         return cls(
             collector_pn=durable,
             wire_framing=wire,
             collector_management_adapter=collector_adapter,
             inverter_forward_adapter=inverter_adapter,
             proxy_adapter=proxy_adapter,
+            capabilities=capabilities,
         )
 
 
@@ -318,6 +372,70 @@ def _adapters_for_wire(wire: str) -> tuple[str, str, str]:
             ADAPTER_PROXY_RAW_TCP,
         )
     return (ADAPTER_NONE, ADAPTER_NONE, ADAPTER_NONE)
+
+
+def _strict_observed_strings(value: object) -> frozenset[str]:
+    """Return exact normalized observation strings; malformed containers fail closed."""
+
+    if type(value) not in (tuple, list, set, frozenset):
+        return frozenset()
+    return frozenset(
+        item
+        for item in value
+        if type(item) is str and item and item == item.strip()
+    )
+
+
+def _capabilities_for_observation(
+    *,
+    wire: str,
+    observed_wires: frozenset[str],
+    identity_sources: frozenset[str],
+) -> SessionCapabilities:
+    """Build role capabilities from exact-session wire/identity evidence.
+
+    Identity sources prove collector-management dialects only.  They do not
+    prove how inverter payloads or cloud proxy bytes are forwarded.  Those
+    roles require an observed/routed wire shape.  This is the load-bearing
+    distinction for hybrid E500 collectors.
+    """
+
+    management: set[str] = set()
+    inverter: set[str] = set()
+    proxy: set[str] = set()
+
+    # Any exact-session framed/AT observation proves only the corresponding
+    # collector-management dialect.  Inverter forwarding and proxying stay
+    # pinned to the ONE primary route selected for this socket.
+    all_management_wires = set(observed_wires)
+    if wire != WIRE_UNKNOWN:
+        all_management_wires.add(wire)
+
+    if WIRE_FRAMED in all_management_wires:
+        management.add(ADAPTER_COLLECTOR_FRAMED_COMMANDS)
+    if WIRE_AT_TEXT in all_management_wires:
+        management.add(ADAPTER_COLLECTOR_AT_COMMANDS)
+
+    if wire == WIRE_FRAMED:
+        inverter.add(ADAPTER_INVERTER_FRAMED_FC4)
+        proxy.add(ADAPTER_PROXY_FRAMED_CLOUD)
+    if wire == WIRE_AT_TEXT:
+        inverter.add(ADAPTER_INVERTER_RAW_PASSTHROUGH)
+        proxy.add(ADAPTER_PROXY_RAW_TCP)
+    if wire == WIRE_RAW_TCP:
+        inverter.add(ADAPTER_INVERTER_RAW_PASSTHROUGH)
+        proxy.add(ADAPTER_PROXY_RAW_TCP)
+
+    if "at_dtupn" in identity_sources:
+        management.add(ADAPTER_COLLECTOR_AT_COMMANDS)
+    if identity_sources & {"fc2_parameter_2", "framed_heartbeat"}:
+        management.add(ADAPTER_COLLECTOR_FRAMED_COMMANDS)
+
+    return SessionCapabilities(
+        collector_management_adapters=frozenset(management),
+        inverter_forward_adapters=frozenset(inverter),
+        proxy_adapters=frozenset(proxy),
+    )
 
 
 def negotiate_wire_result(
@@ -383,17 +501,43 @@ def negotiate_session_adapters(observed: Mapping[str, object] | None) -> Session
         session_protocol=observed.get("session_protocol"),
     )
     collector_adapter, inverter_adapter, proxy_adapter = _adapters_for_wire(wire)
-    identity_source = str(observed.get("collector_identity_source") or "").strip()
+    raw_identity_source = observed.get("collector_identity_source")
+    identity_source = (
+        raw_identity_source
+        if type(raw_identity_source) is str
+        and raw_identity_source
+        and raw_identity_source == raw_identity_source.strip()
+        else ""
+    )
+    identity_sources = set(
+        _strict_observed_strings(observed.get("collector_identity_sources"))
+    )
+    if identity_source:
+        identity_sources.add(identity_source)
+    observed_shapes = _strict_observed_strings(
+        observed.get("observed_protocol_shapes")
+    )
+    observed_wires = frozenset(
+        normalized
+        for shape in observed_shapes
+        if (normalized := _normalize_wire_signal(shape)) != WIRE_UNKNOWN
+    )
+    capabilities = _capabilities_for_observation(
+        wire=wire,
+        observed_wires=observed_wires,
+        identity_sources=frozenset(identity_sources),
+    )
     return SessionHandle(
         session_id=str(observed.get("session_id") or "").strip(),
         collector_pn=str(observed.get("collector_pn") or "").strip(),
         peer_ip=str(observed.get("peer_ip") or "").strip(),
         listener_port=int(observed.get("listener_port") or 0),
         wire_framing=wire,
-        identity_sources=frozenset({identity_source} if identity_source else ()),
+        identity_sources=frozenset(identity_sources),
         collector_management_adapter=collector_adapter,
         inverter_forward_adapter=inverter_adapter,
         proxy_adapter=proxy_adapter,
+        capabilities=capabilities,
         conflict=conflict,
         state=str(observed.get("state") or "").strip(),
     )

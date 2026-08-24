@@ -5,8 +5,12 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from ..link_models import EybondLinkRoute
-from ..link_transport import PayloadLinkTransport, async_send_payload
+from ..link_models import EybondLinkRoute, LinkRoute
+from ..link_transport import (
+    PayloadLinkTransport,
+    async_send_payload,
+    select_payload_route,
+)
 
 
 class ModbusError(Exception):
@@ -356,7 +360,7 @@ class ModbusSession:
         self,
         transport: PayloadLinkTransport,
         *,
-        route: EybondLinkRoute | None = None,
+        route: LinkRoute | None = None,
         devcode: int | None = None,
         collector_addr: int | None = None,
         slave_id: int,
@@ -371,6 +375,20 @@ class ModbusSession:
             )
         self._route = route
         self._slave_id = slave_id
+
+    def _selected_route(self) -> LinkRoute:
+        """Resolve the logical Modbus target through the active link adapter.
+
+        EyeBond framed sessions keep the catalog's tunnel route.  AT callback
+        sessions explicitly translate it to a raw-serial Modbus route.  The
+        transport -- not the driver or cloud metadata -- owns that wire choice.
+        """
+
+        return select_payload_route(
+            self._transport,
+            self._route,
+            payload_family="modbus_rtu",
+        )
 
     async def read_registers(
         self,
@@ -388,7 +406,7 @@ class ModbusSession:
                 response = await async_send_payload(
                     self._transport,
                     request,
-                    route=self._route,
+                    route=self._selected_route(),
                 )
             except asyncio.TimeoutError as exc:
                 last_error = ModbusError("request_timeout")
@@ -429,7 +447,7 @@ class ModbusSession:
             response = await async_send_payload(
                 self._transport,
                 request,
-                route=self._route,
+                route=self._selected_route(),
             )
         except asyncio.TimeoutError as exc:
             raise ModbusError("request_timeout") from exc
@@ -448,7 +466,7 @@ class ModbusSession:
             response = await async_send_payload(
                 self._transport,
                 request,
-                route=self._route,
+                route=self._selected_route(),
             )
         except asyncio.TimeoutError as exc:
             raise ModbusError("request_timeout") from exc

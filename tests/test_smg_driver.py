@@ -449,6 +449,40 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["max_discharge_current_protection"], 0)
         self.assertEqual(inverter.details["output_mode"], "Split-Phase-P1")
 
+    async def test_probe_selects_hhs_11kw_telemetry_without_anj_controls(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        registers = self._anenji_registers()
+        registers[171] = 29440
+        registers[184] = 3
+        transport = FixtureTransport(
+            registers=registers,
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(
+            inverter.variant_key,
+            "anenji_hhs_11kw_wifi_no_parallel",
+        )
+        self.assertEqual(
+            inverter.model_name,
+            "Anenji HHS-11kW-WIFI (without parallel)",
+        )
+        self.assertEqual(inverter.profile_name, "")
+        self.assertEqual(
+            inverter.register_schema_name,
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        )
+        self.assertEqual(inverter.capabilities, ())
+        self.assertEqual(inverter.capability_groups, ())
+        self.assertEqual(inverter.details["device_catalog"]["tier"], "partial")
+        self.assertEqual(inverter.details["device_type"], 29440)
+        self.assertEqual(inverter.details["protocol_number"], 3)
+
     async def test_probe_rejects_anenji_variant_when_variant_anchor_fields_are_invalid(self) -> None:
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)

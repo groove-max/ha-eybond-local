@@ -21,8 +21,12 @@ This service holds:
 * a generation preflight + postflight guard so a stale-route result never
   overwrites a newer session's cache and a stale route is never even queried.
 
-Merge precedence is preserved: AT supplemental values override framed values on
-identical keys.
+Semantic ownership is bound by the route builder. Framed management owns shared
+fields by default, AT owns explicitly better source-specific observations (for
+example Wi-Fi RSSI versus framed cellular CSQ), and an explicit framed
+"unsupported" response may transfer only that field to a confirmed AT
+capability for the current session generation. One generation never has two
+polling owners for the same field.
 """
 
 from __future__ import annotations
@@ -101,6 +105,10 @@ class CollectorMetadataService:
         self._framed_bootstrap_last_attempt = 0.0
         self._at_last_refresh = 0.0
         self._at_last_attempt = 0.0
+        self._at_capability_probe_generation: int | None = None
+        self._semantic_binding_generation: int | None = None
+        self._at_owned_semantic_fields: set[str] = set()
+        self._framed_unsupported_semantic_fields: set[str] = set()
         self._dirty = True
         self._last_fresh = False
 
@@ -168,10 +176,13 @@ class CollectorMetadataService:
         return self._identity
 
     def merged_values(self) -> dict[str, object]:
-        """Return framed base metadata merged with AT supplemental (AT wins)."""
+        """Return metadata after route-level semantic ownership filtering."""
 
-        values = dict(self._framed_values)
-        values.update(self._at_values)
+        # Route exclusions normally make overlaps impossible. Framed wins as a
+        # final fail-safe for stale caches and hand-built routes because it is
+        # the newer primary management dialect; AT is supplemental.
+        values = dict(self._at_values)
+        values.update(self._framed_values)
         return values
 
     def invalidate(self) -> None:
@@ -183,6 +194,10 @@ class CollectorMetadataService:
         self._framed_bootstrap_last_attempt = 0.0
         self._at_last_refresh = 0.0
         self._at_last_attempt = 0.0
+        self._at_capability_probe_generation = None
+        self._semantic_binding_generation = None
+        self._at_owned_semantic_fields.clear()
+        self._framed_unsupported_semantic_fields.clear()
         self._dirty = True
 
     def apply_authoritative_values(self, mapping: dict[str, object]) -> None:
@@ -220,6 +235,10 @@ class CollectorMetadataService:
         """Explicit recheck: forget the metadata channel health entirely."""
 
         self._health.clear()
+        self._at_capability_probe_generation = None
+        self._semantic_binding_generation = None
+        self._at_owned_semantic_fields.clear()
+        self._framed_unsupported_semantic_fields.clear()
 
     # -- refresh ---------------------------------------------------------------
 
@@ -275,6 +294,53 @@ class CollectorMetadataService:
                 routes, self.merged_values(), (), (), (), 0, 0
             )
 
+        if self._semantic_binding_generation != start_generation:
+            # Capability/field ownership is scoped to one physical session
+            # generation. A reconnect renegotiates from the declared defaults.
+            self._semantic_binding_generation = start_generation
+            self._at_owned_semantic_fields.clear()
+            self._framed_unsupported_semantic_fields.clear()
+
+        if (
+            routes.framed is not None
+            and routes.at is not None
+            and not routes.at.capability_probe
+        ):
+            # Static source-quality ownership declared by the route builder
+            # (currently AT Wi-Fi RSSI versus framed cellular CSQ).
+            self._at_owned_semantic_fields.update(
+                routes.framed.excluded_semantic_fields
+            )
+
+        if routes.at is not None and not routes.at.capability_probe:
+            self._at_owned_semantic_fields.update(
+                self._framed_unsupported_semantic_fields
+                & routes.at.excluded_semantic_fields
+            )
+
+        framed_exclusions = (
+            routes.framed.excluded_semantic_fields
+            | frozenset(self._at_owned_semantic_fields)
+            if routes.framed is not None
+            else frozenset()
+        )
+        at_exclusions = (
+            routes.at.excluded_semantic_fields
+            - frozenset(self._at_owned_semantic_fields)
+            if routes.at is not None
+            else frozenset()
+        )
+
+        # A route change may alter field ownership without changing collector
+        # identity.  Remove cached values that the current route explicitly
+        # excludes before any cadence gate or merge can expose them.
+        if routes.framed is not None:
+            for field in framed_exclusions:
+                self._framed_values.pop(field, None)
+        if routes.at is not None:
+            for field in at_exclusions:
+                self._at_values.pop(field, None)
+
         framed_routed = routes.framed is not None
         force_fc = force_refresh or (force_liveness and framed_routed)
         force_at = force_refresh or (force_liveness and not framed_routed)
@@ -287,8 +353,32 @@ class CollectorMetadataService:
                 or now - self._framed_last_refresh >= refresh_interval
             )
             if due:
-                result, status, ms = await self._run_channel(routes.framed, start_generation)
+                result, status, ms = await self._run_channel(
+                    routes.framed,
+                    start_generation,
+                    excluded_semantic_fields=framed_exclusions,
+                )
                 framed_ms = max(framed_ms, ms)
+                self._framed_unsupported_semantic_fields.update(
+                    result.unsupported_semantic_fields
+                )
+                fallback_fields = (
+                    self._framed_unsupported_semantic_fields
+                    & routes.at.excluded_semantic_fields
+                    if routes.at is not None and not routes.at.capability_probe
+                    else frozenset()
+                )
+                if fallback_fields:
+                    # Explicit FC "unsupported" is the only in-session reason
+                    # to move an overlapping field to the confirmed AT legacy
+                    # capability. The decision is pinned until generation moves.
+                    self._at_owned_semantic_fields.update(fallback_fields)
+                    for field in fallback_fields:
+                        self._framed_values.pop(field, None)
+                    at_exclusions = (
+                        routes.at.excluded_semantic_fields
+                        - frozenset(self._at_owned_semantic_fields)
+                    )
                 if status == STATUS_FRESH:
                     self._framed_values = dict(result.values)
                     self._framed_last_refresh = now
@@ -318,7 +408,27 @@ class CollectorMetadataService:
 
         # -- AT-text supplemental metadata sweep ------------------------------
         if routes.at is not None:
-            if self._health.is_dead(AT_METADATA_CHANNEL):
+            if routes.at.capability_probe:
+                # Parser support is not device evidence. Probe this exact
+                # physical session once, independently of the persisted AT
+                # metadata-channel verdict. A reconnect changes generation and
+                # therefore renegotiates; an unchanged session never repeats a
+                # known-negative probe every polling sweep.
+                if self._at_capability_probe_generation != start_generation:
+                    self._at_capability_probe_generation = start_generation
+                    result, status, ms = await self._run_channel(
+                        routes.at,
+                        start_generation,
+                        excluded_semantic_fields=at_exclusions,
+                    )
+                    at_ms = max(at_ms, ms)
+                    if status == STATUS_FRESH:
+                        fresh_channels.append(AT_METADATA_CHANNEL)
+                        self._health.record_alive(AT_METADATA_CHANNEL)
+                    self._record_channel(AT_METADATA_CHANNEL, result, status)
+                else:
+                    self._mark_cached(AT_METADATA_CHANNEL, used_cached)
+            elif self._health.is_dead(AT_METADATA_CHANNEL):
                 self._channel_status[AT_METADATA_CHANNEL] = STATUS_SKIPPED_DEAD
             else:
                 at_stale = (
@@ -329,7 +439,9 @@ class CollectorMetadataService:
                 if force_at or (at_stale and at_attempt_due):
                     self._at_last_attempt = now
                     result, status, ms = await self._run_channel(
-                        routes.at, start_generation
+                        routes.at,
+                        start_generation,
+                        excluded_semantic_fields=at_exclusions,
                     )
                     at_ms = max(at_ms, ms)
                     if status == STATUS_FRESH:
@@ -429,6 +541,8 @@ class CollectorMetadataService:
         self,
         route: CollectorMetadataRoute,
         start_generation: int,
+        *,
+        excluded_semantic_fields: frozenset[str] | None = None,
     ) -> tuple[CollectorMetadataChannelReadResult, str, int]:
         """Run one channel reader with generation pre/postflight guards.
 
@@ -446,7 +560,16 @@ class CollectorMetadataService:
             )
         started = self._now()
         try:
-            result = await route.reader()
+            if (
+                excluded_semantic_fields is not None
+                and excluded_semantic_fields != route.excluded_semantic_fields
+                and route.reader_for_exclusions is not None
+            ):
+                result = await route.reader_for_exclusions(
+                    excluded_semantic_fields
+                )
+            else:
+                result = await route.reader()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - defensive; readers report structured
@@ -521,6 +644,13 @@ class CollectorMetadataService:
                 if route is None:
                     continue
                 result = self._channel_results.get(route.channel_id)
+                effective_exclusions = set(route.excluded_semantic_fields)
+                if role == "framed":
+                    effective_exclusions.update(self._at_owned_semantic_fields)
+                elif role == "at":
+                    effective_exclusions.difference_update(
+                        self._at_owned_semantic_fields
+                    )
                 route_rows.append(
                     {
                         "role": role,
@@ -538,6 +668,16 @@ class CollectorMetadataService:
                         "partial": bool(result and result.outcome == OUTCOME_PARTIAL),
                         "timed_out": bool(result and result.timed_out),
                         "consecutive_failures": self._health.failure_count(route.channel_id),
+                        "excluded_semantic_fields": sorted(
+                            route.excluded_semantic_fields
+                        ),
+                        "effective_excluded_semantic_fields": sorted(
+                            effective_exclusions
+                        ),
+                        "unsupported_semantic_fields": sorted(
+                            result.unsupported_semantic_fields if result else ()
+                        ),
+                        "capability_probe": route.capability_probe,
                     }
                 )
 
@@ -557,6 +697,13 @@ class CollectorMetadataService:
             "session_generation": (routes.generation if routes else self._last_generation),
             "identity_known": bool(self._identity),
             "identity_transitions": self._identity_transitions,
+            "semantic_ownership": {
+                "binding_generation": self._semantic_binding_generation,
+                "at_owned_fields": sorted(self._at_owned_semantic_fields),
+                "framed_unsupported_fields": sorted(
+                    self._framed_unsupported_semantic_fields
+                ),
+            },
             "refresh": {
                 "last_read_fresh": self._last_fresh,
                 "channel_status": dict(self._channel_status),

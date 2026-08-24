@@ -125,6 +125,27 @@ class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
             ("modbus_smg.identity.171", "modbus_smg.identity.184"),
         )
 
+    async def test_point_identity_reads_match_hhs_11kw_read_only_variant(self) -> None:
+        session = _PointIdentityOnlySession({171: 29440, 184: 3})
+
+        probe = await async_probe_catalog_identity(session)
+
+        self.assertIsNotNone(probe)
+        assert probe is not None
+        self.assertEqual(probe.match.kind, MATCH_DEVICE)
+        self.assertEqual(probe.match.entry.entry_key, "anenji_hhs_11kw")
+        self.assertEqual(probe.layout_code, 3)
+        self.assertEqual(probe.model_code, 29440)
+        self.assertEqual(probe.match.entry.tier, "partial")
+        self.assertEqual(
+            probe.match.entry.binding.profile_name,
+            "",
+        )
+        self.assertEqual(
+            probe.match.entry.binding.register_schema_name,
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        )
+
     async def test_force_unsupported_uses_compiled_family_resolution(self) -> None:
         with patch(
             "custom_components.eybond_local.metadata.device_catalog_loader."

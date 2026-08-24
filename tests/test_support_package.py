@@ -312,8 +312,14 @@ class SupportPackageTests(unittest.TestCase):
                 "collector_callback_identity_sources": "framed_heartbeat",
                 "collector_callback_inverter_forward_adapter": "framed_forward",
                 "collector_callback_collector_management_adapter": "framed_collector_commands",
+                "collector_callback_collector_management_capabilities": "at_commands, framed_collector_commands",
+                "collector_callback_inverter_forward_capabilities": "framed_fc4",
                 "collector_callback_proxy_adapter": "raw_passthrough",
+                "collector_callback_proxy_capabilities": "framed_cloud_proxy",
                 "collector_callback_adapter_conflict": "",
+                "collector_metadata_semantic_binding_generation": 3,
+                "collector_metadata_at_owned_fields": "collector_signal_strength, collector_signal_strength_raw",
+                "collector_metadata_framed_unsupported_fields": "collector_ssid",
                 "smartess_device_address": 4,
             },
             data={
@@ -342,6 +348,32 @@ class SupportPackageTests(unittest.TestCase):
         self.assertEqual(
             diag["session"]["collector_live_session_protocol"],
             "eybond_framed",
+        )
+        self.assertEqual(
+            diag["session"][
+                "collector_callback_collector_management_capabilities"
+            ],
+            "at_commands, framed_collector_commands",
+        )
+        self.assertEqual(
+            diag["session"]["collector_callback_inverter_forward_capabilities"],
+            "framed_fc4",
+        )
+        self.assertEqual(
+            diag["collector_metadata"][
+                "collector_metadata_semantic_binding_generation"
+            ],
+            3,
+        )
+        self.assertEqual(
+            diag["collector_metadata"]["collector_metadata_at_owned_fields"],
+            "collector_signal_strength, collector_signal_strength_raw",
+        )
+        self.assertEqual(
+            diag["collector_metadata"][
+                "collector_metadata_framed_unsupported_fields"
+            ],
+            "collector_ssid",
         )
         self.assertEqual(
             diag["session"]["collector_configured_session_protocol"],

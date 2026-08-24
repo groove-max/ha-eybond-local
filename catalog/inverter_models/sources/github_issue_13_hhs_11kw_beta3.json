@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_13_hhs_11kw_beta3",
+  "kind": "github_issue",
+  "title": "Anenji HHS-11kW-WIFI beta.3 support archive",
+  "reference": "project-issue:13",
+  "captured_at": "2026-08-24",
+  "visibility": "public",
+  "summary": "A beta.3 support archive identified an Anenji HHS-11kW-WIFI model without parallel support by the exact Modbus fingerprint layout 3 and model code 29440. The collector link and identity reads were healthy while the runtime catalog had no descriptor for this fingerprint.",
+  "assertions": [
+    "commercial_identity",
+    "fingerprint",
+    "runtime_compatibility"
+  ]
+}

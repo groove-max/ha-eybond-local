@@ -799,9 +799,10 @@ class _ControlledResetRecoveryEngine:
         self._capture_baseline()
 
         # waiting_for_strong_identity -> restart_requested. The reboot goes
-        # through the negotiated management adapter inside the channel; an
-        # adapter that honestly cannot reboot (AT text today) surfaces as the
-        # typed unsupported failure without any wire write.
+        # through the negotiated management adapter inside the channel. A wire
+        # whose adapter cannot reboot surfaces as a typed unsupported failure
+        # without any write; an accepted restart is still not a recovery proof
+        # until the reset activity and same-PN reconnect below are observed.
         self._enter(STATE_RESTART_REQUESTED)
         try:
             await self._restart_channel.async_send_restart()

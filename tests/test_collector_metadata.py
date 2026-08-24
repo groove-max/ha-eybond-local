@@ -84,9 +84,11 @@ class _FramedTransport:
     def __init__(self, responses: dict[int, bytes], *, raise_on: dict[int, Exception] | None = None) -> None:
         self._responses = dict(responses)
         self._raise_on = dict(raise_on or {})
+        self.queries: list[int] = []
 
     async def async_send_collector(self, *, fcode, payload=b"", devcode=0, collector_addr=1):
         parameter = payload[0]
+        self.queries.append(parameter)
         if parameter in self._raise_on:
             raise self._raise_on[parameter]
         if parameter in self._responses:
@@ -214,8 +216,66 @@ class FramedReaderOutcomeTests(unittest.TestCase):
         result = asyncio.run(async_read_framed_metadata(transport))
         self.assertEqual(result.outcome, OUTCOME_SUCCESS)
 
+    def test_success_omits_blank_sibling_metadata(self) -> None:
+        transport = _FramedTransport(
+            {
+                2: b"\x00\x02V0000000000001",
+                41: b"\x00\x29",
+            }
+        )
+        result = asyncio.run(async_read_framed_metadata(transport))
+        self.assertEqual(result.outcome, OUTCOME_SUCCESS)
+        self.assertEqual(result.values["collector_pn"], "V0000000000001")
+        self.assertNotIn("collector_ssid", result.values)
+
 
 class MetadataHealthModelTests(unittest.TestCase):
+    def test_at_capability_probe_runs_once_per_session_generation(self) -> None:
+        async def _run():
+            calls: list[int] = []
+
+            async def _probe():
+                calls.append(1)
+                return CollectorMetadataChannelReadResult(outcome=OUTCOME_EMPTY)
+
+            service = CollectorMetadataService(dead_threshold=2)
+            for _ in range(4):
+                await service.async_refresh(
+                    _routeset(
+                        framed=_framed_route(_reader({"fc": 1}), generation=1),
+                        at=CollectorMetadataRoute(
+                            channel_id=AT_METADATA_CHANNEL,
+                            reader=_probe,
+                            provenance="live",
+                            generation=1,
+                            capability_probe=True,
+                        ),
+                        generation=1,
+                    ),
+                    poll_interval=1.0,
+                )
+            first_generation_calls = len(calls)
+            await service.async_refresh(
+                _routeset(
+                    framed=_framed_route(_reader({"fc": 1}), generation=2),
+                    at=CollectorMetadataRoute(
+                        channel_id=AT_METADATA_CHANNEL,
+                        reader=_probe,
+                        provenance="live",
+                        generation=2,
+                        capability_probe=True,
+                    ),
+                    generation=2,
+                ),
+                poll_interval=1.0,
+            )
+            return first_generation_calls, len(calls), service.dead_channels()
+
+        first, total, dead = asyncio.run(_run())
+        self.assertEqual(first, 1)
+        self.assertEqual(total, 2)
+        self.assertNotIn(AT_METADATA_CHANNEL, dead)
+
     def test_empty_strikes_then_dead_then_revived(self) -> None:
         health = CollectorMetadataHealth()
         for _ in range(UNSUPPORTED_METADATA_CHANNEL_STRIKES - 1):
@@ -258,7 +318,7 @@ class CadenceAndMergeTests(unittest.TestCase):
         self.assertEqual(second, 1)
         self.assertIn(FRAMED_METADATA_CHANNEL, result.used_cached_channels)
 
-    def test_dual_channel_merge_at_overrides_framed(self) -> None:
+    def test_dual_channel_defensive_merge_keeps_framed_primary(self) -> None:
         async def _run():
             service = CollectorMetadataService()
             routes = _routeset(
@@ -268,9 +328,37 @@ class CadenceAndMergeTests(unittest.TestCase):
             return await service.async_refresh(routes, poll_interval=10.0)
 
         result = asyncio.run(_run())
-        self.assertEqual(result.merged_values["collector_server_endpoint"], "at")
+        self.assertEqual(result.merged_values["collector_server_endpoint"], "fc")
         self.assertEqual(result.merged_values["fc_only"], 1)
         self.assertEqual(result.merged_values["at_only"], 2)
+
+    def test_real_dual_readers_keep_framed_ssid_when_at_query_is_blank(self) -> None:
+        async def _run():
+            service = CollectorMetadataService()
+            framed_transport = _FramedTransport(
+                {
+                    2: b"\x00\x02V0000000000001",
+                    41: b"\x00\x29Droid",
+                }
+            )
+            at_transport = _ProgrammableAtTransport(
+                {
+                    "DTUPN": "V0000000000001",
+                    "WFSS": "-40",
+                    "INTPARA41": "",
+                }
+            )
+            routes = _routeset(
+                framed=_framed_route(
+                    lambda: async_read_framed_metadata(framed_transport)
+                ),
+                at=_at_route(lambda: async_read_at_metadata(at_transport)),
+            )
+            return await service.async_refresh(routes, poll_interval=10.0)
+
+        result = asyncio.run(_run())
+        self.assertEqual(result.merged_values["collector_ssid"], "Droid")
+        self.assertEqual(result.merged_values["collector_signal_strength"], -40)
 
     def test_force_liveness_reReads_framed(self) -> None:
         async def _run():
@@ -571,13 +659,201 @@ class DiagnosticsTests(unittest.TestCase):
 
 
 class RouteBuilderTests(unittest.TestCase):
+    def test_explicit_framed_unsupported_moves_ssid_owner_to_at_for_generation(self) -> None:
+        async def _run():
+            service = CollectorMetadataService()
+            framed_transport = _FramedTransport(
+                {2: b"\x00\x02V0000000000001"}
+            )
+            at_transport = _ProgrammableAtTransport(
+                {
+                    "DTUPN": "V0000000000001",
+                    "INTPARA41": "LegacyWiFi",
+                }
+            )
+            routes = build_collector_metadata_routes(
+                framed_transport=framed_transport,
+                at_transport=at_transport,
+                generation=7,
+                identity="V0000000000001",
+                at_capability_confirmed=True,
+            )
+            first = await service.async_refresh(routes, poll_interval=1.0)
+            service.dirty = True
+            second = await service.async_refresh(routes, poll_interval=1.0)
+            return (
+                first,
+                second,
+                framed_transport.queries.count(41),
+                at_transport.queries.count("INTPARA41"),
+            )
+
+        first, second, framed_41, at_41 = asyncio.run(_run())
+        self.assertEqual(first.merged_values["collector_ssid"], "LegacyWiFi")
+        self.assertEqual(second.merged_values["collector_ssid"], "LegacyWiFi")
+        self.assertEqual(framed_41, 1)
+        self.assertEqual(at_41, 2)
+
     def test_builder_omits_bootstrap_when_framed_present(self) -> None:
         routes = build_collector_metadata_routes(
-            framed_transport=object(), at_transport=object(), bootstrap_transport=object()
+            framed_transport=object(),
+            at_transport=object(),
+            bootstrap_transport=object(),
+            at_capability_confirmed=True,
         )
         self.assertIsNotNone(routes.framed)
         self.assertIsNotNone(routes.at)
         self.assertIsNone(routes.bootstrap)
+        assert routes.at is not None
+        self.assertIn("collector_ssid", routes.at.excluded_semantic_fields)
+        assert routes.framed is not None
+        self.assertIn(
+            "collector_signal_strength",
+            routes.framed.excluded_semantic_fields,
+        )
+        self.assertNotIn(
+            "collector_signal_strength",
+            routes.at.excluded_semantic_fields,
+        )
+
+    def test_unconfirmed_at_facade_is_one_identity_probe_not_a_full_sweep(self) -> None:
+        async def _run():
+            at_transport = _ProgrammableAtTransport(
+                {"DTUPN": "E50000200000000001"}
+            )
+            routes = build_collector_metadata_routes(
+                framed_transport=object(),
+                at_transport=at_transport,
+                at_capability_confirmed=False,
+            )
+            assert routes.at is not None
+            result = await routes.at.reader()
+            return routes.at, at_transport.queries, result
+
+        route, queries, result = asyncio.run(_run())
+        self.assertTrue(route.capability_probe)
+        self.assertEqual(queries, ["DTUPN"])
+        self.assertEqual(result.outcome, OUTCOME_SUCCESS)
+        self.assertEqual(result.values, {})
+
+    def test_dual_route_queries_ssid_only_through_framed_owner(self) -> None:
+        async def _run():
+            at_transport = _ProgrammableAtTransport(
+                {
+                    "DTUPN": "V0000000000001",
+                    "INTPARA41": "LegacyWiFi",
+                    "INTPARA49": "ssid,-50",
+                }
+            )
+            routes = build_collector_metadata_routes(
+                framed_transport=object(),
+                at_transport=at_transport,
+                at_capability_confirmed=True,
+            )
+            assert routes.at is not None
+            result = await routes.at.reader()
+            return at_transport.queries, result
+
+        queries, result = asyncio.run(_run())
+        self.assertNotIn("INTPARA41", queries)
+        self.assertNotIn("collector_ssid", result.values)
+        self.assertIn("INTPARA49", queries)
+
+    def test_framed_delivery_failure_does_not_transfer_ssid_owner(self) -> None:
+        async def _run():
+            service = CollectorMetadataService()
+            framed_transport = _FramedTransport(
+                {2: b"\x00\x02V0000000000001"},
+                raise_on={41: TimeoutError()},
+            )
+            at_transport = _ProgrammableAtTransport(
+                {
+                    "DTUPN": "V0000000000001",
+                    "INTPARA41": "LegacyWiFi",
+                }
+            )
+            routes = build_collector_metadata_routes(
+                framed_transport=framed_transport,
+                at_transport=at_transport,
+                generation=8,
+                identity="V0000000000001",
+                at_capability_confirmed=True,
+            )
+            result = await service.async_refresh(routes, poll_interval=1.0)
+            return result, at_transport.queries, service.diagnostics(routes)
+
+        result, queries, diagnostics = asyncio.run(_run())
+        self.assertNotIn("collector_ssid", result.merged_values)
+        self.assertNotIn("INTPARA41", queries)
+        at_owned = set(diagnostics["semantic_ownership"]["at_owned_fields"])
+        self.assertNotIn("collector_ssid", at_owned)
+        self.assertTrue(
+            {
+                "collector_signal_strength",
+                "collector_signal_strength_raw",
+                "collector_signal_strength_source",
+            }.issubset(at_owned)
+        )
+
+    def test_new_session_generation_renegotiates_ssid_owner(self) -> None:
+        async def _run():
+            service = CollectorMetadataService()
+            legacy_framed = _FramedTransport(
+                {2: b"\x00\x02V0000000000001"}
+            )
+            at_transport = _ProgrammableAtTransport(
+                {
+                    "DTUPN": "V0000000000001",
+                    "INTPARA41": "LegacyWiFi",
+                }
+            )
+            first_routes = build_collector_metadata_routes(
+                framed_transport=legacy_framed,
+                at_transport=at_transport,
+                generation=9,
+                identity="V0000000000001",
+                at_capability_confirmed=True,
+            )
+            await service.async_refresh(first_routes, poll_interval=1.0)
+
+            current_framed = _FramedTransport(
+                {
+                    2: b"\x00\x02V0000000000001",
+                    41: b"\x00\x29CurrentWiFi",
+                }
+            )
+            second_routes = build_collector_metadata_routes(
+                framed_transport=current_framed,
+                at_transport=at_transport,
+                generation=10,
+                identity="V0000000000001",
+                at_capability_confirmed=True,
+            )
+            service.dirty = True
+            result = await service.async_refresh(second_routes, poll_interval=1.0)
+            return result, current_framed.queries, service.diagnostics(second_routes)
+
+        result, framed_queries, diagnostics = asyncio.run(_run())
+        self.assertEqual(result.merged_values["collector_ssid"], "CurrentWiFi")
+        self.assertIn(41, framed_queries)
+        self.assertNotIn(
+            "collector_ssid",
+            diagnostics["semantic_ownership"]["at_owned_fields"],
+        )
+
+    def test_at_only_route_keeps_intpara41_as_ssid_owner(self) -> None:
+        async def _run():
+            at_transport = _ProgrammableAtTransport(
+                {"DTUPN": "V0000000000001", "INTPARA41": "LegacyWiFi"}
+            )
+            routes = build_collector_metadata_routes(at_transport=at_transport)
+            assert routes.at is not None
+            result = await routes.at.reader()
+            return at_transport.queries, result
+
+        queries, result = asyncio.run(_run())
+        self.assertIn("INTPARA41", queries)
+        self.assertEqual(result.values["collector_ssid"], "LegacyWiFi")
 
     def test_builder_offers_bootstrap_only_without_framed(self) -> None:
         routes = build_collector_metadata_routes(
