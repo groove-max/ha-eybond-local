@@ -30,6 +30,8 @@ USER_GUIDE_MARKDOWN = (
     REPO_ROOT / "docs" / "user" / "INTERFACE_SCREENSHOTS.md",
     REPO_ROOT / "docs" / "user" / "PROXY_CAPTURE.md",
     REPO_ROOT / "docs" / "user" / "REMOTE_SETUP.md",
+    REPO_ROOT / "docs" / "user" / "RUNTIME_AND_INVERTER.md",
+    REPO_ROOT / "docs" / "user" / "SETUP_AND_DISCOVERY.md",
     REPO_ROOT / "docs" / "user" / "SUPPORT_ARCHIVE.md",
     REPO_ROOT / "docs" / "generated" / "INVERTER_MODEL_CATALOG.generated.md",
 )
@@ -60,6 +62,38 @@ _HEADING_RE = re.compile(r"^#{1,6}\s+(?P<title>.+?)\s*#*\s*$", re.MULTILINE)
 _EXPLICIT_ANCHOR_RE = re.compile(r"<(?:a|[^>]+)\b(?:id|name)=[\"'](?P<anchor>[^\"']+)[\"']", re.I)
 
 _SCREENSHOT_ROOT = REPO_ROOT / "docs" / "images"
+
+_REQUIRED_USER_GUIDE_MARKERS = {
+    REPO_ROOT / "docs" / "user" / "SETUP_AND_DISCOVERY.md": (
+        "Background discovery",
+        "Pending device",
+        "Remote / NAT Setup Guide",
+    ),
+    REPO_ROOT / "docs" / "user" / "RUNTIME_AND_INVERTER.md": (
+        "Fast: first confirmed protocol",
+        "Full scan: check all protocols",
+        "Control mode",
+        "Disabled by the integration",
+    ),
+    REPO_ROOT / "docs" / "user" / "COLLECTOR_MANAGEMENT.md": (
+        "Change collector Wi-Fi",
+        "Restart collector",
+        "Change inverter UART speed",
+        "Cloud + Home Assistant",
+        "Home Assistant only",
+    ),
+    REPO_ROOT / "docs" / "user" / "DEVICE_LEARNING.md": (
+        "Analyze device data",
+        "Verify additional local controls",
+        "Read-only analysis",
+    ),
+    REPO_ROOT / "docs" / "user" / "SUPPORT_ARCHIVE.md": (
+        "Use saved cloud evidence",
+        "Fetch or refresh cloud evidence now",
+        "Create the archive without cloud evidence",
+        "short-lived",
+    ),
+}
 
 
 def _github_slug(title: str) -> str:
@@ -190,6 +224,17 @@ def validate_public_docs() -> tuple[str, ...]:
             target = path.relative_to(DOCS_INDEX.parent).as_posix()
             if f"]({target})" not in index:
                 errors.append(f"docs/README.md: missing audience index link to {target}")
+
+    for path, markers in _REQUIRED_USER_GUIDE_MARKERS.items():
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in text:
+                errors.append(
+                    f"{path.relative_to(REPO_ROOT)}: missing required user-workflow "
+                    f"documentation marker {marker!r}"
+                )
 
     errors.extend(_validate_screenshot_inventory())
 

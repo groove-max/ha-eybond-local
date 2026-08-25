@@ -27,7 +27,14 @@ The collector access point name usually contains the collector identifier. Some 
 
 After the device is added, you can change the collector Wi-Fi from the collector device page.
 
-If you change the collector network and it receives a new IP address, removing and adding the integration again can be the simplest way to pick up the new address cleanly.
+If you change the collector network and it receives a new IP address, keep the
+existing entry. Wait for the collector to reconnect, then reload the entry if
+needed. If it stays offline, run normal or background discovery so EyeBond Local
+can observe the same collector identity on its new route. Removing the entry is
+a last resort because it also removes the established device relationship.
+
+For initial setup, scan result meanings, and background discovery, see
+[Setup and Discovery](SETUP_AND_DISCOVERY.md).
 
 ## Collector connection and cloud
 
@@ -120,7 +127,9 @@ Use this when the collector must join a different SSID or when you are moving it
 - apply the new settings
 - expect the collector to reconnect, sometimes on a new IP address
 
-After a Wi-Fi change, re-adding the device can be the easiest way to pick up the new collector IP cleanly.
+Keep the existing entry after a Wi-Fi change. The collector identity, not its
+old IP address, is the durable device key. Wait for reconnect and reload the
+entry; use discovery only if the new route is not observed automatically.
 
 <p align="center"><img src="../images/collector-wifi-settings.png" alt="Change collector Wi-Fi dialog" width="480"></p>
 
@@ -133,6 +142,27 @@ negotiated local management channel. Home Assistant sends the restart through
 that exact active connection. Setup and connection-recovery flows additionally
 wait for the collector to disconnect and reconnect with the same identity before
 accepting the operation as a successful recovery.
+
+If the restart button is unavailable, the current session has not negotiated a
+management adapter that can safely send the command. This is a capability
+decision for the live session, not a guess based on the collector model.
+
+### Change inverter UART speed
+
+This option appears only when the collector exposes UART management. It changes
+the collector-to-inverter baud rate; it does not change the Home Assistant TCP
+listener or Wi-Fi settings.
+
+- Use **Refresh UART status** to read the current setting.
+- Use **Save UART speed** only when you know the inverter's required baud rate.
+- PI30/Voltronic devices commonly use `2400`; SMG/Modbus devices commonly use
+  `9600`, but the exact inverter documentation is authoritative.
+- A wrong speed can leave the collector online while all inverter entities
+  become unavailable. Return to this screen and restore the previous speed.
+
+ESP EyeBond Collector exposes this action when its platform supports runtime
+UART changes. BK72xx/LibreTiny builds require changing `baud_rate:` in the
+ESPHome YAML and reflashing instead; the options screen reports that limitation.
 
 ### Capture collector traffic
 
@@ -186,6 +216,9 @@ If the integration does not recognize the bridge, update the bridge firmware fir
 If Home Assistant and the collector are on the same LAN, you usually do not need any advanced networking options.
 
 If the collector is remote, behind another router, or must call back through VPN or port forwarding, read the [Remote / NAT Setup Guide](REMOTE_SETUP.md).
+
+For driver detection, Fast versus Full protocol checks, polling, controls, and
+disabled entities, see [Runtime Detection and Entities](RUNTIME_AND_INVERTER.md).
 
 ## Need help?
 

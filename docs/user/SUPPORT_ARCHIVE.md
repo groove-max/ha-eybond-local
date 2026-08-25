@@ -37,6 +37,10 @@ For unsupported or partially supported hardware, always attach a Support Archive
    file.
 7. Attach it to the GitHub issue.
 
+If the link has expired or returns you to the Home Assistant dashboard, create
+the archive again and use the new link. The ZIP is not exposed as a permanent
+public file.
+
 ## What to include in the issue
 
 Along with the ZIP, write a short description:
@@ -50,7 +54,16 @@ Along with the ZIP, write a short description:
 
 This short context is often as important as the archive itself.
 
-## What the archive is for
+## What the archive contains
+
+Depending on what is available for this entry, one archive can include:
+
+- integration version and build information;
+- collector, session, runtime, polling, and inverter-detection diagnostics;
+- the current Home Assistant device and entity layout;
+- recent raw protocol evidence used for diagnosis;
+- an anonymized replay fixture when one can be built safely;
+- device-learning or cloud evidence that already belongs to this entry.
 
 The archive helps answer questions such as:
 
@@ -62,11 +75,31 @@ The archive helps answer questions such as:
 - Did the inverter reject a setting?
 - Is this a known model, a known family fallback, or a new variant?
 
+## Optional cloud evidence
+
+The archive form can offer up to three choices:
+
+- **Use saved cloud evidence** — include the latest matching result already
+  stored for this entry.
+- **Fetch or refresh cloud evidence now** — sign in once, obtain a fresh result,
+  and include it in the same ZIP.
+- **Create the archive without cloud evidence** — collect local diagnostics
+  only.
+
+Only choices that are valid for the current collector and saved evidence are
+shown. Cloud data is optional; a normal Support Archive does not require a
+cloud account.
+
 ## Privacy expectations
 
 The archive is intended for sharing with the maintainer in a GitHub issue.
 
-It avoids obvious secrets where possible, but it can still contain technical identifiers needed for support. Before posting publicly, do not add extra screenshots or files that include passwords, private IP notes, vendor-app account details, or serial/account information you do not want to share.
+Credentials, access tokens, full collector identifiers, and long serial-like
+identifiers are removed or masked by the exporter. The archive can still
+contain private network addresses, device behavior, live readings, and other
+technical context needed to reproduce the problem. Review it before posting it
+publicly, and do not add extra screenshots or files containing passwords or
+vendor-account details.
 
 If the case contains sensitive information, say so in the issue and share only the minimum needed publicly.
 
@@ -74,11 +107,10 @@ If the case contains sensitive information, say so in the issue and share only t
 
 Creating a normal Support Archive does not require your cloud/app password.
 
-Some optional support or device-learning actions can refresh cloud evidence and
-may ask you to choose a supported API such as SmartESS, DESSMonitor, or
-ValueCloud. The available source depends on the collector's confirmed cloud
-family and the selected read-only or active task. Credentials are used only for
-that live request and are not saved by the integration.
+The **Fetch or refresh cloud evidence now** choice may ask you to choose a
+supported API such as SmartESS, DESSMonitor, or ValueCloud. The available source
+depends on the collector's confirmed cloud family. Credentials are used only
+for that live request and are not saved by the integration.
 
 ## Support Archive vs proxy capture
 
@@ -91,3 +123,14 @@ Use **Proxy Capture** only when a developer asks for it. Proxy capture records o
 If you ran **Device learning**, create a Support Archive afterward.
 
 That gives the maintainer the learning result and enough context to decide whether the discovered sensors or controls can be added to the built-in model catalog.
+
+## Other diagnostics menu items
+
+- **Run diagnostic commands** executes a developer-provided scenario. Read the
+  [Diagnostic Commands](DIAGNOSTIC_COMMANDS.md) guide before using it.
+- **Reload local metadata** appears when a local experimental profile or schema
+  needs to be reloaded after a developer-directed change.
+- **Rollback local metadata** removes active local overrides and returns the
+  entry to built-in metadata. Saved evidence and inactive drafts are retained.
+- **Collector traffic capture** is a separate advanced workflow. Use it only
+  when support asks for it; see [Collector Proxy Capture](PROXY_CAPTURE.md).

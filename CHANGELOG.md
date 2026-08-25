@@ -30,6 +30,16 @@ the GitHub release body should be rendered from the matching version section her
 - Replaced collector identifiers in newly tracked regression fixtures with
   synthetic allowlisted values so release privacy validation remains effective.
 
+### Docs
+
+- Added collector-first setup and runtime inverter-detection guides covering
+  discovery results, background discovery, Fast versus Full protocol checks,
+  polling, controls, UART management, and entity availability.
+- Updated device-learning, proxy-capture, remote-network, and Support Archive
+  instructions to match the current options flows and safety boundaries.
+- Added a plain-language legend to the generated inverter model catalog and
+  strengthened documentation checks for the current public workflows.
+
 ## [0.3.0-beta.3] - 2026-08-24
 
 ### Added

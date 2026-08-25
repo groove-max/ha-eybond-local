@@ -4,6 +4,8 @@ Most users do not need this page.
 
 Use remote setup only when the collector is not on the same local network as Home Assistant, for example through VPN, another router, or port forwarding.
 
+For the normal local flow, start with [Setup and Discovery](SETUP_AND_DISCOVERY.md).
+
 For a normal home network:
 
 - use auto-discovery;

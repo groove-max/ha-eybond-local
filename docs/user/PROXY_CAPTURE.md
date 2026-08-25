@@ -27,6 +27,11 @@ Make sure:
 - you are ready to keep the capture short;
 - you can check that the vendor app still works afterward if you use one.
 
+During the capture, Home Assistant relays the collector's cloud connection so
+the vendor app should continue receiving data. A brief gap is still possible
+while the temporary route starts, stops, or reconnects. Do not run a capture
+during a critical monitoring or control window.
+
 If you are not sure, stop and create a Support Archive instead.
 
 ## How to start

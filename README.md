@@ -44,6 +44,10 @@ cloud. See the full, always-current list in the
 
 ## What it does
 
+- Finds collectors through a normal scan, an already connected session,
+  background discovery, or manual/remote setup.
+- Adds the verified collector first, then identifies the inverter safely on the
+  owned runtime connection.
 - Reads inverter, battery, PV, load, and grid data locally.
 - Creates normal Home Assistant sensors, numbers, selects, switches, and buttons.
 - Keeps the vendor app working alongside Home Assistant by default, or lets you
@@ -53,7 +57,11 @@ cloud. See the full, always-current list in the
   - **Read-only** — monitoring only.
   - **Auto** — enable verified controls when the device match is confident.
   - **Full Control** — expose available controls manually for advanced use.
-- Can create a **Support Archive** when your device needs diagnostics or new model support.
+- Can manage supported collector Wi-Fi, restart, UART, and connection settings.
+- Can collect read-only cloud evidence or verify extra controls for a partially
+  supported device.
+- Can create a **Support Archive**, run developer-provided diagnostic commands,
+  and capture collector traffic when normal diagnostics are not enough.
 - Works with the optional [EyeBond Local Card](https://github.com/groove-max/ha-eybond-local-card) dashboard.
 
 ---
@@ -125,6 +133,8 @@ It is a small ESP8266/ESP32-based bridge that connects directly to the inverter 
 
 The setup wizard identifies and adds the collector first. After the entry is
 created, runtime detection identifies the inverter and creates its entities.
+For a complete explanation of scan results, address confirmation, background
+discovery, and manual setup, see [Setup and Discovery](docs/user/SETUP_AND_DISCOVERY.md).
 
 ### 1. Put the collector on the same network
 
@@ -217,6 +227,10 @@ stays high, increase the interval or switch back to Automatic.
 detecting an inverter, or only checking the collector, so long detection cycles
 are not confused with normal runtime polling.
 
+See [Runtime Detection and Entities](docs/user/RUNTIME_AND_INVERTER.md) for the
+driver selector, Fast versus Full protocol detection, multiple matches, control
+mode, and the difference between unavailable and disabled entities.
+
 ---
 
 ## Device learning
@@ -278,10 +292,10 @@ Use these issue templates:
 
 | Problem | Try this |
 |---|---|
-| Auto-scan finds nothing | Retry the scan or choose a different Home Assistant network interface. If needed, use advanced setup with the collector IP from your router. |
+| Auto-scan finds nothing | Retry the scan or choose a different Home Assistant network interface. If needed, follow [Setup and Discovery](docs/user/SETUP_AND_DISCOVERY.md) and use advanced setup with a known collector address. |
 | Bluetooth Wi-Fi setup is unavailable | Make sure Home Assistant has Bluetooth access near the collector. An ESPHome Bluetooth Proxy near the collector can help. |
 | Manual setup cannot verify the collector | Keep the setup flow open and retry with the collector reachable. For an inbound collector, enable background discovery and continue when its identified session appears. |
-| Only the collector device appears | Runtime detection has not identified the inverter yet. Wait for one detection cycle, then create a Support Archive if it remains unidentified. |
+| Only the collector device appears | Runtime detection has not identified the inverter yet. Check **Poll Context** and follow [Runtime Detection and Entities](docs/user/RUNTIME_AND_INVERTER.md); create a Support Archive if no driver binds. |
 | Sensors stay unavailable | Check that the collector and Home Assistant are on the same network and that the collector has stable Wi-Fi. |
 | Vendor app stopped showing live data | If you pointed the collector at Home Assistant only, that disconnects it from its cloud by design. Use **Restore previous collector endpoint** to bring the vendor app back. |
 | Vendor app works, but Home Assistant says unavailable | The collector may have reconnected to its cloud faster than it reconnected locally. Wait a few minutes and check Wi-Fi stability. |
@@ -295,6 +309,8 @@ Use these issue templates:
 ## Documentation
 
 - [Documentation index](docs/README.md)
+- [Setup and discovery](docs/user/SETUP_AND_DISCOVERY.md)
+- [Runtime detection and entities](docs/user/RUNTIME_AND_INVERTER.md)
 - [Collector management](docs/user/COLLECTOR_MANAGEMENT.md)
 - [Device learning](docs/user/DEVICE_LEARNING.md)
 - [Diagnostic commands](docs/user/DIAGNOSTIC_COMMANDS.md) — advanced, developer-directed scenarios

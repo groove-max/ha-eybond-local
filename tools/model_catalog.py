@@ -781,6 +781,36 @@ def render_markdown(catalog_dir: Path = CATALOG_DIR, *, runtime_catalog=None) ->
     lines.append(f"- Runtime inverter catalog version: {runtime_catalog.catalog_version}")
     lines.append(f"- Models: {len(models)} | Variants: {variant_count}")
     lines.append("")
+    lines.append("## How To Read This Catalog")
+    lines.append("")
+    lines.append(
+        "This page describes what has been confirmed for a specific inverter "
+        "model or model family. It is more precise than a simple compatibility list."
+    )
+    lines.append("")
+    lines.append("- **Supported Models** have a safe built-in runtime path and confirmed telemetry.")
+    lines.append(
+        "- **Limited Or Experimental Models** can still work, but a listed limitation, "
+        "partial telemetry, unconfirmed controls, or a read-only path remains."
+    )
+    lines.append(
+        "- **Research Queue** records known hardware that does not yet have a safe "
+        "built-in runtime path."
+    )
+    lines.append(
+        "- **Telemetry** describes confidence in local readings; **Controls** describes "
+        "confidence in local writes; **Hardware** describes the evidence available from "
+        "a real device."
+    )
+    lines.append(
+        "- **Protocol**, **Detection**, **Runtime Tier**, descriptors, surfaces, and "
+        "fingerprints are implementation details useful when comparing variants."
+    )
+    lines.append(
+        "- **Family-level runtime coverage** means EyeBond Local has a safe generic "
+        "protocol path, but has not claimed an exact commercial model identity."
+    )
+    lines.append("")
 
     # Grouping is by derived support state, not lifecycle alone: a supported
     # model with unconfirmed controls / partial telemetry / a read-only surface

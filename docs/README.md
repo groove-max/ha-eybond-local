@@ -8,7 +8,9 @@ release work; they are not required to use the integration.
 ## User guides
 
 - [Main README](../README.md) — installation, setup, connection settings, troubleshooting, and support flow
-- [Collector Management](user/COLLECTOR_MANAGEMENT.md) — how the collector connects, runtime settings, Wi-Fi change, restart, and proxy capture basics
+- [Setup and Discovery](user/SETUP_AND_DISCOVERY.md) — collector-first setup, scan results, address confirmation, background discovery, and manual setup
+- [Runtime Detection and Entities](user/RUNTIME_AND_INVERTER.md) — driver detection, Fast and Full protocol checks, polling, controls, and entity availability
+- [Collector Management](user/COLLECTOR_MANAGEMENT.md) — cloud connection profiles, Wi-Fi, restart, UART, virtual bridges, and proxy-capture basics
 - [Device Learning](user/DEVICE_LEARNING.md) — read-only cloud evidence and active verification of extra sensors and controls
 - [Diagnostic Commands](user/DIAGNOSTIC_COMMANDS.md) — advanced, developer-provided read/write scenarios and shareable results
 - [Support Archive](user/SUPPORT_ARCHIVE.md) — what to attach when asking for hardware support

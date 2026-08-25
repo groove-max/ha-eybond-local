@@ -20,6 +20,16 @@ Active learning shows locally proven items and lets you choose what to enable. A
 read-only metadata check shows information that can help add support later, but
 does not create entities until a local register mapping is proven.
 
+Choose the task by the result you need:
+
+| Task | What it does | Can change the device? |
+|---|---|---:|
+| **Analyze device data** | Collects cloud metadata and available history for support and comparison with local readings. | No |
+| **Verify additional local controls** | Temporarily checks whether cloud fields can be matched safely to local reads or controls. | Only inside the protected verification described on screen |
+
+Start with **Analyze device data** unless a developer asks you to verify a
+specific control.
+
 ## When to use it
 
 Use device learning when:
@@ -57,9 +67,8 @@ If the inverter powers critical loads, run learning only when it is safe to reco
 2. Open **EyeBond Local**.
 3. Click **Configure**.
 4. Choose **Expand support for this device**.
-5. Choose what Home Assistant should do:
-   - **Analyze device data** is read-only and recommended;
-   - **Verify additional local controls** is an advanced active check.
+5. Choose **Analyze device data** for a read-only check, or **Verify additional
+   local controls** only for an advanced active check.
 6. If more than one compatible API is offered, choose the exact cloud source.
 7. For active verification, read and accept the safety notice.
 8. Enter the supported cloud/app credentials for this one session, if the flow
@@ -89,11 +98,11 @@ differ. Follow the current on-screen text when it differs from an image.
 ## What happens during learning
 
 Home Assistant first asks what you want to do. Read-only analysis is the
-recommended default; active correlation is a separate advanced task. If more
+recommended default; control verification is a separate advanced task. If more
 than one API can perform the selected task, the next step asks which API to use.
 Choosing an API never silently changes the task.
 
-For active correlation:
+For control verification:
 
 1. Home Assistant signs in to the selected cloud API with the credentials you entered.
 2. It verifies the exact device identity and asks which settings and fields the cloud knows for this
@@ -121,14 +130,16 @@ The goal is to learn what the device supports without permanently changing inver
 
 If the safe learning path is not ready, the integration stops instead of continuing.
 
-For a read-only metadata source, Home Assistant signs in, verifies that the
+For read-only analysis, Home Assistant signs in, verifies that the
 cloud device has the same collector PN, and downloads bounded device metadata
 and available daily sensor history. SmartESS and DESSMonitor can provide
 history for this workflow. Home Assistant may then offer a separate background
 observation of five local snapshots over roughly 20 minutes so timestamped
-local samples can be compared with the cloud series. The options dialog may be
-closed while that observation runs. It does not redirect the collector, send a
-control action, add an entity automatically, or claim a local register mapping.
+local samples can be compared with the cloud series. You may close the options
+dialog while that observation runs and return later to see its status. This
+background step appears only when the selected source supplied usable
+timestamped history. It does not redirect the collector, send a control action,
+add an entity automatically, or claim a local register mapping.
 
 ## Review screen
 
