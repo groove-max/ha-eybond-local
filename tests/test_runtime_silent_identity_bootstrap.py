@@ -35,8 +35,8 @@ from custom_components.eybond_local.models import ProbeTarget
 from custom_components.eybond_local.payload.modbus import ModbusSession, crc16_modbus
 
 
-FULL_PN = "E50000253884199645"
-FOREIGN_PN = "E50000999999999999"
+FULL_PN = "E50000200000000001"
+FOREIGN_PN = "E50000200000009777"
 
 
 def _free_port() -> int:
