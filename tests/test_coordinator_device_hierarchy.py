@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import dataclasses
 import importlib
+import json
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -9175,6 +9176,23 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(values["integration_build_git_commit"], "abcdef0")
         self.assertEqual(values["integration_build_commit_date"], "2026-06-23")
         self.assertEqual(values["integration_build_built_at"], "20260623T194735Z")
+
+    def test_integration_build_runtime_values_read_real_manifest(self) -> None:
+        package_dir = self.coordinator_tooling_projection_module._package_dir()
+        manifest_path = package_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        values = self.coordinator_module._integration_build_runtime_values()
+
+        self.assertEqual(package_dir.name, "eybond_local")
+        self.assertEqual(
+            Path(values["integration_package_dir"]),
+            package_dir,
+        )
+        self.assertEqual(
+            values["integration_manifest_version"],
+            manifest["version"],
+        )
 
     def test_bind_apply_persists_inbound_integration_managed(self) -> None:
         # Item 2: a successful bind write makes the entry inbound +

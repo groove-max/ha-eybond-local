@@ -137,7 +137,7 @@ def proxy_capture_notification_id(entry_id: str, bundle_path: Path | str) -> str
 
 
 def _package_dir() -> Path:
-    return Path(__file__).resolve().parents[1]
+    return Path(__file__).resolve().parents[2]
 
 
 def _read_package_json(filename: str) -> dict[str, Any]:

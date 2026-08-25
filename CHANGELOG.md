@@ -25,6 +25,8 @@ the GitHub release body should be rendered from the matching version section her
   supplemental observation cannot erase a current SSID or other live metadata.
 - Hardened capability-aware reboot, recovery, driver detection, and device
   routing for E500-class collectors that expose both framed and AT interfaces.
+- Fixed Support Archive build diagnostics so the loaded integration version is
+  read from the actual package manifest instead of an adjacent runtime folder.
 - Replaced collector identifiers in newly tracked regression fixtures with
   synthetic allowlisted values so release privacy validation remains effective.
 
