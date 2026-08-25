@@ -7,6 +7,27 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+## [0.3.0-beta.4] - 2026-08-25
+
+### Added
+
+- Added a built-in profile for the Anenji HHS 11 kW Wi-Fi inverter family from
+  redacted field evidence, including its model-specific entity scope.
+- Added exact-session identity bootstrap for silent framed collectors so a
+  collector can be admitted without trusting a stale or foreign connection.
+
+### Fixed
+
+- Fixed mixed-protocol collector negotiation so the framed channel remains the
+  primary inverter and management authority while AT is used only for
+  compatible supplemental metadata.
+- Fixed collector metadata ownership and refresh merging so an empty or failed
+  supplemental observation cannot erase a current SSID or other live metadata.
+- Hardened capability-aware reboot, recovery, driver detection, and device
+  routing for E500-class collectors that expose both framed and AT interfaces.
+- Replaced collector identifiers in newly tracked regression fixtures with
+  synthetic allowlisted values so release privacy validation remains effective.
+
 ## [0.3.0-beta.3] - 2026-08-24
 
 ### Added
