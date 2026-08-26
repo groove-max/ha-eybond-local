@@ -252,6 +252,7 @@ def _build_diagnostics_split(
             "collector_callback_collector_management_adapter",
             "collector_callback_collector_management_capabilities",
             "collector_callback_inverter_forward_adapter",
+            "collector_callback_inverter_forward_mode",
             "collector_callback_inverter_forward_capabilities",
             "collector_callback_proxy_adapter",
             "collector_callback_proxy_capabilities",
@@ -278,6 +279,9 @@ def _build_diagnostics_split(
             "serial": values.get("serial_number") or data.get("detected_serial", ""),
             "inverter_forward_adapter": values.get(
                 "collector_callback_inverter_forward_adapter", ""
+            ),
+            "inverter_forward_mode": values.get(
+                "collector_callback_inverter_forward_mode", ""
             ),
             **_present(
                 values,

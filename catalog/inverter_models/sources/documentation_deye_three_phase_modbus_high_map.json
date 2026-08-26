@@ -6,8 +6,9 @@
   "reference": "documentation:deye-three-phase-hybrid-modbus-en-mirror",
   "captured_at": "2026-08-18",
   "visibility": "public",
-  "summary": "A public English translation mirror of the Deye three-phase hybrid Modbus document defines holding-register telemetry at 500-683. The observed Kevolt proxy trace independently corroborates the implemented addresses and most scales. Where the translated rated-power unit conflicts with the reported hardware and captured raw value, the implementation follows the hardware-correlated trace and records the discrepancy. The mirror is treated as register-map evidence, not as proof of official hosting or model identity.",
+  "summary": "A public English translation mirror of Deye Modbus RTU V1.04 defines holding-register telemetry at 500-683 and writable settings at 60-499 using FC 0x10. The integration implements a bounded operational subset whose register encoding and scale are unambiguous: power, battery, charging, generator, smart-load, export, metering, six-period TOU, topology, and selected advanced feature fields. Factory/debug/calibration, BMS-owned runtime words, parallel-cluster addressing, ambiguous fields, and grid-code/certification curves are deliberately excluded. The observed Kevolt proxy trace independently corroborates the telemetry addresses, most scales, and limiter register 142. The document remains register-map evidence, not proof of model identity or successful hardware writes.",
   "assertions": [
-    "register_map"
+    "register_map",
+    "control_behavior"
   ]
 }

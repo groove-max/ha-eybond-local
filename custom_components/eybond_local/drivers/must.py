@@ -148,6 +148,8 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
         inverter: DetectedInverter,
         capability_key: str,
         value: Any,
+        *,
+        runtime_state: dict[str, Any] | None = None,
     ) -> Any:
         capability = find_capability(
             capability_key, inverter.capabilities or self.write_capabilities

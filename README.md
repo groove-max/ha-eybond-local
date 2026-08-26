@@ -329,6 +329,7 @@ Use these issue templates:
 - [Documentation index](docs/README.md)
 - [Setup and discovery](docs/user/SETUP_AND_DISCOVERY.md)
 - [Runtime detection and entities](docs/user/RUNTIME_AND_INVERTER.md)
+- [Kevolt / Deye-compatible advanced controls](docs/user/KEVOLT_DEYE_CONTROLS.md) — experimental opt-in settings for the documented 80 kW register map
 - [Collector management](docs/user/COLLECTOR_MANAGEMENT.md)
 - [Device learning](docs/user/DEVICE_LEARNING.md)
 - [Diagnostic commands](docs/user/DIAGNOSTIC_COMMANDS.md) — advanced, developer-directed scenarios

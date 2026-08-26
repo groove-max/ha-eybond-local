@@ -192,6 +192,17 @@ def _deye_3ph_high_holding_registers() -> dict[int, int]:
     for start, count in (
         (0, 3),
         (11, 11),
+        (60, 1),
+        (98, 14),
+        (113, 15),
+        (128, 15),
+        (143, 15),
+        (158, 15),
+        (173, 12),
+        (189, 5),
+        (209, 1),
+        (235, 4),
+        (340, 8),
         (500, 1),
         (514, 15),
         (529, 7),
@@ -212,6 +223,13 @@ def _deye_3ph_high_holding_registers() -> dict[int, int]:
             2: 260,        # protocol version 0x0104
             20: 14464,     # low-first u32: 0x0001_3880 = 80000 W
             21: 1,
+            115: 10,
+            116: 30,
+            117: 20,
+            129: 0,
+            130: 1,
+            142: 2,
+            145: 0,
             500: 2,        # Normal
             514: 189,      # battery charge today 18.9 kWh
             515: 97,       # battery discharge today 9.7 kWh
@@ -500,8 +518,11 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
             inverter.register_schema_name,
             "deye_3ph_high_80kw/base.json",
         )
-        self.assertEqual(inverter.profile_name, "")
-        self.assertEqual(inverter.capabilities, ())
+        self.assertEqual(
+            inverter.profile_name,
+            "modbus_catalog/deye_3ph_high_80kw.json",
+        )
+        self.assertEqual(len(inverter.capabilities), 118)
         evidence = inverter.details["identity_evidence"]
         self.assertEqual(evidence["deye_device_type_raw"], 5)
         self.assertEqual(evidence["deye_3ph_protocol_version_raw"], 260)
@@ -525,6 +546,13 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(values["rated_power"], 80000)
         self.assertEqual(values["run_state"], "Normal")
+        self.assertEqual(values["battery_shutdown_soc"], 10)
+        self.assertEqual(values["battery_restart_soc"], 30)
+        self.assertEqual(values["battery_low_soc"], 20)
+        self.assertEqual(values["generator_charge_enable"], 0)
+        self.assertEqual(values["grid_charge_enable"], 1)
+        self.assertEqual(values["grid_export_mode"], "Zero Export to CT")
+        self.assertEqual(values["solar_sell_enable"], 0)
         self.assertEqual(values["battery_charge_day"], 18.9)
         self.assertEqual(values["battery_discharge_day"], 9.7)
         self.assertEqual(values["grid_export_sum"], 7008.0)
@@ -549,6 +577,221 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["output_power"], 544.0)
         self.assertEqual(values["pv_power"], 0.0)
         self.assertNotIn("battery_power", values)
+
+    async def test_kevolt_controls_are_full_mode_only_and_use_fc16_with_readback_keys(self) -> None:
+        from custom_components.eybond_local.control_policy import can_expose_capability
+        from custom_components.eybond_local.const import (
+            CONTROL_MODE_AUTO,
+            CONTROL_MODE_FULL,
+        )
+
+        registers = _deye_3ph_high_holding_registers()
+        transport = _transport(input_registers={}, holding_registers=registers)
+        driver = ModbusCatalogDriver()
+        inverter = await driver.async_probe(transport, _target())
+        assert inverter is not None
+
+        by_key = {capability.key: capability for capability in inverter.capabilities}
+        self.assertEqual(len(by_key), 118)
+        self.assertTrue(
+            {
+                "battery_shutdown_soc",
+                "battery_restart_soc",
+                "battery_low_soc",
+                "generator_charge_enable",
+                "grid_charge_enable",
+                "grid_export_mode",
+                "solar_sell_enable",
+                "time_of_use_period_1_time",
+                "time_of_use_period_6_generator_charge",
+                "maximum_solar_sell_power",
+                "external_ct_ratio",
+            }.issubset(by_key),
+        )
+        for capability in by_key.values():
+            self.assertFalse(capability.tested, capability.key)
+            self.assertFalse(capability.enabled_default, capability.key)
+            self.assertEqual(capability.provenance, "doc_backed", capability.key)
+            self.assertEqual(capability.write_function, 16, capability.key)
+            self.assertFalse(
+                can_expose_capability(
+                    capability,
+                    control_mode=CONTROL_MODE_AUTO,
+                    detection_confidence="high",
+                ),
+                capability.key,
+            )
+            self.assertTrue(
+                can_expose_capability(
+                    capability,
+                    control_mode=CONTROL_MODE_FULL,
+                    detection_confidence="high",
+                ),
+                capability.key,
+            )
+
+        result = await driver.async_write_capability(
+            transport,
+            inverter,
+            "grid_charge_enable",
+            False,
+        )
+        self.assertFalse(result)
+        self.assertEqual(transport._registers[130], 0)
+
+        values = _full_values(await driver.async_read_values(transport, inverter))
+        self.assertEqual(values["grid_charge_enable"], 0)
+
+    async def test_kevolt_shared_fields_scaled_power_and_tou_time_use_one_typed_write_path(self) -> None:
+        registers = _deye_3ph_high_holding_registers()
+        registers[146] = 0xAA00
+        transport = _transport(input_registers={}, holding_registers=registers)
+        driver = ModbusCatalogDriver()
+        inverter = await driver.async_probe(transport, _target())
+        assert inverter is not None
+
+        enabled = await driver.async_write_capability(
+            transport,
+            inverter,
+            "time_of_use_enable",
+            True,
+        )
+        self.assertIs(enabled, True)
+        self.assertEqual(transport._registers[146], 0xAA01)
+
+        power = await driver.async_write_capability(
+            transport,
+            inverter,
+            "maximum_sell_power",
+            50000,
+        )
+        self.assertEqual(power, 50000)
+        self.assertEqual(transport._registers[143], 5000)
+
+        period_time = await driver.async_write_capability(
+            transport,
+            inverter,
+            "time_of_use_period_1_time",
+            "08:30",
+        )
+        self.assertEqual(period_time, "08:30")
+        self.assertEqual(transport._registers[148], 830)
+
+    async def test_kevolt_runtime_rotates_one_control_block_per_poll(self) -> None:
+        class RecordingTransport(FixtureTransport):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.control_reads: list[tuple[int, int]] = []
+
+            def _handle_read_holding(self, payload: bytes) -> bytes:
+                address = int.from_bytes(payload[2:4], "big")
+                count = int.from_bytes(payload[4:6], "big")
+                if address < 500 and address not in {0, 11}:
+                    self.control_reads.append((address, count))
+                return super()._handle_read_holding(payload)
+
+        transport = RecordingTransport(
+            registers=_deye_3ph_high_holding_registers(),
+            input_registers={},
+            command_responses=None,
+            probe_target=_target(),
+        )
+        driver = ModbusCatalogDriver()
+        inverter = await driver.async_probe(transport, _target())
+        assert inverter is not None
+        transport.control_reads.clear()
+        runtime_state: dict[str, object] = {}
+
+        first = _full_values(
+            await driver.async_read_values(
+                transport,
+                inverter,
+                runtime_state=runtime_state,
+            )
+        )
+        self.assertEqual(transport.control_reads, [(60, 1)])
+        self.assertEqual(first["inverter_power"], "On")
+
+        transport.control_reads.clear()
+        second = _full_values(
+            await driver.async_read_values(
+                transport,
+                inverter,
+                runtime_state=runtime_state,
+            )
+        )
+        self.assertEqual(transport.control_reads, [(98, 14)])
+        self.assertIn("battery_control_mode", second)
+        self.assertEqual(second["inverter_power"], "On")
+        self.assertNotIn("_modbus_catalog_control_cache", inverter.details)
+        self.assertNotIn("modbus_catalog_controls", inverter.details)
+
+        written = await driver.async_write_capability(
+            transport,
+            inverter,
+            "maximum_sell_power",
+            50000,
+            runtime_state=runtime_state,
+        )
+        self.assertEqual(written, 50000)
+        self.assertEqual(
+            runtime_state["modbus_catalog_controls"]["values"][
+                "maximum_sell_power"
+            ],
+            50000,
+        )
+        self.assertNotIn("maximum_sell_power", inverter.details)
+
+    async def test_kevolt_profile_exposes_only_documented_user_operational_registers(self) -> None:
+        driver = ModbusCatalogDriver()
+        inverter = await driver.async_probe(
+            _transport(
+                input_registers={},
+                holding_registers=_deye_3ph_high_holding_registers(),
+            ),
+            _target(),
+        )
+        assert inverter is not None
+        capability_registers = {item.register for item in inverter.capabilities}
+
+        # Explicitly excluded service/factory surfaces: reset and EEPROM
+        # initialization, factory test/calibration, BMS-owned live words,
+        # parallel addressing, and grid-code protection curves.
+        forbidden_registers = {
+            81,
+            91,
+            92,
+            93,
+            94,
+            195,
+            210,
+            214,
+            223,
+            239,
+            240,
+            269,
+            336,
+            341,
+            350,
+            365,
+            395,
+        }
+        self.assertTrue(capability_registers.isdisjoint(forbidden_registers))
+        self.assertEqual(
+            {group.key for group in inverter.capability_groups},
+            {
+                "system",
+                "battery",
+                "charging",
+                "generator",
+                "smart_load",
+                "energy",
+                "time_of_use",
+                "grid",
+                "meter",
+                "advanced",
+            },
+        )
 
     async def test_kevolt_deye_3ph_fingerprint_rejects_near_collisions(self) -> None:
         mutations = (

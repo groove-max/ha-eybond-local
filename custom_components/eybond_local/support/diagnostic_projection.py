@@ -49,6 +49,12 @@ def build_runtime_transport_debug(transport: object | None) -> dict[str, object]
                         "raw_last_total_duration_ms",
                         0,
                     ),
+                    "inverter_forward_mode": getattr(
+                        collector,
+                        "inverter_forward_mode",
+                        "",
+                    )
+                    or "",
                     "raw_last_request_ascii": getattr(
                         collector,
                         "raw_last_request_ascii",

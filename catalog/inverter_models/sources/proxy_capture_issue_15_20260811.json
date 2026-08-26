@@ -6,7 +6,7 @@
   "reference": "project-issue:15#proxy-capture-20260811",
   "captured_at": "2026-08-11",
   "visibility": "public",
-  "summary": "The sanitized proxy trace contains repeated CRC-valid FC03 exchanges at slave 1. Identity reads return device type 5, protocol version 0x0104, and rated-power words 0x3880/0x0001. Runtime reads cover status, energy, battery, three-phase grid/load/generator, and four PV inputs in the 500-683 range.",
+  "summary": "The sanitized proxy trace contains repeated CRC-valid FC03 exchanges at slave 1. Identity reads return device type 5, protocol version 0x0104, and rated-power words 0x3880/0x0001. Runtime reads cover status, energy, battery, three-phase grid/load/generator, and four PV inputs in the 500-683 range. The cloud also reads settings register 142 and receives value 2, proving that the exact device exposes this documented limiter setting for read-back; the trace contains no settings write.",
   "assertions": [
     "fingerprint",
     "runtime_compatibility",

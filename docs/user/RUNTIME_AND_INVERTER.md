@@ -85,6 +85,13 @@ The inverter itself is the final authority for a write. EyeBond Local sends the
 requested value and checks readback when the protocol supports confirmation. A
 rejected or unchanged value is reported instead of being treated as success.
 
+Some experimental models have a large document-backed settings surface whose
+writes have not yet been confirmed on that exact hardware. Those entities stay
+hidden in Auto mode and disabled by default even after Full Control is selected.
+Enable only the individual settings you intend to test. Kevolt 80 kW users
+should read [Kevolt / Deye-Compatible Advanced Controls](KEVOLT_DEYE_CONTROLS.md)
+before enabling them.
+
 ## Available, unavailable, and disabled entities
 
 The entity registry can contain more entities than your device page shows.

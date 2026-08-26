@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "maintainer_kevolt_control_readback_20260826",
+  "kind": "maintainer_test",
+  "title": "Kevolt settings read-back validation",
+  "reference": "maintainer:kevolt-control-readback-20260826",
+  "captured_at": "2026-08-26",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "A maintainer deployment on the issue #15 hardware read all seven proposed settings through the exact modbus_catalog transport: battery shutdown/restart/low-SOC thresholds, generator and grid charging flags, grid export mode, and Solar Sell. The returned values were internally plausible and limiter register 142 agreed with the earlier cloud capture. No setting was written during this validation.",
+  "assertions": [
+    "control_behavior",
+    "hardware_test"
+  ]
+}

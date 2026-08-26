@@ -21,7 +21,7 @@ from ...const import (
     DRIVER_HINT_AUTO,
 )
 from ...drivers.registry import get_driver
-from ...metadata.compiled_detection_catalog import resolve_unique_full_model_surface
+from ...metadata.compiled_detection_catalog import resolve_unique_persisted_model_surface
 from ...metadata.profile_loader import load_driver_profile
 from ...metadata.register_schema_loader import load_register_schema
 from ...models import DetectedInverter, ProbeTarget, RuntimeSnapshot
@@ -249,6 +249,7 @@ class CoordinatorStartupIdentityMixin:
         variant_key = str(getattr(snapshot, "variant_key", "") or "default").strip()
 
         catalog_identity_source = ""
+        catalog_surface = None
         driver_key = str(
             self.config_entry.options.get(
                 CONF_DRIVER_HINT,
@@ -260,20 +261,25 @@ class CoordinatorStartupIdentityMixin:
             driver_key = str(
                 self.config_entry.data.get(CONF_DETECTED_DRIVER) or ""
             ).strip()
-        if not getattr(snapshot, "is_valid", False) and (
-            not driver_key or driver_key == DRIVER_HINT_AUTO
-        ):
+        if not getattr(snapshot, "is_valid", False):
             if self.detection_confidence != "high" or not detected_model:
                 return None
-            catalog_resolution = resolve_unique_full_model_surface(detected_model)
+            catalog_resolution = resolve_unique_persisted_model_surface(detected_model)
             if catalog_resolution is None:
                 return None
             _descriptor, surface = catalog_resolution
+            if (
+                driver_key
+                and driver_key != DRIVER_HINT_AUTO
+                and driver_key != surface.driver_key
+            ):
+                return None
             driver_key = surface.driver_key
             profile_name = surface.profile_name
             register_schema_name = surface.register_schema_name
             variant_key = surface.variant_key
             catalog_identity_source = "persisted_detected_model"
+            catalog_surface = surface
 
         driver = None
         if driver_key and driver_key != DRIVER_HINT_AUTO:
@@ -302,9 +308,13 @@ class CoordinatorStartupIdentityMixin:
                 getattr(driver, "register_schema_name", "") or ""
             ).strip()
 
-        try:
-            profile = load_driver_profile(profile_name)
-        except Exception:
+        profile = None
+        if profile_name:
+            try:
+                profile = load_driver_profile(profile_name)
+            except Exception:
+                return None
+        elif catalog_surface is None or not catalog_surface.read_only:
             return None
         if catalog_identity_source:
             try:
@@ -312,7 +322,11 @@ class CoordinatorStartupIdentityMixin:
             except Exception:
                 return None
             if (
-                str(getattr(profile, "driver_key", "") or "").strip() != driver_key
+                (
+                    profile is not None
+                    and str(getattr(profile, "driver_key", "") or "").strip()
+                    != driver_key
+                )
                 or str(getattr(register_schema, "driver_key", "") or "").strip()
                 != driver_key
             ):

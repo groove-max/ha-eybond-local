@@ -120,6 +120,15 @@ def decode_block(
     decoded: dict[str, Any] = {}
     for spec in specs:
         raw = decode_raw_value(registers, spec, ascii_style=ascii_style)
+        if spec.bitmask is not None and isinstance(raw, int):
+            shift = (spec.bitmask & -spec.bitmask).bit_length() - 1
+            raw = (raw & spec.bitmask) >> shift
+        if spec.combine == "hhmm" and isinstance(raw, int):
+            hour, minute = divmod(raw, 100)
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                continue
+            decoded[spec.key] = f"{hour:02d}:{minute:02d}"
+            continue
         if spec.enum_map is not None:
             decoded[spec.key] = spec.enum_map.get(raw, f"Unknown ({raw})")
             continue
@@ -166,6 +175,18 @@ async def read_spec_set_values(
     specs = schema.spec_set(spec_set)
     for block in schema.blocks:
         block_function = getattr(block, "function", 3)
+        block_specs = tuple(
+            spec
+            for spec in specs
+            if getattr(spec, "function", 3) == block_function
+            and block.start <= spec.register
+            and spec.register + spec.word_count <= block.start + block.count
+        )
+        # A schema may carry slow/on-demand settings blocks beside its fast
+        # runtime set. Never send a wire read for a block that contributes no
+        # values to the requested spec set.
+        if not block_specs:
+            continue
         try:
             words = await session.read_registers(
                 block.start,
@@ -174,12 +195,5 @@ async def read_spec_set_values(
             )
         except Exception:  # pylint: disable=broad-except
             continue
-        block_specs = tuple(
-            spec
-            for spec in specs
-            if getattr(spec, "function", 3) == block_function
-            and block.start <= spec.register
-            and spec.register + spec.word_count <= block.start + block.count
-        )
         values.update(decode_block(block.start, words, block_specs, ascii_style=ascii_style))
     return values

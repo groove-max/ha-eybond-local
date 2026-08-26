@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .common import (
+    ADAPTER_INVERTER_AT_MIXED,
     ADAPTER_INVERTER_RAW_PASSTHROUGH,
     _RUNTIME_CAUSALITY_LEASE_WAIT,
     asyncio,
@@ -385,7 +386,10 @@ class LinkConnectionMixin:
     ) -> bool:
         """Bounded wait for the session, then adopt it. No trigger is sent here."""
 
-        if self._inverter_forward_adapter() == ADAPTER_INVERTER_RAW_PASSTHROUGH:
+        if self._inverter_forward_adapter() in (
+            ADAPTER_INVERTER_AT_MIXED,
+            ADAPTER_INVERTER_RAW_PASSTHROUGH,
+        ):
             if self.active_collector_at_transport is None:
                 ok = await self._async_wait_for_at_connection(timeout=timeout)
                 if not ok:

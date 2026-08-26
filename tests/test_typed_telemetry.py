@@ -413,6 +413,7 @@ class TypedTelemetryArchitectureTests(unittest.TestCase):
             "select.py": ("EybondCapabilitySelect",),
             "switch.py": ("EybondCapabilitySwitch",),
             "button.py": ("EybondPresetButton", "EybondCapabilityButton"),
+            "time.py": ("EybondCapabilityTime",),
         }
         for filename, class_names in class_names_by_path.items():
             path = REPO_ROOT / f"custom_components/eybond_local/{filename}"

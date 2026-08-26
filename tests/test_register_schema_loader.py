@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.metadata.register_schema_loader import (
+    _optional_bitmask,
     load_register_schema,
     set_external_register_schema_roots,
 )
@@ -24,6 +25,16 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
     def tearDown(self) -> None:
         set_external_register_schema_roots(())
         load_register_schema.cache_clear()
+
+    def test_register_bitmask_requires_a_strict_contiguous_field(self) -> None:
+        self.assertEqual(_optional_bitmask("0x0030", spec_key="x"), 0x0030)
+        self.assertEqual(_optional_bitmask(0x0001, spec_key="x"), 0x0001)
+        with self.assertRaises(ValueError):
+            _optional_bitmask(True, spec_key="x")
+        with self.assertRaises(ValueError):
+            _optional_bitmask(" 0x0001", spec_key="x")
+        with self.assertRaises(ValueError):
+            _optional_bitmask("0x0005", spec_key="x")
 
     def test_loads_smg_base_register_schema(self) -> None:
         schema = load_register_schema("modbus_smg/base.json")

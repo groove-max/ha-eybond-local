@@ -122,6 +122,8 @@ class SrneModbusDriver(InverterDriver):
         inverter: DetectedInverter,
         capability_key: str,
         value: Any,
+        *,
+        runtime_state: dict[str, Any] | None = None,
     ) -> Any:
         raise ValueError(f"unsupported_capability:{self.key}:{capability_key}")
 

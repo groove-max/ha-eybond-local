@@ -426,6 +426,7 @@ def _copy_collector_info(collector: CollectorInfo) -> CollectorInfo:
             raw_last_spacing_wait_ms=collector.raw_last_spacing_wait_ms,
             raw_last_response_duration_ms=collector.raw_last_response_duration_ms,
             raw_last_total_duration_ms=collector.raw_last_total_duration_ms,
+            inverter_forward_mode=collector.inverter_forward_mode,
             collector_cloud_family=collector.collector_cloud_family,
             collector_cloud_family_source=collector.collector_cloud_family_source,
             collector_cloud_family_confidence=collector.collector_cloud_family_confidence,

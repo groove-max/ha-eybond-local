@@ -398,6 +398,8 @@ class Pi30Driver(InverterDriver):
         inverter: DetectedInverter,
         capability_key: str,
         value: Any,
+        *,
+        runtime_state: dict[str, Any] | None = None,
     ) -> Any:
         capability = _find_capability(capability_key, inverter.capabilities or self.write_capabilities)
         raw_value = _encode_capability_value(capability, value)

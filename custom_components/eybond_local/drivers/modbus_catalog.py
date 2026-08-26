@@ -29,6 +29,7 @@ from ..metadata.register_schema_loader import load_register_schema
 from ..models import DetectedInverter, ProbeTarget
 from ..payload.modbus import ModbusSession
 from ..payload.register_decode import (
+    decode_block,
     decode_ascii_low_bytes,
     decode_ascii_word,
     read_spec_set_values,
@@ -42,15 +43,23 @@ from .local_register_evidence import (
 from .read_result import DriverReadMode, DriverReadResult
 from .modbus_write_error import ModbusWriteErrorMixin
 from .capability_codec import (
+    CapabilityPostWriteReadError,
+    CapabilityPreWriteReadError,
     decode_capability_value,
     encode_capability_words,
     find_capability,
+    merge_capability_register_word,
 )
 from .catalog_probe import async_walk_detection_dag
 
 logger = logging.getLogger(__name__)
 
 PROTOCOL_KEY = "modbus_catalog"
+_CONTROL_SPEC_SET = "controls"
+_CONTROL_BLOCK_PREFIX = "control_"
+_CONTROL_STATE_KEY = "modbus_catalog_controls"
+_CONTROL_CACHE_KEY = "values"
+_CONTROL_ROTATION_KEY = "modbus_catalog_control_rotation"
 
 
 class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
@@ -199,6 +208,17 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
         )
         session = self._session(transport, inverter.probe_target)
         values = await read_spec_set_values(session, schema, ascii_style="printable")
+        control_updates = await _read_control_settings(
+            session,
+            schema,
+            runtime_state=runtime_state,
+        )
+        if runtime_state is None:
+            values.update(control_updates)
+        else:
+            control_cache = _control_value_cache(runtime_state)
+            control_cache.update(control_updates)
+            values.update(control_cache)
         return DriverReadResult(values=values, mode=DriverReadMode.FULL)
 
     @property
@@ -222,6 +242,8 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
         inverter: DetectedInverter,
         capability_key: str,
         value: Any,
+        *,
+        runtime_state: dict[str, Any] | None = None,
     ) -> Any:
         # A restored entry may carry a profile_name but no materialized
         # capabilities; the driver-level fallback is useless here because
@@ -235,6 +257,7 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
         )
         raw_words = encode_capability_words(capability, value)
         session = self._session(transport, inverter.probe_target)
+        requested_words = list(raw_words)
         if capability.write_function == 6:
             # Firmwares like Growatt SPF only accept single-register writes
             # for their holding config block.
@@ -243,9 +266,56 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
                     capability.register + offset, int(word)
                 )
         else:
-            await session.write_holding(capability.register, [int(w) for w in raw_words])
-        native_value = decode_capability_value(capability, raw_words)
-        inverter.details[capability.key] = native_value
+            if capability.bitmask:
+                try:
+                    current = await session.read_holding(capability.register, 1)
+                except Exception as exc:
+                    raise CapabilityPreWriteReadError(
+                        f"bitmask_pre_write_read_failed:{capability.key}:{exc}"
+                    ) from exc
+                if not current:
+                    raise CapabilityPreWriteReadError(
+                        f"bitmask_read_back_empty:{capability.key}"
+                    )
+                merged = merge_capability_register_word(
+                    capability,
+                    current_word=int(current[0]),
+                    encoded_word=int(raw_words[0]),
+                )
+                await session.write_holding(capability.register, [merged])
+            else:
+                await session.write_holding(
+                    capability.register,
+                    [int(word) for word in raw_words],
+                )
+
+        try:
+            observed_words = list(
+                await session.read_holding(capability.register, capability.word_count)
+            )
+        except Exception as exc:
+            raise CapabilityPostWriteReadError(
+                f"capability_post_write_read_failed:{capability.key}:{exc}"
+            ) from exc
+        if len(observed_words) != capability.word_count:
+            raise CapabilityPostWriteReadError(
+                f"capability_post_write_read_empty:{capability.key}"
+            )
+        if capability.bitmask:
+            shift = capability.bitmask_shift
+            observed_field = (int(observed_words[0]) & capability.bitmask) >> shift
+            comparable_words = [observed_field]
+        else:
+            comparable_words = observed_words
+        if comparable_words != requested_words:
+            raise RuntimeError(
+                f"capability_write_readback_mismatch:{capability.key}:"
+                f"requested={requested_words}:observed={comparable_words}"
+            )
+
+        native_value = decode_capability_value(capability, comparable_words)
+        if runtime_state is not None:
+            _control_value_cache(runtime_state)[capability.value_key] = native_value
         return native_value
 
     async def async_capture_support_evidence(
@@ -288,7 +358,8 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
             "model_name": inverter.model_name,
             "serial_number": inverter.serial_number,
             "capture_notes": [
-                "Catalog-pack Modbus support is read-only; blocks list their"
+                "Support capture only reads catalog blocks; it never invokes"
+                " the driver's optional write capabilities. Blocks list their"
                 " function codes (3 = holding, 4 = input).",
             ],
             "planned_ranges": [
@@ -387,6 +458,85 @@ def _profile_for_name(profile_name: str):
     except Exception:
         logger.warning("Failed to load catalog pack profile %s", name, exc_info=True)
         return None
+
+
+async def _read_control_settings(
+    session: ModbusSession,
+    schema,
+    *,
+    runtime_state: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Read one rotating control block (all blocks for explicit one-shot reads)."""
+
+    try:
+        specs = schema.spec_set(_CONTROL_SPEC_SET)
+    except KeyError:
+        return {}
+    if not specs:
+        return {}
+    blocks = tuple(
+        block
+        for block in schema.blocks
+        if str(block.key).startswith(_CONTROL_BLOCK_PREFIX)
+    )
+    if not blocks:
+        return {}
+
+    if runtime_state is None:
+        selected_blocks = blocks
+    else:
+        raw_index = runtime_state.get(_CONTROL_ROTATION_KEY, 0)
+        index = raw_index if type(raw_index) is int and raw_index >= 0 else 0
+        selected_blocks = (blocks[index % len(blocks)],)
+        runtime_state[_CONTROL_ROTATION_KEY] = (index + 1) % len(blocks)
+
+    values: dict[str, Any] = {}
+    for block in selected_blocks:
+        block_specs = tuple(
+            spec
+            for spec in specs
+            if spec.function == block.function
+            and block.start <= spec.register
+            and spec.register + spec.word_count <= block.start + block.count
+        )
+        if not block_specs:
+            continue
+        try:
+            words = await session.read_registers(
+                block.start,
+                block.count,
+                function=block.function,
+            )
+        except Exception:  # pylint: disable=broad-except
+            continue
+        values.update(
+            decode_block(
+                block.start,
+                words,
+                block_specs,
+                ascii_style="printable",
+            )
+        )
+    return values
+
+
+def _control_value_cache(runtime_state: dict[str, Any]) -> dict[str, Any]:
+    """Return the non-persisted per-session settings cache.
+
+    The cache belongs to the hub-provided driver runtime state. It must never
+    be stored in ``DetectedInverter.details``: that mapping carries detection
+    evidence and is projected into runtime diagnostics and Support Archives.
+    """
+
+    state = runtime_state.setdefault(_CONTROL_STATE_KEY, {})
+    if type(state) is not dict:
+        state = {}
+        runtime_state[_CONTROL_STATE_KEY] = state
+    cache = state.setdefault(_CONTROL_CACHE_KEY, {})
+    if type(cache) is not dict:
+        cache = {}
+        state[_CONTROL_CACHE_KEY] = cache
+    return cache
 
 
 def _decode_evidence_field(field, registers: dict[int, int]) -> object | None:

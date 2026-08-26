@@ -4,19 +4,126 @@
   "driver_key": "modbus_catalog",
   "protocol_family": "deye_3ph_high_80kw",
   "blocks": [
-    {"key": "identity_type", "start": 0, "count": 3},
-    {"key": "identity_rating", "start": 11, "count": 11},
-    {"key": "run_state", "start": 500, "count": 1},
-    {"key": "storage_energy", "start": 514, "count": 15},
-    {"key": "pv_energy", "start": 529, "count": 7},
-    {"key": "temperature", "start": 541, "count": 1},
-    {"key": "warnings_and_faults", "start": 553, "count": 6},
-    {"key": "battery_runtime", "start": 586, "count": 6},
-    {"key": "grid_inner", "start": 598, "count": 15},
-    {"key": "grid_outer", "start": 616, "count": 10},
-    {"key": "load_runtime", "start": 644, "count": 12},
-    {"key": "generator_runtime", "start": 661, "count": 7},
-    {"key": "pv_runtime", "start": 671, "count": 13}
+    {
+      "key": "identity_type",
+      "start": 0,
+      "count": 3
+    },
+    {
+      "key": "identity_rating",
+      "start": 11,
+      "count": 11
+    },
+    {
+      "key": "control_01",
+      "start": 60,
+      "count": 1
+    },
+    {
+      "key": "control_02",
+      "start": 98,
+      "count": 14
+    },
+    {
+      "key": "control_03",
+      "start": 113,
+      "count": 15
+    },
+    {
+      "key": "control_04",
+      "start": 128,
+      "count": 15
+    },
+    {
+      "key": "control_05",
+      "start": 143,
+      "count": 15
+    },
+    {
+      "key": "control_06",
+      "start": 158,
+      "count": 15
+    },
+    {
+      "key": "control_07",
+      "start": 173,
+      "count": 12
+    },
+    {
+      "key": "control_08",
+      "start": 189,
+      "count": 5
+    },
+    {
+      "key": "control_09",
+      "start": 209,
+      "count": 1
+    },
+    {
+      "key": "control_10",
+      "start": 235,
+      "count": 4
+    },
+    {
+      "key": "control_11",
+      "start": 340,
+      "count": 8
+    },
+    {
+      "key": "run_state",
+      "start": 500,
+      "count": 1
+    },
+    {
+      "key": "storage_energy",
+      "start": 514,
+      "count": 15
+    },
+    {
+      "key": "pv_energy",
+      "start": 529,
+      "count": 7
+    },
+    {
+      "key": "temperature",
+      "start": 541,
+      "count": 1
+    },
+    {
+      "key": "warnings_and_faults",
+      "start": 553,
+      "count": 6
+    },
+    {
+      "key": "battery_runtime",
+      "start": 586,
+      "count": 6
+    },
+    {
+      "key": "grid_inner",
+      "start": 598,
+      "count": 15
+    },
+    {
+      "key": "grid_outer",
+      "start": 616,
+      "count": 10
+    },
+    {
+      "key": "load_runtime",
+      "start": 644,
+      "count": 12
+    },
+    {
+      "key": "generator_runtime",
+      "start": 661,
+      "count": 7
+    },
+    {
+      "key": "pv_runtime",
+      "start": 671,
+      "count": 13
+    }
   ],
   "enum_tables": {
     "run_state": {
@@ -25,152 +132,1555 @@
       "2": "Normal",
       "3": "Alarm",
       "4": "Fault"
+    },
+    "grid_export_mode": {
+      "0": "Selling Enabled",
+      "1": "Zero Export to Load",
+      "2": "Zero Export to CT"
     }
   },
   "spec_sets": {
     "runtime": [
-      {"key": "device_type_code", "register": 0},
-      {"key": "protocol_version_code", "register": 2},
-      {"key": "rated_power", "register": 20, "word_count": 2, "combine": "u32_low_first"},
-      {"key": "run_state", "register": 500, "enum_table": "run_state"},
-      {"key": "battery_charge_day", "register": 514, "divisor": 10, "decimals": 1},
-      {"key": "battery_discharge_day", "register": 515, "divisor": 10, "decimals": 1},
-      {"key": "battery_charge_sum", "register": 516, "word_count": 2, "combine": "u32_low_first", "divisor": 10, "decimals": 1},
-      {"key": "battery_discharge_sum", "register": 518, "word_count": 2, "combine": "u32_low_first", "divisor": 10, "decimals": 1},
-      {"key": "grid_import_day", "register": 520, "divisor": 10, "decimals": 1},
-      {"key": "grid_export_day", "register": 521, "divisor": 10, "decimals": 1},
-      {"key": "grid_import_sum", "register": 522, "word_count": 2, "combine": "u32_low_first", "divisor": 10, "decimals": 1},
-      {"key": "grid_export_sum", "register": 524, "word_count": 2, "combine": "u32_low_first", "divisor": 10, "decimals": 1},
-      {"key": "load_energy_day", "register": 526, "divisor": 10, "decimals": 1},
-      {"key": "load_energy_sum", "register": 527, "word_count": 2, "combine": "u32_low_first", "divisor": 10, "decimals": 1},
-      {"key": "pv_generation_day", "register": 529, "divisor": 10, "decimals": 1},
-      {"key": "pv_generation_sum", "register": 534, "word_count": 2, "combine": "u32_low_first", "divisor": 10, "decimals": 1},
-      {"key": "heat_sink_temperature", "register": 541, "offset": -1000, "divisor": 10, "decimals": 1},
-      {"key": "warning_word_1", "register": 553},
-      {"key": "warning_word_2", "register": 554},
-      {"key": "fault_word_1", "register": 555},
-      {"key": "fault_word_2", "register": 556},
-      {"key": "fault_word_3", "register": 557},
-      {"key": "fault_word_4", "register": 558},
-      {"key": "battery_temperature", "register": 586, "divisor": 10, "decimals": 1},
-      {"key": "battery_voltage", "register": 587, "divisor": 100, "decimals": 2},
-      {"key": "battery_percent", "register": 588},
-      {"key": "battery_output_power", "register": 590, "signed": true},
-      {"key": "battery_output_current", "register": 591, "signed": true, "divisor": 100, "decimals": 2},
-      {"key": "grid_voltage_l1", "register": 598, "divisor": 10, "decimals": 1},
-      {"key": "grid_voltage_l2", "register": 599, "divisor": 10, "decimals": 1},
-      {"key": "grid_voltage_l3", "register": 600, "divisor": 10, "decimals": 1},
-      {"key": "grid_frequency", "register": 609, "divisor": 100, "decimals": 2},
-      {"key": "grid_current_l1", "register": 610, "signed": true, "divisor": 100, "decimals": 2},
-      {"key": "grid_current_l2", "register": 611, "signed": true, "divisor": 100, "decimals": 2},
-      {"key": "grid_current_l3", "register": 612, "signed": true, "divisor": 100, "decimals": 2},
-      {"key": "external_grid_power_l1", "register": 616, "signed": true},
-      {"key": "external_grid_power_l2", "register": 617, "signed": true},
-      {"key": "external_grid_power_l3", "register": 618, "signed": true},
-      {"key": "external_grid_total_power", "register": 619, "signed": true},
-      {"key": "grid_power_l1", "register": 622, "signed": true},
-      {"key": "grid_power_l2", "register": 623, "signed": true},
-      {"key": "grid_power_l3", "register": 624, "signed": true},
-      {"key": "grid_power", "register": 625, "signed": true},
-      {"key": "output_voltage_l1", "register": 644, "divisor": 10, "decimals": 1},
-      {"key": "output_voltage_l2", "register": 645, "divisor": 10, "decimals": 1},
-      {"key": "output_voltage_l3", "register": 646, "divisor": 10, "decimals": 1},
-      {"key": "load_phase_power_l1", "register": 650, "signed": true},
-      {"key": "load_phase_power_l2", "register": 651, "signed": true},
-      {"key": "load_phase_power_l3", "register": 652, "signed": true},
-      {"key": "load_total_power_raw", "register": 653, "signed": true},
-      {"key": "output_frequency", "register": 655, "divisor": 100, "decimals": 2},
-      {"key": "generator_voltage_l1", "register": 661, "divisor": 10, "decimals": 1},
-      {"key": "generator_voltage_l2", "register": 662, "divisor": 10, "decimals": 1},
-      {"key": "generator_voltage_l3", "register": 663, "divisor": 10, "decimals": 1},
-      {"key": "generator_power_l1", "register": 664, "signed": true},
-      {"key": "generator_power_l2", "register": 665, "signed": true},
-      {"key": "generator_power_l3", "register": 666, "signed": true},
-      {"key": "generator_total_power", "register": 667, "signed": true},
-      {"key": "pv1_input_power", "register": 672},
-      {"key": "pv2_input_power", "register": 673},
-      {"key": "pv3_input_power", "register": 674},
-      {"key": "pv4_input_power", "register": 675},
-      {"key": "pv1_input_voltage", "register": 676, "divisor": 10, "decimals": 1},
-      {"key": "pv1_input_current", "register": 677, "divisor": 10, "decimals": 1},
-      {"key": "pv2_input_voltage", "register": 678, "divisor": 10, "decimals": 1},
-      {"key": "pv2_input_current", "register": 679, "divisor": 10, "decimals": 1},
-      {"key": "pv3_input_voltage", "register": 680, "divisor": 10, "decimals": 1},
-      {"key": "pv3_input_current", "register": 681, "divisor": 10, "decimals": 1},
-      {"key": "pv4_input_voltage", "register": 682, "divisor": 10, "decimals": 1},
-      {"key": "pv4_input_current", "register": 683, "divisor": 10, "decimals": 1}
+      {
+        "key": "device_type_code",
+        "register": 0
+      },
+      {
+        "key": "protocol_version_code",
+        "register": 2
+      },
+      {
+        "key": "rated_power",
+        "register": 20,
+        "word_count": 2,
+        "combine": "u32_low_first"
+      },
+      {
+        "key": "run_state",
+        "register": 500,
+        "enum_table": "run_state"
+      },
+      {
+        "key": "battery_charge_day",
+        "register": 514,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_discharge_day",
+        "register": 515,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_charge_sum",
+        "register": 516,
+        "word_count": 2,
+        "combine": "u32_low_first",
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_discharge_sum",
+        "register": 518,
+        "word_count": 2,
+        "combine": "u32_low_first",
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_import_day",
+        "register": 520,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_export_day",
+        "register": 521,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_import_sum",
+        "register": 522,
+        "word_count": 2,
+        "combine": "u32_low_first",
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_export_sum",
+        "register": 524,
+        "word_count": 2,
+        "combine": "u32_low_first",
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "load_energy_day",
+        "register": 526,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "load_energy_sum",
+        "register": 527,
+        "word_count": 2,
+        "combine": "u32_low_first",
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv_generation_day",
+        "register": 529,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv_generation_sum",
+        "register": 534,
+        "word_count": 2,
+        "combine": "u32_low_first",
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "heat_sink_temperature",
+        "register": 541,
+        "offset": -1000,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "warning_word_1",
+        "register": 553
+      },
+      {
+        "key": "warning_word_2",
+        "register": 554
+      },
+      {
+        "key": "fault_word_1",
+        "register": 555
+      },
+      {
+        "key": "fault_word_2",
+        "register": 556
+      },
+      {
+        "key": "fault_word_3",
+        "register": 557
+      },
+      {
+        "key": "fault_word_4",
+        "register": 558
+      },
+      {
+        "key": "battery_temperature",
+        "register": 586,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_voltage",
+        "register": 587,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "battery_percent",
+        "register": 588
+      },
+      {
+        "key": "battery_output_power",
+        "register": 590,
+        "signed": true
+      },
+      {
+        "key": "battery_output_current",
+        "register": 591,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "grid_voltage_l1",
+        "register": 598,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_voltage_l2",
+        "register": 599,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_voltage_l3",
+        "register": 600,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_frequency",
+        "register": 609,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "grid_current_l1",
+        "register": 610,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "grid_current_l2",
+        "register": 611,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "grid_current_l3",
+        "register": 612,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "external_grid_power_l1",
+        "register": 616,
+        "signed": true
+      },
+      {
+        "key": "external_grid_power_l2",
+        "register": 617,
+        "signed": true
+      },
+      {
+        "key": "external_grid_power_l3",
+        "register": 618,
+        "signed": true
+      },
+      {
+        "key": "external_grid_total_power",
+        "register": 619,
+        "signed": true
+      },
+      {
+        "key": "grid_power_l1",
+        "register": 622,
+        "signed": true
+      },
+      {
+        "key": "grid_power_l2",
+        "register": 623,
+        "signed": true
+      },
+      {
+        "key": "grid_power_l3",
+        "register": 624,
+        "signed": true
+      },
+      {
+        "key": "grid_power",
+        "register": 625,
+        "signed": true
+      },
+      {
+        "key": "output_voltage_l1",
+        "register": 644,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_voltage_l2",
+        "register": 645,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_voltage_l3",
+        "register": 646,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "load_phase_power_l1",
+        "register": 650,
+        "signed": true
+      },
+      {
+        "key": "load_phase_power_l2",
+        "register": 651,
+        "signed": true
+      },
+      {
+        "key": "load_phase_power_l3",
+        "register": 652,
+        "signed": true
+      },
+      {
+        "key": "load_total_power_raw",
+        "register": 653,
+        "signed": true
+      },
+      {
+        "key": "output_frequency",
+        "register": 655,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "generator_voltage_l1",
+        "register": 661,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "generator_voltage_l2",
+        "register": 662,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "generator_voltage_l3",
+        "register": 663,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "generator_power_l1",
+        "register": 664,
+        "signed": true
+      },
+      {
+        "key": "generator_power_l2",
+        "register": 665,
+        "signed": true
+      },
+      {
+        "key": "generator_power_l3",
+        "register": 666,
+        "signed": true
+      },
+      {
+        "key": "generator_total_power",
+        "register": 667,
+        "signed": true
+      },
+      {
+        "key": "pv1_input_power",
+        "register": 672
+      },
+      {
+        "key": "pv2_input_power",
+        "register": 673
+      },
+      {
+        "key": "pv3_input_power",
+        "register": 674
+      },
+      {
+        "key": "pv4_input_power",
+        "register": 675
+      },
+      {
+        "key": "pv1_input_voltage",
+        "register": 676,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv1_input_current",
+        "register": 677,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv2_input_voltage",
+        "register": 678,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv2_input_current",
+        "register": 679,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv3_input_voltage",
+        "register": 680,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv3_input_current",
+        "register": 681,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv4_input_voltage",
+        "register": 682,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv4_input_current",
+        "register": 683,
+        "divisor": 10,
+        "decimals": 1
+      }
+    ],
+    "controls": [
+      {
+        "key": "inverter_power",
+        "register": 60,
+        "enum_map": {
+          "0": "On",
+          "2": "Off"
+        }
+      },
+      {
+        "key": "battery_control_mode",
+        "register": 98,
+        "enum_map": {
+          "0": "Lead Acid",
+          "1": "Lithium"
+        }
+      },
+      {
+        "key": "parallel_battery_enabled",
+        "register": 110
+      },
+      {
+        "key": "battery_operation_basis",
+        "register": 111,
+        "enum_map": {
+          "0": "Voltage",
+          "1": "State of Charge",
+          "2": "No Battery"
+        }
+      },
+      {
+        "key": "output_voltage_level",
+        "register": 138,
+        "enum_map": {
+          "0": "220/380 V",
+          "1": "230/400 V",
+          "2": "277/480 V"
+        }
+      },
+      {
+        "key": "grid_phase_sequence",
+        "register": 147,
+        "enum_map": {
+          "0": "ABC (0° / 120° / 240°)",
+          "1": "ACB (0° / 240° / 120°)"
+        }
+      },
+      {
+        "key": "grid_frequency_setting",
+        "register": 183,
+        "enum_map": {
+          "0": "50 Hz",
+          "1": "60 Hz"
+        }
+      },
+      {
+        "key": "grid_system_type",
+        "register": 184,
+        "enum_map": {
+          "0": "Three Phase",
+          "1": "Single Phase",
+          "2": "Split Phase"
+        }
+      },
+      {
+        "key": "ups_delay_enabled",
+        "register": 209
+      },
+      {
+        "key": "track_grid_phase_enabled",
+        "register": 235
+      },
+      {
+        "key": "it_system_enabled",
+        "register": 236
+      },
+      {
+        "key": "active_unbalanced_load_enabled",
+        "register": 237
+      },
+      {
+        "key": "unbalanced_power_trip",
+        "register": 238
+      },
+      {
+        "key": "battery_equalization_voltage",
+        "register": 99,
+        "divisor": 100
+      },
+      {
+        "key": "battery_absorption_voltage",
+        "register": 100,
+        "divisor": 100
+      },
+      {
+        "key": "battery_float_voltage",
+        "register": 101,
+        "divisor": 100
+      },
+      {
+        "key": "battery_capacity",
+        "register": 102
+      },
+      {
+        "key": "battery_equalization_cycle",
+        "register": 105
+      },
+      {
+        "key": "battery_equalization_duration",
+        "register": 106,
+        "multiplier": 0.5
+      },
+      {
+        "key": "battery_max_charge_current",
+        "register": 108
+      },
+      {
+        "key": "battery_max_discharge_current",
+        "register": 109
+      },
+      {
+        "key": "battery_resistance",
+        "register": 113
+      },
+      {
+        "key": "battery_charge_efficiency",
+        "register": 114,
+        "divisor": 10
+      },
+      {
+        "key": "battery_shutdown_soc",
+        "register": 115
+      },
+      {
+        "key": "battery_restart_soc",
+        "register": 116
+      },
+      {
+        "key": "battery_low_soc",
+        "register": 117
+      },
+      {
+        "key": "battery_shutdown_voltage",
+        "register": 118,
+        "divisor": 100
+      },
+      {
+        "key": "battery_restart_voltage",
+        "register": 119,
+        "divisor": 100
+      },
+      {
+        "key": "battery_low_voltage",
+        "register": 120,
+        "divisor": 100
+      },
+      {
+        "key": "generator_max_runtime",
+        "register": 121,
+        "divisor": 10
+      },
+      {
+        "key": "generator_cooldown_time",
+        "register": 122,
+        "divisor": 10
+      },
+      {
+        "key": "generator_charge_start_voltage",
+        "register": 123,
+        "divisor": 100
+      },
+      {
+        "key": "generator_charge_start_soc",
+        "register": 124
+      },
+      {
+        "key": "generator_charge_current",
+        "register": 125
+      },
+      {
+        "key": "grid_charge_start_voltage",
+        "register": 126,
+        "divisor": 100
+      },
+      {
+        "key": "grid_charge_start_soc",
+        "register": 127
+      },
+      {
+        "key": "grid_charge_current",
+        "register": 128
+      },
+      {
+        "key": "generator_charge_enable",
+        "register": 129
+      },
+      {
+        "key": "grid_charge_enable",
+        "register": 130
+      },
+      {
+        "key": "ac_coupling_frequency_upper",
+        "register": 131,
+        "divisor": 100
+      },
+      {
+        "key": "force_generator_as_load",
+        "register": 132
+      },
+      {
+        "key": "generator_port_mode",
+        "register": 133,
+        "enum_map": {
+          "0": "Generator Input",
+          "1": "Smart Load Output",
+          "2": "Microinverter Input"
+        }
+      },
+      {
+        "key": "smart_load_off_voltage",
+        "register": 134,
+        "divisor": 100
+      },
+      {
+        "key": "smart_load_off_soc",
+        "register": 135
+      },
+      {
+        "key": "smart_load_on_voltage",
+        "register": 136,
+        "divisor": 100
+      },
+      {
+        "key": "smart_load_on_soc",
+        "register": 137
+      },
+      {
+        "key": "generator_minimum_solar_power",
+        "register": 139
+      },
+      {
+        "key": "generator_on_grid_input",
+        "register": 189
+      },
+      {
+        "key": "generator_peak_shaving_power",
+        "register": 190
+      },
+      {
+        "key": "grid_peak_shaving_power",
+        "register": 191
+      },
+      {
+        "key": "smart_load_open_delay",
+        "register": 192
+      },
+      {
+        "key": "energy_priority",
+        "register": 141,
+        "bitmask": "0x0003",
+        "enum_map": {
+          "2": "Battery First",
+          "3": "Load First"
+        }
+      },
+      {
+        "key": "passive_grid_power_balance",
+        "register": 141,
+        "bitmask": "0x000C",
+        "enum_map": {
+          "2": "Disabled",
+          "3": "Enabled"
+        }
+      },
+      {
+        "key": "active_grid_power_balance",
+        "register": 141,
+        "bitmask": "0x0030",
+        "enum_map": {
+          "2": "Disabled",
+          "3": "Enabled"
+        }
+      },
+      {
+        "key": "grid_export_mode",
+        "register": 142,
+        "enum_map": {
+          "0": "Selling Enabled",
+          "1": "Zero Export to Load",
+          "2": "Zero Export to CT"
+        }
+      },
+      {
+        "key": "maximum_sell_power",
+        "register": 143,
+        "multiplier": 10
+      },
+      {
+        "key": "solar_sell_enable",
+        "register": 145
+      },
+      {
+        "key": "maximum_solar_sell_power",
+        "register": 340,
+        "multiplier": 10
+      },
+      {
+        "key": "output_power_factor",
+        "register": 193,
+        "divisor": 10
+      },
+      {
+        "key": "solar_arc_fault_mode",
+        "register": 181,
+        "enum_map": {
+          "0": "Disabled",
+          "1": "Enabled"
+        }
+      },
+      {
+        "key": "restore_grid_connection_time",
+        "register": 180
+      },
+      {
+        "key": "grid_measurement_source",
+        "register": 344,
+        "enum_map": {
+          "0": "Current Transformer",
+          "1": "Meter"
+        }
+      },
+      {
+        "key": "meter_manufacturer",
+        "register": 345,
+        "enum_map": {
+          "1": "Eastron",
+          "2": "CHNT"
+        }
+      },
+      {
+        "key": "meter_limit_mode",
+        "register": 346,
+        "enum_map": {
+          "0": "Average",
+          "1": "Minimum"
+        }
+      },
+      {
+        "key": "external_ct_ratio",
+        "register": 347
+      },
+      {
+        "key": "microinverter_export_cutoff",
+        "register": 178,
+        "bitmask": "0x0003",
+        "enum_map": {
+          "2": "Disabled",
+          "3": "Enabled"
+        }
+      },
+      {
+        "key": "generator_peak_shaving_enable",
+        "register": 178,
+        "bitmask": "0x000C",
+        "enum_map": {
+          "2": "Disabled",
+          "3": "Enabled"
+        }
+      },
+      {
+        "key": "grid_peak_shaving_enable",
+        "register": 178,
+        "bitmask": "0x0030",
+        "enum_map": {
+          "2": "Disabled",
+          "3": "Enabled"
+        }
+      },
+      {
+        "key": "on_grid_always_on",
+        "register": 178,
+        "bitmask": "0x00C0",
+        "enum_map": {
+          "2": "Disabled",
+          "3": "Enabled"
+        }
+      },
+      {
+        "key": "external_relay_enable",
+        "register": 178,
+        "bitmask": "0x0300",
+        "enum_map": {
+          "2": "Disabled",
+          "3": "Enabled"
+        }
+      },
+      {
+        "key": "lithium_battery_loss_fault",
+        "register": 178,
+        "bitmask": "0x0C00",
+        "enum_map": {
+          "2": "Disabled",
+          "3": "Enabled"
+        }
+      },
+      {
+        "key": "external_ct_auto_direction",
+        "register": 179,
+        "bitmask": "0x0003",
+        "enum_map": {
+          "2": "Disabled",
+          "3": "Enabled"
+        }
+      },
+      {
+        "key": "forced_off_grid_mode",
+        "register": 179,
+        "bitmask": "0x000C",
+        "enum_map": {
+          "2": "Disabled",
+          "3": "Enabled"
+        }
+      },
+      {
+        "key": "time_of_use_enable",
+        "register": 146,
+        "bitmask": "0x0001"
+      },
+      {
+        "key": "time_of_use_monday",
+        "register": 146,
+        "bitmask": "0x0002"
+      },
+      {
+        "key": "time_of_use_tuesday",
+        "register": 146,
+        "bitmask": "0x0004"
+      },
+      {
+        "key": "time_of_use_wednesday",
+        "register": 146,
+        "bitmask": "0x0008"
+      },
+      {
+        "key": "time_of_use_thursday",
+        "register": 146,
+        "bitmask": "0x0010"
+      },
+      {
+        "key": "time_of_use_friday",
+        "register": 146,
+        "bitmask": "0x0020"
+      },
+      {
+        "key": "time_of_use_saturday",
+        "register": 146,
+        "bitmask": "0x0040"
+      },
+      {
+        "key": "time_of_use_sunday",
+        "register": 146,
+        "bitmask": "0x0080"
+      },
+      {
+        "key": "time_of_use_spain_mode",
+        "register": 146,
+        "bitmask": "0x0100"
+      },
+      {
+        "key": "time_of_use_period_1_time",
+        "register": 148,
+        "combine": "hhmm"
+      },
+      {
+        "key": "time_of_use_period_1_power",
+        "register": 154,
+        "multiplier": 10
+      },
+      {
+        "key": "time_of_use_period_1_voltage",
+        "register": 160,
+        "divisor": 100
+      },
+      {
+        "key": "time_of_use_period_1_soc",
+        "register": 166
+      },
+      {
+        "key": "time_of_use_period_1_grid_charge",
+        "register": 172,
+        "bitmask": "0x0001"
+      },
+      {
+        "key": "time_of_use_period_1_generator_charge",
+        "register": 172,
+        "bitmask": "0x0002"
+      },
+      {
+        "key": "time_of_use_period_2_time",
+        "register": 149,
+        "combine": "hhmm"
+      },
+      {
+        "key": "time_of_use_period_2_power",
+        "register": 155,
+        "multiplier": 10
+      },
+      {
+        "key": "time_of_use_period_2_voltage",
+        "register": 161,
+        "divisor": 100
+      },
+      {
+        "key": "time_of_use_period_2_soc",
+        "register": 167
+      },
+      {
+        "key": "time_of_use_period_2_grid_charge",
+        "register": 173,
+        "bitmask": "0x0001"
+      },
+      {
+        "key": "time_of_use_period_2_generator_charge",
+        "register": 173,
+        "bitmask": "0x0002"
+      },
+      {
+        "key": "time_of_use_period_3_time",
+        "register": 150,
+        "combine": "hhmm"
+      },
+      {
+        "key": "time_of_use_period_3_power",
+        "register": 156,
+        "multiplier": 10
+      },
+      {
+        "key": "time_of_use_period_3_voltage",
+        "register": 162,
+        "divisor": 100
+      },
+      {
+        "key": "time_of_use_period_3_soc",
+        "register": 168
+      },
+      {
+        "key": "time_of_use_period_3_grid_charge",
+        "register": 174,
+        "bitmask": "0x0001"
+      },
+      {
+        "key": "time_of_use_period_3_generator_charge",
+        "register": 174,
+        "bitmask": "0x0002"
+      },
+      {
+        "key": "time_of_use_period_4_time",
+        "register": 151,
+        "combine": "hhmm"
+      },
+      {
+        "key": "time_of_use_period_4_power",
+        "register": 157,
+        "multiplier": 10
+      },
+      {
+        "key": "time_of_use_period_4_voltage",
+        "register": 163,
+        "divisor": 100
+      },
+      {
+        "key": "time_of_use_period_4_soc",
+        "register": 169
+      },
+      {
+        "key": "time_of_use_period_4_grid_charge",
+        "register": 175,
+        "bitmask": "0x0001"
+      },
+      {
+        "key": "time_of_use_period_4_generator_charge",
+        "register": 175,
+        "bitmask": "0x0002"
+      },
+      {
+        "key": "time_of_use_period_5_time",
+        "register": 152,
+        "combine": "hhmm"
+      },
+      {
+        "key": "time_of_use_period_5_power",
+        "register": 158,
+        "multiplier": 10
+      },
+      {
+        "key": "time_of_use_period_5_voltage",
+        "register": 164,
+        "divisor": 100
+      },
+      {
+        "key": "time_of_use_period_5_soc",
+        "register": 170
+      },
+      {
+        "key": "time_of_use_period_5_grid_charge",
+        "register": 176,
+        "bitmask": "0x0001"
+      },
+      {
+        "key": "time_of_use_period_5_generator_charge",
+        "register": 176,
+        "bitmask": "0x0002"
+      },
+      {
+        "key": "time_of_use_period_6_time",
+        "register": 153,
+        "combine": "hhmm"
+      },
+      {
+        "key": "time_of_use_period_6_power",
+        "register": 159,
+        "multiplier": 10
+      },
+      {
+        "key": "time_of_use_period_6_voltage",
+        "register": 165,
+        "divisor": 100
+      },
+      {
+        "key": "time_of_use_period_6_soc",
+        "register": 171
+      },
+      {
+        "key": "time_of_use_period_6_grid_charge",
+        "register": 177,
+        "bitmask": "0x0001"
+      },
+      {
+        "key": "time_of_use_period_6_generator_charge",
+        "register": 177,
+        "bitmask": "0x0002"
+      }
     ]
   },
   "measurement_descriptions": [
-    {"key": "device_type_code", "name": "Device Type Code", "diagnostic": true},
-    {"key": "protocol_version_code", "name": "Protocol Version Code", "diagnostic": true},
-    {"key": "rated_power", "name": "Rated Power", "unit": "W", "device_class": "power", "diagnostic": true},
-    {"key": "run_state", "name": "Run State", "diagnostic": true},
-    {"key": "battery_charge_day", "name": "Battery Charge Today", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
-    {"key": "battery_discharge_day", "name": "Battery Discharge Today", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
-    {"key": "battery_charge_sum", "name": "Battery Charge Total", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing", "diagnostic": true},
-    {"key": "battery_discharge_sum", "name": "Battery Discharge Total", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing", "diagnostic": true},
-    {"key": "grid_import_day", "name": "Grid Import Today", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
-    {"key": "grid_export_day", "name": "Grid Export Today", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
-    {"key": "grid_import_sum", "name": "Grid Import Total", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing", "diagnostic": true},
-    {"key": "grid_export_sum", "name": "Grid Export Total", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing", "diagnostic": true},
-    {"key": "load_energy_day", "name": "Load Energy Today", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
-    {"key": "load_energy_sum", "name": "Load Energy Total", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing", "diagnostic": true},
-    {"key": "pv_generation_day", "name": "PV Generation Today", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
-    {"key": "pv_generation_sum", "name": "PV Generation Total", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing", "diagnostic": true},
-    {"key": "heat_sink_temperature", "name": "Heat Sink Temperature", "unit": "°C", "device_class": "temperature", "state_class": "measurement", "diagnostic": true},
-    {"key": "warning_word_1", "name": "Warning Bits 1", "diagnostic": true},
-    {"key": "warning_word_2", "name": "Warning Bits 2", "diagnostic": true},
-    {"key": "fault_word_1", "name": "Fault Bits 1", "diagnostic": true},
-    {"key": "fault_word_2", "name": "Fault Bits 2", "diagnostic": true},
-    {"key": "fault_word_3", "name": "Fault Bits 3", "diagnostic": true},
-    {"key": "fault_word_4", "name": "Fault Bits 4", "diagnostic": true},
-    {"key": "battery_temperature", "name": "Battery Temperature", "unit": "°C", "device_class": "temperature", "state_class": "measurement"},
-    {"key": "battery_voltage", "name": "Battery Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
-    {"key": "battery_percent", "name": "Battery", "unit": "%", "device_class": "battery", "state_class": "measurement"},
-    {"key": "battery_output_power", "name": "Battery Output Power (wire sign)", "unit": "W", "device_class": "power", "state_class": "measurement", "diagnostic": true},
-    {"key": "battery_output_current", "name": "Battery Output Current (wire sign)", "unit": "A", "device_class": "current", "state_class": "measurement", "diagnostic": true},
-    {"key": "grid_voltage_l1", "name": "Grid Voltage L1", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
-    {"key": "grid_voltage_l2", "name": "Grid Voltage L2", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
-    {"key": "grid_voltage_l3", "name": "Grid Voltage L3", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
-    {"key": "grid_frequency", "name": "Grid Frequency", "unit": "Hz", "device_class": "frequency", "state_class": "measurement"},
-    {"key": "grid_current_l1", "name": "Grid Current L1", "unit": "A", "device_class": "current", "state_class": "measurement", "diagnostic": true},
-    {"key": "grid_current_l2", "name": "Grid Current L2", "unit": "A", "device_class": "current", "state_class": "measurement", "diagnostic": true},
-    {"key": "grid_current_l3", "name": "Grid Current L3", "unit": "A", "device_class": "current", "state_class": "measurement", "diagnostic": true},
-    {"key": "external_grid_power_l1", "name": "External Grid Power L1", "unit": "W", "device_class": "power", "state_class": "measurement", "diagnostic": true},
-    {"key": "external_grid_power_l2", "name": "External Grid Power L2", "unit": "W", "device_class": "power", "state_class": "measurement", "diagnostic": true},
-    {"key": "external_grid_power_l3", "name": "External Grid Power L3", "unit": "W", "device_class": "power", "state_class": "measurement", "diagnostic": true},
-    {"key": "external_grid_total_power", "name": "External Grid Total Power", "unit": "W", "device_class": "power", "state_class": "measurement", "diagnostic": true},
-    {"key": "grid_power_l1", "name": "Grid Power L1", "unit": "W", "device_class": "power", "state_class": "measurement"},
-    {"key": "grid_power_l2", "name": "Grid Power L2", "unit": "W", "device_class": "power", "state_class": "measurement"},
-    {"key": "grid_power_l3", "name": "Grid Power L3", "unit": "W", "device_class": "power", "state_class": "measurement"},
-    {"key": "grid_power", "name": "Grid Power", "unit": "W", "device_class": "power", "state_class": "measurement"},
-    {"key": "output_voltage_l1", "name": "Load Voltage L1", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
-    {"key": "output_voltage_l2", "name": "Load Voltage L2", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
-    {"key": "output_voltage_l3", "name": "Load Voltage L3", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
-    {"key": "load_phase_power_l1", "name": "Load Power L1", "unit": "W", "device_class": "power", "state_class": "measurement"},
-    {"key": "load_phase_power_l2", "name": "Load Power L2", "unit": "W", "device_class": "power", "state_class": "measurement"},
-    {"key": "load_phase_power_l3", "name": "Load Power L3", "unit": "W", "device_class": "power", "state_class": "measurement"},
-    {"key": "load_total_power_raw", "name": "Load Total Power (device)", "unit": "W", "device_class": "power", "state_class": "measurement", "diagnostic": true},
-    {"key": "output_frequency", "name": "Load Frequency", "unit": "Hz", "device_class": "frequency", "state_class": "measurement"},
-    {"key": "generator_voltage_l1", "name": "Generator Voltage L1", "unit": "V", "device_class": "voltage", "state_class": "measurement", "diagnostic": true},
-    {"key": "generator_voltage_l2", "name": "Generator Voltage L2", "unit": "V", "device_class": "voltage", "state_class": "measurement", "diagnostic": true},
-    {"key": "generator_voltage_l3", "name": "Generator Voltage L3", "unit": "V", "device_class": "voltage", "state_class": "measurement", "diagnostic": true},
-    {"key": "generator_power_l1", "name": "Generator Power L1", "unit": "W", "device_class": "power", "state_class": "measurement", "diagnostic": true},
-    {"key": "generator_power_l2", "name": "Generator Power L2", "unit": "W", "device_class": "power", "state_class": "measurement", "diagnostic": true},
-    {"key": "generator_power_l3", "name": "Generator Power L3", "unit": "W", "device_class": "power", "state_class": "measurement", "diagnostic": true},
-    {"key": "generator_total_power", "name": "Generator Total Power", "unit": "W", "device_class": "power", "state_class": "measurement", "diagnostic": true},
-    {"key": "pv1_input_power", "name": "PV1 Power", "unit": "W", "device_class": "power", "state_class": "measurement"},
-    {"key": "pv2_input_power", "name": "PV2 Power", "unit": "W", "device_class": "power", "state_class": "measurement"},
-    {"key": "pv3_input_power", "name": "PV3 Power", "unit": "W", "device_class": "power", "state_class": "measurement", "diagnostic": true},
-    {"key": "pv4_input_power", "name": "PV4 Power", "unit": "W", "device_class": "power", "state_class": "measurement", "diagnostic": true},
-    {"key": "pv1_input_voltage", "name": "PV1 Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
-    {"key": "pv1_input_current", "name": "PV1 Current", "unit": "A", "device_class": "current", "state_class": "measurement"},
-    {"key": "pv2_input_voltage", "name": "PV2 Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
-    {"key": "pv2_input_current", "name": "PV2 Current", "unit": "A", "device_class": "current", "state_class": "measurement"},
-    {"key": "pv3_input_voltage", "name": "PV3 Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement", "diagnostic": true},
-    {"key": "pv3_input_current", "name": "PV3 Current", "unit": "A", "device_class": "current", "state_class": "measurement", "diagnostic": true},
-    {"key": "pv4_input_voltage", "name": "PV4 Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement", "diagnostic": true},
-    {"key": "pv4_input_current", "name": "PV4 Current", "unit": "A", "device_class": "current", "state_class": "measurement", "diagnostic": true}
+    {
+      "key": "device_type_code",
+      "name": "Device Type Code",
+      "diagnostic": true
+    },
+    {
+      "key": "protocol_version_code",
+      "name": "Protocol Version Code",
+      "diagnostic": true
+    },
+    {
+      "key": "rated_power",
+      "name": "Rated Power",
+      "unit": "W",
+      "device_class": "power",
+      "diagnostic": true
+    },
+    {
+      "key": "run_state",
+      "name": "Run State",
+      "diagnostic": true
+    },
+    {
+      "key": "battery_charge_day",
+      "name": "Battery Charge Today",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing"
+    },
+    {
+      "key": "battery_discharge_day",
+      "name": "Battery Discharge Today",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing"
+    },
+    {
+      "key": "battery_charge_sum",
+      "name": "Battery Charge Total",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing",
+      "diagnostic": true
+    },
+    {
+      "key": "battery_discharge_sum",
+      "name": "Battery Discharge Total",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing",
+      "diagnostic": true
+    },
+    {
+      "key": "grid_import_day",
+      "name": "Grid Import Today",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing"
+    },
+    {
+      "key": "grid_export_day",
+      "name": "Grid Export Today",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing"
+    },
+    {
+      "key": "grid_import_sum",
+      "name": "Grid Import Total",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing",
+      "diagnostic": true
+    },
+    {
+      "key": "grid_export_sum",
+      "name": "Grid Export Total",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing",
+      "diagnostic": true
+    },
+    {
+      "key": "load_energy_day",
+      "name": "Load Energy Today",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing"
+    },
+    {
+      "key": "load_energy_sum",
+      "name": "Load Energy Total",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing",
+      "diagnostic": true
+    },
+    {
+      "key": "pv_generation_day",
+      "name": "PV Generation Today",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing"
+    },
+    {
+      "key": "pv_generation_sum",
+      "name": "PV Generation Total",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing",
+      "diagnostic": true
+    },
+    {
+      "key": "heat_sink_temperature",
+      "name": "Heat Sink Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "warning_word_1",
+      "name": "Warning Bits 1",
+      "diagnostic": true
+    },
+    {
+      "key": "warning_word_2",
+      "name": "Warning Bits 2",
+      "diagnostic": true
+    },
+    {
+      "key": "fault_word_1",
+      "name": "Fault Bits 1",
+      "diagnostic": true
+    },
+    {
+      "key": "fault_word_2",
+      "name": "Fault Bits 2",
+      "diagnostic": true
+    },
+    {
+      "key": "fault_word_3",
+      "name": "Fault Bits 3",
+      "diagnostic": true
+    },
+    {
+      "key": "fault_word_4",
+      "name": "Fault Bits 4",
+      "diagnostic": true
+    },
+    {
+      "key": "battery_temperature",
+      "name": "Battery Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement"
+    },
+    {
+      "key": "battery_voltage",
+      "name": "Battery Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "battery_percent",
+      "name": "Battery",
+      "unit": "%",
+      "device_class": "battery",
+      "state_class": "measurement"
+    },
+    {
+      "key": "battery_output_power",
+      "name": "Battery Output Power (wire sign)",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "battery_output_current",
+      "name": "Battery Output Current (wire sign)",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "grid_voltage_l1",
+      "name": "Grid Voltage L1",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_voltage_l2",
+      "name": "Grid Voltage L2",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_voltage_l3",
+      "name": "Grid Voltage L3",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_frequency",
+      "name": "Grid Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_current_l1",
+      "name": "Grid Current L1",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "grid_current_l2",
+      "name": "Grid Current L2",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "grid_current_l3",
+      "name": "Grid Current L3",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "external_grid_power_l1",
+      "name": "External Grid Power L1",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "external_grid_power_l2",
+      "name": "External Grid Power L2",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "external_grid_power_l3",
+      "name": "External Grid Power L3",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "external_grid_total_power",
+      "name": "External Grid Total Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "grid_power_l1",
+      "name": "Grid Power L1",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_power_l2",
+      "name": "Grid Power L2",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_power_l3",
+      "name": "Grid Power L3",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_power",
+      "name": "Grid Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "output_voltage_l1",
+      "name": "Load Voltage L1",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "output_voltage_l2",
+      "name": "Load Voltage L2",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "output_voltage_l3",
+      "name": "Load Voltage L3",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "load_phase_power_l1",
+      "name": "Load Power L1",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "load_phase_power_l2",
+      "name": "Load Power L2",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "load_phase_power_l3",
+      "name": "Load Power L3",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "load_total_power_raw",
+      "name": "Load Total Power (device)",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "output_frequency",
+      "name": "Load Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement"
+    },
+    {
+      "key": "generator_voltage_l1",
+      "name": "Generator Voltage L1",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "generator_voltage_l2",
+      "name": "Generator Voltage L2",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "generator_voltage_l3",
+      "name": "Generator Voltage L3",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "generator_power_l1",
+      "name": "Generator Power L1",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "generator_power_l2",
+      "name": "Generator Power L2",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "generator_power_l3",
+      "name": "Generator Power L3",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "generator_total_power",
+      "name": "Generator Total Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "pv1_input_power",
+      "name": "PV1 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv2_input_power",
+      "name": "PV2 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv3_input_power",
+      "name": "PV3 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "pv4_input_power",
+      "name": "PV4 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "pv1_input_voltage",
+      "name": "PV1 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv1_input_current",
+      "name": "PV1 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv2_input_voltage",
+      "name": "PV2 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv2_input_current",
+      "name": "PV2 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv3_input_voltage",
+      "name": "PV3 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "pv3_input_current",
+      "name": "PV3 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "pv4_input_voltage",
+      "name": "PV4 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "pv4_input_current",
+      "name": "PV4 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "diagnostic": true
+    }
   ]
 }

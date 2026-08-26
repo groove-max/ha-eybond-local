@@ -7,7 +7,16 @@ DOMAIN = "eybond_local"
 # discovery must not abort that exact flow while setup is still running; doing
 # so makes the manager raise UnknownFlow after the entry was already created.
 FLOW_CONTEXT_ENTRY_COMMIT_IN_PROGRESS = "eybond_entry_commit_in_progress"
-PLATFORMS: list[str] = ["sensor", "binary_sensor", "number", "select", "switch", "button", "text"]
+PLATFORMS: list[str] = [
+    "sensor",
+    "binary_sensor",
+    "number",
+    "select",
+    "switch",
+    "button",
+    "text",
+    "time",
+]
 LOCAL_METADATA_DIR = "eybond_local"
 LOCAL_PROFILES_DIR = "profiles"
 LOCAL_REGISTER_SCHEMAS_DIR = "register_schemas"

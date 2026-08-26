@@ -21,8 +21,9 @@ Adapters (what the payload/driver can ride on this session):
   bridge.
 - ``framed_collector_commands`` -- framed collector FC queries (PN / endpoint).
 - ``at_commands`` -- SmartESS AT-text collector commands.
-- ``raw_passthrough`` -- raw serial passthrough over the AT-text session, used by
-  G-ASCII / ValueCloud style drivers.
+- ``at_mixed_forward`` -- exact-session data-plane negotiation on an AT-primary
+  stream: a correlated reply selects raw passthrough or framed FC4.
+- ``raw_passthrough`` -- a positively selected raw serial data plane.
 
 The negotiated *wire* remains the one thing runtime payload routing turns on:
 ``framed`` (use the framed transport) vs ``at_text`` (use the AT transport) vs
@@ -43,6 +44,7 @@ from dataclasses import dataclass, field
 ADAPTER_COLLECTOR_FRAMED_COMMANDS = "framed_collector_commands"
 ADAPTER_COLLECTOR_AT_COMMANDS = "at_commands"
 ADAPTER_INVERTER_FRAMED_FC4 = "framed_fc4"
+ADAPTER_INVERTER_AT_MIXED = "at_mixed_forward"
 ADAPTER_INVERTER_RAW_PASSTHROUGH = "raw_passthrough"
 ADAPTER_INVERTER_NATIVE_MODBUS_TCP = "native_modbus_tcp"
 ADAPTER_PROXY_FRAMED_CLOUD = "framed_cloud_proxy"
@@ -77,9 +79,9 @@ _UNTRUSTED_STATES = frozenset(
 )
 
 # Adapter sets per negotiated wire. A framed wire carries framed forward + framed
-# collector commands. An AT-text wire carries AT commands + raw passthrough, and
-# can also carry a single framed collector-command probe (FC over AT) which the
-# transport uses to read the ESP bridge identity without switching the wire.
+# collector commands. An AT-text wire carries AT commands plus an exact-session
+# data-plane negotiator, and can also carry a framed collector-command probe
+# (FC over AT) without switching the primary wire.
 _TRANSPORT_WIRE_BY_WIRE_FRAMING: dict[str, str] = {
     WIRE_FRAMED: WIRE_FRAMED,
     WIRE_AT_TEXT: WIRE_AT_TEXT,
@@ -362,7 +364,7 @@ def _adapters_for_wire(wire: str) -> tuple[str, str, str]:
     if wire == WIRE_AT_TEXT:
         return (
             ADAPTER_COLLECTOR_AT_COMMANDS,
-            ADAPTER_INVERTER_RAW_PASSTHROUGH,
+            ADAPTER_INVERTER_AT_MIXED,
             ADAPTER_PROXY_RAW_TCP,
         )
     if wire == WIRE_RAW_TCP:
@@ -420,7 +422,7 @@ def _capabilities_for_observation(
         inverter.add(ADAPTER_INVERTER_FRAMED_FC4)
         proxy.add(ADAPTER_PROXY_FRAMED_CLOUD)
     if wire == WIRE_AT_TEXT:
-        inverter.add(ADAPTER_INVERTER_RAW_PASSTHROUGH)
+        inverter.add(ADAPTER_INVERTER_AT_MIXED)
         proxy.add(ADAPTER_PROXY_RAW_TCP)
     if wire == WIRE_RAW_TCP:
         inverter.add(ADAPTER_INVERTER_RAW_PASSTHROUGH)

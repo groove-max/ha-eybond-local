@@ -376,6 +376,8 @@ class _IllegalDataValueDriver(ModbusWriteErrorMixin):
         inverter,
         capability_key,
         value,
+        *,
+        runtime_state=None,
     ):
         self.write_calls += 1
         raise ModbusError("exception_code:3")
@@ -412,6 +414,8 @@ class _WriteConfirmedDriver:
         inverter,
         capability_key,
         value,
+        *,
+        runtime_state=None,
     ):
         self.write_calls += 1
         self._current_value = value
@@ -448,6 +452,8 @@ class _WriteUnconfirmedDriver:
         inverter,
         capability_key,
         value,
+        *,
+        runtime_state=None,
     ):
         self.write_calls += 1
         return value
@@ -485,6 +491,8 @@ class _AdvancingClockWriteDriver:
         inverter,
         capability_key,
         value,
+        *,
+        runtime_state=None,
     ):
         self.write_calls += 1
         self._written = True
@@ -522,6 +530,8 @@ class _WriteConfirmedWhileChargingDriver:
         inverter,
         capability_key,
         value,
+        *,
+        runtime_state=None,
     ):
         self.write_calls += 1
         self._current_value = value
@@ -3179,6 +3189,67 @@ class RuntimeStateMachineTests(unittest.TestCase):
             self.assertEqual(snapshot.values["runtime_inverter_state"], "ambiguous")
             self.assertEqual(snapshot.values["runtime_inverter_candidate_count"], 2)
             self.assertEqual(snapshot.values["runtime_inverter_probe_total_ms"], 1700)
+
+        asyncio.run(_run())
+
+    def test_auto_detection_resolves_declared_exact_catalog_overlap(self) -> None:
+        async def _run() -> None:
+            hub = self._hub(full_scan=True)
+            smg = self._candidate_context(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model="False-positive SMG surface",
+            )
+            target = smg.inverter.probe_target
+            inverter = DetectedInverter(
+                driver_key="modbus_catalog",
+                protocol_family="modbus_catalog",
+                model_name="Deye-Compatible Three-Phase Hybrid 80 kW (Modbus)",
+                serial_number="",
+                probe_target=target,
+                variant_key="deye_3ph_high_80kw",
+                profile_name="modbus_catalog/deye_3ph_high_80kw.json",
+                register_schema_name="deye_3ph_high_80kw/base.json",
+                details={
+                    "catalog_detection": {
+                        "resolution": "exact",
+                        "surface_key": "deye_3ph_high_80kw_untested",
+                        "confidence": "high",
+                    }
+                },
+            )
+            catalog = DetectedDriverContext(
+                driver=SimpleNamespace(key="modbus_catalog"),
+                inverter=inverter,
+                match=DriverMatch(
+                    driver_key="modbus_catalog",
+                    protocol_family="modbus_catalog",
+                    model_name=inverter.model_name,
+                    serial_number="",
+                    probe_target=target,
+                    variant_key=inverter.variant_key,
+                ),
+            )
+
+            with patch(
+                "custom_components.eybond_local.runtime.hub.detection."
+                "async_detect_inverter_candidates",
+                return_value=DriverCandidateScan(candidates=(smg, catalog)),
+            ):
+                result = await hub._async_detect_driver()
+
+            self.assertEqual(result, "")
+            self.assertIs(hub._driver, catalog.driver)
+            self.assertIs(hub._inverter, catalog.inverter)
+            self.assertEqual(hub.inverter_protocol_candidates, ())
+            self.assertEqual(
+                hub._inverter.details["driver_candidate_selection"],
+                {
+                    "kind": "catalog_protocol_precedence",
+                    "catalog_entry_key": "deye_3ph_high_80kw",
+                    "superseded_protocols": ["modbus_smg"],
+                },
+            )
 
         asyncio.run(_run())
 

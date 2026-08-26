@@ -191,6 +191,64 @@ class ProfileLoaderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             # A bitmask only makes sense inside one 16-bit word.
             parse(1, capability_key="x", word_count=2)
+        with self.assertRaises(ValueError):
+            parse(True, capability_key="x", word_count=1)
+        with self.assertRaises(ValueError):
+            parse(" 0x0001", capability_key="x", word_count=1)
+        with self.assertRaises(ValueError):
+            parse("0x0005", capability_key="x", word_count=1)
+
+    def test_rejects_unsafe_generic_capability_codec_shapes(self) -> None:
+        base = {
+            "profile_key": "bad_codec_profile",
+            "title": "Bad Codec Profile",
+            "groups": [{"key": "system", "title": "System"}],
+            "capabilities": [
+                {
+                    "key": "setting",
+                    "register": 100,
+                    "value_kind": "u16",
+                    "note": "invalid shape",
+                    "group": "system",
+                }
+            ],
+            "presets": [],
+        }
+        invalid_cases = (
+            (
+                {"bitmask": "0x0001", "write_function": 6},
+                "bitmask_requires_write_multiple",
+            ),
+            (
+                {"value_kind": "time_hhmm", "word_count": 2},
+                "time_hhmm_requires_single_word",
+            ),
+            (
+                {"value_kind": "u16", "multiplier": 10},
+                "scale_requires_scaled_u16",
+            ),
+            (
+                {"value_kind": "scaled_u16"},
+                "scaled_u16_requires_scale",
+            ),
+            ({"write_function": 5}, "unsupported_write_function"),
+            ({"value_kind": "mystery"}, "unsupported_value_kind"),
+        )
+        for overrides, reason in invalid_cases:
+            with self.subTest(reason=reason):
+                raw = json.loads(json.dumps(base))
+                raw["capabilities"][0].update(overrides)
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    profile_path = Path(temp_dir) / "bad_codec_profile.json"
+                    profile_path.write_text(json.dumps(raw), encoding="utf-8")
+                    with mock.patch.object(
+                        profile_loader, "PROFILES_DIR", Path(temp_dir)
+                    ):
+                        profile_loader.load_driver_profile.cache_clear()
+                        with self.assertRaisesRegex(ValueError, reason):
+                            profile_loader.load_driver_profile(
+                                "bad_codec_profile.json"
+                            )
 
     def test_loads_pi30_profile_metadata(self) -> None:
         profile_loader.load_driver_profile.cache_clear()

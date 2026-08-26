@@ -147,6 +147,7 @@ class DetectionDeviceDescriptor:
     read_only: bool = False
     family_fallback: bool = False
     priority: int = 100
+    detection_supersedes_protocols: tuple[str, ...] = ()
 
     @property
     def required_anchor_keys(self) -> tuple[str, ...]:
@@ -387,6 +388,7 @@ def _descriptor_from_device_entry(entry: DeviceCatalogEntry) -> DetectionDeviceD
         read_only=not bool(entry.binding.profile_name),
         family_fallback=entry.family_fallback,
         priority=entry.priority,
+        detection_supersedes_protocols=entry.detection_supersedes_protocols,
     )
 
 
@@ -623,4 +625,3 @@ def _stable_signature_value(value: object) -> str:
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value)
-

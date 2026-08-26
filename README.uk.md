@@ -339,6 +339,7 @@ Modbus-пристрої можуть оновлюватися частіше, н
 - [Покажчик документації](docs/README.md)
 - [Налаштування та пошук](docs/user/SETUP_AND_DISCOVERY.md)
 - [Визначення інвертора та сутності](docs/user/RUNTIME_AND_INVERTER.md)
+- [Розширене керування Kevolt / Deye-сумісними моделями](docs/user/KEVOLT_DEYE_CONTROLS.md) — експериментальні налаштування для документованої карти 80 кВт
 - [Керування колектором](docs/user/COLLECTOR_MANAGEMENT.md)
 - [Навчання пристрою](docs/user/DEVICE_LEARNING.md)
 - [Діагностичні команди](docs/user/DIAGNOSTIC_COMMANDS.md) — розширені сценарії від розробника

@@ -327,6 +327,12 @@ class HubSnapshotMixin:
         values["collector_raw_last_total_duration_ms"] = (
             collector.raw_last_total_duration_ms
         )
+        if collector.inverter_forward_mode:
+            values["collector_inverter_forward_mode"] = (
+                collector.inverter_forward_mode
+            )
+        else:
+            values.pop("collector_inverter_forward_mode", None)
         for key, value in (
             ("collector_raw_last_request_ascii", collector.raw_last_request_ascii),
             ("collector_raw_last_request_hex", collector.raw_last_request_hex),

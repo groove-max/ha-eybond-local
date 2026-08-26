@@ -57,6 +57,7 @@ class HubManagementMixin:
                     self._inverter,
                     capability_key,
                     value,
+                    runtime_state=self._runtime_read_state,
                 )
                 self._write_blockers.pop(capability_key, None)
                 break

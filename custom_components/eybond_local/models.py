@@ -70,6 +70,9 @@ class RegisterValueSpec:
     # Added to the raw register value before any scaling. Deye-style
     # temperatures encode as (raw - 1000) * 0.1 degC -> offset -1000.
     offset: int | None = None
+    # Optional field ownership inside one shared 16-bit register. The raw
+    # register is masked and shifted before enum/scaling is applied.
+    bitmask: int | None = None
     enum_map: dict[int | str, str] | None = None
     # Modbus function the register lives under: 3 = holding, 4 = input.
     # Input and holding registers are distinct address spaces, so specs are
@@ -203,6 +206,10 @@ class WriteCapability:
     support_notes: str = ""
     action_value: int | None = None
     divisor: int | None = None
+    # Native value = raw register value * multiplier. This complements the
+    # divisor form used by most protocols and covers high-power Deye maps
+    # whose documented unit is 10 W per register count.
+    multiplier: float | None = None
     minimum: int | None = None
     maximum: int | None = None
     command_width: int | None = None
@@ -276,6 +283,8 @@ class WriteCapability:
             return self.step
         if self.divisor:
             return 1 / self.divisor
+        if self.multiplier is not None:
+            return self.multiplier
         return 1.0
 
     @property
@@ -338,6 +347,8 @@ class WriteCapability:
             return None
         if self.divisor:
             return round(raw / self.divisor, decimals_for_divisor(self.divisor))
+        if self.multiplier is not None:
+            return raw * self.multiplier
         return raw
 
     def runtime_state(self, values: Mapping[str, Any]) -> "CapabilityRuntimeState":
@@ -471,6 +482,7 @@ class CollectorInfo:
     raw_last_spacing_wait_ms: int = 0
     raw_last_response_duration_ms: int = 0
     raw_last_total_duration_ms: int = 0
+    inverter_forward_mode: str = ""
     last_disconnect_reason: str = ""
     discovery_restart_count: int = 0
     last_discovery_reason: str = ""

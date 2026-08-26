@@ -274,6 +274,7 @@ class DeviceCatalogEntry:
     anchors: tuple[dict[str, object], ...] = ()
     priority: int = 100
     family_fallback: bool = False
+    detection_supersedes_protocols: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -803,6 +804,25 @@ def _validate_device_catalog(catalog: DeviceCatalog) -> None:
             default_drivers.add(driver_key)
     fingerprints: dict[tuple[int, int], str] = {}
     for entry in catalog.devices:
+        surface = catalog.surfaces[entry.surface_key]
+        owner_protocol = catalog.protocols[surface.protocol_key]
+        for protocol_key in entry.detection_supersedes_protocols:
+            if protocol_key == surface.protocol_key:
+                raise ValueError(
+                    "device_catalog:detection_supersedes_self:"
+                    f"{entry.entry_key}:{protocol_key}"
+                )
+            superseded = catalog.protocols.get(protocol_key)
+            if superseded is None:
+                raise ValueError(
+                    "device_catalog:detection_supersedes_unknown_protocol:"
+                    f"{entry.entry_key}:{protocol_key}"
+                )
+            if superseded.transport_key != owner_protocol.transport_key:
+                raise ValueError(
+                    "device_catalog:detection_supersedes_foreign_transport:"
+                    f"{entry.entry_key}:{protocol_key}"
+                )
         if entry.anchors:
             continue
         key = (entry.fingerprint.layout_code, entry.fingerprint.model_code)
@@ -845,6 +865,22 @@ def _parse_device(
     cloud_hints = cloud_hints if isinstance(cloud_hints, dict) else {}
     entry_key = str(raw["entry_key"]).strip()
     surface = _surface_for_reference(raw, surfaces)
+    supersedes_raw = raw.get("detection_supersedes_protocols", [])
+    if not isinstance(supersedes_raw, list):
+        raise ValueError(
+            f"device_catalog:{entry_key}:invalid_detection_supersedes_protocols"
+        )
+    detection_supersedes_protocols: list[str] = []
+    for value in supersedes_raw:
+        if type(value) is not str or not value or value != value.strip():
+            raise ValueError(
+                f"device_catalog:{entry_key}:invalid_detection_supersedes_protocol"
+            )
+        if value in detection_supersedes_protocols:
+            raise ValueError(
+                f"device_catalog:{entry_key}:duplicate_detection_supersedes_protocol:{value}"
+            )
+        detection_supersedes_protocols.append(value)
     fingerprint_raw = raw.get("fingerprint")
     fingerprint = (
         _parse_fingerprint(fingerprint_raw)
@@ -882,6 +918,7 @@ def _parse_device(
         ),
         priority=int(raw.get("priority", 100)),
         family_fallback=bool(raw.get("family_fallback", False)),
+        detection_supersedes_protocols=tuple(detection_supersedes_protocols),
     )
 
 

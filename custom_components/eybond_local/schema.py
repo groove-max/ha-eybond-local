@@ -435,6 +435,8 @@ def entity_kind_for_capability(capability: WriteCapability) -> str:
         return "select"
     if capability.value_kind in {"scaled_u16", "u16", "u32"}:
         return "number"
+    if capability.value_kind == "time_hhmm":
+        return "time"
     if capability.value_kind == "action":
         return "button"
     return "unknown"

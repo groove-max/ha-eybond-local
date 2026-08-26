@@ -297,6 +297,7 @@ def _parse_spec(
         multiplier=_optional_float(raw.get("multiplier")),
         decimals=_optional_int(raw.get("decimals")),
         offset=_optional_int(raw.get("offset")),
+        bitmask=_optional_bitmask(raw.get("bitmask"), spec_key=str(raw["key"])),
         enum_map=enum_map,
         function=_parse_read_function(raw.get("function", 3)),
     )
@@ -307,6 +308,28 @@ def _parse_read_function(value: Any) -> int:
     if function not in (3, 4):
         raise ValueError(f"unsupported_spec_function:{function}")
     return function
+
+
+def _optional_bitmask(value: Any, *, spec_key: str) -> int | None:
+    """Parse one exact non-zero 16-bit register field mask."""
+
+    if value is None or value == "":
+        return None
+    if type(value) is int:
+        parsed = value
+    elif type(value) is str and value == value.strip():
+        try:
+            parsed = int(value, 0)
+        except ValueError as exc:
+            raise ValueError(f"invalid_register_spec_bitmask:{spec_key}:{value}") from exc
+    else:
+        raise ValueError(f"invalid_register_spec_bitmask:{spec_key}:{value}")
+    if not 1 <= parsed <= 0xFFFF:
+        raise ValueError(f"invalid_register_spec_bitmask:{spec_key}:{value}")
+    normalized = parsed >> ((parsed & -parsed).bit_length() - 1)
+    if normalized & (normalized + 1):
+        raise ValueError(f"register_spec_bitmask_not_contiguous:{spec_key}:{value}")
+    return parsed
 
 
 def _optional_float(value: Any) -> float | None:

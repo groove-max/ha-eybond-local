@@ -18,7 +18,7 @@ from ..metadata.compiled_detection_catalog import (
     CompiledSurfaceDescriptor,
     load_compiled_detection_catalog,
 )
-from ..link_models import EybondLinkRoute, RawSerialLinkRoute
+from ..link_models import AtMixedLinkRoute, EybondLinkRoute, RawSerialLinkRoute
 from ..models import DetectedInverter, DriverMatch, ProbeTarget
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,107 @@ class DriverCandidateScan:
     candidates: tuple[DetectedDriverContext, ...] = field(default_factory=tuple)
     budget_exhausted: bool = False
     probe_log: tuple[dict[str, object], ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
+class DriverCandidateSelection:
+    """One catalog-authorized resolution of overlapping driver probes."""
+
+    context: DetectedDriverContext
+    catalog_entry_key: str
+    superseded_protocols: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _CandidateProtocolContext:
+    """Validated protocol/transport identity for one runtime candidate."""
+
+    context: DetectedDriverContext
+    protocol_key: str
+    transport_key: str
+    probe_target: ProbeTarget
+
+
+def resolve_catalog_driver_candidate_overlap(
+    candidates: tuple[DetectedDriverContext, ...],
+) -> DriverCandidateSelection | None:
+    """Resolve only an explicitly declared cross-protocol probe overlap.
+
+    A successful response is not by itself enough to choose a driver: several
+    Modbus maps can return plausible values for the same register addresses.
+    The offline device catalog may therefore let one *exact* fingerprint state
+    that it supersedes known false-positive protocol matches.  The declaration
+    is admitted only when every candidate uses the same physical probe target
+    and catalog transport, and one declaration covers every competing
+    protocol.  Unknown combinations remain ambiguous for explicit user intent.
+    """
+
+    if len(candidates) < 2:
+        return None
+    catalog = load_compiled_detection_catalog()
+    validated: list[_CandidateProtocolContext] = []
+    for context in candidates:
+        driver_key = getattr(context.driver, "key", None)
+        inverter = context.inverter
+        match = context.match
+        if (
+            type(driver_key) is not str
+            or not driver_key
+            or driver_key != match.driver_key
+            or driver_key != inverter.driver_key
+            or type(match.protocol_family) is not str
+            or not match.protocol_family
+            or match.protocol_family != inverter.protocol_family
+            or match.probe_target != inverter.probe_target
+        ):
+            return None
+        protocol = catalog.protocols.get(match.protocol_family)
+        if protocol is None:
+            return None
+        validated.append(
+            _CandidateProtocolContext(
+                context=context,
+                protocol_key=match.protocol_family,
+                transport_key=protocol.transport_key,
+                probe_target=match.probe_target,
+            )
+        )
+
+    first = validated[0]
+    if any(
+        item.transport_key != first.transport_key
+        or item.probe_target != first.probe_target
+        for item in validated[1:]
+    ):
+        return None
+
+    selections: list[DriverCandidateSelection] = []
+    for item in validated:
+        descriptor = _exact_catalog_descriptor_for_candidate(item.context)
+        if descriptor is None or not descriptor.detection_supersedes_protocols:
+            continue
+        competing_protocols = tuple(
+            sorted(
+                {
+                    other.protocol_key
+                    for other in validated
+                    if other is not item
+                }
+            )
+        )
+        if not competing_protocols or not set(competing_protocols).issubset(
+            descriptor.detection_supersedes_protocols
+        ):
+            continue
+        selections.append(
+            DriverCandidateSelection(
+                context=item.context,
+                catalog_entry_key=descriptor.key,
+                superseded_protocols=competing_protocols,
+            )
+        )
+
+    return selections[0] if len(selections) == 1 else None
 
 
 @dataclass(slots=True)
@@ -636,6 +737,22 @@ class _ResponseTrackingTransport:
                     protocol=route.protocol,
                 ),
             )
+        if type(route) is AtMixedLinkRoute:
+            key = (
+                "at_mixed",
+                route.devcode,
+                route.collector_addr,
+                route.protocol,
+            )
+            return self._route_counters.setdefault(
+                key,
+                _ProbeRouteCounter(
+                    family="at_mixed",
+                    devcode=route.devcode,
+                    collector_addr=route.collector_addr,
+                    protocol=route.protocol,
+                ),
+            )
         return None
 
     def __getattr__(self, name: str):
@@ -817,3 +934,59 @@ def _catalog_surface_context(
         if key in catalog.devices
     )
     return surface, candidates
+
+
+def _exact_catalog_descriptor_for_candidate(
+    context: DetectedDriverContext,
+) -> CompiledDeviceDescriptor | None:
+    """Return the one exact descriptor proved by a candidate, fail-closed."""
+
+    inverter = context.inverter
+    surface, _surface_candidates = _catalog_surface_context(inverter)
+    if surface is None:
+        return None
+    details = inverter.details
+    if type(details) is not dict:
+        return None
+
+    resolution: dict[str, object] | None = None
+    device_catalog = details.get("device_catalog")
+    if type(device_catalog) is dict:
+        compiled = device_catalog.get("compiled_resolution")
+        if type(compiled) is dict:
+            resolution = compiled
+    catalog_detection = details.get("catalog_detection")
+    if resolution is None and type(catalog_detection) is dict:
+        resolution = catalog_detection
+    if (
+        resolution is None
+        or resolution.get("resolution") != "exact"
+        or resolution.get("surface_key") != surface.key
+        or resolution.get("confidence") != "high"
+    ):
+        return None
+
+    catalog = load_compiled_detection_catalog()
+    raw_candidate_keys = resolution.get("candidate_keys")
+    if type(raw_candidate_keys) is list:
+        if (
+            len(raw_candidate_keys) != 1
+            or type(raw_candidate_keys[0]) is not str
+        ):
+            return None
+        candidate_keys = (raw_candidate_keys[0],)
+    elif raw_candidate_keys is None:
+        candidate_keys = catalog.devices_by_surface.get(surface.key, ())
+        if len(candidate_keys) != 1:
+            return None
+    else:
+        return None
+
+    descriptor = catalog.devices.get(candidate_keys[0])
+    if (
+        descriptor is None
+        or descriptor.protocol_key != context.match.protocol_family
+        or descriptor.surface_key != surface.key
+    ):
+        return None
+    return descriptor

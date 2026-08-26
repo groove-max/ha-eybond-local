@@ -117,6 +117,7 @@ class CompiledDeviceDescriptor:
     provenance_confidence: str
     family_fallback: bool
     priority: int = 100
+    detection_supersedes_protocols: tuple[str, ...] = ()
     revision: str = ""
 
 
@@ -295,18 +296,19 @@ def load_compiled_detection_catalog() -> CompiledDetectionCatalog:
     )
 
 
-def resolve_unique_full_model_surface(
+def resolve_unique_persisted_model_surface(
     model_name: str,
     *,
     catalog: CompiledDetectionCatalog | None = None,
 ) -> tuple[CompiledDeviceDescriptor, CompiledSurfaceDescriptor] | None:
-    """Resolve one durable model name to one writable full runtime surface.
+    """Resolve one durable model name to its exact runtime surface.
 
     This is intentionally an identity-to-metadata lookup, not a detector.  It is
     suitable only when a caller already owns a durable, high-confidence model
     identity and needs to reconstruct metadata while live probing is degraded.
-    Ambiguous aliases, family fallbacks and reduced/read-only surfaces fail
-    closed.
+    Ambiguous aliases and family fallbacks fail closed.  A read-only surface is
+    accepted only with a register schema; it reconstructs telemetry metadata but
+    never manufactures a writable controls profile.
     """
 
     normalized = str(model_name or "").strip().casefold()
@@ -322,11 +324,9 @@ def resolve_unique_full_model_surface(
     surface = resolved.surfaces.get(descriptor.surface_key)
     if (
         surface is None
-        or surface.read_only
-        or surface.support_tier != "full"
         or not surface.driver_key
-        or not surface.profile_name
         or not surface.register_schema_name
+        or (not surface.read_only and not surface.profile_name)
     ):
         return None
     return descriptor, surface
@@ -366,6 +366,9 @@ def compile_detection_catalog(
             provenance_confidence=descriptor.provenance_confidence,
             family_fallback=descriptor.family_fallback,
             priority=descriptor.priority,
+            detection_supersedes_protocols=(
+                descriptor.detection_supersedes_protocols
+            ),
             revision=_descriptor_revision(descriptor),
         )
 
@@ -668,6 +671,9 @@ def _descriptor_revision(descriptor: DetectionDeviceDescriptor) -> str:
         "surface": descriptor.binding.surface_key,
         "aliases": descriptor.aliases,
         "priority": descriptor.priority,
+        "detection_supersedes_protocols": (
+            descriptor.detection_supersedes_protocols
+        ),
         "anchors": [
             {
                 "key": anchor.key,

@@ -69,6 +69,39 @@ class StructuredSilenceTests(unittest.IsolatedAsyncioTestCase):
         await tracked.async_send_payload(b"req")
         self.assertEqual(tracked.responses, 2)
 
+    async def test_response_tracking_records_at_mixed_route(self) -> None:
+        from custom_components.eybond_local.link_models import AtMixedLinkRoute
+        from custom_components.eybond_local.runtime.driver_detection import (
+            _ResponseTrackingTransport,
+        )
+
+        class Inner:
+            async def async_send_payload(self, payload, **kwargs):
+                return b"reply"
+
+        tracked = _ResponseTrackingTransport(Inner())
+        route = AtMixedLinkRoute(
+            devcode=0x0001,
+            collector_addr=0x01,
+            protocol="modbus_rtu",
+        )
+
+        await tracked.async_send_payload(b"request", route=route)
+
+        self.assertEqual(
+            tracked.route_records,
+            (
+                {
+                    "family": "at_mixed",
+                    "attempts": 1,
+                    "responses": 1,
+                    "devcode": 0x0001,
+                    "collector_addr": 0x01,
+                    "protocol": "modbus_rtu",
+                },
+            ),
+        )
+
     async def test_answering_garbage_device_is_not_silent(self) -> None:
         # A device that RESPONDS with out-of-envelope registers must not be
         # classified as silence even though every driver returns no-match

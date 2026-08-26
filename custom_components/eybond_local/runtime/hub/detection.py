@@ -22,6 +22,7 @@ from .common import (
     driver_keys_for_link_baud,
     logger,
     monotonic,
+    resolve_catalog_driver_candidate_overlap,
 )
 
 
@@ -317,6 +318,21 @@ class HubDetectionMixin:
             return "collector_session_changed"
 
         if detect_all_candidates:
+            selection = resolve_catalog_driver_candidate_overlap(contexts)
+            if selection is not None:
+                contexts = (selection.context,)
+                selection.context.inverter.details["driver_candidate_selection"] = {
+                    "kind": "catalog_protocol_precedence",
+                    "catalog_entry_key": selection.catalog_entry_key,
+                    "superseded_protocols": list(selection.superseded_protocols),
+                }
+                logger.info(
+                    "Resolved overlapping inverter protocols using exact catalog "
+                    "evidence: selected=%s entry=%s superseded=%s",
+                    selection.context.match.driver_key,
+                    selection.catalog_entry_key,
+                    ",".join(selection.superseded_protocols),
+                )
             if len(contexts) > 1:
                 self._inverter_protocol_candidates = tuple(
                     RuntimeInverterCandidate(

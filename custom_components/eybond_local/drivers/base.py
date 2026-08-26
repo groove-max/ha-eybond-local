@@ -221,5 +221,14 @@ class InverterDriver(ABC):
         inverter: DetectedInverter,
         capability_key: str,
         value: Any,
+        *,
+        runtime_state: dict[str, Any] | None = None,
     ) -> Any:
-        """Validate and write one logical capability value to the inverter."""
+        """Validate and write one logical capability value to the inverter.
+
+        ``runtime_state`` is the same non-persisted, per-session state mapping
+        passed to :meth:`async_read_values`. Drivers may update a confirmed
+        readback cache here so the mandatory refresh after a write observes the
+        just-confirmed value without putting runtime state into identity
+        metadata.
+        """

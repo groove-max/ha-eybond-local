@@ -28,6 +28,7 @@ USER_GUIDE_MARKDOWN = (
     REPO_ROOT / "docs" / "user" / "DEVICE_LEARNING.md",
     REPO_ROOT / "docs" / "user" / "DIAGNOSTIC_COMMANDS.md",
     REPO_ROOT / "docs" / "user" / "INTERFACE_SCREENSHOTS.md",
+    REPO_ROOT / "docs" / "user" / "KEVOLT_DEYE_CONTROLS.md",
     REPO_ROOT / "docs" / "user" / "PROXY_CAPTURE.md",
     REPO_ROOT / "docs" / "user" / "REMOTE_SETUP.md",
     REPO_ROOT / "docs" / "user" / "RUNTIME_AND_INVERTER.md",
@@ -87,6 +88,11 @@ _REQUIRED_USER_GUIDE_MARKERS = {
         "Analyze device data",
         "Verify additional local controls",
         "Read-only analysis",
+    ),
+    REPO_ROOT / "docs" / "user" / "KEVOLT_DEYE_CONTROLS.md": (
+        "Full Control",
+        "What write confirmation means",
+        "Intentionally unavailable operations",
     ),
     REPO_ROOT / "docs" / "user" / "SUPPORT_ARCHIVE.md": (
         "Use saved cloud evidence",

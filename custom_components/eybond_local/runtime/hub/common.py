@@ -62,6 +62,7 @@ from ..driver_detection import (
     DriverSweepNoMatch,
     async_detect_inverter,
     async_detect_inverter_candidates,
+    resolve_catalog_driver_candidate_overlap,
 )
 from ..link.baud_sweep import (
     RuntimeLinkBaudChannel,

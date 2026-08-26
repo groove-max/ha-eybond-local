@@ -37,7 +37,7 @@ from custom_components.eybond_local.collector.protocol import (
     decode_header,
     parse_heartbeat_pn,
 )
-from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
+from custom_components.eybond_local.link_models import AtMixedLinkRoute, EybondLinkRoute, RawSerialLinkRoute
 from custom_components.eybond_local.models import CollectorInfo
 from custom_components.eybond_local.payload.ascii_line import build_ascii_line_request
 from custom_components.eybond_local.payload.modbus import (
@@ -351,6 +351,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         framed_future = asyncio.get_running_loop().create_future()
         connection._pending_response = at_future
         connection._pending_framed_response[32] = framed_future
+        connection._pending_framed_fcode[32] = 2
         reader = asyncio.StreamReader()
         reader.feed_data(
             b"AT+INTPARA:41,Home WiFi"
@@ -3010,6 +3011,189 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(header.tid, request_header.tid)
             self.assertEqual(header.fcode, 2)
             self.assertEqual(payload, response_payload)
+            self.assertTrue(connection.mixed_frame_observed)
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+
+    async def test_at_primary_session_prefers_fc4_after_exact_framed_observation(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+            raw_passthrough_bootstrap="none",
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_fc4_observation_order",
+        )
+        transport = SharedCollectorAtTransport(
+            host="127.0.0.1",
+            port=18899,
+            request_timeout=0.2,
+            collector_ip="127.0.0.1",
+        )
+        transport.set_negotiated_wire("at_text")
+        route = AtMixedLinkRoute(
+            devcode=0x0001,
+            collector_addr=0x01,
+            protocol="modbus_rtu",
+        )
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+            identity_task = asyncio.create_task(
+                connection.async_send_bridge_identity_probe(
+                    fcode=2,
+                    payload=b"\x06",
+                    request_timeout=0.2,
+                )
+            )
+            deadline = monotonic() + 1.0
+            while len(writer.buffer) < HEADER_SIZE + 1:
+                if monotonic() >= deadline:
+                    self.fail("timed out waiting for framed identity request")
+                await asyncio.sleep(0.005)
+            identity_frame = bytes(writer.buffer)
+            identity_header = decode_header(identity_frame[:HEADER_SIZE])
+            reader.feed_data(
+                build_collector_request(
+                    identity_header.tid,
+                    b"\x00\x06esp-collector/0.1.8/ESP8266",
+                    devcode=0,
+                    collector_addr=1,
+                    fcode=2,
+                )
+            )
+            await identity_task
+            identity_len = len(writer.buffer)
+
+            request = build_read_request(1, 2, 6)
+            payload_task = asyncio.create_task(
+                transport._async_send_payload_on_connection(
+                    connection,
+                    request,
+                    route=route,
+                    request_timeout=0.2,
+                )
+            )
+            deadline = monotonic() + 1.0
+            while len(writer.buffer) < identity_len + HEADER_SIZE + len(request):
+                if monotonic() >= deadline:
+                    self.fail("timed out waiting for preferred FC4 request")
+                await asyncio.sleep(0.005)
+            forwarded = bytes(writer.buffer[identity_len:])
+            forward_header = decode_header(forwarded[:HEADER_SIZE])
+            self.assertEqual(forward_header.fcode, 4)
+            self.assertEqual(forwarded[HEADER_SIZE:], request)
+
+            response = bytearray((1, 3, 12, 1, 4))
+            response.extend(b"2407260015")
+            response.extend(crc16_modbus(response).to_bytes(2, "little"))
+            reader.feed_data(
+                build_collector_request(
+                    forward_header.tid,
+                    bytes(response),
+                    devcode=forward_header.devcode,
+                    collector_addr=forward_header.devaddr,
+                    fcode=4,
+                )
+            )
+
+            self.assertEqual(await payload_task, bytes(response))
+            self.assertEqual(
+                connection.collector_info.inverter_forward_mode,
+                "eybond_fc4",
+            )
+        finally:
+            await connection.disconnect()
+            run_task.cancel()
+
+    async def test_at_primary_session_falls_back_to_fc4_and_pins_exact_socket(self) -> None:
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        connection = _CollectorAtConnection(
+            remote_ip_hint="127.0.0.1",
+            write_timeout=0.5,
+            raw_passthrough_bootstrap="none",
+        )
+        run_task = asyncio.create_task(
+            connection.run(reader, writer),
+            name="test_at_connection_fc4_data_plane",
+        )
+        transport = SharedCollectorAtTransport(
+            host="127.0.0.1",
+            port=18899,
+            request_timeout=0.05,
+            collector_ip="127.0.0.1",
+        )
+        transport.set_negotiated_wire("at_text")
+        logical_route = EybondLinkRoute(devcode=0x0001, collector_addr=0x01)
+        try:
+            self.assertTrue(await connection.wait_until_connected(0.2))
+            with patch.object(transport, "_at_connection", return_value=connection):
+                selected = transport.select_payload_route(
+                    logical_route,
+                    payload_family="modbus_rtu",
+                )
+            self.assertEqual(
+                selected,
+                AtMixedLinkRoute(
+                    devcode=0x0001,
+                    collector_addr=0x01,
+                    protocol="modbus_rtu",
+                ),
+            )
+
+            request = build_read_request(1, 2, 6)
+            query_task = asyncio.create_task(
+                transport._async_send_payload_on_connection(
+                    connection,
+                    request,
+                    route=selected,
+                    request_timeout=0.05,
+                )
+            )
+            deadline = monotonic() + 1.0
+            while len(writer.buffer) < len(request) + HEADER_SIZE + len(request):
+                if monotonic() >= deadline:
+                    self.fail(f"FC4 fallback was not written: {writer.buffer.hex()}")
+                await asyncio.sleep(0.005)
+
+            # The legacy raw attempt remains first for compatibility. Its
+            # timeout does not itself mint a capability; the exact FC4 reply does.
+            self.assertEqual(bytes(writer.buffer[: len(request)]), request)
+            framed = bytes(writer.buffer[len(request) :])
+            header = decode_header(framed[:HEADER_SIZE])
+            self.assertEqual(header.fcode, 4)
+            self.assertEqual(framed[HEADER_SIZE:], request)
+
+            response = bytearray((1, 3, 12, 1, 4))
+            response.extend(b"2407260015")
+            response.extend(crc16_modbus(response).to_bytes(2, "little"))
+            reader.feed_data(
+                build_collector_request(
+                    header.tid,
+                    bytes(response),
+                    devcode=header.devcode,
+                    collector_addr=header.devaddr,
+                    fcode=4,
+                )
+            )
+
+            self.assertEqual(await query_task, bytes(response))
+            self.assertEqual(
+                connection.collector_info.inverter_forward_mode,
+                "eybond_fc4",
+            )
+            with patch.object(transport, "_at_connection", return_value=connection):
+                self.assertIs(
+                    transport.select_payload_route(
+                        logical_route,
+                        payload_family="modbus_rtu",
+                    ),
+                    logical_route,
+                )
         finally:
             await connection.disconnect()
             run_task.cancel()
@@ -3095,6 +3279,10 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 connection.collector_info.raw_last_parser,
                 "raw_modbus_rtu",
+            )
+            self.assertEqual(
+                connection.collector_info.inverter_forward_mode,
+                "raw_serial",
             )
         finally:
             await connection.disconnect()
@@ -3562,7 +3750,11 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 selected_route,
-                RawSerialLinkRoute(protocol="pi30_ascii"),
+                AtMixedLinkRoute(
+                    devcode=0x0994,
+                    collector_addr=0xFF,
+                    protocol="pi30_ascii",
+                ),
             )
             response = await transport.async_send_payload(
                 build_request("QPI"),

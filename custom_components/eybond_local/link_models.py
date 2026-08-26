@@ -34,3 +34,29 @@ class RawSerialLinkRoute(LinkRoute):
     def __init__(self, *, protocol: str = "") -> None:
         object.__setattr__(self, "family", "raw_serial")
         object.__setattr__(self, "protocol", str(protocol or "").strip())
+
+
+@dataclass(frozen=True, slots=True)
+class AtMixedLinkRoute(LinkRoute):
+    """Data-plane negotiation route for one exact AT-primary session.
+
+    AT manages the collector, while inverter payloads may be raw bytes or an
+    EyeBond FC=4 frame on the same socket. Both typed alternatives are retained
+    until a correlated response proves which data plane this socket supports.
+    """
+
+    devcode: int
+    collector_addr: int
+    protocol: str
+
+    def __init__(
+        self,
+        *,
+        devcode: int,
+        collector_addr: int,
+        protocol: str = "",
+    ) -> None:
+        object.__setattr__(self, "family", "at_mixed")
+        object.__setattr__(self, "devcode", int(devcode))
+        object.__setattr__(self, "collector_addr", int(collector_addr))
+        object.__setattr__(self, "protocol", str(protocol or "").strip())

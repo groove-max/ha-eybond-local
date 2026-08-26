@@ -149,6 +149,31 @@ The Python driver should remain the place for:
 - derived procedural runtime logic
 - actual write-command encoding
 
+### Large register-mapped control surfaces
+
+For a catalog-driven Modbus family with many settings:
+
+- keep each writable capability in the profile and its read-back field in a
+  dedicated schema spec set; capability `read_key` values and spec keys must
+  match exactly;
+- keep on-demand settings ranges in explicitly named blocks (for example
+  `control_*`) and never make the normal telemetry reader fetch blocks that do
+  not contribute to its requested spec set;
+- rotate compact settings blocks through the driver's non-persisted per-session
+  runtime state instead of storing a cache in `DetectedInverter.details`;
+- update that same runtime cache only after exact wire read-back confirms a
+  write, so the coordinator's mandatory refresh sees the confirmed value;
+- use the shared capability codec for scaling, packed `HHMM` times, and masked
+  register fields. A masked field requires one contiguous 16-bit mask and an
+  FC 0x10 read-modify-write; it must never use FC 0x06;
+- keep destructive, factory, calibration, address-selection, and ambiguous
+  fields out of the profile even when the document marks their register range
+  writable.
+
+The profile loader rejects unsupported value kinds, unsafe write functions,
+scaled values without exactly one scale, multi-word `time_hhmm`, and masked
+FC 0x06 writes. Add loader tests when extending this generic codec contract.
+
 ### 5. Update The Model Catalog
 
 Runtime detection and commercial model administration are separate.
@@ -235,6 +260,8 @@ Before considering a new driver usable, aim for:
 - the public model-catalog journal refreshes cleanly when catalog records changed
 - local debug reports refresh cleanly if you use fixture-derived reports
 - support level and known limits are documented
+- experimental control surfaces have a user guide that explains opt-in,
+  read-back meaning, and deliberate exclusions
 
 ## Project Rules
 

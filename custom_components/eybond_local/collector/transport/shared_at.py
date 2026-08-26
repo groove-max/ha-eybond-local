@@ -6,7 +6,7 @@ import asyncio
 from typing import Any
 
 from ..at import CollectorAtResponse
-from ...link_models import LinkRoute, RawSerialLinkRoute
+from ...link_models import AtMixedLinkRoute, EybondLinkRoute, LinkRoute, RawSerialLinkRoute
 from ...models import CollectorInfo
 from ..protocol import EybondHeader
 from .common import _bounded_write_timeout, _copy_collector_info
@@ -415,12 +415,18 @@ class SharedCollectorAtTransport:
         route: LinkRoute,
         request_timeout: float | None = None,
     ) -> bytes:
-        """Send one raw inverter payload over the active AT stream."""
+        """Send one inverter payload over the active AT-primary stream.
 
-        if not isinstance(route, RawSerialLinkRoute):
-            raise TypeError(f"unsupported_link_route:{route.family}")
+        The concrete exact-session connection owns data-plane negotiation. A
+        raw response selects raw serial for that socket; only a raw timeout
+        permits one FC4 attempt, whose correlated reply selects framed FC4.
+        No model, endpoint, PN prefix, cloud family, or peer address participates.
+        """
+
+        if type(route) not in (RawSerialLinkRoute, EybondLinkRoute, AtMixedLinkRoute):
+            raise TypeError(f"unsupported_link_route:{getattr(route, 'family', '')}")
         if not self._uses_at_text_session():
-            raise TypeError("raw_serial_route_requires_at_text_session")
+            raise TypeError("at_payload_route_requires_at_text_session")
         effective_request_timeout = (
             float(request_timeout)
             if request_timeout is not None
@@ -429,10 +435,11 @@ class SharedCollectorAtTransport:
 
         connection = self._at_connection(create_placeholder=bool(self._collector_ip))
         if connection is not None and connection.connected:
-            return await connection.async_send_raw_payload(
+            return await self._async_send_payload_on_connection(
+                connection,
                 payload,
+                route=route,
                 request_timeout=effective_request_timeout,
-                payload_protocol=route.protocol,
             )
 
         if self._listener is None:
@@ -458,13 +465,74 @@ class SharedCollectorAtTransport:
                         self._collector_raw_passthrough_min_interval_ms
                     ),
                 )
-                return await connection.async_send_raw_payload(
+                return await self._async_send_payload_on_connection(
+                    connection,
                     payload,
+                    route=route,
                     request_timeout=effective_request_timeout,
-                    payload_protocol=route.protocol,
                 )
 
         raise ConnectionError("collector_not_connected")
+
+    async def _async_send_payload_on_connection(
+        self,
+        connection: _CollectorAtConnection,
+        payload: bytes,
+        *,
+        route: LinkRoute,
+        request_timeout: float,
+    ) -> bytes:
+        if type(route) is RawSerialLinkRoute:
+            return await connection.async_send_raw_payload(
+                payload,
+                request_timeout=request_timeout,
+                payload_protocol=route.protocol,
+            )
+        if type(route) is EybondLinkRoute:
+            return await connection.async_send_framed_inverter_payload(
+                payload,
+                devcode=route.devcode,
+                collector_addr=route.collector_addr,
+                request_timeout=request_timeout,
+            )
+        if type(route) is not AtMixedLinkRoute:
+            raise TypeError(f"unsupported_link_route:{getattr(route, 'family', '')}")
+
+        if connection.mixed_frame_observed:
+            # A positive framed collector reply on this exact physical session
+            # is stronger ordering evidence than the AT-primary wire shape.
+            # It does not by itself pin FC4: only the correlated FC4 response
+            # below does. Raw remains the timeout fallback for hybrid bridges.
+            try:
+                return await connection.async_send_framed_inverter_payload(
+                    payload,
+                    devcode=route.devcode,
+                    collector_addr=route.collector_addr,
+                    request_timeout=request_timeout,
+                )
+            except asyncio.TimeoutError:
+                return await connection.async_send_raw_payload(
+                    payload,
+                    request_timeout=request_timeout,
+                    payload_protocol=route.protocol,
+                )
+
+        try:
+            return await connection.async_send_raw_payload(
+                payload,
+                request_timeout=request_timeout,
+                payload_protocol=route.protocol,
+            )
+        except asyncio.TimeoutError:
+            # A timeout is negative evidence for this request only, not a
+            # durable capability. The FC4 result below must still positively
+            # confirm itself through the exact TID on this physical socket.
+            return await connection.async_send_framed_inverter_payload(
+                payload,
+                devcode=route.devcode,
+                collector_addr=route.collector_addr,
+                request_timeout=request_timeout,
+            )
 
     def select_payload_route(
         self,
@@ -473,7 +541,23 @@ class SharedCollectorAtTransport:
         payload_family: str = "",
     ) -> LinkRoute:
         if self._uses_at_text_session():
-            return RawSerialLinkRoute(protocol=payload_family)
+            connection = self._at_connection(create_placeholder=False)
+            mode = (
+                str(connection.collector_info.inverter_forward_mode or "").strip()
+                if connection is not None and connection.connected
+                else ""
+            )
+            if mode == "raw_serial":
+                return RawSerialLinkRoute(protocol=payload_family)
+            if mode == "eybond_fc4":
+                return route
+            if type(route) is not EybondLinkRoute:
+                raise TypeError("at_mixed_route_requires_eybond_route")
+            return AtMixedLinkRoute(
+                devcode=route.devcode,
+                collector_addr=route.collector_addr,
+                protocol=payload_family,
+            )
         return route
 
     @property

@@ -8728,7 +8728,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         with (
             patch.object(
                 self.coordinator_startup_module,
-                "resolve_unique_full_model_surface",
+                "resolve_unique_persisted_model_surface",
                 return_value=(types.SimpleNamespace(), surface),
             ),
             patch.object(self.coordinator_startup_module, "get_driver", return_value=driver),
@@ -8785,12 +8785,93 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
 
         with patch.object(
-            self.coordinator_startup_module, "resolve_unique_full_model_surface"
+            self.coordinator_startup_module, "resolve_unique_persisted_model_surface"
         ) as resolver:
             inverter = coordinator._prime_startup_inverter_from_persisted_metadata()
 
         self.assertIsNone(inverter)
         resolver.assert_not_called()
+
+    def test_prime_startup_restores_exact_catalog_telemetry_and_controls(self) -> None:
+        capability = types.SimpleNamespace(key="grid_charge_enable")
+        profile = types.SimpleNamespace(
+            driver_key="modbus_catalog",
+            protocol_family="deye_3ph_high_80kw",
+            groups=(),
+            capabilities=(capability,),
+            presets=(),
+        )
+        surface = types.SimpleNamespace(
+            driver_key="modbus_catalog",
+            variant_key="deye_3ph_high_80kw",
+            profile_name="modbus_catalog/deye_3ph_high_80kw.json",
+            register_schema_name="deye_3ph_high_80kw/base.json",
+            read_only=False,
+        )
+        driver = types.SimpleNamespace(
+            key="modbus_catalog",
+            profile_name="",
+            register_schema_name="",
+            probe_targets=(
+                self.coordinator_module.ProbeTarget(
+                    devcode=1,
+                    collector_addr=255,
+                    device_addr=1,
+                ),
+            ),
+        )
+        register_schema = types.SimpleNamespace(driver_key="modbus_catalog")
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "detected_model": "Deye-Compatible Three-Phase Hybrid 80 kW (Modbus)",
+                "detected_serial": "",
+                "detection_confidence": "high",
+                "detected_driver": "modbus_catalog",
+                "driver_hint": "auto",
+            },
+            options={},
+        )
+
+        with (
+            patch.object(
+                self.coordinator_startup_module,
+                "resolve_unique_persisted_model_surface",
+                return_value=(types.SimpleNamespace(), surface),
+            ),
+            patch.object(self.coordinator_startup_module, "get_driver", return_value=driver),
+            patch.object(
+                self.coordinator_startup_module,
+                "load_register_schema",
+                return_value=register_schema,
+            ),
+            patch.object(
+                self.coordinator_startup_module,
+                "load_driver_profile",
+                return_value=profile,
+            ) as profile_loader,
+        ):
+            inverter = coordinator._prime_startup_inverter_from_persisted_metadata()
+
+        self.assertIsNotNone(inverter)
+        self.assertEqual(inverter.driver_key, "modbus_catalog")
+        self.assertEqual(inverter.variant_key, "deye_3ph_high_80kw")
+        self.assertEqual(
+            inverter.profile_name,
+            "modbus_catalog/deye_3ph_high_80kw.json",
+        )
+        self.assertEqual(
+            inverter.register_schema_name,
+            "deye_3ph_high_80kw/base.json",
+        )
+        self.assertEqual(inverter.capabilities, (capability,))
+        self.assertEqual(
+            inverter.details["identity_source"],
+            "persisted_detected_model",
+        )
+        profile_loader.assert_called_once_with(
+            "modbus_catalog/deye_3ph_high_80kw.json"
+        )
 
     def test_prime_startup_snapshot_adds_persisted_inverter_when_values_already_exist(self) -> None:
         capability = types.SimpleNamespace(key="output_source_priority")

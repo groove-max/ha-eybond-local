@@ -1150,6 +1150,18 @@
      11
     ],
     [
+     115,
+     3
+    ],
+    [
+     129,
+     2
+    ],
+    [
+     142,
+     4
+    ],
+    [
      500,
      1
     ],
@@ -1195,7 +1207,7 @@
     ]
    ],
    "notes": [
-    "Read-only Deye-compatible three-phase high-power hybrid map observed on the Kevolt PD0080G-TPM-EU. All ranges use holding-register function 3 and stay at 15 words or fewer, matching the successful request shape in the supplied cloud proxy capture. No write surface is exposed."
+    "Deye-compatible three-phase high-power hybrid map observed on the Kevolt PD0080G-TPM-EU. All read ranges use holding-register function 3 and stay at 15 words or fewer, matching the successful request shape in the supplied cloud proxy capture. A bounded document-backed operational control subset uses FC 0x10 and remains Full-Control-only until writes are confirmed on hardware."
    ]
   }
  },
@@ -1505,14 +1517,14 @@
    "support_capture_policy": "deye_lv"
   },
   {
-   "key": "deye_3ph_high_80kw_read_only",
+   "key": "deye_3ph_high_80kw_untested",
    "protocol_key": "modbus_catalog",
    "driver_key": "modbus_catalog",
    "variant_key": "deye_3ph_high_80kw",
-   "profile_name": "",
+   "profile_name": "modbus_catalog/deye_3ph_high_80kw.json",
    "register_schema_name": "deye_3ph_high_80kw/base.json",
-   "tier": "partial",
-   "read_only": true,
+   "tier": "full",
+   "read_only": false,
    "support_capture_policy": "deye_3ph_high_80kw"
   }
  ],
@@ -2738,10 +2750,13 @@
   },
   {
    "entry_key": "deye_3ph_high_80kw",
-   "surface_key": "deye_3ph_high_80kw_read_only",
+   "surface_key": "deye_3ph_high_80kw_untested",
    "model_name": "Deye-Compatible Three-Phase Hybrid 80 kW (Modbus)",
    "aliases": [
     "Kevolt PD0080G-TPM-EU"
+   ],
+   "detection_supersedes_protocols": [
+    "modbus_smg"
    ],
    "priority": 118,
    "anchors": [

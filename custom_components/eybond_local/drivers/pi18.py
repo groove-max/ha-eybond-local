@@ -213,7 +213,15 @@ class Pi18Driver(InverterDriver):
             diagnostics=unsupported_command_diagnostics(runtime_state),
         )
 
-    async def async_write_capability(self, transport, inverter: DetectedInverter, capability_key: str, value: Any) -> Any:
+    async def async_write_capability(
+        self,
+        transport,
+        inverter: DetectedInverter,
+        capability_key: str,
+        value: Any,
+        *,
+        runtime_state: dict[str, Any] | None = None,
+    ) -> Any:
         raise ValueError(f"unsupported_capability:{self.key}:{capability_key}")
 
     async def async_capture_support_evidence(self, transport, inverter: DetectedInverter) -> dict[str, Any]:

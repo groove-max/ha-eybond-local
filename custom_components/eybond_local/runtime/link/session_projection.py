@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .common import (
+    ADAPTER_INVERTER_AT_MIXED,
     ADAPTER_INVERTER_RAW_PASSTHROUGH,
     ADAPTER_NONE,
     Callable,
@@ -173,7 +174,10 @@ class LinkSessionProjectionMixin:
     def active_transport(self) -> CollectorTransport | None:
         """Return the connected payload transport selected for the active collector."""
 
-        if self._inverter_forward_adapter() == ADAPTER_INVERTER_RAW_PASSTHROUGH:
+        if self._inverter_forward_adapter() in (
+            ADAPTER_INVERTER_AT_MIXED,
+            ADAPTER_INVERTER_RAW_PASSTHROUGH,
+        ):
             return None
         return self._connected_payload_transport()
 
@@ -190,7 +194,10 @@ class LinkSessionProjectionMixin:
         adapter = self._inverter_forward_adapter()
         if adapter == ADAPTER_NONE:
             return self._unavailable_payload_transport
-        if adapter == ADAPTER_INVERTER_RAW_PASSTHROUGH:
+        if adapter in (
+            ADAPTER_INVERTER_AT_MIXED,
+            ADAPTER_INVERTER_RAW_PASSTHROUGH,
+        ):
             return self.active_collector_at_transport or self._at_transport
         return self.active_transport or self._transport
 
@@ -273,6 +280,8 @@ class LinkSessionProjectionMixin:
             collector.raw_last_total_duration_ms = (
                 at_collector.raw_last_total_duration_ms
             )
+        if at_collector.inverter_forward_mode:
+            collector.inverter_forward_mode = at_collector.inverter_forward_mode
         merged_pn = reconcile_pn(
             collector.collector_pn,
             at_collector.collector_pn,
@@ -384,6 +393,11 @@ class LinkSessionProjectionMixin:
         # none/"conflict"), NOT the shared wire/forward selection above.
         _mgmt_adapter_id, _mgmt_provenance = self._collector_management_selection()
         current_live_session = self._current_live_session_state()
+        at_transport = self.active_collector_at_transport or self._at_transport
+        at_collector = getattr(at_transport, "collector_info", None)
+        forward_mode = str(
+            getattr(at_collector, "inverter_forward_mode", "") or ""
+        ).strip()
         diagnostics: dict[str, object] = {
             "collector_listener_status": self._listener_status,
             "collector_listener_bind_host": self._listener_bind_host,
@@ -442,6 +456,7 @@ class LinkSessionProjectionMixin:
             "collector_management_adapter_id": _mgmt_adapter_id,
             "collector_management_adapter_provenance": _mgmt_provenance,
             "collector_callback_inverter_forward_adapter": eff_forward,
+            "collector_callback_inverter_forward_mode": forward_mode,
             "collector_callback_inverter_forward_capabilities": ", ".join(
                 sorted(
                     eff_capabilities.inverter_forward_adapters

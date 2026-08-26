@@ -93,6 +93,10 @@ Phase 4 removed that copy after all of the following became true:
 - An error or disconnected snapshot cannot describe retained data as fresh.
 - Metadata, tooling state, lists, and dictionaries are not silently classified
   as measurements.
+- Rotating writable-setting caches are non-persisted driver runtime state. They
+  are folded into the compatibility values needed by capability entities, but
+  never stored in `DetectedInverter.details`, promoted to identity evidence, or
+  exported as an opaque internal cache in a Support Archive.
 - Driver diagnostics have an exact per-identity replacement lifecycle in the
   hub. They remain in the broad compatibility snapshot, never enter the typed
   measurement frame, and disappear when omitted by the next successful result

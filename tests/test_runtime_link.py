@@ -1883,9 +1883,8 @@ class DomainTransportOwnershipTests(unittest.TestCase):
             manager._inverter_forward_adapter(), "framed_fc4"
         )
 
-    # 7. Live AT/raw session on a non-primary listener keeps the
-    # ValueCloud/G-ASCII raw-passthrough transport.
-    def test_live_at_text_on_other_listener_keeps_raw_passthrough(self) -> None:
+    # 7. Live AT-primary session uses the exact-session data-plane negotiator.
+    def test_live_at_text_on_other_listener_uses_mixed_data_plane(self) -> None:
         manager = self._manager(collector_pn=self.FULL_PN)
         manager._configured_collector_session_protocol = "eybond_framed"
         self._install_aux_fakes(manager)
@@ -1905,7 +1904,7 @@ class DomainTransportOwnershipTests(unittest.TestCase):
         self.assertTrue(handle.observed)
         self.assertEqual(handle.wire_framing, "at_text")
         self.assertEqual(
-            manager._inverter_forward_adapter(), "raw_passthrough"
+            manager._inverter_forward_adapter(), "at_mixed_forward"
         )
 
     def test_owned_session_monitor_reports_cross_listener_replacement(self) -> None:

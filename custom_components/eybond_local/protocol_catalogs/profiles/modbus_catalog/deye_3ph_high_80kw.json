@@ -1,0 +1,1949 @@
+{
+  "profile_key": "modbus_catalog/deye_3ph_high_80kw.json",
+  "title": "Deye-Compatible Three-Phase High-Power Hybrid (untested controls)",
+  "driver_key": "modbus_catalog",
+  "protocol_family": "deye_3ph_high_80kw",
+  "capability_defaults": {
+    "tested": false,
+    "provenance": "doc_backed",
+    "support_notes": "Deye three-phase Modbus RTU V1.04 documents this setting, but writes remain untested on this hardware and are available only after the user selects Full control.",
+    "write_function": 16,
+    "enabled_default": false,
+    "advanced": true,
+    "requires_confirm": true
+  },
+  "groups": [
+    {
+      "key": "system",
+      "title": "System",
+      "order": 100,
+      "description": "Power, topology, and system behavior.",
+      "icon": "mdi:cog-outline",
+      "advanced": true
+    },
+    {
+      "key": "battery",
+      "title": "Battery",
+      "order": 200,
+      "description": "Battery type, charge parameters, and protection thresholds.",
+      "icon": "mdi:battery-cog",
+      "advanced": true
+    },
+    {
+      "key": "charging",
+      "title": "Grid Charging",
+      "order": 300,
+      "description": "Grid-assisted battery charging.",
+      "icon": "mdi:transmission-tower-import",
+      "advanced": true
+    },
+    {
+      "key": "generator",
+      "title": "Generator",
+      "order": 400,
+      "description": "Generator input, charging, and peak-shaving settings.",
+      "icon": "mdi:engine-outline",
+      "advanced": true
+    },
+    {
+      "key": "smart_load",
+      "title": "Smart Load",
+      "order": 500,
+      "description": "Smart-load output thresholds and delay.",
+      "icon": "mdi:power-socket",
+      "advanced": true
+    },
+    {
+      "key": "energy",
+      "title": "Energy Management",
+      "order": 600,
+      "description": "Energy priority and export behavior.",
+      "icon": "mdi:swap-vertical",
+      "advanced": true
+    },
+    {
+      "key": "time_of_use",
+      "title": "Time of Use",
+      "order": 700,
+      "description": "Six-period schedule, weekday selection, and charging permissions.",
+      "icon": "mdi:calendar-clock",
+      "advanced": true
+    },
+    {
+      "key": "grid",
+      "title": "Grid",
+      "order": 800,
+      "description": "Grid topology, reconnection, and peak-shaving settings.",
+      "icon": "mdi:transmission-tower",
+      "advanced": true
+    },
+    {
+      "key": "meter",
+      "title": "Meter and CT",
+      "order": 900,
+      "description": "External meter and current-transformer settings.",
+      "icon": "mdi:meter-electric-outline",
+      "advanced": true
+    },
+    {
+      "key": "advanced",
+      "title": "Advanced Functions",
+      "order": 1000,
+      "description": "Documented shared-bit operational functions.",
+      "icon": "mdi:tune-variant",
+      "advanced": true
+    }
+  ],
+  "capabilities": [
+    {
+      "key": "inverter_power",
+      "title": "Inverter Power",
+      "register": 60,
+      "value_kind": "enum",
+      "group": "system",
+      "order": 10,
+      "choices": [
+        {
+          "value": 0,
+          "label": "On",
+          "order": 0,
+          "description": "Keep the inverter powered on."
+        },
+        {
+          "value": 2,
+          "label": "Off",
+          "order": 2,
+          "description": "Request an inverter shutdown."
+        }
+      ],
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 60; multiple-register write (FC 0x10).",
+      "change_summary": "Changes inverter power using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_control_mode",
+      "title": "Battery Type",
+      "register": 98,
+      "value_kind": "enum",
+      "group": "battery",
+      "order": 20,
+      "choices": [
+        {
+          "value": 0,
+          "label": "Lead Acid",
+          "order": 0,
+          "description": ""
+        },
+        {
+          "value": 1,
+          "label": "Lithium",
+          "order": 1,
+          "description": ""
+        }
+      ],
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 98; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery type using the documented Deye three-phase setting."
+    },
+    {
+      "key": "parallel_battery_enabled",
+      "title": "Parallel Battery Inputs",
+      "register": 110,
+      "value_kind": "bool",
+      "group": "battery",
+      "order": 30,
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 110; multiple-register write (FC 0x10).",
+      "change_summary": "Changes parallel battery inputs using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_operation_basis",
+      "title": "Battery Operating Basis",
+      "register": 111,
+      "value_kind": "enum",
+      "group": "battery",
+      "order": 40,
+      "choices": [
+        {
+          "value": 0,
+          "label": "Voltage",
+          "order": 0,
+          "description": ""
+        },
+        {
+          "value": 1,
+          "label": "State of Charge",
+          "order": 1,
+          "description": ""
+        },
+        {
+          "value": 2,
+          "label": "No Battery",
+          "order": 2,
+          "description": ""
+        }
+      ],
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 111; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery operating basis using the documented Deye three-phase setting."
+    },
+    {
+      "key": "output_voltage_level",
+      "title": "Nominal Output Voltage",
+      "register": 138,
+      "value_kind": "enum",
+      "group": "system",
+      "order": 50,
+      "choices": [
+        {
+          "value": 0,
+          "label": "220/380 V",
+          "order": 0,
+          "description": ""
+        },
+        {
+          "value": 1,
+          "label": "230/400 V",
+          "order": 1,
+          "description": ""
+        },
+        {
+          "value": 2,
+          "label": "277/480 V",
+          "order": 2,
+          "description": ""
+        }
+      ],
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 138; multiple-register write (FC 0x10).",
+      "change_summary": "Changes nominal output voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "grid_phase_sequence",
+      "title": "Grid Phase Sequence",
+      "register": 147,
+      "value_kind": "enum",
+      "group": "grid",
+      "order": 60,
+      "choices": [
+        {
+          "value": 0,
+          "label": "ABC (0° / 120° / 240°)",
+          "order": 0,
+          "description": ""
+        },
+        {
+          "value": 1,
+          "label": "ACB (0° / 240° / 120°)",
+          "order": 1,
+          "description": ""
+        }
+      ],
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 147; multiple-register write (FC 0x10).",
+      "change_summary": "Changes grid phase sequence using the documented Deye three-phase setting."
+    },
+    {
+      "key": "grid_frequency_setting",
+      "title": "Nominal Grid Frequency",
+      "register": 183,
+      "value_kind": "enum",
+      "group": "grid",
+      "order": 70,
+      "choices": [
+        {
+          "value": 0,
+          "label": "50 Hz",
+          "order": 0,
+          "description": ""
+        },
+        {
+          "value": 1,
+          "label": "60 Hz",
+          "order": 1,
+          "description": ""
+        }
+      ],
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 183; multiple-register write (FC 0x10).",
+      "change_summary": "Changes nominal grid frequency using the documented Deye three-phase setting."
+    },
+    {
+      "key": "grid_system_type",
+      "title": "Grid System Type",
+      "register": 184,
+      "value_kind": "enum",
+      "group": "grid",
+      "order": 80,
+      "choices": [
+        {
+          "value": 0,
+          "label": "Three Phase",
+          "order": 0,
+          "description": ""
+        },
+        {
+          "value": 1,
+          "label": "Single Phase",
+          "order": 1,
+          "description": ""
+        },
+        {
+          "value": 2,
+          "label": "Split Phase",
+          "order": 2,
+          "description": ""
+        }
+      ],
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 184; multiple-register write (FC 0x10).",
+      "change_summary": "Changes grid system type using the documented Deye three-phase setting."
+    },
+    {
+      "key": "ups_delay_enabled",
+      "title": "UPS Output Delay",
+      "register": 209,
+      "value_kind": "bool",
+      "group": "system",
+      "order": 90,
+      "note": "Deye three-phase holding register 209; multiple-register write (FC 0x10).",
+      "change_summary": "Changes ups output delay using the documented Deye three-phase setting."
+    },
+    {
+      "key": "track_grid_phase_enabled",
+      "title": "Track Grid Phase",
+      "register": 235,
+      "value_kind": "bool",
+      "group": "grid",
+      "order": 100,
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 235; multiple-register write (FC 0x10).",
+      "change_summary": "Changes track grid phase using the documented Deye three-phase setting."
+    },
+    {
+      "key": "it_system_enabled",
+      "title": "IT System",
+      "register": 236,
+      "value_kind": "bool",
+      "group": "grid",
+      "order": 110,
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 236; multiple-register write (FC 0x10).",
+      "change_summary": "Changes it system using the documented Deye three-phase setting."
+    },
+    {
+      "key": "active_unbalanced_load_enabled",
+      "title": "Active Unbalanced Load",
+      "register": 237,
+      "value_kind": "bool",
+      "group": "grid",
+      "order": 120,
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 237; multiple-register write (FC 0x10).",
+      "change_summary": "Changes active unbalanced load using the documented Deye three-phase setting."
+    },
+    {
+      "key": "unbalanced_power_trip",
+      "title": "Unbalanced Power Trip Threshold",
+      "register": 238,
+      "value_kind": "u16",
+      "group": "grid",
+      "order": 130,
+      "minimum": 0,
+      "maximum": 65535,
+      "unit": "W",
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 238; multiple-register write (FC 0x10).",
+      "change_summary": "Changes unbalanced power trip threshold using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_equalization_voltage",
+      "title": "Battery Equalization Voltage",
+      "register": 99,
+      "value_kind": "scaled_u16",
+      "group": "battery",
+      "order": 140,
+      "minimum": 3800,
+      "maximum": 6100,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 99; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery equalization voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_absorption_voltage",
+      "title": "Battery Absorption Voltage",
+      "register": 100,
+      "value_kind": "scaled_u16",
+      "group": "battery",
+      "order": 150,
+      "minimum": 3800,
+      "maximum": 6100,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 100; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery absorption voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_float_voltage",
+      "title": "Battery Float Voltage",
+      "register": 101,
+      "value_kind": "scaled_u16",
+      "group": "battery",
+      "order": 160,
+      "minimum": 3800,
+      "maximum": 6100,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 101; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery float voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_capacity",
+      "title": "Battery Capacity",
+      "register": 102,
+      "value_kind": "u16",
+      "group": "battery",
+      "order": 170,
+      "minimum": 0,
+      "maximum": 2000,
+      "unit": "Ah",
+      "note": "Deye three-phase holding register 102; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery capacity using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_equalization_cycle",
+      "title": "Battery Equalization Cycle",
+      "register": 105,
+      "value_kind": "u16",
+      "group": "battery",
+      "order": 180,
+      "minimum": 0,
+      "maximum": 90,
+      "unit": "d",
+      "note": "Deye three-phase holding register 105; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery equalization cycle using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_equalization_duration",
+      "title": "Battery Equalization Duration",
+      "register": 106,
+      "value_kind": "scaled_u16",
+      "group": "battery",
+      "order": 190,
+      "minimum": 0,
+      "maximum": 20,
+      "unit": "h",
+      "multiplier": 0.5,
+      "step": 0.5,
+      "note": "Deye three-phase holding register 106; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery equalization duration using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_max_charge_current",
+      "title": "Battery Maximum Charge Current",
+      "register": 108,
+      "value_kind": "u16",
+      "group": "battery",
+      "order": 200,
+      "minimum": 0,
+      "maximum": 185,
+      "unit": "A",
+      "device_class": "current",
+      "note": "Deye three-phase holding register 108; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery maximum charge current using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_max_discharge_current",
+      "title": "Battery Maximum Discharge Current",
+      "register": 109,
+      "value_kind": "u16",
+      "group": "battery",
+      "order": 210,
+      "minimum": 0,
+      "maximum": 185,
+      "unit": "A",
+      "device_class": "current",
+      "note": "Deye three-phase holding register 109; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery maximum discharge current using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_resistance",
+      "title": "Battery Resistance",
+      "register": 113,
+      "value_kind": "u16",
+      "group": "battery",
+      "order": 220,
+      "minimum": 0,
+      "maximum": 6000,
+      "unit": "mΩ",
+      "note": "Deye three-phase holding register 113; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery resistance using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_charge_efficiency",
+      "title": "Battery Charge Efficiency",
+      "register": 114,
+      "value_kind": "scaled_u16",
+      "group": "battery",
+      "order": 230,
+      "minimum": 0,
+      "maximum": 1000,
+      "unit": "%",
+      "divisor": 10,
+      "note": "Deye three-phase holding register 114; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery charge efficiency using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_shutdown_soc",
+      "title": "Battery Shutdown SOC",
+      "register": 115,
+      "value_kind": "u16",
+      "group": "battery",
+      "order": 240,
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "%",
+      "note": "Deye three-phase holding register 115; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery shutdown soc using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_restart_soc",
+      "title": "Battery Restart SOC",
+      "register": 116,
+      "value_kind": "u16",
+      "group": "battery",
+      "order": 250,
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "%",
+      "note": "Deye three-phase holding register 116; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery restart soc using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_low_soc",
+      "title": "Low Battery SOC",
+      "register": 117,
+      "value_kind": "u16",
+      "group": "battery",
+      "order": 260,
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "%",
+      "note": "Deye three-phase holding register 117; multiple-register write (FC 0x10).",
+      "change_summary": "Changes low battery soc using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_shutdown_voltage",
+      "title": "Battery Shutdown Voltage",
+      "register": 118,
+      "value_kind": "scaled_u16",
+      "group": "battery",
+      "order": 270,
+      "minimum": 3800,
+      "maximum": 6100,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 118; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery shutdown voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_restart_voltage",
+      "title": "Battery Restart Voltage",
+      "register": 119,
+      "value_kind": "scaled_u16",
+      "group": "battery",
+      "order": 280,
+      "minimum": 3800,
+      "maximum": 6100,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 119; multiple-register write (FC 0x10).",
+      "change_summary": "Changes battery restart voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "battery_low_voltage",
+      "title": "Low Battery Voltage",
+      "register": 120,
+      "value_kind": "scaled_u16",
+      "group": "battery",
+      "order": 290,
+      "minimum": 3800,
+      "maximum": 6100,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 120; multiple-register write (FC 0x10).",
+      "change_summary": "Changes low battery voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "generator_max_runtime",
+      "title": "Generator Maximum Runtime",
+      "register": 121,
+      "value_kind": "scaled_u16",
+      "group": "generator",
+      "order": 300,
+      "minimum": 0,
+      "maximum": 65535,
+      "unit": "h",
+      "divisor": 10,
+      "note": "Deye three-phase holding register 121; multiple-register write (FC 0x10).",
+      "change_summary": "Changes generator maximum runtime using the documented Deye three-phase setting."
+    },
+    {
+      "key": "generator_cooldown_time",
+      "title": "Generator Cooldown Time",
+      "register": 122,
+      "value_kind": "scaled_u16",
+      "group": "generator",
+      "order": 310,
+      "minimum": 0,
+      "maximum": 65535,
+      "unit": "h",
+      "divisor": 10,
+      "note": "Deye three-phase holding register 122; multiple-register write (FC 0x10).",
+      "change_summary": "Changes generator cooldown time using the documented Deye three-phase setting."
+    },
+    {
+      "key": "generator_charge_start_voltage",
+      "title": "Generator Charge Start Voltage",
+      "register": 123,
+      "value_kind": "scaled_u16",
+      "group": "generator",
+      "order": 320,
+      "minimum": 0,
+      "maximum": 6300,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 123; multiple-register write (FC 0x10).",
+      "change_summary": "Changes generator charge start voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "generator_charge_start_soc",
+      "title": "Generator Charge Start SOC",
+      "register": 124,
+      "value_kind": "u16",
+      "group": "generator",
+      "order": 330,
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "%",
+      "note": "Deye three-phase holding register 124; multiple-register write (FC 0x10).",
+      "change_summary": "Changes generator charge start soc using the documented Deye three-phase setting."
+    },
+    {
+      "key": "generator_charge_current",
+      "title": "Generator Charge Current",
+      "register": 125,
+      "value_kind": "u16",
+      "group": "generator",
+      "order": 340,
+      "minimum": 0,
+      "maximum": 185,
+      "unit": "A",
+      "device_class": "current",
+      "note": "Deye three-phase holding register 125; multiple-register write (FC 0x10).",
+      "change_summary": "Changes generator charge current using the documented Deye three-phase setting."
+    },
+    {
+      "key": "grid_charge_start_voltage",
+      "title": "Grid Charge Start Voltage",
+      "register": 126,
+      "value_kind": "scaled_u16",
+      "group": "charging",
+      "order": 350,
+      "minimum": 0,
+      "maximum": 6300,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 126; multiple-register write (FC 0x10).",
+      "change_summary": "Changes grid charge start voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "grid_charge_start_soc",
+      "title": "Grid Charge Start SOC",
+      "register": 127,
+      "value_kind": "u16",
+      "group": "charging",
+      "order": 360,
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "%",
+      "note": "Deye three-phase holding register 127; multiple-register write (FC 0x10).",
+      "change_summary": "Changes grid charge start soc using the documented Deye three-phase setting."
+    },
+    {
+      "key": "grid_charge_current",
+      "title": "Grid Charge Current",
+      "register": 128,
+      "value_kind": "u16",
+      "group": "charging",
+      "order": 370,
+      "minimum": 0,
+      "maximum": 185,
+      "unit": "A",
+      "device_class": "current",
+      "note": "Deye three-phase holding register 128; multiple-register write (FC 0x10).",
+      "change_summary": "Changes grid charge current using the documented Deye three-phase setting."
+    },
+    {
+      "key": "generator_charge_enable",
+      "title": "Generator Charging",
+      "register": 129,
+      "value_kind": "bool",
+      "group": "generator",
+      "order": 380,
+      "note": "Deye three-phase holding register 129; multiple-register write (FC 0x10).",
+      "change_summary": "Changes generator charging using the documented Deye three-phase setting."
+    },
+    {
+      "key": "grid_charge_enable",
+      "title": "Grid Charging",
+      "register": 130,
+      "value_kind": "bool",
+      "group": "charging",
+      "order": 390,
+      "note": "Deye three-phase holding register 130; multiple-register write (FC 0x10).",
+      "change_summary": "Changes grid charging using the documented Deye three-phase setting."
+    },
+    {
+      "key": "ac_coupling_frequency_upper",
+      "title": "AC Coupling Frequency Upper Limit",
+      "register": 131,
+      "value_kind": "scaled_u16",
+      "group": "generator",
+      "order": 400,
+      "minimum": 5000,
+      "maximum": 6500,
+      "unit": "Hz",
+      "divisor": 100,
+      "device_class": "frequency",
+      "note": "Deye three-phase holding register 131; multiple-register write (FC 0x10).",
+      "change_summary": "Changes ac coupling frequency upper limit using the documented Deye three-phase setting."
+    },
+    {
+      "key": "force_generator_as_load",
+      "title": "Force Generator Port as Load",
+      "register": 132,
+      "value_kind": "bool",
+      "group": "generator",
+      "order": 410,
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 132; multiple-register write (FC 0x10).",
+      "change_summary": "Changes force generator port as load using the documented Deye three-phase setting."
+    },
+    {
+      "key": "generator_port_mode",
+      "title": "Generator Port Mode",
+      "register": 133,
+      "value_kind": "enum",
+      "group": "generator",
+      "order": 420,
+      "choices": [
+        {
+          "value": 0,
+          "label": "Generator Input",
+          "order": 0,
+          "description": ""
+        },
+        {
+          "value": 1,
+          "label": "Smart Load Output",
+          "order": 1,
+          "description": ""
+        },
+        {
+          "value": 2,
+          "label": "Microinverter Input",
+          "order": 2,
+          "description": ""
+        }
+      ],
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 133; multiple-register write (FC 0x10).",
+      "change_summary": "Changes generator port mode using the documented Deye three-phase setting."
+    },
+    {
+      "key": "smart_load_off_voltage",
+      "title": "Smart Load Off Voltage",
+      "register": 134,
+      "value_kind": "scaled_u16",
+      "group": "smart_load",
+      "order": 430,
+      "minimum": 3800,
+      "maximum": 6300,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 134; multiple-register write (FC 0x10).",
+      "change_summary": "Changes smart load off voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "smart_load_off_soc",
+      "title": "Smart Load Off SOC",
+      "register": 135,
+      "value_kind": "u16",
+      "group": "smart_load",
+      "order": 440,
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "%",
+      "note": "Deye three-phase holding register 135; multiple-register write (FC 0x10).",
+      "change_summary": "Changes smart load off soc using the documented Deye three-phase setting."
+    },
+    {
+      "key": "smart_load_on_voltage",
+      "title": "Smart Load On Voltage",
+      "register": 136,
+      "value_kind": "scaled_u16",
+      "group": "smart_load",
+      "order": 450,
+      "minimum": 3800,
+      "maximum": 6300,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 136; multiple-register write (FC 0x10).",
+      "change_summary": "Changes smart load on voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "smart_load_on_soc",
+      "title": "Smart Load On SOC",
+      "register": 137,
+      "value_kind": "u16",
+      "group": "smart_load",
+      "order": 460,
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "%",
+      "note": "Deye three-phase holding register 137; multiple-register write (FC 0x10).",
+      "change_summary": "Changes smart load on soc using the documented Deye three-phase setting."
+    },
+    {
+      "key": "generator_minimum_solar_power",
+      "title": "Minimum Solar Power to Start Generator",
+      "register": 139,
+      "value_kind": "u16",
+      "group": "generator",
+      "order": 470,
+      "minimum": 0,
+      "maximum": 8000,
+      "unit": "W",
+      "device_class": "power",
+      "note": "Deye three-phase holding register 139; multiple-register write (FC 0x10).",
+      "change_summary": "Changes minimum solar power to start generator using the documented Deye three-phase setting."
+    },
+    {
+      "key": "generator_on_grid_input",
+      "title": "Generator Connected to Grid Input",
+      "register": 189,
+      "value_kind": "bool",
+      "group": "generator",
+      "order": 480,
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 189; multiple-register write (FC 0x10).",
+      "change_summary": "Changes generator connected to grid input using the documented Deye three-phase setting."
+    },
+    {
+      "key": "generator_peak_shaving_power",
+      "title": "Generator Peak-Shaving Power",
+      "register": 190,
+      "value_kind": "u16",
+      "group": "generator",
+      "order": 490,
+      "minimum": 0,
+      "maximum": 16000,
+      "unit": "W",
+      "device_class": "power",
+      "note": "Deye three-phase holding register 190; multiple-register write (FC 0x10).",
+      "change_summary": "Changes generator peak-shaving power using the documented Deye three-phase setting."
+    },
+    {
+      "key": "grid_peak_shaving_power",
+      "title": "Grid Peak-Shaving Power",
+      "register": 191,
+      "value_kind": "u16",
+      "group": "grid",
+      "order": 500,
+      "minimum": 0,
+      "maximum": 16000,
+      "unit": "W",
+      "device_class": "power",
+      "note": "Deye three-phase holding register 191; multiple-register write (FC 0x10).",
+      "change_summary": "Changes grid peak-shaving power using the documented Deye three-phase setting."
+    },
+    {
+      "key": "smart_load_open_delay",
+      "title": "Smart Load Open Delay",
+      "register": 192,
+      "value_kind": "u16",
+      "group": "smart_load",
+      "order": 510,
+      "minimum": 1,
+      "maximum": 120,
+      "unit": "min",
+      "note": "Deye three-phase holding register 192; multiple-register write (FC 0x10).",
+      "change_summary": "Changes smart load open delay using the documented Deye three-phase setting."
+    },
+    {
+      "key": "energy_priority",
+      "title": "Energy Priority",
+      "register": 141,
+      "value_kind": "enum",
+      "group": "energy",
+      "order": 520,
+      "choices": [
+        {
+          "value": 2,
+          "label": "Battery First",
+          "order": 2,
+          "description": ""
+        },
+        {
+          "value": 3,
+          "label": "Load First",
+          "order": 3,
+          "description": ""
+        }
+      ],
+      "bitmask": "0x0003",
+      "note": "Deye three-phase holding register 141; multiple-register write (FC 0x10).",
+      "change_summary": "Changes energy priority using the documented Deye three-phase setting."
+    },
+    {
+      "key": "passive_grid_power_balance",
+      "title": "Passive Grid Power Balance",
+      "register": 141,
+      "value_kind": "enum",
+      "group": "energy",
+      "order": 530,
+      "choices": [
+        {
+          "value": 2,
+          "label": "Disabled",
+          "order": 2,
+          "description": ""
+        },
+        {
+          "value": 3,
+          "label": "Enabled",
+          "order": 3,
+          "description": ""
+        }
+      ],
+      "bitmask": "0x000C",
+      "note": "Deye three-phase holding register 141; multiple-register write (FC 0x10).",
+      "change_summary": "Changes passive grid power balance using the documented Deye three-phase setting."
+    },
+    {
+      "key": "active_grid_power_balance",
+      "title": "Active Grid Power Balance",
+      "register": 141,
+      "value_kind": "enum",
+      "group": "energy",
+      "order": 540,
+      "choices": [
+        {
+          "value": 2,
+          "label": "Disabled",
+          "order": 2,
+          "description": ""
+        },
+        {
+          "value": 3,
+          "label": "Enabled",
+          "order": 3,
+          "description": ""
+        }
+      ],
+      "bitmask": "0x0030",
+      "note": "Deye three-phase holding register 141; multiple-register write (FC 0x10).",
+      "change_summary": "Changes active grid power balance using the documented Deye three-phase setting."
+    },
+    {
+      "key": "grid_export_mode",
+      "title": "Grid Export Mode",
+      "register": 142,
+      "value_kind": "enum",
+      "group": "energy",
+      "order": 550,
+      "choices": [
+        {
+          "value": 0,
+          "label": "Selling Enabled",
+          "order": 0,
+          "description": ""
+        },
+        {
+          "value": 1,
+          "label": "Zero Export to Load",
+          "order": 1,
+          "description": ""
+        },
+        {
+          "value": 2,
+          "label": "Zero Export to CT",
+          "order": 2,
+          "description": ""
+        }
+      ],
+      "note": "Deye three-phase holding register 142; multiple-register write (FC 0x10).",
+      "change_summary": "Changes grid export mode using the documented Deye three-phase setting."
+    },
+    {
+      "key": "maximum_sell_power",
+      "title": "Maximum Sell Power",
+      "register": 143,
+      "value_kind": "scaled_u16",
+      "group": "energy",
+      "order": 560,
+      "minimum": 0,
+      "maximum": 8000,
+      "unit": "W",
+      "multiplier": 10,
+      "step": 10,
+      "device_class": "power",
+      "note": "Deye three-phase holding register 143; multiple-register write (FC 0x10).",
+      "change_summary": "Changes maximum sell power using the documented Deye three-phase setting."
+    },
+    {
+      "key": "solar_sell_enable",
+      "title": "Solar Sell",
+      "register": 145,
+      "value_kind": "bool",
+      "group": "energy",
+      "order": 570,
+      "note": "Deye three-phase holding register 145; multiple-register write (FC 0x10).",
+      "change_summary": "Changes solar sell using the documented Deye three-phase setting."
+    },
+    {
+      "key": "maximum_solar_sell_power",
+      "title": "Maximum Solar Sell Power",
+      "register": 340,
+      "value_kind": "scaled_u16",
+      "group": "energy",
+      "order": 580,
+      "minimum": 0,
+      "maximum": 8000,
+      "unit": "W",
+      "multiplier": 10,
+      "step": 10,
+      "device_class": "power",
+      "note": "Deye three-phase holding register 340; multiple-register write (FC 0x10).",
+      "change_summary": "Changes maximum solar sell power using the documented Deye three-phase setting."
+    },
+    {
+      "key": "output_power_factor",
+      "title": "Output Power Factor",
+      "register": 193,
+      "value_kind": "scaled_u16",
+      "group": "grid",
+      "order": 590,
+      "minimum": 800,
+      "maximum": 1200,
+      "unit": "%",
+      "divisor": 10,
+      "note": "Deye three-phase holding register 193; multiple-register write (FC 0x10).",
+      "change_summary": "Changes output power factor using the documented Deye three-phase setting."
+    },
+    {
+      "key": "solar_arc_fault_mode",
+      "title": "Solar Arc-Fault Detection",
+      "register": 181,
+      "value_kind": "enum",
+      "group": "system",
+      "order": 600,
+      "choices": [
+        {
+          "value": 0,
+          "label": "Disabled",
+          "order": 0,
+          "description": ""
+        },
+        {
+          "value": 1,
+          "label": "Enabled",
+          "order": 1,
+          "description": ""
+        }
+      ],
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 181; multiple-register write (FC 0x10).",
+      "change_summary": "Changes solar arc-fault detection using the documented Deye three-phase setting."
+    },
+    {
+      "key": "restore_grid_connection_time",
+      "title": "Grid Reconnection Delay",
+      "register": 180,
+      "value_kind": "u16",
+      "group": "grid",
+      "order": 610,
+      "minimum": 10,
+      "maximum": 300,
+      "unit": "s",
+      "note": "Deye three-phase holding register 180; multiple-register write (FC 0x10).",
+      "change_summary": "Changes grid reconnection delay using the documented Deye three-phase setting."
+    },
+    {
+      "key": "grid_measurement_source",
+      "title": "Grid Measurement Source",
+      "register": 344,
+      "value_kind": "enum",
+      "group": "meter",
+      "order": 620,
+      "choices": [
+        {
+          "value": 0,
+          "label": "Current Transformer",
+          "order": 0,
+          "description": ""
+        },
+        {
+          "value": 1,
+          "label": "Meter",
+          "order": 1,
+          "description": ""
+        }
+      ],
+      "note": "Deye three-phase holding register 344; multiple-register write (FC 0x10).",
+      "change_summary": "Changes grid measurement source using the documented Deye three-phase setting."
+    },
+    {
+      "key": "meter_manufacturer",
+      "title": "Meter Manufacturer",
+      "register": 345,
+      "value_kind": "enum",
+      "group": "meter",
+      "order": 630,
+      "choices": [
+        {
+          "value": 1,
+          "label": "Eastron",
+          "order": 1,
+          "description": ""
+        },
+        {
+          "value": 2,
+          "label": "CHNT",
+          "order": 2,
+          "description": ""
+        }
+      ],
+      "note": "Deye three-phase holding register 345; multiple-register write (FC 0x10).",
+      "change_summary": "Changes meter manufacturer using the documented Deye three-phase setting."
+    },
+    {
+      "key": "meter_limit_mode",
+      "title": "Meter Limit Mode",
+      "register": 346,
+      "value_kind": "enum",
+      "group": "meter",
+      "order": 640,
+      "choices": [
+        {
+          "value": 0,
+          "label": "Average",
+          "order": 0,
+          "description": ""
+        },
+        {
+          "value": 1,
+          "label": "Minimum",
+          "order": 1,
+          "description": ""
+        }
+      ],
+      "note": "Deye three-phase holding register 346; multiple-register write (FC 0x10).",
+      "change_summary": "Changes meter limit mode using the documented Deye three-phase setting."
+    },
+    {
+      "key": "external_ct_ratio",
+      "title": "External CT Ratio",
+      "register": 347,
+      "value_kind": "u16",
+      "group": "meter",
+      "order": 650,
+      "minimum": 1,
+      "maximum": 65535,
+      "unit": ":1",
+      "note": "Deye three-phase holding register 347; multiple-register write (FC 0x10).",
+      "change_summary": "Changes external ct ratio using the documented Deye three-phase setting."
+    },
+    {
+      "key": "microinverter_export_cutoff",
+      "title": "Microinverter Export Cutoff",
+      "register": 178,
+      "value_kind": "enum",
+      "group": "advanced",
+      "order": 660,
+      "choices": [
+        {
+          "value": 2,
+          "label": "Disabled",
+          "order": 2,
+          "description": ""
+        },
+        {
+          "value": 3,
+          "label": "Enabled",
+          "order": 3,
+          "description": ""
+        }
+      ],
+      "bitmask": "0x0003",
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 178; multiple-register write (FC 0x10).",
+      "change_summary": "Changes microinverter export cutoff using the documented Deye three-phase setting."
+    },
+    {
+      "key": "generator_peak_shaving_enable",
+      "title": "Generator Peak Shaving",
+      "register": 178,
+      "value_kind": "enum",
+      "group": "advanced",
+      "order": 670,
+      "choices": [
+        {
+          "value": 2,
+          "label": "Disabled",
+          "order": 2,
+          "description": ""
+        },
+        {
+          "value": 3,
+          "label": "Enabled",
+          "order": 3,
+          "description": ""
+        }
+      ],
+      "bitmask": "0x000C",
+      "note": "Deye three-phase holding register 178; multiple-register write (FC 0x10).",
+      "change_summary": "Changes generator peak shaving using the documented Deye three-phase setting."
+    },
+    {
+      "key": "grid_peak_shaving_enable",
+      "title": "Grid Peak Shaving",
+      "register": 178,
+      "value_kind": "enum",
+      "group": "advanced",
+      "order": 680,
+      "choices": [
+        {
+          "value": 2,
+          "label": "Disabled",
+          "order": 2,
+          "description": ""
+        },
+        {
+          "value": 3,
+          "label": "Enabled",
+          "order": 3,
+          "description": ""
+        }
+      ],
+      "bitmask": "0x0030",
+      "note": "Deye three-phase holding register 178; multiple-register write (FC 0x10).",
+      "change_summary": "Changes grid peak shaving using the documented Deye three-phase setting."
+    },
+    {
+      "key": "on_grid_always_on",
+      "title": "On-Grid Always On",
+      "register": 178,
+      "value_kind": "enum",
+      "group": "advanced",
+      "order": 690,
+      "choices": [
+        {
+          "value": 2,
+          "label": "Disabled",
+          "order": 2,
+          "description": ""
+        },
+        {
+          "value": 3,
+          "label": "Enabled",
+          "order": 3,
+          "description": ""
+        }
+      ],
+      "bitmask": "0x00C0",
+      "note": "Deye three-phase holding register 178; multiple-register write (FC 0x10).",
+      "change_summary": "Changes on-grid always on using the documented Deye three-phase setting."
+    },
+    {
+      "key": "external_relay_enable",
+      "title": "External Relay",
+      "register": 178,
+      "value_kind": "enum",
+      "group": "advanced",
+      "order": 700,
+      "choices": [
+        {
+          "value": 2,
+          "label": "Disabled",
+          "order": 2,
+          "description": ""
+        },
+        {
+          "value": 3,
+          "label": "Enabled",
+          "order": 3,
+          "description": ""
+        }
+      ],
+      "bitmask": "0x0300",
+      "note": "Deye three-phase holding register 178; multiple-register write (FC 0x10).",
+      "change_summary": "Changes external relay using the documented Deye three-phase setting."
+    },
+    {
+      "key": "lithium_battery_loss_fault",
+      "title": "Lithium Battery Loss Fault",
+      "register": 178,
+      "value_kind": "enum",
+      "group": "advanced",
+      "order": 710,
+      "choices": [
+        {
+          "value": 2,
+          "label": "Disabled",
+          "order": 2,
+          "description": ""
+        },
+        {
+          "value": 3,
+          "label": "Enabled",
+          "order": 3,
+          "description": ""
+        }
+      ],
+      "bitmask": "0x0C00",
+      "note": "Deye three-phase holding register 178; multiple-register write (FC 0x10).",
+      "change_summary": "Changes lithium battery loss fault using the documented Deye three-phase setting."
+    },
+    {
+      "key": "external_ct_auto_direction",
+      "title": "External CT Automatic Direction",
+      "register": 179,
+      "value_kind": "enum",
+      "group": "advanced",
+      "order": 720,
+      "choices": [
+        {
+          "value": 2,
+          "label": "Disabled",
+          "order": 2,
+          "description": ""
+        },
+        {
+          "value": 3,
+          "label": "Enabled",
+          "order": 3,
+          "description": ""
+        }
+      ],
+      "bitmask": "0x0003",
+      "note": "Deye three-phase holding register 179; multiple-register write (FC 0x10).",
+      "change_summary": "Changes external ct automatic direction using the documented Deye three-phase setting."
+    },
+    {
+      "key": "forced_off_grid_mode",
+      "title": "Forced Off-Grid Operation",
+      "register": 179,
+      "value_kind": "enum",
+      "group": "advanced",
+      "order": 730,
+      "choices": [
+        {
+          "value": 2,
+          "label": "Disabled",
+          "order": 2,
+          "description": ""
+        },
+        {
+          "value": 3,
+          "label": "Enabled",
+          "order": 3,
+          "description": ""
+        }
+      ],
+      "bitmask": "0x000C",
+      "unsafe_while_running": true,
+      "note": "Deye three-phase holding register 179; multiple-register write (FC 0x10).",
+      "change_summary": "Changes forced off-grid operation using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_enable",
+      "title": "Time of Use",
+      "register": 146,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 740,
+      "bitmask": "0x0001",
+      "note": "Deye three-phase holding register 146; multiple-register write (FC 0x10).",
+      "change_summary": "Changes time of use using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_monday",
+      "title": "Time of Use Monday",
+      "register": 146,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 750,
+      "bitmask": "0x0002",
+      "note": "Deye three-phase holding register 146; multiple-register write (FC 0x10).",
+      "change_summary": "Changes time of use monday using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_tuesday",
+      "title": "Time of Use Tuesday",
+      "register": 146,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 760,
+      "bitmask": "0x0004",
+      "note": "Deye three-phase holding register 146; multiple-register write (FC 0x10).",
+      "change_summary": "Changes time of use tuesday using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_wednesday",
+      "title": "Time of Use Wednesday",
+      "register": 146,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 770,
+      "bitmask": "0x0008",
+      "note": "Deye three-phase holding register 146; multiple-register write (FC 0x10).",
+      "change_summary": "Changes time of use wednesday using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_thursday",
+      "title": "Time of Use Thursday",
+      "register": 146,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 780,
+      "bitmask": "0x0010",
+      "note": "Deye three-phase holding register 146; multiple-register write (FC 0x10).",
+      "change_summary": "Changes time of use thursday using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_friday",
+      "title": "Time of Use Friday",
+      "register": 146,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 790,
+      "bitmask": "0x0020",
+      "note": "Deye three-phase holding register 146; multiple-register write (FC 0x10).",
+      "change_summary": "Changes time of use friday using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_saturday",
+      "title": "Time of Use Saturday",
+      "register": 146,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 800,
+      "bitmask": "0x0040",
+      "note": "Deye three-phase holding register 146; multiple-register write (FC 0x10).",
+      "change_summary": "Changes time of use saturday using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_sunday",
+      "title": "Time of Use Sunday",
+      "register": 146,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 810,
+      "bitmask": "0x0080",
+      "note": "Deye three-phase holding register 146; multiple-register write (FC 0x10).",
+      "change_summary": "Changes time of use sunday using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_spain_mode",
+      "title": "Time of Use Spain Mode",
+      "register": 146,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 820,
+      "bitmask": "0x0100",
+      "note": "Deye three-phase holding register 146; multiple-register write (FC 0x10).",
+      "change_summary": "Changes time of use spain mode using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_1_time",
+      "title": "TOU Period 1 Time",
+      "register": 148,
+      "value_kind": "time_hhmm",
+      "group": "time_of_use",
+      "order": 830,
+      "minimum": 0,
+      "maximum": 2359,
+      "note": "Deye three-phase holding register 148; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 1 time using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_1_power",
+      "title": "TOU Period 1 Power",
+      "register": 154,
+      "value_kind": "scaled_u16",
+      "group": "time_of_use",
+      "order": 840,
+      "minimum": 0,
+      "maximum": 8000,
+      "unit": "W",
+      "multiplier": 10,
+      "step": 10,
+      "device_class": "power",
+      "note": "Deye three-phase holding register 154; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 1 power using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_1_voltage",
+      "title": "TOU Period 1 Voltage",
+      "register": 160,
+      "value_kind": "scaled_u16",
+      "group": "time_of_use",
+      "order": 850,
+      "minimum": 0,
+      "maximum": 6300,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 160; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 1 voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_1_soc",
+      "title": "TOU Period 1 SOC",
+      "register": 166,
+      "value_kind": "u16",
+      "group": "time_of_use",
+      "order": 860,
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "%",
+      "note": "Deye three-phase holding register 166; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 1 soc using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_1_grid_charge",
+      "title": "TOU Period 1 Grid Charging",
+      "register": 172,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 870,
+      "bitmask": "0x0001",
+      "note": "Deye three-phase holding register 172; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 1 grid charging using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_1_generator_charge",
+      "title": "TOU Period 1 Generator Charging",
+      "register": 172,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 880,
+      "bitmask": "0x0002",
+      "note": "Deye three-phase holding register 172; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 1 generator charging using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_2_time",
+      "title": "TOU Period 2 Time",
+      "register": 149,
+      "value_kind": "time_hhmm",
+      "group": "time_of_use",
+      "order": 890,
+      "minimum": 0,
+      "maximum": 2359,
+      "note": "Deye three-phase holding register 149; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 2 time using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_2_power",
+      "title": "TOU Period 2 Power",
+      "register": 155,
+      "value_kind": "scaled_u16",
+      "group": "time_of_use",
+      "order": 900,
+      "minimum": 0,
+      "maximum": 8000,
+      "unit": "W",
+      "multiplier": 10,
+      "step": 10,
+      "device_class": "power",
+      "note": "Deye three-phase holding register 155; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 2 power using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_2_voltage",
+      "title": "TOU Period 2 Voltage",
+      "register": 161,
+      "value_kind": "scaled_u16",
+      "group": "time_of_use",
+      "order": 910,
+      "minimum": 0,
+      "maximum": 6300,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 161; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 2 voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_2_soc",
+      "title": "TOU Period 2 SOC",
+      "register": 167,
+      "value_kind": "u16",
+      "group": "time_of_use",
+      "order": 920,
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "%",
+      "note": "Deye three-phase holding register 167; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 2 soc using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_2_grid_charge",
+      "title": "TOU Period 2 Grid Charging",
+      "register": 173,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 930,
+      "bitmask": "0x0001",
+      "note": "Deye three-phase holding register 173; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 2 grid charging using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_2_generator_charge",
+      "title": "TOU Period 2 Generator Charging",
+      "register": 173,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 940,
+      "bitmask": "0x0002",
+      "note": "Deye three-phase holding register 173; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 2 generator charging using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_3_time",
+      "title": "TOU Period 3 Time",
+      "register": 150,
+      "value_kind": "time_hhmm",
+      "group": "time_of_use",
+      "order": 950,
+      "minimum": 0,
+      "maximum": 2359,
+      "note": "Deye three-phase holding register 150; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 3 time using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_3_power",
+      "title": "TOU Period 3 Power",
+      "register": 156,
+      "value_kind": "scaled_u16",
+      "group": "time_of_use",
+      "order": 960,
+      "minimum": 0,
+      "maximum": 8000,
+      "unit": "W",
+      "multiplier": 10,
+      "step": 10,
+      "device_class": "power",
+      "note": "Deye three-phase holding register 156; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 3 power using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_3_voltage",
+      "title": "TOU Period 3 Voltage",
+      "register": 162,
+      "value_kind": "scaled_u16",
+      "group": "time_of_use",
+      "order": 970,
+      "minimum": 0,
+      "maximum": 6300,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 162; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 3 voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_3_soc",
+      "title": "TOU Period 3 SOC",
+      "register": 168,
+      "value_kind": "u16",
+      "group": "time_of_use",
+      "order": 980,
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "%",
+      "note": "Deye three-phase holding register 168; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 3 soc using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_3_grid_charge",
+      "title": "TOU Period 3 Grid Charging",
+      "register": 174,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 990,
+      "bitmask": "0x0001",
+      "note": "Deye three-phase holding register 174; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 3 grid charging using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_3_generator_charge",
+      "title": "TOU Period 3 Generator Charging",
+      "register": 174,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 1000,
+      "bitmask": "0x0002",
+      "note": "Deye three-phase holding register 174; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 3 generator charging using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_4_time",
+      "title": "TOU Period 4 Time",
+      "register": 151,
+      "value_kind": "time_hhmm",
+      "group": "time_of_use",
+      "order": 1010,
+      "minimum": 0,
+      "maximum": 2359,
+      "note": "Deye three-phase holding register 151; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 4 time using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_4_power",
+      "title": "TOU Period 4 Power",
+      "register": 157,
+      "value_kind": "scaled_u16",
+      "group": "time_of_use",
+      "order": 1020,
+      "minimum": 0,
+      "maximum": 8000,
+      "unit": "W",
+      "multiplier": 10,
+      "step": 10,
+      "device_class": "power",
+      "note": "Deye three-phase holding register 157; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 4 power using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_4_voltage",
+      "title": "TOU Period 4 Voltage",
+      "register": 163,
+      "value_kind": "scaled_u16",
+      "group": "time_of_use",
+      "order": 1030,
+      "minimum": 0,
+      "maximum": 6300,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 163; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 4 voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_4_soc",
+      "title": "TOU Period 4 SOC",
+      "register": 169,
+      "value_kind": "u16",
+      "group": "time_of_use",
+      "order": 1040,
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "%",
+      "note": "Deye three-phase holding register 169; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 4 soc using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_4_grid_charge",
+      "title": "TOU Period 4 Grid Charging",
+      "register": 175,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 1050,
+      "bitmask": "0x0001",
+      "note": "Deye three-phase holding register 175; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 4 grid charging using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_4_generator_charge",
+      "title": "TOU Period 4 Generator Charging",
+      "register": 175,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 1060,
+      "bitmask": "0x0002",
+      "note": "Deye three-phase holding register 175; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 4 generator charging using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_5_time",
+      "title": "TOU Period 5 Time",
+      "register": 152,
+      "value_kind": "time_hhmm",
+      "group": "time_of_use",
+      "order": 1070,
+      "minimum": 0,
+      "maximum": 2359,
+      "note": "Deye three-phase holding register 152; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 5 time using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_5_power",
+      "title": "TOU Period 5 Power",
+      "register": 158,
+      "value_kind": "scaled_u16",
+      "group": "time_of_use",
+      "order": 1080,
+      "minimum": 0,
+      "maximum": 8000,
+      "unit": "W",
+      "multiplier": 10,
+      "step": 10,
+      "device_class": "power",
+      "note": "Deye three-phase holding register 158; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 5 power using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_5_voltage",
+      "title": "TOU Period 5 Voltage",
+      "register": 164,
+      "value_kind": "scaled_u16",
+      "group": "time_of_use",
+      "order": 1090,
+      "minimum": 0,
+      "maximum": 6300,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 164; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 5 voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_5_soc",
+      "title": "TOU Period 5 SOC",
+      "register": 170,
+      "value_kind": "u16",
+      "group": "time_of_use",
+      "order": 1100,
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "%",
+      "note": "Deye three-phase holding register 170; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 5 soc using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_5_grid_charge",
+      "title": "TOU Period 5 Grid Charging",
+      "register": 176,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 1110,
+      "bitmask": "0x0001",
+      "note": "Deye three-phase holding register 176; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 5 grid charging using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_5_generator_charge",
+      "title": "TOU Period 5 Generator Charging",
+      "register": 176,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 1120,
+      "bitmask": "0x0002",
+      "note": "Deye three-phase holding register 176; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 5 generator charging using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_6_time",
+      "title": "TOU Period 6 Time",
+      "register": 153,
+      "value_kind": "time_hhmm",
+      "group": "time_of_use",
+      "order": 1130,
+      "minimum": 0,
+      "maximum": 2359,
+      "note": "Deye three-phase holding register 153; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 6 time using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_6_power",
+      "title": "TOU Period 6 Power",
+      "register": 159,
+      "value_kind": "scaled_u16",
+      "group": "time_of_use",
+      "order": 1140,
+      "minimum": 0,
+      "maximum": 8000,
+      "unit": "W",
+      "multiplier": 10,
+      "step": 10,
+      "device_class": "power",
+      "note": "Deye three-phase holding register 159; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 6 power using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_6_voltage",
+      "title": "TOU Period 6 Voltage",
+      "register": 165,
+      "value_kind": "scaled_u16",
+      "group": "time_of_use",
+      "order": 1150,
+      "minimum": 0,
+      "maximum": 6300,
+      "unit": "V",
+      "divisor": 100,
+      "device_class": "voltage",
+      "note": "Deye three-phase holding register 165; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 6 voltage using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_6_soc",
+      "title": "TOU Period 6 SOC",
+      "register": 171,
+      "value_kind": "u16",
+      "group": "time_of_use",
+      "order": 1160,
+      "minimum": 0,
+      "maximum": 100,
+      "unit": "%",
+      "note": "Deye three-phase holding register 171; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 6 soc using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_6_grid_charge",
+      "title": "TOU Period 6 Grid Charging",
+      "register": 177,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 1170,
+      "bitmask": "0x0001",
+      "note": "Deye three-phase holding register 177; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 6 grid charging using the documented Deye three-phase setting."
+    },
+    {
+      "key": "time_of_use_period_6_generator_charge",
+      "title": "TOU Period 6 Generator Charging",
+      "register": 177,
+      "value_kind": "bool",
+      "group": "time_of_use",
+      "order": 1180,
+      "bitmask": "0x0002",
+      "note": "Deye three-phase holding register 177; multiple-register write (FC 0x10).",
+      "change_summary": "Changes tou period 6 generator charging using the documented Deye three-phase setting."
+    }
+  ]
+}

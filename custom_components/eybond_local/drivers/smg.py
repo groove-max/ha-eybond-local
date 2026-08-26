@@ -18,7 +18,6 @@ from ..models import (
 from ..payload.modbus import (
     ModbusError,
     ModbusSession,
-    merge_register_field,
     to_signed_16,
 )
 from ..payload.register_decode import decode_block as shared_decode_block
@@ -51,9 +50,11 @@ from .read_result import DriverReadMode, DriverReadResult
 from .modbus_write_error import ModbusWriteErrorMixin
 from .support_marker import DriverSupportMarker, DriverSupportWorkflow
 from .capability_codec import (
+    CapabilityPreWriteReadError,
     decode_capability_value as _decode_capability_value,
     encode_capability_words as _encode_capability_words,
     find_capability as _find_capability,
+    merge_capability_register_word,
 )
 from .catalog_identity import (
     CatalogIdentityProbe,
@@ -114,16 +115,6 @@ SMG_MODBUS_POLL_POLICY = PollPolicy(
     min_auto_interval=3.0,
     max_auto_interval=60.0,
 )
-
-
-class CapabilityPreWriteReadError(RuntimeError):
-    """A masked write's read-modify-write failed on its PRE-WRITE read.
-
-    No write was attempted, so the hub must NOT classify it as a write
-    rejection (which would record a persistent 'unsupported_or_locked' blocker).
-    It carries no Modbus exception code, so the hub's write-error classifier
-    skips it and the failure surfaces as a plain transient error.
-    """
 
 
 def _attach_descriptor_decision_shadow_details(
@@ -575,6 +566,8 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
         inverter: DetectedInverter,
         capability_key: str,
         value: Any,
+        *,
+        runtime_state: dict[str, Any] | None = None,
     ) -> Any:
         capability = _find_capability(capability_key, inverter.capabilities or self.write_capabilities)
         raw_words = _encode_capability_words(capability, value)
@@ -585,10 +578,6 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
             # current word first and rewrite it with ONLY the masked field
             # changed. A blind write would clobber the other bits, whose
             # meanings may be unknown (e.g. OP2 enable is bit 0 of reg 354).
-            shift = capability.bitmask_shift
-            field = (int(raw_words[0]) << shift) & 0xFFFF
-            if field & ~capability.bitmask:
-                raise ValueError(f"value_exceeds_bitmask:{capability.key}:{raw_words[0]}")
             try:
                 current = await session.read_holding(capability.register, 1)
             except ModbusError as exc:
@@ -604,7 +593,11 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
                 raise CapabilityPreWriteReadError(
                     f"bitmask_read_back_empty:{capability.key}"
                 )
-            merged = merge_register_field(int(current[0]), capability.bitmask, field)
+            merged = merge_capability_register_word(
+                capability,
+                current_word=int(current[0]),
+                encoded_word=int(raw_words[0]),
+            )
             await session.write_holding(capability.register, [merged])
         else:
             await session.write_holding(capability.register, raw_words)

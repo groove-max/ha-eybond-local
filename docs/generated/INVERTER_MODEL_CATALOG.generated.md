@@ -37,7 +37,7 @@ This page describes what has been confirmed for a specific inverter model or mod
 | Aninerel | 6200 (dual output) | modbus_smg | fingerprint | full | confirmed | partial | captured |
 | Aninerel | ANL-4200T-24L-W-PRO | modbus_smg | fingerprint | full | partial | partial | captured |
 | Gootu | GT-H2436M14P5 | eybond_g_ascii | anchors | full | confirmed | partial | captured |
-| Kevolt | PD0080G-TPM-EU | modbus_catalog | anchors | partial | partial | none | captured |
+| Kevolt | PD0080G-TPM-EU | modbus_catalog | anchors | full | partial | partial | captured |
 | LVYUAN | TY-SIC-3.6KBE-W1 | eybond_g_ascii | anchors | full | confirmed | partial | captured |
 | MUST | PV18-3024 | must_pv_ph18 | anchors | full | partial | partial | captured |
 | Sandisolar | SD 11KP48V WIFI | modbus_smg | fingerprint | full | partial | none | captured |
@@ -264,29 +264,32 @@ Runtime descriptors with no specific commercial model record. These are generic 
 
 - Lifecycle: experimental
 - Aliases: Kevolt 80 kW Three-Phase Hybrid
-- Validation: hardware captured, telemetry partial, controls none
-- Coverage: runtime read_only, cloud unknown, vendor map documented
+- Validation: hardware captured, telemetry partial, controls partial
+- Coverage: runtime available, cloud unknown, vendor map documented
   - Coverage notes:
     - The supplied SmartValue proxy capture contains repeated, CRC-valid Modbus FC03 request/response pairs for the Deye-compatible three-phase runtime map at registers 500-683.
     - Runtime identification uses four local raw anchors: device type 5, protocol version 0x0104, and low-first rated-power words 0x3880/0x0001 (80000 raw W).
     - The translated document labels the rated-power words as 0.1 W, but that scale conflicts with both the reported 80 kW hardware and its captured raw value 80000. Runtime therefore uses the hardware-correlated 1 W scale and fingerprints the unscaled words.
-    - The first implementation exposes read-only telemetry only. It uses small register blocks of at most 15 words rather than the unsupported 500-599 bulk read reported in the issue.
-- Summary: Kevolt PD0080G-TPM-EU is a reported 80 kW three-phase hybrid inverter behind an EyeBond Wi-Fi collector. The latest SmartValue proxy capture proves a Modbus RTU FC03 layout with device type 5, protocol version 0x0104, rated-power words resolving to 80000 raw W, and live telemetry in the Deye-compatible 500-683 register range. A public translated Deye three-phase protocol document corroborates the observed register meanings. The integration therefore binds this exact wire fingerprint to a read-only catalog surface and deliberately leaves all writes disabled.
+    - Runtime reads use small register blocks of at most 15 words rather than the unsupported 500-599 bulk read reported in the issue.
+    - A bounded document-backed operational subset with unambiguous register encoding is available as 118 untested controls only in Full control mode. It covers battery, charging, generator, smart-load, export, metering, TOU, topology, and selected advanced functions.
+    - Settings read-back is rotated one compact block per poll so the expanded control surface does not delay live telemetry. Every write uses FC 0x10, preserves unrelated shared-register bits, and requires an immediate wire read-back before it is accepted.
+- Summary: Kevolt PD0080G-TPM-EU is a reported 80 kW three-phase hybrid inverter behind an EyeBond Wi-Fi collector. The latest SmartValue proxy capture proves a Modbus RTU FC03 layout with device type 5, protocol version 0x0104, rated-power words resolving to 80000 raw W, and live telemetry in the Deye-compatible 500-683 register range. Deye Modbus RTU V1.04 corroborates the telemetry and documents a broader FC 0x10 settings range. The exact wire fingerprint therefore exposes the current document-backed telemetry surface plus 118 opt-in, untested controls whose encodings are unambiguous, with shared-field-safe writes and mandatory immediate read-back confirmation.
 - Variants:
   - `deye_3ph_high_80kw` — Deye-compatible FC03 high-power map, protocol 0x0104, 80 kW
     - Descriptors: deye_3ph_high_80kw
     - Known firmware: collector AT R001, inverter protocol 0x0104
-    - `deye_3ph_high_80kw` → surface `deye_3ph_high_80kw_read_only` (driver modbus_catalog, variant deye_3ph_high_80kw)
+    - `deye_3ph_high_80kw` → surface `deye_3ph_high_80kw_untested` (driver modbus_catalog, variant deye_3ph_high_80kw)
       - Protocol: modbus_catalog | Detection: anchors (identity.deye_device_type_raw=5; identity.deye_3ph_protocol_version_raw=260; identity.deye_3ph_rated_power_low_raw=14464; identity.deye_3ph_rated_power_high_raw=1)
-      - Tier: partial | Read-only: yes | Profile: — | Schema: deye_3ph_high_80kw/base.json
-      - Capabilities: no model-specific profile | Telemetry: 70 measurements, 0 binary sensors
+      - Tier: full | Read-only: no | Profile: modbus_catalog/deye_3ph_high_80kw.json | Schema: deye_3ph_high_80kw/base.json
+      - Capabilities: 118 (untested 118); support tiers: conditional 18, standard 100 | Telemetry: 70 measurements, 0 binary sensors
 - Known limitations:
-  - No controls are exposed until model-specific writes and read-back behavior are captured on this hardware.
+  - All 118 document-backed controls are untested and disabled by default. Users must explicitly select Full control and then enable only the individual entities they intend to test.
+  - Factory reset, production-test, EEPROM initialization, calibration, BMS-owned live words, parallel-cluster addressing, and grid-code/certification curves are intentionally not exposed as user controls even though they occupy writable registers in the protocol document.
   - Battery output power/current retain the documented wire sign as diagnostic values; their charge/discharge sign has not yet been promoted to canonical battery telemetry.
   - Heat-sink temperature is diagnostic because the observed raw value requires the offset-1000 convention used by adjacent Deye storage maps, while the translated table omits that offset for register 541.
   - The commercial Kevolt identity comes from the public issue report; the local fingerprint identifies the compatible 80 kW Deye-family wire layout and may be shared by OEM siblings.
   - A current-release hardware retest is still required before telemetry support can be marked confirmed.
-- Evidence: 3 source(s)
+- Evidence: 4 source(s)
 
 ### LVYUAN — TY-SIC-3.6KBE-W1 (`lvyuan_ty_sic_3_6kbe_w1`)
 

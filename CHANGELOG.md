@@ -14,6 +14,10 @@ the GitHub release body should be rendered from the matching version section her
   Compatible controls remain explicitly untested and Full-Control-only.
 - Added a typed support-acquisition boundary so read-only cloud evidence can be
   collected for an identified collector before an inverter driver is known.
+- Added 118 opt-in, document-backed settings for the exact Kevolt
+  PD0080G-TPM-EU / Deye-compatible 80 kW fingerprint. They remain untested,
+  hidden in Auto mode, and disabled by default; six Time of Use schedule fields
+  use native Home Assistant time entities.
 
 ### Changed
 
@@ -23,6 +27,9 @@ the GitHub release body should be rendered from the matching version section her
 - Active-learning consent now explicitly covers the temporary collector
   endpoint change, bounded cloud test commands, local interception, and route
   restoration.
+- Large Modbus settings surfaces now refresh one compact block per poll and
+  keep their cache in non-persisted per-session driver state. Confirmed writes
+  update that same cache only after immediate wire read-back.
 
 ### Fixed
 
@@ -33,6 +40,10 @@ the GitHub release body should be rendered from the matching version section her
 - Kept support evidence and proxy diagnostics available when the collector is
   identified but the inverter driver is still unresolved, while active
   route-owning operations continue to fail closed.
+- Fixed AT-primary collectors that accept AT management commands but carry
+  inverter payloads in correlated EyeBond FC4 frames. The exact live session
+  now negotiates raw serial versus FC4 from replies instead of inferring the
+  data plane from model, endpoint, PN, cloud family, or peer address.
 
 ### Docs
 
@@ -40,6 +51,8 @@ the GitHub release body should be rendered from the matching version section her
   without creating a tag or GitHub release.
 - Updated device-learning and proxy-capture guides for the current menu names,
   trust boundaries, and recovery behavior.
+- Added a Kevolt / Deye-compatible advanced-controls guide covering explicit
+  opt-in, read-back guarantees, and deliberately excluded service operations.
 
 ## [0.3.0-beta.4] - 2026-08-25
 

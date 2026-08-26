@@ -12,6 +12,14 @@ from typing import Any
 from ..models import WriteCapability, decimals_for_divisor
 
 
+class CapabilityPreWriteReadError(RuntimeError):
+    """A masked write failed before any register mutation was attempted."""
+
+
+class CapabilityPostWriteReadError(RuntimeError):
+    """A register write completed but its mandatory wire readback failed."""
+
+
 def find_capability(
     capability_key: str,
     capabilities: tuple[WriteCapability, ...],
@@ -33,6 +41,8 @@ def encode_capability_words(capability: WriteCapability, value: Any) -> list[int
         return [_encode_scaled_u16_value(capability, value)]
     if capability.value_kind == "u16":
         return [_encode_u16_value(capability, value)]
+    if capability.value_kind == "time_hhmm":
+        return [_encode_time_hhmm_value(capability, value)]
     if capability.value_kind == "u32":
         return _encode_u32_words(capability, value)
     if capability.value_kind == "date_words":
@@ -54,6 +64,8 @@ def decode_capability_value(capability: WriteCapability, raw_words: list[int]) -
         return _decode_date_words(capability, raw_words)
     if capability.value_kind == "time_words":
         return _decode_time_words(capability, raw_words)
+    if capability.value_kind == "time_hhmm":
+        return _decode_time_hhmm_value(capability, raw_value)
     enum_map = capability.enum_value_map
     if capability.value_kind == "bool":
         if enum_map:
@@ -63,7 +75,28 @@ def decode_capability_value(capability: WriteCapability, raw_words: list[int]) -
         return enum_map.get(raw_value, f"Unknown ({raw_value})")
     if capability.divisor:
         return round(raw_value / capability.divisor, decimals_for_divisor(capability.divisor))
+    if capability.multiplier is not None:
+        return raw_value * capability.multiplier
     return raw_value
+
+
+def merge_capability_register_word(
+    capability: WriteCapability,
+    *,
+    current_word: int,
+    encoded_word: int,
+) -> int:
+    """Merge one encoded capability field into its shared register word."""
+
+    from ..payload.modbus import merge_register_field
+
+    if not capability.bitmask:
+        raise ValueError(f"capability_has_no_bitmask:{capability.key}")
+    shift = capability.bitmask_shift
+    field = (int(encoded_word) << shift) & 0xFFFF
+    if field & ~capability.bitmask:
+        raise ValueError(f"value_exceeds_bitmask:{capability.key}:{encoded_word}")
+    return merge_register_field(int(current_word), capability.bitmask, field)
 
 
 def _encode_enum_value(capability: WriteCapability, value: Any) -> int:
@@ -125,17 +158,59 @@ def _encode_action_value(capability: WriteCapability, value: Any) -> int:
 
 
 def _encode_scaled_u16_value(capability: WriteCapability, value: Any) -> int:
-    if capability.divisor is None:
-        raise ValueError(f"missing_divisor:{capability.key}")
+    if capability.divisor is None and capability.multiplier is None:
+        raise ValueError(f"missing_scale:{capability.key}")
+    if capability.divisor is not None and capability.multiplier is not None:
+        raise ValueError(f"ambiguous_scale:{capability.key}")
 
     try:
         numeric = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid_numeric_value:{capability.key}:{value}") from exc
 
-    raw_value = int(round(numeric * capability.divisor))
+    raw_value = (
+        int(round(numeric * capability.divisor))
+        if capability.divisor is not None
+        else int(round(numeric / float(capability.multiplier)))
+    )
     _validate_range(capability, raw_value)
     return raw_value
+
+
+def _encode_time_hhmm_value(capability: WriteCapability, value: Any) -> int:
+    """Encode an HH:MM string (or exact HHMM integer) into one register."""
+
+    if type(value) is str:
+        if value != value.strip():
+            raise ValueError(f"invalid_time_value:{capability.key}:{value}")
+        if len(value) == 5 and value[2] == ":":
+            hour_text, minute_text = value.split(":", 1)
+            if not (hour_text.isascii() and hour_text.isdecimal() and minute_text.isascii() and minute_text.isdecimal()):
+                raise ValueError(f"invalid_time_value:{capability.key}:{value}")
+            hour = int(hour_text)
+            minute = int(minute_text)
+            raw_value = hour * 100 + minute
+        elif value.isascii() and value.isdecimal():
+            raw_value = int(value)
+        else:
+            raise ValueError(f"invalid_time_value:{capability.key}:{value}")
+    elif type(value) is int:
+        raw_value = value
+    else:
+        raise ValueError(f"invalid_time_value:{capability.key}:{value}")
+
+    hour, minute = divmod(raw_value, 100)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError(f"invalid_time_value:{capability.key}:{value}")
+    _validate_range(capability, raw_value)
+    return raw_value
+
+
+def _decode_time_hhmm_value(capability: WriteCapability, raw_value: int) -> str:
+    hour, minute = divmod(int(raw_value), 100)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError(f"invalid_time_word:{capability.key}:{raw_value}")
+    return f"{hour:02d}:{minute:02d}"
 
 
 def _encode_u16_value(capability: WriteCapability, value: Any) -> int:
@@ -242,5 +317,3 @@ def _validate_range(capability: WriteCapability, raw_value: int) -> None:
         raise ValueError(f"value_below_minimum:{capability.key}:{raw_value}")
     if capability.maximum is not None and raw_value > capability.maximum:
         raise ValueError(f"value_above_maximum:{capability.key}:{raw_value}")
-
-

@@ -303,6 +303,7 @@ def _parse_capability(
         support_notes=str(resolved_raw.get("support_notes", "")),
         action_value=_optional_int(resolved_raw.get("action_value")),
         divisor=_optional_int(resolved_raw.get("divisor")),
+        multiplier=_optional_float(resolved_raw.get("multiplier")),
         minimum=_optional_int(resolved_raw.get("minimum")),
         maximum=_optional_int(resolved_raw.get("maximum")),
         command_width=_optional_int(resolved_raw.get("command_width")),
@@ -500,11 +501,24 @@ def _optional_bitmask(value: Any, *, capability_key: str, word_count: int) -> in
 
     if value is None or value == "":
         return None
-    mask = int(value.strip(), 0) if isinstance(value, str) else int(value)
+    if type(value) is int:
+        mask = value
+    elif type(value) is str and value == value.strip():
+        try:
+            mask = int(value, 0)
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid_capability_bitmask:{capability_key}:{value}"
+            ) from exc
+    else:
+        raise ValueError(f"invalid_capability_bitmask:{capability_key}:{value}")
     if not 1 <= mask <= 0xFFFF:
         raise ValueError(f"invalid_capability_bitmask:{capability_key}:{value}")
     if word_count != 1:
         raise ValueError(f"bitmask_requires_single_word:{capability_key}")
+    normalized = mask >> ((mask & -mask).bit_length() - 1)
+    if normalized & (normalized + 1):
+        raise ValueError(f"bitmask_requires_contiguous_field:{capability_key}:{value}")
     return mask
 
 
@@ -635,6 +649,17 @@ def _validate_profile(profile: DriverProfileMetadata) -> None:
     )
 
     allowed_support_tiers = {"standard", "conditional", "blocked"}
+    allowed_value_kinds = {
+        "action",
+        "bool",
+        "date_words",
+        "enum",
+        "scaled_u16",
+        "time_hhmm",
+        "time_words",
+        "u16",
+        "u32",
+    }
 
     for capability in profile.capabilities:
         if capability.group not in group_keys:
@@ -649,6 +674,43 @@ def _validate_profile(profile: DriverProfileMetadata) -> None:
         if capability.word_count < 1:
             raise ValueError(
                 f"profile:{profile.key}:capability_requires_positive_word_count:{capability.key}"
+            )
+        if capability.value_kind not in allowed_value_kinds:
+            raise ValueError(
+                f"profile:{profile.key}:unsupported_value_kind:"
+                f"{capability.key}:{capability.value_kind}"
+            )
+        if capability.write_function not in (None, 6, 16):
+            raise ValueError(
+                f"profile:{profile.key}:unsupported_write_function:"
+                f"{capability.key}:{capability.write_function}"
+            )
+        if capability.bitmask is not None and capability.write_function == 6:
+            raise ValueError(
+                f"profile:{profile.key}:bitmask_requires_write_multiple:"
+                f"{capability.key}"
+            )
+        if capability.value_kind == "time_hhmm" and capability.word_count != 1:
+            raise ValueError(
+                f"profile:{profile.key}:time_hhmm_requires_single_word:"
+                f"{capability.key}"
+            )
+        if (
+            capability.value_kind != "scaled_u16"
+            and (capability.divisor is not None or capability.multiplier is not None)
+        ):
+            raise ValueError(
+                f"profile:{profile.key}:scale_requires_scaled_u16:"
+                f"{capability.key}"
+            )
+        if (
+            capability.value_kind == "scaled_u16"
+            and capability.divisor is None
+            and capability.multiplier is None
+        ):
+            raise ValueError(
+                f"profile:{profile.key}:scaled_u16_requires_scale:"
+                f"{capability.key}"
             )
         if capability.value_kind == "enum" and not capability.enum_value_map:
             raise ValueError(
@@ -668,6 +730,11 @@ def _validate_profile(profile: DriverProfileMetadata) -> None:
                 raise ValueError(
                     f"profile:{profile.key}:bool_capability_requires_0_1:{capability.key}"
                 )
+        if capability.divisor is not None and capability.multiplier is not None:
+            raise ValueError(
+                f"profile:{profile.key}:capability_has_divisor_and_multiplier:"
+                f"{capability.key}"
+            )
         if capability.support_tier and capability.support_tier not in allowed_support_tiers:
             raise ValueError(
                 f"profile:{profile.key}:unsupported_support_tier:"

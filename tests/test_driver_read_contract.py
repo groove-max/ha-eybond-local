@@ -101,6 +101,17 @@ class DriverReadContractTests(unittest.TestCase):
                 source = inspect.getsource(driver.async_read_values)
                 self.assertIn("DriverReadResult(", source)
 
+    def test_every_builtin_write_accepts_non_persisted_runtime_state(self) -> None:
+        for driver in iter_drivers("auto"):
+            with self.subTest(driver=driver.key):
+                parameter = inspect.signature(
+                    driver.async_write_capability
+                ).parameters.get("runtime_state")
+                self.assertIsNotNone(parameter)
+                assert parameter is not None
+                self.assertIs(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+                self.assertIsNone(parameter.default)
+
     def test_bare_dict_is_full(self) -> None:
         result = coerce_driver_read_result({"a": 1}, driver_key="pi30")
         self.assertIsInstance(result, DriverReadResult)

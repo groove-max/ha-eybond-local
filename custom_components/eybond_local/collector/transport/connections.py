@@ -578,6 +578,7 @@ class _CollectorAtConnection:
         self._pending_raw_response: asyncio.Future[bytes] | None = None
         self._pending_raw_protocol = ""
         self._pending_framed_response: dict[int, asyncio.Future[tuple[EybondHeader, bytes]]] = {}
+        self._pending_framed_fcode: dict[int, int] = {}
         self._tid = TIDCounter()
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
         self._session_id = ""
@@ -592,6 +593,7 @@ class _CollectorAtConnection:
         )
         self._raw_passthrough_last_write_monotonic = 0.0
         self._raw_passthrough_bootstrapped = False
+        self._mixed_frame_observed = False
         self._run_epoch = 0
 
     @property
@@ -605,6 +607,12 @@ class _CollectorAtConnection:
     @property
     def collector_info(self) -> CollectorInfo:
         return _copy_collector_info(self._collector)
+
+    @property
+    def mixed_frame_observed(self) -> bool:
+        """Return whether this exact AT session answered a framed request."""
+
+        return self._mixed_frame_observed
 
     def set_write_timeout(self, timeout: float) -> None:
         self._write_timeout = float(timeout)
@@ -688,6 +696,7 @@ class _CollectorAtConnection:
                 response = await asyncio.wait_for(future, timeout=request_timeout)
                 finished = asyncio.get_running_loop().time()
                 self._collector.raw_response_count += 1
+                self._collector.inverter_forward_mode = "raw_serial"
                 self._collector.raw_last_response_hex = response.hex()
                 self._collector.raw_last_response_ascii = _short_ascii(response)
                 self._collector.raw_last_spacing_wait_ms = spacing_wait_ms
@@ -744,6 +753,46 @@ class _CollectorAtConnection:
         reintroducing legacy PN or AT fallbacks.
         """
 
+        return await self._async_send_mixed_frame(
+            fcode=fcode,
+            payload=payload,
+            devcode=devcode,
+            collector_addr=collector_addr,
+            request_timeout=request_timeout,
+        )
+
+    async def async_send_framed_inverter_payload(
+        self,
+        payload: bytes,
+        *,
+        devcode: int,
+        collector_addr: int,
+        request_timeout: float,
+    ) -> bytes:
+        """Forward one inverter payload as FC=4 on this exact AT socket."""
+
+        _header, response = await self._async_send_mixed_frame(
+            fcode=FC_FORWARD_TO_DEVICE,
+            payload=payload,
+            devcode=devcode,
+            collector_addr=collector_addr,
+            request_timeout=request_timeout,
+        )
+        if response:
+            self._collector.inverter_forward_mode = "eybond_fc4"
+        return response
+
+    async def _async_send_mixed_frame(
+        self,
+        *,
+        fcode: int,
+        payload: bytes,
+        devcode: int,
+        collector_addr: int,
+        request_timeout: float,
+    ) -> tuple[EybondHeader, bytes]:
+        """Send one TID-correlated EyeBond frame on the AT-primary stream."""
+
         if not self.connected or not self._writer:
             raise ConnectionError("collector_not_connected")
 
@@ -763,11 +812,15 @@ class _CollectorAtConnection:
             loop = asyncio.get_running_loop()
             future: asyncio.Future[tuple[EybondHeader, bytes]] = loop.create_future()
             self._pending_framed_response[tid] = future
+            self._pending_framed_fcode[tid] = int(fcode)
             try:
                 await self._async_write(frame)
-                return await asyncio.wait_for(future, timeout=request_timeout)
+                response = await asyncio.wait_for(future, timeout=request_timeout)
+                self._mixed_frame_observed = True
+                return response
             finally:
                 self._pending_framed_response.pop(tid, None)
+                self._pending_framed_fcode.pop(tid, None)
 
     async def _async_wait_raw_passthrough_spacing_locked(self) -> int:
         interval = self._raw_passthrough_min_interval
@@ -887,6 +940,10 @@ class _CollectorAtConnection:
         self._session_id = str(session_id or "").strip()
         self._session_identity_callback = session_identity_callback
         self._raw_passthrough_bootstrapped = False
+        # Data-plane evidence belongs to this physical session only. A reconnect
+        # must positively negotiate raw serial vs FC4 again.
+        self._collector.inverter_forward_mode = ""
+        self._mixed_frame_observed = False
         self._connected.set()
 
         logger.info(
@@ -1085,11 +1142,17 @@ class _CollectorAtConnection:
                             self._record_session_identity(pn, "framed_heartbeat")
                         self._collector.heartbeat_devcode = header.devcode
                         self._collector.heartbeat_payload_hex = payload.hex()
-                    elif header.fcode == FC_QUERY_COLLECTOR:
+                    else:
                         future = self._pending_framed_response.get(header.tid)
-                        if future is not None and not future.done():
+                        expected_fcode = self._pending_framed_fcode.get(header.tid)
+                        if (
+                            future is not None
+                            and not future.done()
+                            and expected_fcode == header.fcode
+                        ):
                             future.set_result((header, payload))
                             continue
+                    if header.fcode == FC_QUERY_COLLECTOR:
                         pn = _parse_fc2_collector_pn(payload)
                         if pn:
                             self._collector.collector_pn = reconcile_pn(
@@ -1097,7 +1160,7 @@ class _CollectorAtConnection:
                                 pn,
                             )
                             self._record_session_identity(pn, "fc2_parameter_2")
-                    else:
+                    elif header.fcode != FC_HEARTBEAT:
                         logger.debug(
                             "Unhandled collector mixed frame on AT connection remote=%s fc=%d payload=%s",
                             self._collector.remote_ip,
@@ -1281,3 +1344,9 @@ class _CollectorAtConnection:
         self._pending_raw_protocol = ""
         if raw_future is not None and not raw_future.done():
             raw_future.set_exception(ConnectionError("collector_disconnected"))
+
+        for framed_future in self._pending_framed_response.values():
+            if not framed_future.done():
+                framed_future.set_exception(ConnectionError("collector_disconnected"))
+        self._pending_framed_response.clear()
+        self._pending_framed_fcode.clear()

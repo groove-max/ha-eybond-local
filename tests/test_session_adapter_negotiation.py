@@ -16,6 +16,7 @@ import types
 from custom_components.eybond_local.connection.session_handle import (
     ADAPTER_COLLECTOR_AT_COMMANDS,
     ADAPTER_COLLECTOR_FRAMED_COMMANDS,
+    ADAPTER_INVERTER_AT_MIXED,
     ADAPTER_INVERTER_FRAMED_FC4,
     ADAPTER_INVERTER_RAW_PASSTHROUGH,
     ADAPTER_NONE,
@@ -26,7 +27,7 @@ from custom_components.eybond_local.connection.session_handle import (
     negotiate_session_adapters,
     negotiate_wire_result,
 )
-from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
+from custom_components.eybond_local.link_models import AtMixedLinkRoute, EybondLinkRoute, RawSerialLinkRoute
 from custom_components.eybond_local.link_transport import select_payload_route
 from custom_components.eybond_local.collector_identity import reconcile_durable_pn
 from custom_components.eybond_local.connection.session_registry import (
@@ -88,7 +89,11 @@ class _FakeAtTransport:
     collector_info = types.SimpleNamespace(remote_ip="")
 
     def select_payload_route(self, route, *, payload_family=""):
-        return RawSerialLinkRoute(protocol=payload_family)
+        return AtMixedLinkRoute(
+            devcode=route.devcode,
+            collector_addr=route.collector_addr,
+            protocol=payload_family,
+        )
 
 
 def _bare_link(
@@ -302,17 +307,18 @@ class SessionHandleNegotiationTests(unittest.TestCase):
         self.assertTrue(handle.supports(ADAPTER_COLLECTOR_FRAMED_COMMANDS))
         self.assertFalse(handle.supports(ADAPTER_COLLECTOR_AT_COMMANDS))
 
-    def test_at_text_negotiates_raw_passthrough_and_at_commands(self) -> None:
+    def test_at_text_negotiates_exact_session_data_plane_and_at_commands(self) -> None:
         handle = negotiate_session_adapters(
             _observed("s2", FULL_PN, state="routed_at_text", shape="at_text", source="at_dtupn")
         )
         self.assertEqual(handle.wire_framing, WIRE_AT_TEXT)
         self.assertTrue(handle.supports(ADAPTER_COLLECTOR_AT_COMMANDS))
-        self.assertTrue(handle.supports(ADAPTER_INVERTER_RAW_PASSTHROUGH))
+        self.assertTrue(handle.supports(ADAPTER_INVERTER_AT_MIXED))
+        self.assertFalse(handle.supports(ADAPTER_INVERTER_RAW_PASSTHROUGH))
         self.assertFalse(handle.supports(ADAPTER_INVERTER_FRAMED_FC4))
         self.assertEqual(
             handle.inverter_forward_adapter,
-            ADAPTER_INVERTER_RAW_PASSTHROUGH,
+            ADAPTER_INVERTER_AT_MIXED,
         )
 
     def test_closed_listener_session_is_not_unclaimed_discovery_candidate(self) -> None:
@@ -387,7 +393,7 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
         self.assertIsInstance(link._session_registry, CallbackSessionRegistry)
         # After negotiation the registry owns this entry's durable identity.
         self.assertNotEqual(
-            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_AT_MIXED
         )
         self.assertEqual(
             link._session_registry.owner_for_pn(FULL_PN), "runtime"
@@ -430,18 +436,15 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
-        )
-        self.assertEqual(
             link._inverter_forward_adapter(),
-            ADAPTER_INVERTER_RAW_PASSTHROUGH,
+            ADAPTER_INVERTER_AT_MIXED,
         )
         route = select_payload_route(
             link.transport,
             EybondLinkRoute(devcode=0x0994, collector_addr=1),
             payload_family="pi30_ascii",
         )
-        self.assertIsInstance(route, RawSerialLinkRoute)
+        self.assertIsInstance(route, AtMixedLinkRoute)
         self.assertEqual(route.protocol, "pi30_ascii")
 
     def test_conflicting_live_session_does_not_silently_select_raw_passthrough(self) -> None:
@@ -500,7 +503,7 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
             collector_pn=FULL_PN, collector_ip="", persisted_protocol="at_text", sessions=sessions
         )
         self.assertNotEqual(
-            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_AT_MIXED
         )
         self.assertEqual(link.session_handle.collector_pn, FULL_PN)
 
@@ -552,7 +555,7 @@ class LinkLiveWireSelectionTests(unittest.TestCase):
             collector_pn=FULL_PN, collector_ip="", persisted_protocol="eybond_framed", sessions=sessions
         )
         self.assertEqual(
-            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_AT_MIXED
         )
         self.assertEqual(link.session_handle.wire_framing, WIRE_AT_TEXT)
 
@@ -747,12 +750,12 @@ class SessionHandoverLifecycleTests(unittest.TestCase):
         _set_sessions(link, [_observed("s2", FULL_PN, state="routed_at_text", source="at_dtupn")])
         self.assertEqual(link._raw_live_observed_protocol(), "at_text")
         # Live observed session routes directly; adoption updates the binding.
-        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH)
+        self.assertEqual(link._inverter_forward_adapter(), ADAPTER_INVERTER_AT_MIXED)
         _observe(link)
         self.assertTrue(link.confirmed_wire_binding.uses_at_text_wire)
         self.assertEqual(
             link.confirmed_wire_binding.inverter_forward_adapter,
-            ADAPTER_INVERTER_RAW_PASSTHROUGH,
+            ADAPTER_INVERTER_AT_MIXED,
         )
 
     # The confirmed binding must NOT carry stale socket metadata.
@@ -1179,7 +1182,7 @@ class TransportIndependenceTests(unittest.TestCase):
             )
             self.assertEqual(other, base)
         self.assertEqual(base[0], WIRE_AT_TEXT)
-        self.assertEqual(base[2], ADAPTER_INVERTER_RAW_PASSTHROUGH)
+        self.assertEqual(base[2], ADAPTER_INVERTER_AT_MIXED)
 
     def test_negotiation_signature_takes_no_driver_or_provider_inputs(self) -> None:
         # Structural guard: driver_key / cloud_family / collector_kind / hostname
@@ -1222,7 +1225,7 @@ class PersistedConfirmedProtocolBootstrapTests(unittest.TestCase):
             confirmed_pn=FULL_PN,
         )
         self.assertEqual(
-            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_AT_MIXED
         )
         self.assertTrue(link.confirmed_wire_binding.uses_at_text_wire)
 
@@ -1329,7 +1332,7 @@ class PersistedConfirmedProtocolBootstrapTests(unittest.TestCase):
         )
         self.assertTrue(link.session_handle.observed)
         self.assertEqual(
-            link._inverter_forward_adapter(), ADAPTER_INVERTER_RAW_PASSTHROUGH
+            link._inverter_forward_adapter(), ADAPTER_INVERTER_AT_MIXED
         )
 
     def test_confirmed_only_protocol_is_handed_to_transport_not_inferred(self) -> None:

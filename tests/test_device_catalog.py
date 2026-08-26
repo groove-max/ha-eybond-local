@@ -93,6 +93,31 @@ class CatalogValidationGuardTest(unittest.TestCase):
             device_catalog_loader._validate_device_catalog(bad)
         self.assertIn("overlapping_family_defaults", str(ctx.exception))
 
+    def test_detection_precedence_rejects_unknown_and_foreign_transport(self) -> None:
+        catalog = load_device_catalog()
+        kevolt = next(
+            entry for entry in catalog.devices if entry.entry_key == "deye_3ph_high_80kw"
+        )
+        for protocols, reason in (
+            (("missing_protocol",), "unknown_protocol"),
+            (("pi30",), "foreign_transport"),
+        ):
+            with self.subTest(protocols=protocols):
+                replacement = dataclasses.replace(
+                    kevolt,
+                    detection_supersedes_protocols=protocols,
+                )
+                bad = dataclasses.replace(
+                    catalog,
+                    devices=tuple(
+                        replacement if entry is kevolt else entry
+                        for entry in catalog.devices
+                    ),
+                )
+                with self.assertRaises(ValueError) as ctx:
+                    device_catalog_loader._validate_device_catalog(bad)
+                self.assertIn(reason, str(ctx.exception))
+
 
 class TierValidationTest(unittest.TestCase):
     def test_invalid_tier_string_is_rejected(self) -> None:
@@ -136,6 +161,16 @@ class DeviceCatalogLoadTest(unittest.TestCase):
         self.assertGreaterEqual(len(catalog.surfaces), 4)
         self.assertGreaterEqual(len(catalog.devices), 4)
         self.assertGreaterEqual(len(catalog.family_defaults), 1)
+
+    def test_kevolt_exact_fingerprint_declares_smg_probe_overlap(self) -> None:
+        catalog = load_device_catalog()
+        kevolt = next(
+            entry for entry in catalog.devices if entry.entry_key == "deye_3ph_high_80kw"
+        )
+        self.assertEqual(
+            kevolt.detection_supersedes_protocols,
+            ("modbus_smg",),
+        )
 
     def test_identity_probe_covers_fingerprint_fields(self) -> None:
         catalog = load_device_catalog()
@@ -461,6 +496,7 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
             ("modbus_smg/models/anenji_op2_6200.json", "default"),
             ("modbus_catalog/growatt_spf.json", "growatt_spf"),
             ("modbus_catalog/deye_lv.json", "deye_lv"),
+            ("modbus_catalog/deye_3ph_high_80kw.json", "deye_3ph_high_80kw"),
             ("must_pv_ph18/base.json", "pv_ph18"),
         ):
             profile = load_driver_profile(profile_name)

@@ -93,7 +93,7 @@ def _default_enabled_unique_ids(entry_id: str) -> set[str]:
         if not capability.enabled_default:
             continue
         entity_kind = entity_kind_for_capability(capability)
-        if entity_kind in {"select", "number", "switch", "button"}:
+        if entity_kind in {"select", "number", "switch", "button", "time"}:
             expected.add(_entity_unique_id(entry_id, entity_kind, capability.key))
 
     for preset in all_capability_presets():
@@ -200,7 +200,7 @@ def _default_enabled_unique_ids_for_current_runtime(
         if not can_expose_capability(capability):
             continue
         entity_kind = entity_kind_for_capability(capability)
-        if entity_kind in {"select", "number", "switch", "button"}:
+        if entity_kind in {"select", "number", "switch", "button", "time"}:
             expected.add(_entity_unique_id(entry_id, entity_kind, capability.key))
 
     for preset in presets:
@@ -485,7 +485,7 @@ async def _async_cleanup_obsolete_entities(
         if not coordinator.can_expose_capability(capability):
             continue
         entity_kind = entity_kind_for_capability(capability)
-        if entity_kind in {"select", "number", "switch", "button"}:
+        if entity_kind in {"select", "number", "switch", "button", "time"}:
             expected_unique_ids.add(_entity_unique_id(entry.entry_id, entity_kind, capability.key))
     for preset in presets:
         if not coordinator.can_expose_preset(preset):

@@ -75,6 +75,24 @@ class DecodeBlockTests(unittest.TestCase):
         decoded = decode_block(10, [0x0001, 0x0002], specs)
         self.assertEqual(decoded["value"], 0x0001_0002)
 
+    def test_shared_register_field_is_masked_and_shifted_before_enum_decode(self) -> None:
+        specs = (
+            _spec(
+                bitmask=0x000C,
+                enum_map={2: "Disabled", 3: "Enabled"},
+            ),
+        )
+
+        decoded = decode_block(10, [0xFFF8], specs)
+
+        self.assertEqual(decoded["value"], "Disabled")
+
+    def test_hhmm_register_decodes_to_typed_time_and_rejects_invalid_minutes(self) -> None:
+        specs = (_spec(combine="hhmm"),)
+
+        self.assertEqual(decode_block(10, [830], specs), {"value": "08:30"})
+        self.assertEqual(decode_block(10, [1260], specs), {})
+
     def test_ascii_styles_filter_differently(self) -> None:
         # 0x2A is "*" — printable but outside the model charset.
         self.assertEqual(decode_ascii_word(0x2A41, style="printable"), "*A")

@@ -15,7 +15,7 @@ from custom_components.eybond_local.metadata.compiled_detection_catalog import (
     clear_compiled_detection_catalog_cache,
     compile_detection_catalog,
     load_compiled_detection_catalog,
-    resolve_unique_full_model_surface,
+    resolve_unique_persisted_model_surface,
 )
 from custom_components.eybond_local.metadata.detection_descriptor_loader import (
     DetectionAnchorCondition,
@@ -93,9 +93,15 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
         surface = catalog.surfaces["smg_6200_full"]
         self.assertTrue(surface.default_for_driver)
         self.assertIn((700, 45), surface.support_capture_ranges)
+        self.assertEqual(
+            catalog.devices[
+                "deye_3ph_high_80kw"
+            ].detection_supersedes_protocols,
+            ("modbus_smg",),
+        )
 
-    def test_unique_persisted_model_resolves_only_to_full_writable_surface(self) -> None:
-        resolved = resolve_unique_full_model_surface(
+    def test_unique_persisted_model_resolves_full_writable_surface(self) -> None:
+        resolved = resolve_unique_persisted_model_surface(
             "  anenji anj-11kw-48v-wifi-p  "
         )
 
@@ -109,6 +115,29 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
         )
         self.assertFalse(surface.read_only)
         self.assertEqual(surface.support_tier, "full")
+
+    def test_unique_persisted_model_resolves_exact_untested_control_surface(self) -> None:
+        resolved = resolve_unique_persisted_model_surface(
+            "Kevolt PD0080G-TPM-EU"
+        )
+
+        self.assertIsNotNone(resolved)
+        descriptor, surface = resolved
+        self.assertEqual(descriptor.key, "deye_3ph_high_80kw")
+        self.assertEqual(surface.driver_key, "modbus_catalog")
+        self.assertEqual(
+            surface.profile_name,
+            "modbus_catalog/deye_3ph_high_80kw.json",
+        )
+        self.assertEqual(
+            surface.register_schema_name,
+            "deye_3ph_high_80kw/base.json",
+        )
+        self.assertFalse(surface.read_only)
+        self.assertEqual(surface.support_tier, "full")
+        self.assertIn((115, 3), surface.support_capture_ranges)
+        self.assertIn((129, 2), surface.support_capture_ranges)
+        self.assertIn((142, 4), surface.support_capture_ranges)
 
     def test_persisted_model_resolution_fails_closed_when_alias_is_ambiguous(self) -> None:
         catalog = load_compiled_detection_catalog()
@@ -124,13 +153,13 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
         )
 
         self.assertIsNone(
-            resolve_unique_full_model_surface(
+            resolve_unique_persisted_model_surface(
                 "Anenji ANJ-11KW-48V-WIFI-P",
                 catalog=ambiguous,
             )
         )
         self.assertIsNone(
-            resolve_unique_full_model_surface("unknown model", catalog=catalog)
+            resolve_unique_persisted_model_surface("unknown model", catalog=catalog)
         )
 
     def test_resolves_exact_and_family_surfaces(self) -> None:

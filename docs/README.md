@@ -11,6 +11,7 @@ release work; they are not required to use the integration.
 - [Testing the unreleased main branch](../README.md#testing-the-unreleased-main-branch) — manual installation of a maintainer-requested test build
 - [Setup and Discovery](user/SETUP_AND_DISCOVERY.md) — collector-first setup, scan results, address confirmation, background discovery, and manual setup
 - [Runtime Detection and Entities](user/RUNTIME_AND_INVERTER.md) — driver detection, Fast and Full protocol checks, polling, controls, and entity availability
+- [Kevolt / Deye-Compatible Advanced Controls](user/KEVOLT_DEYE_CONTROLS.md) — opt-in testing, read-back behavior, and intentionally excluded operations for the experimental 80 kW control surface
 - [Collector Management](user/COLLECTOR_MANAGEMENT.md) — cloud connection profiles, Wi-Fi, restart, UART, virtual bridges, and proxy-capture basics
 - [Device Learning](user/DEVICE_LEARNING.md) — read-only cloud evidence and active verification of extra sensors and controls
 - [Diagnostic Commands](user/DIAGNOSTIC_COMMANDS.md) — advanced, developer-provided read/write scenarios and shareable results
