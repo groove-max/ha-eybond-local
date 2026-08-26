@@ -856,8 +856,8 @@
       "unit": "kWh",
       "device_class": "energy",
       "state_class": "total",
-      "diagnostic": true,
-      "enabled_default": false,
+      "diagnostic": false,
+      "enabled_default": true,
       "live": true
     },
     {

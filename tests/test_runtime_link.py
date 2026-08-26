@@ -1702,7 +1702,7 @@ class DomainTransportOwnershipTests(unittest.TestCase):
         listener_port: int,
         state: str = "parked_waiting_for_identity",
         shape: str = "eybond_framed_or_binary",
-        source: str = "framed_heartbeat",
+        source: str = "fc2_parameter_2",
         peer_ip: str = "203.0.113.10",
     ) -> dict[str, object]:
         return {
@@ -1740,7 +1740,7 @@ class DomainTransportOwnershipTests(unittest.TestCase):
         manager = self._manager(collector_pn=self.FULL_PN)
         built = self._install_aux_fakes(manager)
         inventory = [
-            self._domain_session("listener-18899-7", self.SHORT_PN, listener_port=18899)
+            self._domain_session("listener-18899-7", self.FULL_PN, listener_port=18899)
         ]
         self._wire_domain(manager, inventory)
         manager._announcer.last_reply = ""
@@ -1805,7 +1805,12 @@ class DomainTransportOwnershipTests(unittest.TestCase):
         manager = self._manager(collector_pn=self.FULL_PN)
         self._install_aux_fakes(manager)
         inventory = [
-            self._domain_session("listener-18899-3", self.SHORT_PN, listener_port=18899)
+            self._domain_session(
+                "listener-18899-3",
+                self.SHORT_PN,
+                listener_port=18899,
+                source="framed_heartbeat",
+            )
         ]
         domain = self._wire_domain(manager, inventory)
 

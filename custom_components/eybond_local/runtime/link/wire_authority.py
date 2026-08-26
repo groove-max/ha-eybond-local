@@ -536,21 +536,52 @@ class LinkWireAuthorityMixin:
             return None
 
     def _claimed_session_id(self) -> str:
-        """Return the registry-claimed session id for this entry's owned session.
+        """Return a strongly-identified session id for transport activation.
 
-        Domain-registry path: the exact session id of the entry-owned observed
-        session -- including a parked/identified socket that has not been
-        activated yet (activation is exactly what the claim is for). Fallback
-        (no domain registry): only a trusted observed-wire session is returned;
-        a route-identity mismatch / not-yet-routed session negotiates to an
-        unknown wire and is never handed to the transport as the claim target.
+        ``owned_session_location`` may deliberately expose a weak heartbeat
+        observation so runtime can follow the correct shared listener and run
+        an exact-session identity challenge there.  That location is a
+        candidate, not proof.  The transport claim boundary therefore returns
+        its session id only after FC=2 parameter 2 / AT+DTUPN established a
+        strong identity.  The standalone registry fallback follows the same
+        rule, so neither path can silently promote a heartbeat prefix into a
+        trusted runtime session.
         """
+
+        from ...collector_identity import identity_source_is_strong
 
         if self._domain_ownership_active():
             session = self._owned_domain_session()
-            return str(getattr(session, "session_id", "") or "") if session else ""
+            if session is None or not bool(
+                getattr(session, "has_strong_identity", False)
+            ):
+                return ""
+            return str(getattr(session, "session_id", "") or "")
         handle = self._live_session_handle()
-        return handle.session_id if handle.observed else ""
+        strong = any(
+            identity_source_is_strong(source)
+            for source in handle.identity_sources
+        )
+        return handle.session_id if handle.observed and strong else ""
+
+    def _owned_session_requires_identity_upgrade(self) -> bool:
+        """Return whether the best owned live location still has weak identity."""
+
+        from ...collector_identity import identity_source_is_strong
+
+        if self._domain_ownership_active():
+            session = self._owned_domain_session()
+            return bool(
+                session is not None
+                and not bool(getattr(session, "has_strong_identity", False))
+            )
+        handle = self._live_session_handle()
+        if not handle.session_id:
+            return False
+        return not any(
+            identity_source_is_strong(source)
+            for source in handle.identity_sources
+        )
 
     def _effective_transport_wire(self) -> str:
         """Return the wire selector to push down: live if observed, else confirmed.

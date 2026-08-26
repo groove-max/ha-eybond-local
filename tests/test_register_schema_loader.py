@@ -438,6 +438,10 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertEqual(config_specs["constant_voltage_to_float_wait_time"].register, 639)
         self.assertEqual(config_specs["max_discharge_current_protection"].register, 642)
         self.assertEqual(config_specs["op1_offgrid_soc_protection_value"].register, 649)
+        pv_generation_day = schema.measurement_description("pv_generation_day")
+        self.assertFalse(pv_generation_day.diagnostic)
+        self.assertTrue(pv_generation_day.enabled_default)
+        self.assertTrue(pv_generation_day.live)
 
     def test_pi30_driver_uses_loaded_register_schema(self) -> None:
         schema = load_register_schema("pi30_ascii/models/smartess_0925_compat.json")

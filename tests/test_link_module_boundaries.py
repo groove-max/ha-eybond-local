@@ -39,7 +39,7 @@ EXPECTED_MRO = [
 ]
 
 EXPECTED_METHOD_MULTISET_SHA256 = (
-    "f93cb2c1dcb28d2555ca01a9841a4f76468215fc1c8ff0410fa2e956f645c13f"
+    "13d877e37ef1e11006544dd7efffff633e11ea73d88e8ae113f05af962aec42b"
 )
 
 
@@ -105,8 +105,8 @@ class LinkCompositionBoundaryTests(unittest.TestCase):
             {},
         )
         payload = "\n".join(f"{name}:{count}" for name, count in sorted(counts.items()))
-        self.assertEqual(sum(counts.values()), 116)
-        self.assertEqual(len(counts), 116)
+        self.assertEqual(sum(counts.values()), 119)
+        self.assertEqual(len(counts), 119)
         self.assertEqual(
             hashlib.sha256(payload.encode()).hexdigest(),
             EXPECTED_METHOD_MULTISET_SHA256,

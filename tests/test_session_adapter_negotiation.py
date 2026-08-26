@@ -1779,7 +1779,7 @@ class CollectorMetadataRouteAuthorityTests(unittest.TestCase):
             sessions=[
                 _observed(
                     "s1", FULL_PN, state="routed_framed",
-                    shape="eybond_framed_or_binary", source="framed_heartbeat",
+                    shape="eybond_framed_or_binary", source="fc2_parameter_2",
                 )
             ],
         )

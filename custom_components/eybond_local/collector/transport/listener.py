@@ -2124,6 +2124,9 @@ class _SharedEybondListener:
                 initial_pn,
                 initial_pn_source,
             )
+        identity_can_route = bool(
+            initial_pn and identity_source_is_strong(initial_pn_source)
+        )
         if self._matches_exclusive_collector_route(
             remote_ip=pending.remote_ip,
             observed_pn=initial_pn,
@@ -2144,16 +2147,22 @@ class _SharedEybondListener:
         # rather than AT+, so for raw_tcp we allow a single registered owner to
         # choose the activation facade. A plausible EyeBond frame is never
         # downgraded to routed_at_text by an AT owner.
-        framed_owner = self._has_owner_for_collector_pn(
-            self._payload_pn_owner_counts, initial_pn
+        framed_owner = (
+            identity_can_route
+            and self._has_owner_for_collector_pn(
+                self._payload_pn_owner_counts, initial_pn
+            )
         ) or (
             not initial_pn
             and self._has_owner_for_remote_ip(
                 self._payload_owner_counts, pending.remote_ip
             )
         )
-        at_owner = self._has_owner_for_collector_pn(
-            self._at_pn_owner_counts, initial_pn
+        at_owner = (
+            identity_can_route
+            and self._has_owner_for_collector_pn(
+                self._at_pn_owner_counts, initial_pn
+            )
         ) or (
             not initial_pn
             and self._has_owner_for_remote_ip(self._at_owner_counts, pending.remote_ip)
@@ -2170,7 +2179,7 @@ class _SharedEybondListener:
 
         if route_at:
             connection = None
-            if initial_pn:
+            if initial_pn and identity_can_route:
                 connection = self._connection_by_collector_pn(
                     initial_pn,
                     self._at_connections_by_pn,
@@ -2186,13 +2195,19 @@ class _SharedEybondListener:
                 connection,
                 self._session_at_connections,
             ):
-                has_ip_owner = self._has_owner_for_remote_ip(
-                    self._at_owner_counts,
-                    pending.remote_ip,
+                has_ip_owner = bool(
+                    not initial_pn
+                    and self._has_owner_for_remote_ip(
+                        self._at_owner_counts,
+                        pending.remote_ip,
+                    )
                 )
-                has_pn_owner = self._has_owner_for_collector_pn(
-                    self._at_pn_owner_counts,
-                    initial_pn,
+                has_pn_owner = bool(
+                    identity_can_route
+                    and self._has_owner_for_collector_pn(
+                        self._at_pn_owner_counts,
+                        initial_pn,
+                    )
                 )
                 if not has_ip_owner and not has_pn_owner:
                     await self._park_unclaimed_pending_socket(
@@ -2230,7 +2245,7 @@ class _SharedEybondListener:
             return
 
         connection = None
-        if initial_pn:
+        if initial_pn and identity_can_route:
             connection = self._connection_by_collector_pn(
                 initial_pn,
                 self._connections_by_pn,
@@ -2243,13 +2258,19 @@ class _SharedEybondListener:
             connection,
             self._session_payload_connections,
         ):
-            has_ip_owner = self._has_owner_for_remote_ip(
-                self._payload_owner_counts,
-                pending.remote_ip,
+            has_ip_owner = bool(
+                not initial_pn
+                and self._has_owner_for_remote_ip(
+                    self._payload_owner_counts,
+                    pending.remote_ip,
+                )
             )
-            has_pn_owner = self._has_owner_for_collector_pn(
-                self._payload_pn_owner_counts,
-                initial_pn,
+            has_pn_owner = bool(
+                identity_can_route
+                and self._has_owner_for_collector_pn(
+                    self._payload_pn_owner_counts,
+                    initial_pn,
+                )
             )
             if not has_ip_owner and not has_pn_owner:
                 await self._park_unclaimed_pending_socket(

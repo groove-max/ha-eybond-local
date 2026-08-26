@@ -2821,10 +2821,10 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         reader.feed_data(
             build_collector_request(
                 1,
-                foreign_pn[:16].encode("ascii"),
+                b"\x00\x02" + foreign_pn.encode("ascii"),
                 devcode=2376,
                 collector_addr=1,
-                fcode=1,
+                fcode=2,
             )
         )
         pending = _PendingCollectorSocket(
@@ -3811,14 +3811,32 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
             fcode=1,
         )
 
-    def _pending(self, listener, *, session_id: str, remote_ip: str, eof: bool = False):
+    def _pending(
+        self,
+        listener,
+        *,
+        session_id: str,
+        remote_ip: str,
+        eof: bool = False,
+        strong_identity: bool = False,
+    ):
         listener._remember_session(
             session_id=session_id,
             remote_ip=remote_ip,
             remote_port=41000,
         )
         reader = asyncio.StreamReader()
-        reader.feed_data(self._heartbeat_frame())
+        reader.feed_data(
+            build_collector_request(
+                7,
+                b"\x00\x02E5000020000000",
+                devcode=2376,
+                collector_addr=1,
+                fcode=2,
+            )
+            if strong_identity
+            else self._heartbeat_frame()
+        )
         if eof:
             reader.feed_eof()
         pending = _PendingCollectorSocket(
@@ -3963,6 +3981,7 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
             listener,
             session_id="session-first",
             remote_ip="192.168.1.55",
+            strong_identity=True,
         )
         first_task = asyncio.create_task(listener._sniff_pending_socket(first_pending))
         for _ in range(20):
@@ -3974,6 +3993,7 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
             listener,
             session_id="session-second",
             remote_ip="192.168.1.55",
+            strong_identity=True,
         )
         second_task = asyncio.create_task(listener._sniff_pending_socket(second_pending))
         for _ in range(20):

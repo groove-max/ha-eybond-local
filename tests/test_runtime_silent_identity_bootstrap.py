@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 import socket
 import sys
@@ -12,9 +13,22 @@ from unittest.mock import AsyncMock, patch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+HELPERS_DIR = REPO_ROOT / "tests" / "helpers"
+if str(HELPERS_DIR) not in sys.path:
+    sys.path.insert(0, str(HELPERS_DIR))
 
+from custom_components.eybond_local.connection.session_registry import (
+    CallbackSessionRegistry,
+)
 from custom_components.eybond_local.connection.spec_factory import (
     build_connection_spec,
+)
+from custom_components.eybond_local.collector.discovery import (
+    async_send_callback_trigger,
+)
+from custom_components.eybond_local.collector.transport import (
+    _acquire_shared_listener,
+    _release_shared_listener,
 )
 from custom_components.eybond_local.const import (
     CONF_COLLECTOR_CLOUD_FAMILY,
@@ -33,16 +47,60 @@ from custom_components.eybond_local.drivers.catalog_identity import (
 )
 from custom_components.eybond_local.models import ProbeTarget
 from custom_components.eybond_local.payload.modbus import ModbusSession, crc16_modbus
+from fake_collector import FakeCollectorService
+from fake_collector_lib import (
+    CollectorProfile,
+    QUERY_MODE_FAIL,
+    resolve_scenario,
+)
 
 
 FULL_PN = "E50000200000000001"
 FOREIGN_PN = "E50000200000009777"
+ISSUE37_SHORT_PN = FULL_PN[:14]
+ISSUE37_FULL_PN = FULL_PN
+ISSUE37_FOREIGN_FULL_PN = FOREIGN_PN
 
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def _free_udp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _weak_framed_collector(
+    *,
+    udp_port: int,
+    pn: str,
+    answer_fc2: bool = True,
+) -> FakeCollectorService:
+    """Return a real framed collector that volunteers only a weak heartbeat PN."""
+
+    scenario = resolve_scenario(
+        preset="collector_only",
+        profile=CollectorProfile(pn=pn),
+        first_heartbeat_delay=0.05,
+    )
+    if not answer_fc2:
+        scenario = replace(
+            scenario,
+            fc2_query_modes={**dict(scenario.fc2_query_modes), 2: QUERY_MODE_FAIL},
+        )
+    return FakeCollectorService(
+        listen_ip="127.0.0.1",
+        udp_port=udp_port,
+        tcp_bind_ip="127.0.0.1",
+        heartbeat_interval=30.0,
+        connect_timeout=2.0,
+        udp_reply="rsp>server=1;",
+        scenario=scenario,
+    )
 
 
 class _SilentAtCollector:
@@ -254,6 +312,211 @@ class RuntimeSilentIdentityBootstrapTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await collector.stop()
             await manager.async_stop()
+
+
+class Issue37WeakHeartbeatRuntimeRegressionTests(
+    unittest.IsolatedAsyncioTestCase
+):
+    """Issue #37: a weak heartbeat is a candidate, never a runtime claim proof."""
+
+    @staticmethod
+    async def _wait_for_weak_session(
+        registry: CallbackSessionRegistry,
+    ) -> str:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 2.0
+        while loop.time() < deadline:
+            for session in registry.observed_sessions_per_socket():
+                if (
+                    session.collector_pn == ISSUE37_SHORT_PN
+                    and session.identity_source == "framed_heartbeat"
+                ):
+                    return session.session_id
+            await asyncio.sleep(0.02)
+        raise AssertionError("weak framed-heartbeat session did not appear")
+
+    async def _exercise(
+        self,
+        *,
+        durable_pn: str,
+        collector_pn: str,
+        answer_fc2: bool,
+        session_on_primary: bool = False,
+        callback_on_demand: bool = True,
+    ) -> tuple[bool, tuple, str, int]:
+        session_port = _free_port()
+        primary_port = session_port if session_on_primary else _free_port()
+        udp_port = _free_udp_port()
+        manager = EybondRuntimeLinkManager(
+            server_ip="127.0.0.1",
+            collector_ip="127.0.0.1",
+            collector_pn=durable_pn,
+            collector_identity_challenge_protocol="eybond_framed",
+            tcp_port=primary_port,
+            advertised_tcp_port=session_port,
+            udp_port=udp_port,
+            discovery_target="127.0.0.1",
+            discovery_interval=30,
+            heartbeat_interval=60,
+        )
+        registry = CallbackSessionRegistry(
+            sessions_source=lambda: tuple(
+                {**row, "listener_port": session_port}
+                for row in listener.discovered_collector_sessions()
+            )
+        )
+        registry.claim("issue-37-entry", collector_pn=durable_pn)
+        manager.set_callback_ownership(registry, "issue-37-entry")
+        manager.set_reverse_discovery_enabled(callback_on_demand)
+        collector = _weak_framed_collector(
+            udp_port=udp_port,
+            pn=collector_pn,
+            answer_fc2=answer_fc2,
+        )
+        listener = await _acquire_shared_listener("0.0.0.0", session_port)
+        await collector.start()
+        try:
+            # Reproduce the support archive faithfully: the callback session is
+            # already open and the listener has learned only the 14-character
+            # heartbeat prefix before the entry runtime starts and registers
+            # its route. It therefore remains parked instead of being routed
+            # opportunistically by an already-running transport owner.
+            await async_send_callback_trigger(
+                bind_ip="127.0.0.1",
+                advertised_server_ip="127.0.0.1",
+                advertised_server_port=session_port,
+                target_ip="127.0.0.1",
+                udp_port=udp_port,
+                timeout=0.2,
+                source="issue37_preexisting_session",
+            )
+            await manager.async_start()
+            weak_session_id = await self._wait_for_weak_session(registry)
+            trigger = AsyncMock(
+                return_value=types.SimpleNamespace(reply="", reply_from="")
+            )
+            with patch(
+                "custom_components.eybond_local.runtime.link.callback."
+                "async_send_callback_trigger",
+                new=trigger,
+            ):
+                connected = await manager.async_try_connect(timeout=2.5)
+            return (
+                connected,
+                registry.observed_sessions_per_socket(),
+                weak_session_id,
+                trigger.await_count,
+            )
+        finally:
+            await collector.stop()
+            await manager.async_stop()
+            await _release_shared_listener(
+                listener,
+                close_pending=True,
+                close_payload=True,
+                close_at=True,
+            )
+
+    async def test_weak_heartbeat_is_upgraded_on_the_exact_session(self) -> None:
+        connected, sessions, weak_session_id, trigger_count = await self._exercise(
+            durable_pn=ISSUE37_SHORT_PN,
+            collector_pn=ISSUE37_FULL_PN,
+            answer_fc2=True,
+        )
+
+        self.assertTrue(connected)
+        strong = next(
+            session for session in sessions if session.session_id == weak_session_id
+        )
+        self.assertTrue(strong.has_strong_identity)
+        self.assertEqual(strong.identity_source, "fc2_parameter_2")
+        self.assertEqual(strong.collector_pn, ISSUE37_FULL_PN)
+        self.assertEqual(trigger_count, 1)
+
+    async def test_weak_heartbeat_on_primary_listener_is_not_routed_early(
+        self,
+    ) -> None:
+        connected, sessions, weak_session_id, trigger_count = await self._exercise(
+            durable_pn=ISSUE37_SHORT_PN,
+            collector_pn=ISSUE37_FULL_PN,
+            answer_fc2=True,
+            session_on_primary=True,
+        )
+
+        self.assertTrue(connected)
+        strong = next(
+            session for session in sessions if session.session_id == weak_session_id
+        )
+        self.assertTrue(strong.has_strong_identity)
+        self.assertEqual(strong.identity_source, "fc2_parameter_2")
+        self.assertEqual(strong.collector_pn, ISSUE37_FULL_PN)
+        self.assertEqual(trigger_count, 1)
+
+    async def test_weak_heartbeat_with_failed_fc2_is_not_claimed(self) -> None:
+        connected, sessions, weak_session_id, trigger_count = await self._exercise(
+            durable_pn=ISSUE37_SHORT_PN,
+            collector_pn=ISSUE37_FULL_PN,
+            answer_fc2=False,
+        )
+
+        self.assertFalse(connected)
+        weak = next(
+            session for session in sessions if session.session_id == weak_session_id
+        )
+        self.assertFalse(weak.has_strong_identity)
+        self.assertEqual(weak.identity_source, "framed_heartbeat")
+        self.assertEqual(weak.collector_pn, ISSUE37_SHORT_PN)
+        self.assertEqual(trigger_count, 1)
+
+    async def test_matching_weak_prefix_cannot_hide_foreign_full_pn(self) -> None:
+        connected, sessions, weak_session_id, trigger_count = await self._exercise(
+            durable_pn=ISSUE37_FULL_PN,
+            collector_pn=ISSUE37_FOREIGN_FULL_PN,
+            answer_fc2=True,
+        )
+
+        self.assertFalse(connected)
+        foreign = next(
+            session for session in sessions if session.session_id == weak_session_id
+        )
+        self.assertTrue(foreign.has_strong_identity)
+        self.assertEqual(foreign.identity_source, "fc2_parameter_2")
+        self.assertEqual(foreign.collector_pn, ISSUE37_FOREIGN_FULL_PN)
+        self.assertEqual(trigger_count, 1)
+
+    async def test_inbound_weak_heartbeat_is_upgraded_without_udp(self) -> None:
+        connected, sessions, weak_session_id, trigger_count = await self._exercise(
+            durable_pn=ISSUE37_SHORT_PN,
+            collector_pn=ISSUE37_FULL_PN,
+            answer_fc2=True,
+            callback_on_demand=False,
+        )
+
+        self.assertTrue(connected)
+        strong = next(
+            session for session in sessions if session.session_id == weak_session_id
+        )
+        self.assertTrue(strong.has_strong_identity)
+        self.assertEqual(strong.identity_source, "fc2_parameter_2")
+        self.assertEqual(strong.collector_pn, ISSUE37_FULL_PN)
+        self.assertEqual(trigger_count, 0)
+
+    async def test_inbound_failed_fc2_stays_parked_without_udp(self) -> None:
+        connected, sessions, weak_session_id, trigger_count = await self._exercise(
+            durable_pn=ISSUE37_SHORT_PN,
+            collector_pn=ISSUE37_FULL_PN,
+            answer_fc2=False,
+            callback_on_demand=False,
+        )
+
+        self.assertFalse(connected)
+        weak = next(
+            session for session in sessions if session.session_id == weak_session_id
+        )
+        self.assertFalse(weak.has_strong_identity)
+        self.assertEqual(weak.identity_source, "framed_heartbeat")
+        self.assertEqual(weak.collector_pn, ISSUE37_SHORT_PN)
+        self.assertEqual(trigger_count, 0)
 
 
 class Issue13RuntimeRegressionTests(unittest.IsolatedAsyncioTestCase):

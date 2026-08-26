@@ -84,8 +84,37 @@ class LinkConnectionMixin:
         # entry's owned session on another already-running shared listener,
         # attach the facade there BEFORE waiting, so inbound entries connect to
         # the socket the collector actually opened (no UDP involved).
-        await self._async_follow_owned_session_listener()
+        # A weak location must be challenged while it is still parked on the
+        # shared listener. Starting the auxiliary transport first registers a
+        # PN owner and can route that socket into a live connection before the
+        # exact-session channel gets a chance to upgrade it. Follow immediately
+        # only for an already-strong location; the weak path follows after the
+        # successful challenge below.
+        if not self._owned_session_requires_identity_upgrade():
+            await self._async_follow_owned_session_listener()
         self._apply_live_wire_to_transports()
+
+        # An inbound entry never sends set>server, but its already-open socket
+        # can still volunteer only a weak heartbeat prefix.  Upgrade that exact
+        # owned session in place before transport activation.  This is the
+        # trigger-free counterpart of the callback causality path below: the
+        # registry supplies the socket identity, and FC=2/AT+DTUPN supplies the
+        # strong collector identity.  Peer IP and weak PN prefixes remain
+        # ineligible for routing.
+        if (
+            not self._reverse_discovery_enabled
+            and not self.connected
+            and self._owned_session_requires_identity_upgrade()
+        ):
+            deadline = asyncio.get_running_loop().time() + max(
+                0.0, float(timeout)
+            )
+            upgraded = await self._async_upgrade_owned_session_without_trigger(
+                timeout=max(0.0, deadline - asyncio.get_running_loop().time())
+            )
+            if not upgraded:
+                return False
+            timeout = max(0.0, deadline - asyncio.get_running_loop().time())
 
         # A registry-owned exact session is already causally certified for this
         # entry. It may still be parked while the freshly-created transport
@@ -130,6 +159,63 @@ class LinkConnectionMixin:
         return await self._async_await_callback_session(
             timeout=timeout, require_heartbeat=require_heartbeat
         )
+
+    async def _async_upgrade_owned_session_without_trigger(
+        self, *, timeout: float
+    ) -> bool:
+        """Strongly identify one already-owned inbound session without UDP.
+
+        The session id and listener port come only from the ownership registry.
+        The read-only identity query is pinned to that exact socket.  Failure,
+        timeout, a foreign PN, or an unavailable probe channel leaves the weak
+        session parked and cannot fall through to route/peer matching.
+        """
+
+        expected_pn = str(self._collector_pn or "").strip()
+        session = self._owned_domain_session()
+        session_id = str(
+            getattr(session, "session_id", "")
+            if session is not None
+            else self._live_session_handle().session_id
+        ).strip()
+        challenge = self._identity_challenge_candidate()
+        if not expected_pn or not session_id or not challenge:
+            return False
+
+        from ...collector.silent_session_probe import (
+            SilentSessionIdentityProbeChannel,
+        )
+
+        probe_channel = SilentSessionIdentityProbeChannel(
+            host=self._listener_bind_host,
+            port=self._identity_challenge_listener_port(),
+        )
+        try:
+            await probe_channel.async_open()
+            if not probe_channel.available:
+                return False
+            self._active_identity_challenge_protocol = challenge
+            try:
+                identified_pn = await asyncio.wait_for(
+                    probe_channel.async_identify_exact_session(
+                        session_id,
+                        session_protocol=challenge,
+                    ),
+                    timeout=max(0.0, float(timeout)),
+                )
+            except asyncio.TimeoutError:
+                return False
+            if not identified_pn or not pn_is_same_identity(
+                expected_pn, identified_pn
+            ):
+                return False
+
+            await self._async_follow_owned_session_listener()
+            self._apply_live_wire_to_transports()
+            return self._claimed_session_id() == session_id
+        finally:
+            self._active_identity_challenge_protocol = ""
+            await probe_channel.async_close()
 
     async def async_activate_claimed_session(
         self,
@@ -235,9 +321,10 @@ class LinkConnectionMixin:
                             SilentSessionIdentityProbeChannel,
                         )
 
+                        probe_port = self._identity_challenge_listener_port()
                         probe_channel = SilentSessionIdentityProbeChannel(
                             host=self._listener_bind_host,
-                            port=self._tcp_port,
+                            port=probe_port,
                         )
                         await probe_channel.async_open()
                         if probe_channel.available:
@@ -259,12 +346,28 @@ class LinkConnectionMixin:
                             baseline=baseline,
                             deadline=deadline,
                         )
-                        if identified:
-                            # The exact-session challenge wrote only a strong PN
-                            # into the public inventory. The ordinary registry
-                            # now negotiates/owns/routes that socket; the cloud
-                            # candidate itself never reaches transport authority.
-                            self._apply_live_wire_to_transports()
+                        if not identified:
+                            # A metadata-selected query format is only probe
+                            # permission.  When it cannot establish a strong PN,
+                            # never fall through to the transport's legacy
+                            # PN/route matcher: that would promote the very weak
+                            # heartbeat candidate this boundary is meant to
+                            # certify.
+                            self._note_callback_failure()
+                            return False
+                        # The exact-session challenge wrote only a strong PN
+                        # into the public inventory. The ordinary registry now
+                        # negotiates/owns/routes that socket; the cloud candidate
+                        # itself never reaches transport authority.
+                        await self._async_follow_owned_session_listener()
+                        self._apply_live_wire_to_transports()
+                    else:
+                        # The challenge path is selected only while no trusted
+                        # live identity exists.  If its exact-session channel is
+                        # unavailable, fail closed instead of letting the
+                        # transport claim by a weak PN prefix or peer route.
+                        self._note_callback_failure()
+                        return False
 
                     remaining = max(
                         0.0, deadline - asyncio.get_running_loop().time()
@@ -291,12 +394,47 @@ class LinkConnectionMixin:
         binding always owns the established path and suppresses this bootstrap.
         """
 
+        if self._owned_session_requires_identity_upgrade():
+            # A weak owned location is deliberately visible so this exact
+            # session can be upgraded. Its observed byte shape may select the
+            # non-mutating query dialect; durable metadata is only a fallback.
+            session = self._owned_domain_session()
+            shape = str(
+                getattr(session, "protocol_shape", "") or ""
+            ).strip().lower()
+            if shape in ("eybond_framed", "eybond_framed_or_binary"):
+                return "eybond_framed"
+            if shape == "at_text":
+                return "at_text"
+            handle = self._live_session_handle()
+            if handle.uses_framed_wire:
+                return "eybond_framed"
+            if handle.uses_at_text_wire:
+                return "at_text"
+            return self._configured_identity_challenge_protocol
+
         handle = self._live_session_handle()
         if handle.observed and not handle.conflict:
             return ""
         if self._effective_wire_binding() is not None:
             return ""
         return self._configured_identity_challenge_protocol
+
+    def _identity_challenge_listener_port(self) -> int:
+        """Return the listener that owns the exact session being challenged.
+
+        The domain registry is the location authority across all shared
+        listeners. A callback can remain parked on a listener different from
+        this entry's primary port; probing the primary listener in that case
+        can never upgrade the owned weak session. Fall back to the primary port
+        only when no valid owned location is currently available.
+        """
+
+        session = self._owned_domain_session()
+        listener_port = getattr(session, "listener_port", 0) if session else 0
+        if type(listener_port) is int and 0 < listener_port <= 65535:
+            return listener_port
+        return self._tcp_port
 
     async def _async_identify_callback_session(
         self,
