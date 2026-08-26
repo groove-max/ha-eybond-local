@@ -72,20 +72,15 @@ class ProxyCaptureOptionsMixin:
                 ),
                 next_step=self._diagnostics_result_tr(
                     "ensure_entry_loaded",
-                    "Ensure the entry is loaded and the inverter has been detected, then try again.",
+                    "Ensure the entry is loaded, then try again.",
                 ),
             )
 
+        proxy_readiness = self._support_acquisition_readiness().proxy_capture
         if not (
-            (
-                self._cloud_tool_new_operations_allowed()
-                and self._collector_capabilities().proxy_capture
-            )
+            proxy_readiness.visible
             or self._proxy_capture_lifecycle_active(coordinator)
-            or (
-                self._collector_capabilities().proxy_capture
-                and self._proxy_capture_status_available(coordinator)
-            )
+            or self._proxy_capture_status_available(coordinator)
         ):
             return await self._async_cloud_tools_unavailable()
 

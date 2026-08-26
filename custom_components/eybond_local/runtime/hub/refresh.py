@@ -22,6 +22,59 @@ from .common import (
 )
 
 
+def _sanitize_probe_routes(value: object) -> list[dict[str, object]]:
+    """Keep only non-sensitive records minted from typed link routes."""
+
+    sanitized: list[dict[str, object]] = []
+    if not isinstance(value, (tuple, list)):
+        return sanitized
+    for route in value:
+        if type(route) is not dict:
+            continue
+        family = route.get("family")
+        attempts = route.get("attempts")
+        responses = route.get("responses")
+        if (
+            family not in {"eybond", "raw_serial"}
+            or type(attempts) is not int
+            or attempts < 1
+            or type(responses) is not int
+            or responses < 0
+            or responses > attempts
+        ):
+            continue
+        record: dict[str, object] = {
+            "family": family,
+            "attempts": attempts,
+            "responses": responses,
+        }
+        if family == "eybond":
+            devcode = route.get("devcode")
+            collector_addr = route.get("collector_addr")
+            if (
+                type(devcode) is not int
+                or not 0 <= devcode <= 0xFFFF
+                or type(collector_addr) is not int
+                or not 0 <= collector_addr <= 0xFF
+            ):
+                continue
+            record.update(
+                {"devcode": devcode, "collector_addr": collector_addr}
+            )
+        else:
+            protocol = route.get("protocol")
+            if (
+                type(protocol) is not str
+                or protocol != protocol.strip()
+                or len(protocol) > 64
+            ):
+                continue
+            if protocol:
+                record["protocol"] = protocol
+        sanitized.append(record)
+    return sanitized
+
+
 class HubRefreshMixin:
     """Methods owned by HubRefreshMixin."""
 
@@ -488,14 +541,16 @@ class HubRefreshMixin:
                     outcome = "error"
                 elif outcome not in allowed_outcomes:
                     outcome = "unknown"
-                sanitized.append(
-                    {
-                        "driver": driver,
-                        "elapsed_ms": elapsed_ms,
-                        "outcome": outcome,
-                        "saw_response": entry.get("saw_response") is True,
-                    }
-                )
+                record: dict[str, object] = {
+                    "driver": driver,
+                    "elapsed_ms": elapsed_ms,
+                    "outcome": outcome,
+                    "saw_response": entry.get("saw_response") is True,
+                }
+                routes = _sanitize_probe_routes(entry.get("routes"))
+                if routes:
+                    record["routes"] = routes
+                sanitized.append(record)
         self._inverter_detection_probe_log = tuple(sanitized)
         self._inverter_detection_probe_budget_exhausted = (
             type(budget_exhausted) is bool and budget_exhausted

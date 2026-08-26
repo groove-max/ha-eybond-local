@@ -18,7 +18,6 @@ from ...const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
     CONF_COLLECTOR_PN,
     CONF_CONNECTION_MODE,
-    CONF_CONTROL_MODE,
     CONF_DETECTED_DRIVER,
     CONF_DETECTED_MODEL,
     CONF_DETECTED_SERIAL,
@@ -28,8 +27,6 @@ from ...const import (
     CONF_SMARTESS_DEVICE_ADDRESS,
     CONF_SMARTESS_PROFILE_KEY,
     CONF_SMARTESS_PROTOCOL_ASSET_ID,
-    CONTROL_MODE_READ_ONLY,
-    DEFAULT_CONTROL_MODE,
 )
 from ...drivers.registry import serial_is_stable
 from ...metadata.effective_metadata_snapshot import effective_metadata_snapshot_from_dict
@@ -528,10 +525,6 @@ class CoordinatorPersistenceMixin:
                 "medium",
             }:
                 updated_data[CONF_DETECTION_CONFIDENCE] = "high"
-            if updated_data.get(CONF_CONTROL_MODE) == CONTROL_MODE_READ_ONLY:
-                updated_data[CONF_CONTROL_MODE] = DEFAULT_CONTROL_MODE
-            if updated_options.get(CONF_CONTROL_MODE) == CONTROL_MODE_READ_ONLY:
-                updated_options[CONF_CONTROL_MODE] = DEFAULT_CONTROL_MODE
             if driver_key:
                 # ``driver_hint`` is user intent (auto or an explicit choice).
                 # Runtime detection is a separate fact and must never silently

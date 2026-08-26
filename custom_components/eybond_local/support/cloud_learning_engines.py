@@ -265,6 +265,27 @@ def compatible_cloud_learning_sources_for_method(
     )
 
 
+def compatible_cloud_learning_sources_for_method_any_provider(
+    method_id: object,
+) -> tuple[CloudApiSource, ...]:
+    """Return exact API sources for a method without guessing a provider.
+
+    This boundary is used only by metadata-only support acquisition when the
+    collector's cloud family is not known yet.  The user selects the API
+    explicitly; active route-owning methods continue to require a trusted
+    provider before this function is ever consulted by the options flow.
+    """
+
+    if type(method_id) is not str or method_id != method_id.strip():
+        return ()
+    return tuple(
+        engine.source
+        for engine in _REGISTERED_ENGINES
+        if engine.method.method_id == method_id
+        and source_supports_method(engine.source, engine.method)
+    )
+
+
 def compatible_cloud_learning_methods(
     source_id: object,
 ) -> tuple[CloudLearningMethod, ...]:
@@ -329,6 +350,21 @@ def default_cloud_learning_source_for_method(
     return defaults[0] if len(defaults) == 1 else ""
 
 
+def default_cloud_learning_source_for_method_any_provider(
+    method_id: object,
+) -> str:
+    """Return one registry-declared default without provider inference."""
+
+    if type(method_id) is not str or method_id != method_id.strip():
+        return ""
+    defaults = tuple(
+        engine.source.source_id
+        for engine in _REGISTERED_ENGINES
+        if engine.method.method_id == method_id and engine.default_for_method
+    )
+    return defaults[0] if len(defaults) == 1 else ""
+
+
 def resolve_cloud_learning_selection(selection: object) -> CloudLearningEngine:
     """Resolve one strict method/source pair; malformed values fail closed."""
 
@@ -352,8 +388,10 @@ __all__ = [
     "compatible_cloud_learning_methods_for_provider",
     "compatible_cloud_learning_sources",
     "compatible_cloud_learning_sources_for_method",
+    "compatible_cloud_learning_sources_for_method_any_provider",
     "default_cloud_learning_method",
     "default_cloud_learning_source_for_method",
+    "default_cloud_learning_source_for_method_any_provider",
     "resolve_cloud_learning_selection",
     "supported_cloud_learning_methods",
     "supported_cloud_learning_selections",

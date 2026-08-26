@@ -38,7 +38,7 @@ navigation changed:
 - the old writable **Collector Operation Mode** was replaced by the verified
   **Collector connection and cloud** flow;
 - proxy duration, start/stop, recovery, status, and download are now owned by
-  one **Cloud traffic tools → Capture collector traffic** flow instead of
+  one **Expand device support → Capture collector cloud traffic** flow instead of
   separate device entities.
 
 <p align="center"><img src="../images/runtime-settings.png" alt="Earlier combined runtime settings screen" width="720"></p>

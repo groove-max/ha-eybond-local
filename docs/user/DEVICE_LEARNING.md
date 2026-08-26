@@ -36,12 +36,17 @@ Use device learning when:
 
 - monitoring works, but controls are missing;
 - the model is shown as partially supported;
+- the collector is identified, but runtime has not yet found a supported
+  inverter driver and you want to collect read-only evidence for support;
 - the device was added as read-only, but the integration offers learning;
 - a developer asks you to run it and share the result.
 
 Do not use it just to “see what happens” on a fully supported inverter. If the device already has confirmed support, learning usually adds no value.
 
-Do not use it when only the collector was found and no inverter was detected. In that case, check the inverter connection first and create a Support Archive if it still cannot be identified.
+Read-only analysis may be available before the inverter is identified. It can
+collect identity-bound cloud evidence, but it cannot invent a local driver or a
+register mapping. Also check the inverter cable/UART connection and create a
+Support Archive if runtime detection still does not complete.
 
 ## Before you start
 
@@ -53,7 +58,7 @@ Check these first:
   through Home Assistant under the same protected endpoint transaction used by
   proxy capture, then restores the original cloud endpoint. A read-only metadata
   source does not change the collector endpoint.
-- Home Assistant can read live data from the inverter.
+- For active verification, Home Assistant can read live data from the inverter.
 - You know the cloud/app username and password for this device, if the learning
   flow asks for them.
 - The mobile app for the same cloud account is closed while learning runs.
@@ -66,11 +71,12 @@ If the inverter powers critical loads, run learning only when it is safe to reco
 1. Open **Settings → Devices & Services**.
 2. Open **EyeBond Local**.
 3. Click **Configure**.
-4. Choose **Expand support for this device**.
+4. Choose **Expand device support**.
 5. Choose **Analyze device data** for a read-only check, or **Verify additional
    local controls** only for an advanced active check.
 6. If more than one compatible API is offered, choose the exact cloud source.
-7. For active verification, read and accept the safety notice.
+7. For active verification, read and accept the notice covering the temporary
+   endpoint change, bounded cloud test commands, and local interception.
 8. Enter the supported cloud/app credentials for this one session, if the flow
    asks for them.
 9. Wait for the check to finish. Progress can pause while the selected cloud
@@ -107,10 +113,21 @@ For control verification:
 1. Home Assistant signs in to the selected cloud API with the credentials you entered.
 2. It verifies the exact device identity and asks which settings and fields the cloud knows for this
    device.
-3. Only after that succeeds, it starts a temporary safe learning session.
-4. It observes how those cloud items map to the local inverter connection.
-5. It blocks unsafe or unknown traffic instead of letting it reach the real inverter.
-6. It builds a local result for review.
+3. Only after that succeeds, it temporarily changes the collector's cloud
+   endpoint to a local Home Assistant shadow route.
+4. The selected cloud API sends bounded test commands for this exact device.
+5. Home Assistant captures the matching local write commands and blocks them
+   before they reach the real inverter. If a cloud success cannot be matched to
+   a local interception, the run stops as a possible unproxied write.
+6. Home Assistant restores the collector's previous cloud endpoint. If that
+   restoration cannot be confirmed, the recovery action remains available in
+   the same support menu.
+7. It builds a local result for review.
+
+This endpoint transaction is the critical part of active verification. The
+confirmation checkbox is consent to the temporary rerouting, the bounded cloud
+test commands, and their local interception. Read-only analysis does none of
+these operations and never changes the collector endpoint.
 
 The currently implemented method/source combinations are:
 
@@ -120,10 +137,12 @@ The currently implemented method/source combinations are:
 | DESSMonitor API | Yes | Yes |
 | ValueCloud API | No | Yes |
 
-The options flow shows only sources compatible with the cloud family already
-confirmed for this collector. SmartESS and DESSMonitor remain separate API
-choices even when the same credentials work with both. Home Assistant uses only
-the source selected for that run; it does not silently retry through another
+For active verification, the options flow shows only sources compatible with
+the cloud family already confirmed for this collector. Before a provider is
+confirmed, read-only analysis can still offer registered metadata APIs for the
+user to choose explicitly. SmartESS and DESSMonitor remain separate API choices
+even when the same credentials work with both. Home Assistant uses only the
+source selected for that run; it does not silently retry through another
 service.
 
 The goal is to learn what the device supports without permanently changing inverter settings.

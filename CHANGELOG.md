@@ -7,6 +7,40 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+### Added
+
+- Added built-in detection and telemetry mapping for the Sandisolar SD 11KP48V
+  WIFI fingerprint (`layout=4`, `model=0x8003`) from issue #13 evidence.
+  Compatible controls remain explicitly untested and Full-Control-only.
+- Added a typed support-acquisition boundary so read-only cloud evidence can be
+  collected for an identified collector before an inverter driver is known.
+
+### Changed
+
+- Moved device-support analysis and collector cloud-traffic capture under one
+  **Expand device support** menu with separate readiness rules for read-only
+  metadata, active learning, and proxy capture.
+- Active-learning consent now explicitly covers the temporary collector
+  endpoint change, bounded cloud test commands, local interception, and route
+  restoration.
+
+### Fixed
+
+- Fixed stale generic-SMG projections that could survive a stronger runtime
+  fingerprint and hide the correct model-specific telemetry surface.
+- Added typed per-route probe evidence so support diagnostics can distinguish
+  framed and raw-serial attempts without exposing endpoints or payloads.
+- Kept support evidence and proxy diagnostics available when the collector is
+  identified but the inverter driver is still unresolved, while active
+  route-owning operations continue to fail closed.
+
+### Docs
+
+- Added safe instructions for manually testing the unreleased `main` branch
+  without creating a tag or GitHub release.
+- Updated device-learning and proxy-capture guides for the current menu names,
+  trust boundaries, and recovery behavior.
+
 ## [0.3.0-beta.4] - 2026-08-25
 
 ### Added

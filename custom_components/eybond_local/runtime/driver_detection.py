@@ -18,6 +18,7 @@ from ..metadata.compiled_detection_catalog import (
     CompiledSurfaceDescriptor,
     load_compiled_detection_catalog,
 )
+from ..link_models import EybondLinkRoute, RawSerialLinkRoute
 from ..models import DetectedInverter, DriverMatch, ProbeTarget
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,32 @@ class DriverDetectionDeadline:
         if base <= 0:
             return remaining
         return min(base, remaining)
+
+
+@dataclass(slots=True)
+class _ProbeRouteCounter:
+    """Non-sensitive counts for one exact typed payload route."""
+
+    family: str
+    devcode: int | None = None
+    collector_addr: int | None = None
+    protocol: str = ""
+    attempts: int = 0
+    responses: int = 0
+
+    def as_record(self) -> dict[str, object]:
+        record: dict[str, object] = {
+            "family": self.family,
+            "attempts": self.attempts,
+            "responses": self.responses,
+        }
+        if self.devcode is not None:
+            record["devcode"] = self.devcode
+        if self.collector_addr is not None:
+            record["collector_addr"] = self.collector_addr
+        if self.protocol:
+            record["protocol"] = self.protocol
+        return record
 
 
 def driver_keys_for_profile_prefixes(profile_names: Any) -> tuple[str, ...]:
@@ -219,6 +246,7 @@ async def async_detect_inverter(
                 started=probe_started,
                 outcome="probe_timeout",
                 saw_response=tracked.saw_response,
+                routes=tracked.route_records,
                 loop=loop,
             )
             logger.debug("Probe timed out driver=%s timeout=%s", driver.key, driver.probe_timeout)
@@ -236,6 +264,7 @@ async def async_detect_inverter(
                 started=probe_started,
                 outcome=ERROR_INVERTER_LINK_DOWN,
                 saw_response=False,
+                routes=tracked.route_records,
                 loop=loop,
             )
             logger.debug("Identity region read as zeros driver=%s", driver.key)
@@ -249,6 +278,7 @@ async def async_detect_inverter(
                 started=probe_started,
                 outcome=f"error:{str(exc)[:80]}",
                 saw_response=tracked.saw_response,
+                routes=tracked.route_records,
                 loop=loop,
             )
             logger.debug("Probe failed driver=%s error=%s", driver.key, exc)
@@ -262,6 +292,7 @@ async def async_detect_inverter(
                 started=probe_started,
                 outcome="matched",
                 saw_response=True,
+                routes=tracked.route_records,
                 loop=loop,
             )
             inverter.details["probe_elapsed_ms"] = elapsed_ms
@@ -277,6 +308,7 @@ async def async_detect_inverter(
             started=probe_started,
             outcome="no_match",
             saw_response=tracked.saw_response,
+            routes=tracked.route_records,
             loop=loop,
         )
 
@@ -349,16 +381,18 @@ async def async_detect_inverter_candidates(
         outcome: str,
         *,
         saw_response: bool = False,
+        routes: tuple[dict[str, object], ...] = (),
     ) -> int:
         elapsed_ms = int(round(max(0.0, loop.time() - started) * 1000.0))
-        probe_log.append(
-            {
-                "driver": driver.key,
-                "elapsed_ms": elapsed_ms,
-                "outcome": outcome,
-                "saw_response": saw_response,
-            }
-        )
+        record: dict[str, object] = {
+            "driver": driver.key,
+            "elapsed_ms": elapsed_ms,
+            "outcome": outcome,
+            "saw_response": saw_response,
+        }
+        if routes:
+            record["routes"] = list(routes)
+        probe_log.append(record)
         return elapsed_ms
 
     for index, (driver, targets) in enumerate(driver_targets):
@@ -386,7 +420,13 @@ async def async_detect_inverter_candidates(
                 inverter = await probe
         except asyncio.TimeoutError:
             errors.append(f"{driver.key}:probe_timeout")
-            _log_probe(driver, probe_started, "probe_timeout", saw_response=tracked.saw_response)
+            _log_probe(
+                driver,
+                probe_started,
+                "probe_timeout",
+                saw_response=tracked.saw_response,
+                routes=tracked.route_records,
+            )
             logger.debug("Probe timed out driver=%s timeout=%s", driver.key, driver.probe_timeout)
             continue
         except InverterIdentityNoDataError:
@@ -394,7 +434,13 @@ async def async_detect_inverter_candidates(
             inverter_link_down = True
             # The collector answered with zeros — the INVERTER did not speak;
             # this must never count as a link-level response.
-            _log_probe(driver, probe_started, ERROR_INVERTER_LINK_DOWN, saw_response=False)
+            _log_probe(
+                driver,
+                probe_started,
+                ERROR_INVERTER_LINK_DOWN,
+                saw_response=False,
+                routes=tracked.route_records,
+            )
             logger.debug("Identity region read as zeros driver=%s", driver.key)
             continue
         except Exception as exc:
@@ -404,12 +450,19 @@ async def async_detect_inverter_candidates(
                 probe_started,
                 f"error:{str(exc)[:80]}",
                 saw_response=tracked.saw_response,
+                routes=tracked.route_records,
             )
             logger.debug("Probe failed driver=%s error=%s", driver.key, exc)
             continue
 
         if inverter is not None:
-            elapsed_ms = _log_probe(driver, probe_started, "matched", saw_response=True)
+            elapsed_ms = _log_probe(
+                driver,
+                probe_started,
+                "matched",
+                saw_response=True,
+                routes=tracked.route_records,
+            )
             # Measured identification time: the driver-choice step shows it so
             # the user can compare candidates on something real.
             inverter.details["probe_elapsed_ms"] = elapsed_ms
@@ -424,7 +477,13 @@ async def async_detect_inverter_candidates(
             # None from async_probe is NOT evidence of an answer: drivers
             # swallow read timeouts internally. Only the transport-observed
             # response counter may claim the inverter spoke.
-            _log_probe(driver, probe_started, "no_match", saw_response=tracked.saw_response)
+            _log_probe(
+                driver,
+                probe_started,
+                "no_match",
+                saw_response=tracked.saw_response,
+                routes=tracked.route_records,
+            )
 
     if candidates or budget_exhausted:
         return DriverCandidateScan(
@@ -545,10 +604,39 @@ class _ResponseTrackingTransport:
     def __init__(self, inner: Any) -> None:
         self._inner = inner
         self.responses = 0
+        self._route_counters: dict[tuple[object, ...], _ProbeRouteCounter] = {}
 
     @property
     def saw_response(self) -> bool:
         return self.responses > 0
+
+    @property
+    def route_records(self) -> tuple[dict[str, object], ...]:
+        """Return attempts grouped by exact typed route, never by endpoint."""
+
+        return tuple(counter.as_record() for counter in self._route_counters.values())
+
+    def _route_counter(self, route: object) -> _ProbeRouteCounter | None:
+        if type(route) is EybondLinkRoute:
+            key = ("eybond", route.devcode, route.collector_addr)
+            return self._route_counters.setdefault(
+                key,
+                _ProbeRouteCounter(
+                    family="eybond",
+                    devcode=route.devcode,
+                    collector_addr=route.collector_addr,
+                ),
+            )
+        if type(route) is RawSerialLinkRoute:
+            key = ("raw_serial", route.protocol)
+            return self._route_counters.setdefault(
+                key,
+                _ProbeRouteCounter(
+                    family="raw_serial",
+                    protocol=route.protocol,
+                ),
+            )
+        return None
 
     def __getattr__(self, name: str):
         attr = getattr(self._inner, name)
@@ -556,10 +644,15 @@ class _ResponseTrackingTransport:
             return attr
 
         async def _watched(*args: Any, **kwargs: Any):
+            route_counter = self._route_counter(kwargs.get("route"))
+            if route_counter is not None:
+                route_counter.attempts += 1
             result = await attr(*args, **kwargs)
             payload = result[1] if isinstance(result, tuple) and len(result) > 1 else result
             if payload:
                 self.responses += 1
+                if route_counter is not None:
+                    route_counter.responses += 1
             return result
 
         return _watched
@@ -641,17 +734,19 @@ def _append_probe_log(
     started: float,
     outcome: str,
     saw_response: bool,
+    routes: tuple[dict[str, object], ...] = (),
     loop,
 ) -> int:
     elapsed_ms = int(round(max(0.0, loop.time() - started) * 1000.0))
-    probe_log.append(
-        {
-            "driver": driver.key,
-            "elapsed_ms": elapsed_ms,
-            "outcome": outcome,
-            "saw_response": bool(saw_response),
-        }
-    )
+    record: dict[str, object] = {
+        "driver": driver.key,
+        "elapsed_ms": elapsed_ms,
+        "outcome": outcome,
+        "saw_response": bool(saw_response),
+    }
+    if routes:
+        record["routes"] = list(routes)
+    probe_log.append(record)
     return elapsed_ms
 
 

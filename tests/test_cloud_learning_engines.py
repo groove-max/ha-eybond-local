@@ -30,8 +30,10 @@ from custom_components.eybond_local.support.cloud_learning_engines import (  # n
     compatible_cloud_learning_methods_for_provider,
     compatible_cloud_learning_sources,
     compatible_cloud_learning_sources_for_method,
+    compatible_cloud_learning_sources_for_method_any_provider,
     default_cloud_learning_method,
     default_cloud_learning_source_for_method,
+    default_cloud_learning_source_for_method_any_provider,
     resolve_cloud_learning_selection,
     supported_cloud_learning_methods,
     supported_cloud_learning_selections,
@@ -298,6 +300,21 @@ class CloudLearningModelTests(unittest.TestCase):
                 )
             ),
             ("dessmonitor", "smartess"),
+        )
+        self.assertEqual(
+            tuple(
+                source.source_id
+                for source in compatible_cloud_learning_sources_for_method_any_provider(
+                    LEARNING_METHOD_READ_ONLY_EVIDENCE
+                )
+            ),
+            ("dessmonitor", "smartess"),
+        )
+        self.assertEqual(
+            default_cloud_learning_source_for_method_any_provider(
+                LEARNING_METHOD_READ_ONLY_EVIDENCE
+            ),
+            "dessmonitor",
         )
         self.assertEqual(
             tuple(

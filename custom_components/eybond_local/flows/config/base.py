@@ -244,31 +244,35 @@ class ConfigFlowBaseMixin:
         return EybondLocalOptionsFlow(config_entry)
 
     @_with_translation_bundle
-    async def _async_refresh_force_unsupported_override(self) -> None:
-        """Re-read the on-device force-unsupported sentinel for flow-time detection.
+    async def _async_prepare_metadata_caches(self) -> None:
+        """Prepare every JSON-backed detector input before flow-time detection.
 
-        The integration's async_setup only runs after the first entry exists, so
-        on a fresh install the very first config flow would otherwise ignore the
-        force_unsupported.flag sentinel. Refresh it once here (in an executor —
-        it stats a file) so the validation toggle works during onboarding too.
+        The integration's domain ``async_setup`` does not run until the first
+        entry exists.  A fresh installation must therefore warm the same
+        metadata catalogs from the config flow itself; otherwise the first scan
+        reaches ``Path.read_text`` from Home Assistant's event loop.  Keep the
+        complete preparation in one executor boundary, including the on-device
+        ``force_unsupported.flag`` sentinel used by onboarding validation.
         """
 
-        if getattr(self, "_force_unsupported_refreshed", False):
+        if getattr(self, "_metadata_caches_prepared", False):
             return
-        self._force_unsupported_refreshed = True
-        from ...metadata.device_catalog_loader import refresh_force_unsupported_override
+        self._metadata_caches_prepared = True
+        from ...integration_metadata import _prime_metadata_caches
 
         with suppress(Exception):
-            config_root = Path(self.hass.config.path("eybond_local")).resolve()
+            # Constructing this path is pure; all filesystem resolution and
+            # reads remain inside the executor-owned loader call below.
+            config_root = Path(self.hass.config.path("eybond_local"))
             await self.hass.async_add_executor_job(
-                refresh_force_unsupported_override, config_root
+                _prime_metadata_caches, config_root
             )
 
     async def async_step_user(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        await self._async_refresh_force_unsupported_override()
+        await self._async_prepare_metadata_caches()
         await self._async_ensure_network_defaults()
 
         def _select_connection_type(connection_type: str) -> None:
@@ -319,7 +323,7 @@ class ConfigFlowBaseMixin:
     ) -> ConfigFlowResult:
         """Handle a collector that dialed into the passive callback listener."""
 
-        await self._async_refresh_force_unsupported_override()
+        await self._async_prepare_metadata_caches()
         await self._async_ensure_network_defaults()
 
         collector_pn = str(discovery_info.get(CONF_COLLECTOR_PN) or "").strip()

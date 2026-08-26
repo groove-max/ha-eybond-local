@@ -4,6 +4,24 @@ This project uses a changelog-first release flow.
 
 The source of truth for release notes is [CHANGELOG.md](../../CHANGELOG.md), not the GitHub release form.
 
+## Publishing code for manual testing without a release
+
+Use this path when real-device feedback is needed before a public release:
+
+1. Assign the next candidate version in
+   [manifest.json](../../custom_components/eybond_local/manifest.json), while
+   keeping its notes under `Unreleased` in the changelog.
+2. Run the quality gate and the current real-Home-Assistant lane, then deploy
+   that exact tree to the maintainer's test Home Assistant and verify entry
+   setup, live entities, and logs.
+3. Push the tested commit to `main`, but do not create or push a version tag and
+   do not create a GitHub release.
+4. Direct testers to the `main` branch instructions in the public README. Ask
+   them to include the exact commit and a new Support Archive with feedback.
+
+HACS release users do not receive this build automatically. Before the actual
+release, rerun the complete release workflow below from the final tree.
+
 ## Release Workflow
 
 1. Keep incoming work under `## [Unreleased]` in [CHANGELOG.md](../../CHANGELOG.md)

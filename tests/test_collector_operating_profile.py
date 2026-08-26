@@ -262,7 +262,6 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         def _method_source(name: str) -> str:
             return _lifecycle_method_source("options_*.py", name)
 
-        new_operation_gate = _method_source("_cloud_tool_new_operations_allowed")
         proxy_lifecycle = _method_source("_proxy_capture_lifecycle_active")
         proxy_status = _method_source("_proxy_capture_status_available")
         cloud_tools_availability = _method_source("_cloud_tools_menu_available")
@@ -270,30 +269,36 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         cloud_tools_step = _method_source("async_step_cloud_tools")
         proxy_step = _method_source("async_step_proxy_capture")
         shadow_step = _method_source("async_step_shadow_learning")
+        support_package_step = _method_source("async_step_create_support_package")
+        support_package_form = _method_source("_show_create_support_package_form")
         diagnostics_menu = _method_source("_diagnostics_menu_options")
 
-        self.assertIn("cloud_connection_supported", new_operation_gate)
-        self.assertIn("cloud_tools_allowed", new_operation_gate)
         self.assertIn("proxy_capture_overview", proxy_lifecycle)
         self.assertNotIn("can_start", proxy_lifecycle)
         self.assertIn("can_stop", proxy_lifecycle)
         self.assertIn("critical_phase", proxy_lifecycle)
         self.assertIn("blocking_reason", proxy_status)
         self.assertIn("latest_proxy_trace_path", proxy_status)
-        self.assertIn("_cloud_tool_new_operations_allowed", cloud_tools_availability)
+        self.assertIn("_support_acquisition_readiness", cloud_tools_availability)
+        self.assertIn("cloud_metadata_read.visible", cloud_tools_availability)
+        self.assertIn("proxy_capture.visible", cloud_tools_availability)
         self.assertIn("_proxy_capture_lifecycle_active", cloud_tools_availability)
-        self.assertNotIn("_proxy_capture_status_available", cloud_tools_availability)
+        self.assertIn("_proxy_capture_status_available", cloud_tools_availability)
         self.assertIn("_shadow_learning_lifecycle_active", cloud_tools_availability)
         self.assertIn('"cloud_tools"', init_step)
         self.assertNotIn('"proxy_capture"', init_step)
         self.assertNotIn('"shadow_learning"', init_step)
         self.assertIn('"proxy_capture"', cloud_tools_step)
         self.assertIn('"shadow_learning"', cloud_tools_step)
-        self.assertIn("_cloud_tool_new_operations_allowed", proxy_step)
-        self.assertIn("_proxy_capture_lifecycle_active", proxy_step)
+        self.assertIn("_support_acquisition_readiness", proxy_step)
         self.assertIn("_proxy_capture_status_available", proxy_step)
-        self.assertIn("_cloud_tool_new_operations_allowed", shadow_step)
+        self.assertIn("_proxy_capture_lifecycle_active", proxy_step)
+        self.assertIn("_support_acquisition_readiness", shadow_step)
         self.assertIn("_shadow_learning_lifecycle_active", shadow_step)
+        self.assertIn("_support_acquisition_readiness", support_package_step)
+        self.assertIn("cloud_metadata_read", support_package_step)
+        self.assertIn("_support_acquisition_readiness", support_package_form)
+        self.assertIn("cloud_metadata_read", support_package_form)
         self.assertNotIn('"proxy_capture"', diagnostics_menu)
 
     def test_runtime_route_never_re_reads_legacy_operation_mode(self) -> None:
@@ -335,11 +340,16 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         endpoint_context = _coordinator_method_source(
             "_async_prepare_cloud_tool_endpoint_context"
         )
+        snapshot_proxy_projection = _coordinator_method_source(
+            "_proxy_capture_values"
+        )
 
-        self.assertIn("collector_cloud_tools_allowed", shadow_start)
+        self.assertIn("support_acquisition_readiness", shadow_start)
+        self.assertIn("active_control_learning", shadow_start)
         self.assertIn("async_set_collector_server_endpoint", shadow_start)
         self.assertIn("restore_required", shadow_start)
-        self.assertIn("proxy_capture_overview", proxy_start)
+        self.assertIn("support_acquisition_readiness", proxy_start)
+        self.assertIn("proxy_capture", proxy_start)
         self.assertEqual(
             shadow_start.count("_async_prepare_cloud_tool_endpoint_context"),
             1,
@@ -364,14 +374,17 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
             "_async_read_live_collector_server_endpoint",
             endpoint_context,
         )
-        self.assertNotIn("collector_cloud_tools_allowed", shadow_stop)
-        self.assertNotIn("collector_cloud_tools_allowed", proxy_stop)
-        self.assertEqual(
-            source.count(
-                "cloud_tools_allowed=self.collector_cloud_tools_allowed"
-            ),
-            4,
+        self.assertNotIn("support_acquisition_readiness", shadow_stop)
+        self.assertNotIn("support_acquisition_readiness", proxy_stop)
+        self.assertIn(
+            "support_acquisition_readiness",
+            snapshot_proxy_projection,
         )
+        self.assertNotIn(
+            "collector_capabilities.proxy_capture",
+            snapshot_proxy_projection,
+        )
+        self.assertIn("support_acquisition_readiness", source)
 
 
 if __name__ == "__main__":

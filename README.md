@@ -127,6 +127,23 @@ It is a small ESP8266/ESP32-based bridge that connects directly to the inverter 
 3. Restart Home Assistant.
 4. Add **EyeBond Local** from **Settings → Devices & Services**.
 
+### Testing the unreleased `main` branch
+
+Use this only when a maintainer asks you to test a fix that is not in a release
+yet. It does not update through HACS and may change before the next release.
+
+1. Back up your Home Assistant configuration.
+2. Download the current [`main` branch archive](https://github.com/groove-max/ha-eybond-local/archive/refs/heads/main.zip).
+3. Remove the existing `config/custom_components/eybond_local/` directory, then
+   copy the complete directory from the archive into `config/custom_components/`.
+   Do not mix files from two builds.
+4. Restart Home Assistant and check the EyeBond Local entries.
+5. When reporting a result, include the Git commit shown on the repository page
+   and attach a new Support Archive.
+
+To return to a published build, reinstall the latest release through HACS or
+replace the directory with the complete directory from that release archive.
+
 ---
 
 ## Setup
@@ -235,8 +252,8 @@ mode, and the difference between unavailable and disabled entities.
 
 ## Device learning
 
-Some devices can be added in read-only or partial mode first. **Expand support
-for this device** can then collect extra evidence or check which additional
+Some devices can be added in read-only or partial mode first. **Expand device
+support** can then collect extra evidence or check which additional
 settings and sensors your exact device supports.
 
 Use it when:
@@ -247,12 +264,13 @@ Use it when:
 
 What to expect:
 
-1. Start **Configure → Expand support for this device**.
+1. Start **Configure → Expand device support**.
 2. Choose **Analyze device data** (recommended) or the advanced active-control
    verification.
 3. When more than one compatible API is available, choose the exact cloud
    source for this run.
-4. Read the safety notice when active verification is selected.
+4. For active verification, confirm the temporary collector endpoint change,
+   bounded cloud test commands, and their local interception by Home Assistant.
 5. Sign in to the supported cloud account for this one session, if requested.
 6. Review the result. Read-only evidence does not add entities automatically;
    only locally proven active results can be applied.

@@ -250,6 +250,9 @@ class CollectorScanFlowMixin:
     async def _async_do_scan(self) -> None:
         """Run auto-detection in the background."""
 
+        # Direct scan invocations (including resumed flows) must cross the same
+        # cold-start executor boundary as the top-level user/discovery steps.
+        await self._async_prepare_metadata_caches()
         self._scan_responded_addresses.clear()
         effective_input = self._auto_config
         server_ip = str(

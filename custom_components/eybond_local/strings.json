@@ -413,7 +413,7 @@
           "connection": "Collector connection and cloud",
           "collector_endpoint": "Home Assistant connection address",
           "runtime": "Polling and inverter detection",
-          "cloud_tools": "Cloud traffic tools",
+          "cloud_tools": "Expand device support",
           "local_register_observation": "Local read-only observation",
           "collector_wifi": "Change collector Wi-Fi",
           "collector_uart": "Change inverter UART speed",
@@ -425,11 +425,12 @@
         }
       },
       "cloud_tools": {
-        "title": "Cloud Traffic Tools",
-        "description": "These tools temporarily route the collector's cloud connection through Home Assistant and restore the original cloud endpoint when finished.",
+        "title": "Expand Device Support",
+        "description": "Collect read-only cloud information, record the collector's cloud exchange when the route is safe, or create one archive for support. Read-only analysis does not change the collector connection.",
         "menu_options": {
-          "proxy_capture": "Capture collector traffic",
-          "shadow_learning": "Discover additional device controls"
+          "shadow_learning": "Analyze cloud data and device capabilities",
+          "proxy_capture": "Capture collector cloud traffic",
+          "create_support_package": "Create support archive"
         }
       },
       "local_register_observation": {
@@ -574,7 +575,7 @@
         }
       },
       "shadow_learning": {
-        "title": "Expand support for this device",
+        "title": "Expand device support",
         "description": "{control_discovery_hint}",
         "data": {
           "learning_method": "What should Home Assistant do?"
@@ -594,17 +595,17 @@
         }
       },
       "shadow_learning_consent": {
-        "title": "Expand support for this device",
+        "title": "Expand device support",
         "description": "{control_discovery_hint}",
         "data": {
-          "shadow_learning_confirm_cloud_write": "Yes, briefly check which extra sensors and controls this device supports"
+          "shadow_learning_confirm_cloud_write": "Yes, temporarily reroute the collector, send bounded cloud test commands, and intercept them locally"
         },
         "data_description": {
-          "shadow_learning_confirm_cloud_write": "Home Assistant briefly checks this device through its cloud service to discover extra controls and sensor evidence. The device's settings are not changed."
+          "shadow_learning_confirm_cloud_write": "Home Assistant temporarily changes the collector cloud endpoint. The selected cloud service sends bounded test commands; Home Assistant captures and blocks the matching local writes, then restores the previous endpoint."
         }
       },
       "shadow_learning_credentials": {
-        "title": "Expand support for this device",
+        "title": "Expand device support",
         "description": "{control_discovery_hint}",
         "data": {
           "username": "Cloud username",
@@ -616,7 +617,7 @@
         }
       },
       "shadow_learning_review": {
-        "title": "Expand support for this device",
+        "title": "Expand device support",
         "description": "{control_discovery_hint}",
         "data": {
           "enabled_controls": "Extra controls to add",
@@ -628,7 +629,7 @@
         }
       },
       "shadow_learning_result": {
-        "title": "Expand support for this device",
+        "title": "Expand device support",
         "description": "{control_discovery_hint}",
         "data": {
           "result_action": "What would you like to do?"

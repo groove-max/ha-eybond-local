@@ -38,6 +38,7 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertEqual(schema.block("live").count, 34)
         self.assertEqual(schema.scalar_register("rated_power_register"), 643)
         self.assertEqual(schema.enum_map_for("mode_names")[3], "Off-Grid")
+        self.assertEqual(schema.enum_map_for("battery_type_base")[8], "LiB")
         self.assertEqual(schema.bit_labels_for("warning_code_names")[9], "Battery Not Connected")
         self.assertEqual(
             schema.bit_labels_for("warning_code_names")[19],

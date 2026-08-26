@@ -24,7 +24,10 @@ from custom_components.eybond_local.metadata.device_catalog_loader import (  # n
     MATCH_NO_DATA,
     clear_device_catalog_cache,
 )
-from custom_components.eybond_local.models import ProbeTarget  # noqa: E402
+from custom_components.eybond_local.models import (  # noqa: E402
+    DetectedInverter,
+    ProbeTarget,
+)
 from custom_components.eybond_local.runtime.driver_detection import (  # noqa: E402
     async_detect_inverter,
     async_detect_inverter_candidates,
@@ -329,6 +332,56 @@ class SmgProbeCatalogAuthorityTest(unittest.IsolatedAsyncioTestCase):
 
 
 class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_log_records_only_the_typed_link_route(self) -> None:
+        class _Transport:
+            async def async_send_payload(self, payload, *, route):
+                return b"response"
+
+        class _MatchingDriver:
+            key = "typed_route"
+            protocol_family = "test"
+            probe_timeout = 0
+            signature_timeout = 0
+            probe_targets = (
+                ProbeTarget(
+                    devcode=0x0994,
+                    collector_addr=0x01,
+                    device_addr=0,
+                ),
+            )
+
+            async def async_probe(self, transport, target):
+                await transport.async_send_payload(
+                    b"probe",
+                    route=target.link_route,
+                )
+                return DetectedInverter(
+                    driver_key=self.key,
+                    protocol_family=self.protocol_family,
+                    model_name="Typed route test",
+                    serial_number="TEST01",
+                    probe_target=target,
+                )
+
+        with patch(
+            "custom_components.eybond_local.runtime.driver_detection.iter_drivers",
+            return_value=(_MatchingDriver(),),
+        ):
+            context = await async_detect_inverter(_Transport(), driver_hint="auto")
+
+        self.assertEqual(
+            context.inverter.details["probe_log"][0]["routes"],
+            [
+                {
+                    "family": "eybond",
+                    "attempts": 1,
+                    "responses": 1,
+                    "devcode": 0x0994,
+                    "collector_addr": 0x01,
+                }
+            ],
+        )
+
     async def test_detection_surfaces_link_down_instead_of_no_driver(self) -> None:
         class _LinkDownDriver:
             key = "modbus_smg"

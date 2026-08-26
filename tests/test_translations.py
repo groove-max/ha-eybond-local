@@ -152,6 +152,46 @@ class TranslationShapeTests(unittest.TestCase):
                     steps["rediscover_devices"]["data"],
                 )
 
+    def test_active_learning_consent_names_the_complete_endpoint_transaction(self) -> None:
+        """Consent covers routing, cloud commands, interception, and restore."""
+
+        markers = {
+            "en": ("endpoint", "test commands", "capture and block", "restores"),
+            "ru": (
+                "endpoint",
+                "тестовые команды",
+                "перехватить и заблокировать",
+                "восстановит",
+            ),
+            "uk": (
+                "endpoint",
+                "тестові команди",
+                "перехопити й заблокувати",
+                "відновить",
+            ),
+        }
+        for path in FLOW_TRANSLATION_FILES:
+            with self.subTest(path=path.name):
+                dynamic = json.loads(path.read_text(encoding="utf-8"))["common"][
+                    "dynamic"
+                ]
+                consent = dynamic["control_discovery_intro_hint"]
+                for marker in markers[path.stem]:
+                    self.assertIn(marker, consent)
+
+        for path in TRANSLATION_FILES:
+            language = "en" if path.name == "strings.json" else path.stem
+            with self.subTest(path=path.name):
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                consent = payload["options"]["step"]["shadow_learning_consent"]
+                label = consent["data"]["shadow_learning_confirm_cloud_write"]
+                description = consent["data_description"][
+                    "shadow_learning_confirm_cloud_write"
+                ]
+                self.assertIn(markers[language][1], label)
+                self.assertIn("endpoint", description)
+                self.assertIn(markers[language][1], description)
+
 
 class RecoveryFailureLocalizationTests(unittest.TestCase):
     """The runtime-generated recovery-failure explanations are really localized.

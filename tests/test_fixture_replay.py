@@ -59,8 +59,32 @@ PI30_FIXTURE_PATH = (
     / "fixture.json"
 )
 
+ISSUE_13_SANDISOLAR_FIXTURE_PATH = (
+    REPO_ROOT
+    / "tests"
+    / "fixtures"
+    / "issue_13_sandisolar_sd_11kp48v_beta4.json"
+)
+
 
 class FixtureReplayContractTests(unittest.TestCase):
+    def test_issue_13_sandisolar_fixture_resolves_without_generic_smg_projection(self) -> None:
+        async def scenario() -> tuple[object, dict[str, object]]:
+            context = await detect_fixture_path(ISSUE_13_SANDISOLAR_FIXTURE_PATH)
+            values = (await read_fixture_result(context)).values
+            return context, values
+
+        context, values = asyncio.run(scenario())
+
+        self.assertEqual(context.inverter.model_name, "Sandisolar SD 11KP48V WIFI")
+        self.assertEqual(context.inverter.variant_key, "sandisolar_sd_11kp48v_wifi")
+        self.assertEqual(
+            context.inverter.register_schema_name,
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        )
+        self.assertEqual(values["inverter_frequency"], 50.01)
+        self.assertEqual(values["inverter_temperature"], 35)
+
     def test_replay_preserves_typed_result_until_snapshot_boundary(self) -> None:
         expected = DriverReadResult(
             values={"output_power": 420},

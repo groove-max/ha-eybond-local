@@ -12,6 +12,10 @@ from ...schema import (
     capability_write_exposure_allowed,
     preset_write_exposure_allowed,
 )
+from .poll_projection import (
+    RUNTIME_DRIVER_STATE_DRIVER_UNBOUND,
+    runtime_driver_state_from_snapshot,
+)
 
 
 class CoordinatorControlProjectionMixin:
@@ -21,6 +25,8 @@ class CoordinatorControlProjectionMixin:
     def controls_enabled(self) -> bool:
         """Whether writes are globally enabled for this entry."""
 
+        if self._runtime_driver_unbound_for_controls():
+            return False
         return controls_enabled(
             control_mode=self.control_mode,
             detection_confidence=self.detection_confidence,
@@ -37,6 +43,8 @@ class CoordinatorControlProjectionMixin:
     def controls_reason(self) -> str:
         """Why writes are enabled or disabled for this entry."""
 
+        if self._runtime_driver_unbound_for_controls():
+            return "driver_unbound"
         return controls_reason(
             control_mode=self.control_mode,
             detection_confidence=self.detection_confidence,
@@ -47,6 +55,8 @@ class CoordinatorControlProjectionMixin:
     def controls_summary(self) -> str:
         """Human-readable summary of the current control policy."""
 
+        if self._runtime_driver_unbound_for_controls():
+            return "Monitoring only while Home Assistant identifies the inverter driver."
         return controls_summary(
             control_mode=self.control_mode,
             detection_confidence=self.detection_confidence,
@@ -66,9 +76,26 @@ class CoordinatorControlProjectionMixin:
 
         return None
 
+    def _runtime_driver_unbound_for_controls(self) -> bool:
+        """Return whether inverter writes are blocked until a driver is bound.
+
+        This is runtime safety state, not configuration.  In particular it must
+        never rewrite ``control_mode``: an explicit Read-only or Full Control
+        choice remains durable while detection runs and after identity is saved.
+        ``collector_offline`` deliberately does not remove the known control
+        surface; those entities stay present and become unavailable normally.
+        """
+
+        return (
+            runtime_driver_state_from_snapshot(self.data)
+            == RUNTIME_DRIVER_STATE_DRIVER_UNBOUND
+        )
+
     def can_expose_capability(self, capability: WriteCapability) -> bool:
         """Whether one capability should exist as a writable HA entity."""
 
+        if self._runtime_driver_unbound_for_controls():
+            return False
         context = self._write_exposure_context()
         return capability_write_exposure_allowed(
             capability,
@@ -99,6 +126,8 @@ class CoordinatorControlProjectionMixin:
     def can_expose_preset(self, preset: CapabilityPreset) -> bool:
         """Whether one preset should exist as a writable HA entity."""
 
+        if self._runtime_driver_unbound_for_controls():
+            return False
         inverter = self.identified_inverter
         if inverter is None:
             capabilities_by_key = {

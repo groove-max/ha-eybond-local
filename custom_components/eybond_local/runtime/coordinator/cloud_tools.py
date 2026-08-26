@@ -20,6 +20,7 @@ from ...const import (
     DOMAIN,
     LOCAL_METADATA_DIR,
 )
+from ...connection.operating_profile import collector_operating_profile_from_entry
 from ...metadata.collector_cloud_profile_catalog_loader import (
     resolve_collector_cloud_provider,
     resolve_collector_cloud_session_protocol,
@@ -29,6 +30,11 @@ from ...support.cloud_evidence_providers import (
     CloudEvidenceContext,
     cloud_evidence_provider_supported,
     resolve_cloud_evidence_provider,
+)
+from ...support.acquisition import (
+    SUPPORT_BLOCKER_OPERATING_PROFILE,
+    SupportAcquisitionReadiness,
+    resolve_support_acquisition_readiness,
 )
 from ...support.download import sign_proxy_capture_download_url
 from ...support.memory_guard import read_available_memory_mib, shadow_learning_memory_blocker
@@ -100,6 +106,45 @@ logger = logging.getLogger(__name__)
 class CoordinatorCloudToolsMixin:
     """Own the shared proxy/shadow endpoint transaction lifecycle."""
 
+    @property
+    def support_acquisition_readiness(self) -> SupportAcquisitionReadiness:
+        """Project support tools without requiring an identified inverter.
+
+        The ordinary collector capability profile remains conservative for
+        product/runtime behavior.  Evidence acquisition instead uses the exact
+        collector identity, bridge classification, provider registry and
+        canonical connection axes.  It never persists a collector kind.
+        """
+
+        config_entry = self.config_entry
+        entry_data = dict(getattr(config_entry, "data", {}) or {})
+        entry_options = dict(getattr(config_entry, "options", {}) or {})
+        values = dict(getattr(self.data, "values", {}) or {})
+        route_profile = collector_operating_profile_from_entry(
+            entry_data,
+            entry_options,
+            # Unknown means unclassified, not proven local-only.  The support
+            # route is allowed by the canonical callback/external axes while a
+            # positively identified virtual bridge still fails closed below.
+            ha_only_required=False,
+        )
+        provider = self.cloud_evidence_provider
+        return resolve_support_acquisition_readiness(
+            collector_pn=self.smartess_collector_pn,
+            inverter_identified=bool(
+                entry_data.get("detected_model")
+                or entry_data.get("detected_serial")
+                or entry_options.get("detected_model")
+                or entry_options.get("detected_serial")
+                or values.get("model_name")
+                or values.get("serial_number")
+            ),
+            virtual_bridge=self.collector_capabilities.virtual_bridge,
+            cloud_provider=provider,
+            cloud_provider_supported=cloud_evidence_provider_supported(provider),
+            cloud_route_allowed=route_profile.cloud_tools_allowed,
+        )
+
     async def _async_disconnect_collector_for_cloud_tool_route(
         self,
         *,
@@ -136,10 +181,9 @@ class CoordinatorCloudToolsMixin:
             raise RuntimeError("shadow_learning_route_running")
         if self._proxy_capture_process_running():
             raise RuntimeError("proxy_capture_already_running")
-        if not self.collector_cloud_tools_allowed:
-            raise RuntimeError("operating_profile_requires_cloud_and_ha")
-        if not self.collector_capabilities.proxy_capture:
-            raise RuntimeError("collector_proxy_capture_unavailable")
+        proxy_readiness = self.support_acquisition_readiness.proxy_capture
+        if not proxy_readiness.can_start:
+            raise RuntimeError(proxy_readiness.blocker)
         if not self.collector_actions_enabled:
             raise RuntimeError("collector_control_disabled")
 
@@ -619,8 +663,11 @@ class CoordinatorCloudToolsMixin:
     ) -> dict[str, object]:
         """Start one fail-closed shadow-learning runtime session."""
 
-        if not self.collector_cloud_tools_allowed:
-            raise RuntimeError("shadow_learning_requires_cloud_and_ha_profile")
+        active_readiness = self.support_acquisition_readiness.active_control_learning
+        if not active_readiness.can_start:
+            if active_readiness.blocker == SUPPORT_BLOCKER_OPERATING_PROFILE:
+                raise RuntimeError("shadow_learning_requires_cloud_and_ha_profile")
+            raise RuntimeError(active_readiness.blocker)
         if not self.collector_actions_enabled:
             raise RuntimeError("shadow_learning_collector_control_disabled")
         active_proxy_state = await self._async_active_proxy_capture_state(require_process=False)
@@ -1304,9 +1351,13 @@ class CoordinatorCloudToolsMixin:
         return build_proxy_capture_overview(
             control_mode=self.control_mode,
             collector_control_allowed=self.collector_actions_enabled,
-            collector_proxy_capture_allowed=self.collector_capabilities.proxy_capture,
+            collector_proxy_capture_allowed=(
+                self.support_acquisition_readiness.proxy_capture.visible
+            ),
             collector_connected=bool(snapshot.connected),
-            cloud_tools_allowed=self.collector_cloud_tools_allowed,
+            cloud_tools_allowed=(
+                self.support_acquisition_readiness.proxy_capture.can_start
+            ),
             collector_cloud_family=self.collector_cloud_family,
             collector_session_protocol=self.collector_session_protocol,
             cloud_session_protocol=resolve_collector_cloud_session_protocol(
@@ -1604,9 +1655,13 @@ class CoordinatorCloudToolsMixin:
         return build_proxy_capture_overview(
             control_mode=self.control_mode,
             collector_control_allowed=self.collector_actions_enabled,
-            collector_proxy_capture_allowed=self.collector_capabilities.proxy_capture,
+            collector_proxy_capture_allowed=(
+                self.support_acquisition_readiness.proxy_capture.visible
+            ),
             collector_connected=True,
-            cloud_tools_allowed=self.collector_cloud_tools_allowed,
+            cloud_tools_allowed=(
+                self.support_acquisition_readiness.proxy_capture.can_start
+            ),
             collector_cloud_family=self.collector_cloud_family,
             collector_session_protocol=self.collector_session_protocol,
             cloud_session_protocol=resolve_collector_cloud_session_protocol(
@@ -2471,9 +2526,13 @@ class CoordinatorCloudToolsMixin:
         overview = build_proxy_capture_overview(
             control_mode=self.control_mode,
             collector_control_allowed=self.collector_actions_enabled,
-            collector_proxy_capture_allowed=self.collector_capabilities.proxy_capture,
+            collector_proxy_capture_allowed=(
+                self.support_acquisition_readiness.proxy_capture.visible
+            ),
             collector_connected=bool(snapshot.connected),
-            cloud_tools_allowed=self.collector_cloud_tools_allowed,
+            cloud_tools_allowed=(
+                self.support_acquisition_readiness.proxy_capture.can_start
+            ),
             collector_cloud_family=self.collector_cloud_family,
             current_endpoint=str(
                 current_endpoint

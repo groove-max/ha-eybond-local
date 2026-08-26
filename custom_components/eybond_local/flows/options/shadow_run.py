@@ -34,7 +34,6 @@ from ...runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
 from ...support.cloud_local_coverage import build_cloud_local_coverage_report
 from ...support.cloud_learning_engines import (
     default_cloud_learning_method,
-    default_cloud_learning_source_for_method,
 )
 from ...support.cloud_learning_models import (
     LEARNING_METHOD_ACTIVE_CORRELATION,
@@ -126,15 +125,14 @@ class ShadowLearningRunMixin:
                 ),
                 next_step=self._diagnostics_result_tr(
                     "ensure_entry_loaded",
-                    "Ensure the entry is loaded and the inverter has been detected, then try again.",
+                    "Ensure the entry is loaded, then try again.",
                 ),
             )
 
+        readiness = self._support_acquisition_readiness()
         if not (
-            (
-                self._cloud_tool_new_operations_allowed()
-                and self._collector_capabilities().shadow_learning
-            )
+            readiness.cloud_metadata_read.can_start
+            or readiness.active_control_learning.can_start
             or self._shadow_learning_lifecycle_active(coordinator)
         ):
             return await self._async_cloud_tools_unavailable()
@@ -224,8 +222,8 @@ class ShadowLearningRunMixin:
             return await self._async_continue_after_learning_source(coordinator)
 
         method_id = self._control_discovery_learning_method(coordinator)
-        default_source = default_cloud_learning_source_for_method(
-            self._control_discovery_cloud_provider(coordinator),
+        default_source = self._control_discovery_default_learning_source(
+            coordinator,
             method_id,
         )
         selected = (user_input or {}).get("learning_source", default_source)
@@ -298,7 +296,7 @@ class ShadowLearningRunMixin:
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Require explicit consent only for sources that send control probes."""
+        """Consent to temporary routing, bounded cloud probes, and interception."""
 
         coordinator = self._coordinator()
         if coordinator is None:

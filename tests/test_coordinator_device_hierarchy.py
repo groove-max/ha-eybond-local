@@ -893,6 +893,40 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             "custom_components.eybond_local.models"
         ].RuntimeSnapshot
 
+    def _support_readiness(
+        self,
+        *,
+        proxy_can_start: bool = True,
+        active_can_start: bool = True,
+    ):
+        module = importlib.import_module(
+            "custom_components.eybond_local.support.acquisition"
+        )
+        ready = module.SupportOperationReadiness(
+            visible=True,
+            can_start=True,
+            blocker="",
+        )
+
+        def _route(can_start: bool):
+            return (
+                ready
+                if can_start
+                else module.SupportOperationReadiness(
+                    visible=True,
+                    can_start=False,
+                    blocker="operating_profile_requires_cloud_and_ha",
+                )
+            )
+
+        return module.SupportAcquisitionReadiness(
+            collector_identified=True,
+            inverter_identified=False,
+            cloud_metadata_read=ready,
+            proxy_capture=_route(proxy_can_start),
+            active_control_learning=_route(active_can_start),
+        )
+
     @classmethod
     def tearDownClass(cls) -> None:
         for name in reversed(_STUBBED_MODULE_NAMES):
@@ -4847,9 +4881,10 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         class _ConfigEntries:
             def async_update_entry(self, entry, *, title=None, data=None, options=None) -> None:
-                del options
                 if data is not None:
                     entry.data = dict(data)
+                if options is not None:
+                    entry.options = dict(options)
                 if title is not None:
                     entry.title = title
                 updated_entries.append(
@@ -4869,8 +4904,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 "detected_model": "",
                 "detected_serial": "",
                 "server_ip": "192.168.1.104",
+                "control_mode": "read_only",
             },
-            options={},
+            options={"control_mode": "read_only"},
             title="Collector 192.168.1.14",
         )
         coordinator.data = self.RuntimeSnapshot()
@@ -4910,6 +4946,8 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             "55355535553555",
         )
         self.assertEqual(coordinator.config_entry.data["detected_driver"], "pi30")
+        self.assertEqual(coordinator.config_entry.data["control_mode"], "read_only")
+        self.assertEqual(coordinator.config_entry.options["control_mode"], "read_only")
         self.assertNotIn("driver_hint", coordinator.config_entry.data)
         self.assertEqual(
             coordinator.config_entry.data["collector_cloud_profile_key"],
@@ -6284,9 +6322,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
             with patch.object(
                 self.coordinator_module.EybondLocalCoordinator,
-                "collector_cloud_tools_allowed",
+                "support_acquisition_readiness",
                 new_callable=PropertyMock,
-                return_value=True,
+                return_value=self._support_readiness(),
             ), patch.object(
                 self.coordinator_module.EybondLocalCoordinator,
                 "collector_actions_enabled",
@@ -6309,6 +6347,45 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_support_readiness_does_not_require_an_identified_inverter(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            entry_id="entry-unbound-support",
+            data={
+                "collector_pn": "E50000200000000001",
+                "connection_strategy": "callback_on_demand",
+                "endpoint_control_policy": "external",
+                "detected_model": "",
+                "detected_serial": "",
+            },
+            options={},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={"driver_key": "auto"})
+
+        with patch.object(
+            self.coordinator_module.EybondLocalCoordinator,
+            "smartess_collector_pn",
+            new_callable=PropertyMock,
+            return_value="E50000200000000001",
+        ), patch.object(
+            self.coordinator_module.EybondLocalCoordinator,
+            "cloud_evidence_provider",
+            new_callable=PropertyMock,
+            return_value="smartess",
+        ), patch.object(
+            self.coordinator_module.EybondLocalCoordinator,
+            "collector_capabilities",
+            new_callable=PropertyMock,
+            return_value=types.SimpleNamespace(virtual_bridge=False),
+        ):
+            readiness = coordinator.support_acquisition_readiness
+
+        self.assertTrue(readiness.collector_identified)
+        self.assertFalse(readiness.inverter_identified)
+        self.assertTrue(readiness.cloud_metadata_read.can_start)
+        self.assertTrue(readiness.proxy_capture.can_start)
+        self.assertTrue(readiness.active_control_learning.can_start)
+
     def test_start_shadow_learning_requires_cloud_and_ha_profile(self) -> None:
         async def _run() -> None:
             coordinator = object.__new__(
@@ -6329,9 +6406,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
             with patch.object(
                 self.coordinator_module.EybondLocalCoordinator,
-                "collector_cloud_tools_allowed",
+                "support_acquisition_readiness",
                 new_callable=PropertyMock,
-                return_value=False,
+                return_value=self._support_readiness(active_can_start=False),
             ):
                 with self.assertRaisesRegex(
                     RuntimeError,
@@ -6369,9 +6446,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
             with patch.object(
                 self.coordinator_module.EybondLocalCoordinator,
-                "collector_cloud_tools_allowed",
+                "support_acquisition_readiness",
                 new_callable=PropertyMock,
-                return_value=True,
+                return_value=self._support_readiness(),
             ), patch.object(
                 self.coordinator_module.EybondLocalCoordinator,
                 "collector_actions_enabled",
@@ -7163,6 +7240,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             return_value=value,
         )
         patchers = [
+            prop("support_acquisition_readiness", self._support_readiness()),
             prop("smartess_collector_pn", "E5000020000000"),
             prop("collector_cloud_tools_allowed", True),
             prop("collector_actions_enabled", True),
@@ -7805,6 +7883,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             return_value=value,
         )
         patchers = [
+            prop("support_acquisition_readiness", self._support_readiness()),
             prop("proxy_capture_overview", overview),
             prop("smartess_collector_pn", "E5000020000000"),
             prop("collector_cloud_tools_allowed", True),
@@ -8473,6 +8552,51 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(coordinator.data.values["last_error"], "startup_detection_pending")
         collector_info = coordinator.collector_device_info()
         self.assertEqual(collector_info["model"], "EyeBond Collector")
+
+    def test_driver_unbound_interlocks_writes_without_changing_user_mode(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        capability = types.SimpleNamespace(key="output_source_priority")
+        inverter = types.SimpleNamespace(
+            model_name="Bound inverter",
+            serial_number="SERIAL-1",
+            capabilities=(capability,),
+        )
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "control_mode": "full",
+                "detection_confidence": "high",
+            },
+            options={"control_mode": "full"},
+        )
+        coordinator.data = self.RuntimeSnapshot(
+            connected=True,
+            inverter=inverter,
+            values={"runtime_driver_state": "driver_unbound"},
+        )
+        coordinator._write_exposure_context = lambda: {
+            "variant_key": "",
+            "profile_source_scope": "builtin",
+            "schema_source_scope": "builtin",
+            "profile_name": "",
+            "device_scoped_overlay_active": False,
+            "selected_control_keys": None,
+        }
+
+        self.assertEqual(coordinator.control_mode, "full")
+        self.assertFalse(coordinator.controls_enabled)
+        self.assertEqual(coordinator.controls_reason, "driver_unbound")
+        self.assertFalse(coordinator.can_expose_capability(capability))
+
+        coordinator.data.values["runtime_driver_state"] = "driver_bound"
+
+        self.assertEqual(coordinator.control_mode, "full")
+        self.assertTrue(coordinator.controls_enabled)
+        self.assertTrue(coordinator.can_expose_capability(capability))
+
+        coordinator.data.values["runtime_driver_state"] = "collector_offline"
+
+        self.assertTrue(coordinator.controls_enabled)
+        self.assertTrue(coordinator.can_expose_capability(capability))
 
     def test_prime_startup_snapshot_includes_persisted_inverter_capabilities(self) -> None:
         capability = types.SimpleNamespace(key="output_source_priority")

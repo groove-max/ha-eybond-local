@@ -217,14 +217,17 @@ class DiagnosticsOptionsMixin:
             )
 
         capabilities = self._collector_capabilities()
+        metadata_readiness = (
+            self._support_acquisition_readiness().cloud_metadata_read
+        )
         is_bridge = capabilities.virtual_bridge
         can_refresh_cloud_evidence = (
             self._cloud_evidence_export_available(coordinator)
-            and capabilities.cloud_evidence
+            and metadata_readiness.can_start
         )
         saved_cloud_evidence_path = self._current_cloud_evidence_path(coordinator)
         had_saved_cloud_evidence = (
-            bool(saved_cloud_evidence_path) and capabilities.cloud_evidence
+            bool(saved_cloud_evidence_path) and metadata_readiness.visible
         )
 
         if user_input is None and can_refresh_cloud_evidence:
@@ -654,15 +657,17 @@ class DiagnosticsOptionsMixin:
         user_input: dict[str, Any] | None = None,
         errors: dict[str, str] | None = None,
     ) -> ConfigFlowResult:
-        capabilities = self._collector_capabilities()
+        metadata_readiness = (
+            self._support_acquisition_readiness().cloud_metadata_read
+        )
         had_saved_cloud_evidence = (
-            bool(saved_cloud_evidence_path) and capabilities.cloud_evidence
+            bool(saved_cloud_evidence_path) and metadata_readiness.visible
         )
         can_refresh_cloud_evidence = (
             self._cloud_evidence_export_available(coordinator)
-            and capabilities.cloud_evidence
+            and metadata_readiness.can_start
         )
-        if not capabilities.cloud_evidence:
+        if not metadata_readiness.visible:
             saved_cloud_evidence_path = ""
             had_saved_cloud_evidence = False
         defaults = {

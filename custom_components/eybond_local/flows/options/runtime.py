@@ -218,7 +218,6 @@ class RuntimeOptionsMixin:
                 data = dict(self._config_entry.data)
                 options = dict(self._config_entry.options)
                 options[CONF_DRIVER_HINT] = selected
-                options[CONF_CONTROL_MODE] = CONTROL_MODE_READ_ONLY
                 _clear_runtime_inverter_facts(data)
                 self.hass.config_entries.async_update_entry(
                     self._config_entry,
@@ -689,7 +688,6 @@ class RuntimeOptionsMixin:
             # scan depth so the reloaded runtime really performs the requested
             # identification instead of merely saving a decorative preference.
             _clear_runtime_inverter_facts(data)
-            options[CONF_CONTROL_MODE] = CONTROL_MODE_READ_ONLY
         self.hass.config_entries.async_update_entry(
             self._config_entry,
             data=data,

@@ -39,8 +39,8 @@ If you are not sure, stop and create a Support Archive instead.
 1. **Settings → Devices & Services**
 2. **EyeBond Local**
 3. **Configure**
-4. **Cloud traffic tools**
-5. **Capture collector traffic**
+4. **Expand device support**
+5. **Capture collector cloud traffic**
 6. Choose the duration and start the capture.
 7. Reproduce the problem, or follow the developer's instructions.
 8. Stop the capture, or wait for the timer to finish.
@@ -87,7 +87,7 @@ Normally, EyeBond Local restores the collector automatically after capture.
 
 If the vendor app stops showing live data afterward:
 
-1. Open **Configure → Cloud traffic tools → Capture collector traffic**.
+1. Open **Configure → Expand device support → Capture collector cloud traffic**.
 2. Use the stop/recovery action shown for the current session.
 3. Wait for Home Assistant to confirm restoration.
 4. Check the vendor app again.

@@ -3232,6 +3232,23 @@ class RuntimeStateMachineTests(unittest.TestCase):
                         "elapsed_ms": 1234,
                         "outcome": "matched",
                         "saw_response": True,
+                        "routes": [
+                            {
+                                "family": "eybond",
+                                "devcode": 0x0994,
+                                "collector_addr": 1,
+                                "attempts": 4,
+                                "responses": 4,
+                                "endpoint": "192.0.2.10",
+                            },
+                            {
+                                "family": "eybond",
+                                "devcode": True,
+                                "collector_addr": 1,
+                                "attempts": 1,
+                                "responses": 1,
+                            },
+                        ],
                     },
                 ),
             )
@@ -3259,6 +3276,15 @@ class RuntimeStateMachineTests(unittest.TestCase):
                         "elapsed_ms": 1234,
                         "outcome": "matched",
                         "saw_response": True,
+                        "routes": [
+                            {
+                                "family": "eybond",
+                                "devcode": 0x0994,
+                                "collector_addr": 1,
+                                "attempts": 4,
+                                "responses": 4,
+                            }
+                        ],
                     },
                 ],
             )

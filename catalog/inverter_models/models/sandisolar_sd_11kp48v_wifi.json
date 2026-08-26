@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "model_key": "sandisolar_sd_11kp48v_wifi",
+  "manufacturer": "Sandisolar",
+  "model": "SD 11KP48V WIFI",
+  "aliases": [],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "layout4_model32771",
+      "label": "Protocol-4 fingerprint 171=0x8003, 184=4",
+      "device_descriptor_keys": [
+        "sandisolar_sd_11kp48v"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "partial",
+    "controls": "none"
+  },
+  "coverage": {
+    "runtime_control_surface": "available",
+    "smartess_control_surface": "unknown",
+    "vendor_register_map": "documented",
+    "notes": [
+      "The exact layout/model fingerprint is captured from the issue #13 beta.4 support archive.",
+      "Telemetry uses the documented Anenji protocol-4 register schema; this prevents generic SMG interpretation of register 227 as temperature.",
+      "The compatible ANJ write surface is inherited only as untested Full-Control candidates. Automatic control mode exposes none of these writes."
+    ]
+  },
+  "known_limitations": [
+    "No local write has been validated on this exact Sandisolar fingerprint; every inherited control remains Full-Control-only until hardware retesting."
+  ],
+  "knowledge_summary": "Sandisolar SD 11KP48V WIFI with exact layout-4/model-0x8003 identity. Captured telemetry follows the documented ANJ protocol-4 map, while compatible write candidates remain explicitly untested.",
+  "source_keys": [
+    "github_issue_13_sandisolar_sd_11kp48v_beta4",
+    "documentation_anenji_protocol_3_10"
+  ]
+}

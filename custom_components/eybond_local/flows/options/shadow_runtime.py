@@ -12,9 +12,15 @@ from ...support.cloud_learning_engines import (
     CloudLearningEngine,
     compatible_cloud_learning_methods_for_provider,
     compatible_cloud_learning_sources_for_method,
+    compatible_cloud_learning_sources_for_method_any_provider,
+    default_cloud_learning_source_for_method,
+    default_cloud_learning_source_for_method_any_provider,
     resolve_cloud_learning_selection,
+    supported_cloud_learning_methods,
 )
 from ...support.cloud_learning_models import (
+    LEARNING_METHOD_ACTIVE_CORRELATION,
+    LEARNING_METHOD_READ_ONLY_EVIDENCE,
     CloudApiSource,
     CloudLearningMethod,
     CloudLearningSelection,
@@ -67,8 +73,23 @@ class ShadowLearningRuntimeMixin:
     def _control_discovery_learning_methods(
         self, coordinator
     ) -> tuple[CloudLearningMethod, ...]:
-        return compatible_cloud_learning_methods_for_provider(
-            self._control_discovery_cloud_provider(coordinator)
+        provider = self._control_discovery_cloud_provider(coordinator)
+        candidates = (
+            compatible_cloud_learning_methods_for_provider(provider)
+            if provider
+            else supported_cloud_learning_methods()
+        )
+        readiness = self._support_acquisition_readiness()
+        allowed: set[str] = set()
+        if readiness.cloud_metadata_read.can_start:
+            allowed.add(LEARNING_METHOD_READ_ONLY_EVIDENCE)
+        if (
+            readiness.active_control_learning.can_start
+            or self._shadow_learning_lifecycle_active(coordinator)
+        ):
+            allowed.add(LEARNING_METHOD_ACTIVE_CORRELATION)
+        return tuple(
+            method for method in candidates if method.method_id in allowed
         )
 
     def _control_discovery_learning_source(self, coordinator) -> str:
@@ -87,10 +108,33 @@ class ShadowLearningRuntimeMixin:
     ) -> tuple[CloudApiSource, ...]:
         """Return sources compatible with the trusted provider and method."""
 
-        return compatible_cloud_learning_sources_for_method(
-            self._control_discovery_cloud_provider(coordinator),
-            self._control_discovery_learning_method(coordinator),
-        )
+        provider = self._control_discovery_cloud_provider(coordinator)
+        method_id = self._control_discovery_learning_method(coordinator)
+        if provider:
+            return compatible_cloud_learning_sources_for_method(
+                provider,
+                method_id,
+            )
+        if (
+            method_id == LEARNING_METHOD_READ_ONLY_EVIDENCE
+            and self._support_acquisition_readiness().cloud_metadata_read.can_start
+        ):
+            return compatible_cloud_learning_sources_for_method_any_provider(
+                method_id
+            )
+        return ()
+
+    def _control_discovery_default_learning_source(
+        self,
+        coordinator,
+        method_id: str,
+    ) -> str:
+        """Return a source default without inventing a missing provider."""
+
+        provider = self._control_discovery_cloud_provider(coordinator)
+        if provider:
+            return default_cloud_learning_source_for_method(provider, method_id)
+        return default_cloud_learning_source_for_method_any_provider(method_id)
 
     def _control_discovery_learning_selection(
         self, coordinator
@@ -104,9 +148,12 @@ class ShadowLearningRuntimeMixin:
             source_id=source_id,
         )
         engine = resolve_cloud_learning_selection(selection)
-        if not engine.available or engine.source.provider_id != (
-            self._control_discovery_cloud_provider(coordinator)
-        ):
+        if not engine.available:
+            return None
+        provider = self._control_discovery_cloud_provider(coordinator)
+        if provider and engine.source.provider_id != provider:
+            return None
+        if not provider and method_id != LEARNING_METHOD_READ_ONLY_EVIDENCE:
             return None
         return selection
 
@@ -151,7 +198,12 @@ class ShadowLearningRuntimeMixin:
         )
 
     def _control_discovery_cloud_provider_label(self, coordinator) -> str:
-        provider = self._control_discovery_cloud_provider(coordinator)
+        engine = self._control_discovery_learning_engine(coordinator)
+        provider = (
+            engine.source.provider_id
+            if engine.available
+            else self._control_discovery_cloud_provider(coordinator)
+        )
         if provider == "valuecloud":
             return "ValueCloud"
         if provider == "smartess":
@@ -159,7 +211,12 @@ class ShadowLearningRuntimeMixin:
         return provider or self._tr("common.dynamic.cloud_provider", "cloud service")
 
     def _control_discovery_cloud_app_label(self, coordinator) -> str:
-        provider = self._control_discovery_cloud_provider(coordinator)
+        engine = self._control_discovery_learning_engine(coordinator)
+        provider = (
+            engine.source.provider_id
+            if engine.available
+            else self._control_discovery_cloud_provider(coordinator)
+        )
         if provider == "valuecloud":
             return "SmartValue"
         if provider == "smartess":

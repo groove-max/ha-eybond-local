@@ -10,6 +10,7 @@ import enum
 import itertools
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from contextlib import contextmanager, suppress
@@ -948,6 +949,30 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "load_translation_bundle",
             [getattr(func, "__name__", "") for func, _args in flow.hass.executor_job_calls],
         )
+
+    async def test_cold_flow_metadata_preparation_runs_once_off_event_loop(self) -> None:
+        flow = self._make_flow()
+        flow.hass.config.path = lambda name: f"/config/{name}"
+        worker_threads: list[str] = []
+
+        def _prime(_config_root: Path) -> None:
+            worker_threads.append(threading.current_thread().name)
+
+        async def _run_in_executor(func, *args):
+            flow.hass.executor_job_calls.append((func, args))
+            return await asyncio.to_thread(func, *args)
+
+        flow.hass.async_add_executor_job = _run_in_executor
+        with patch(
+            "custom_components.eybond_local.integration_metadata._prime_metadata_caches",
+            side_effect=_prime,
+        ) as prime:
+            await flow._async_prepare_metadata_caches()
+            await flow._async_prepare_metadata_caches()
+
+        prime.assert_called_once_with(Path("/config/eybond_local"))
+        self.assertEqual(len(worker_threads), 1)
+        self.assertNotEqual(worker_threads[0], threading.main_thread().name)
 
     async def test_user_step_routes_to_interface_selection_when_multiple_interfaces(self) -> None:
         flow = self._make_flow()
@@ -5219,7 +5244,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await flow.async_step_manual_save()
 
         self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"]["control_mode"], "read_only")
+        self.assertEqual(result["data"]["control_mode"], "auto")
         self.assertEqual(result["data"]["detection_confidence"], "none")
         self.assertEqual(result["data"]["detected_model"], "")
         self.assertEqual(result["data"]["detected_serial"], "")
@@ -5315,7 +5340,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["data"]["detected_serial"], "")
         self.assertEqual(result["data"]["detection_confidence"], "none")
         self.assertEqual(result["data"][CONF_DRIVER_HINT], "auto")
-        self.assertEqual(result["data"]["control_mode"], "read_only")
+        self.assertEqual(result["data"]["control_mode"], "auto")
 
     async def test_smartess_cloud_assist_preview_does_not_bind_runtime_driver(self) -> None:
         flow = self._make_flow()
@@ -5618,7 +5643,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(options._config_entry.data["detected_model"], "")
         self.assertEqual(options._config_entry.data["detected_serial"], "")
         self.assertEqual(options._config_entry.data["detection_confidence"], "none")
-        self.assertEqual(options._config_entry.data["control_mode"], "read_only")
+        self.assertEqual(options._config_entry.data["control_mode"], "auto")
         self.assertEqual(len(options.hass.config_entries.updates), 1)
         self.assertEqual(options.hass.config_entries.reloaded, [])
 
@@ -5756,11 +5781,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options = self._make_options_flow()
         options._config_entry.data.update(
             {
+                "collector_pn": "E50000200000000001",
                 CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
                 "endpoint_control_policy": "external",
             }
         )
         options._config_entry.runtime_data = types.SimpleNamespace(
+            cloud_evidence_provider="smartess",
+            smartess_collector_pn="E50000200000000001",
             proxy_capture_overview=types.SimpleNamespace(
                 can_start=True,
                 can_stop=False,
@@ -5780,7 +5808,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         tools = await options.async_step_cloud_tools()
         self.assertEqual(
             tools["menu_options"],
-            ["proxy_capture", "shadow_learning"],
+            ["shadow_learning", "proxy_capture", "create_support_package"],
         )
         self.assertNotIn("collector_uart", result["menu_options"])
         self.assertEqual(result["description_placeholders"]["bridge_note"], "")
@@ -5790,12 +5818,16 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options._config_entry.data = {
             **dict(options._config_entry.data),
             "collector_kind": COLLECTOR_KIND_UNKNOWN,
+            "collector_pn": "E50000200000000001",
             CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+            "endpoint_control_policy": "external",
         }
         options._config_entry.options = {
             "collector_kind": COLLECTOR_KIND_UNKNOWN,
         }
         options._config_entry.runtime_data = types.SimpleNamespace(
+            cloud_evidence_provider="smartess",
+            smartess_collector_pn="E50000200000000001",
             data=types.SimpleNamespace(
                 collector=types.SimpleNamespace(collector_virtual_bridge=False),
                 values={
@@ -5860,7 +5892,10 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("cloud_tools", menu["menu_options"])
         self.assertNotIn("shadow_learning", menu["menu_options"])
         tools = await options.async_step_cloud_tools()
-        self.assertEqual(tools["menu_options"], ["proxy_capture"])
+        self.assertEqual(
+            tools["menu_options"],
+            ["proxy_capture", "create_support_package"],
+        )
 
     async def test_shadow_restore_remains_reachable_after_profile_drift(self) -> None:
         options = self._make_options_flow()
@@ -5882,6 +5917,129 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("cloud_tools", menu["menu_options"])
         self.assertIn("shadow_learning", tools["menu_options"])
+
+    async def test_unbound_inverter_keeps_read_only_and_proxy_support_paths(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                "collector_pn": "E50000200000000001",
+                "detected_model": "",
+                "detected_serial": "",
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                "endpoint_control_policy": "external",
+            }
+        )
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            cloud_evidence_provider="smartess",
+            smartess_collector_pn="E50000200000000001",
+            proxy_capture_overview=types.SimpleNamespace(
+                can_start=False,
+                can_stop=False,
+                critical_phase=False,
+                blocking_reason="current_endpoint_unavailable",
+            ),
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={"driver_key": "auto"},
+            ),
+        )
+
+        menu = await options.async_step_init()
+        tools = await options.async_step_cloud_tools()
+        learning = await options.async_step_shadow_learning()
+
+        self.assertEqual(options._collector_capabilities().collector_kind, "unknown")
+        self.assertIn("cloud_tools", menu["menu_options"])
+        self.assertEqual(
+            tools["menu_options"],
+            ["shadow_learning", "proxy_capture", "create_support_package"],
+        )
+        self.assertEqual(learning["step_id"], "shadow_learning")
+        self.assertEqual(
+            tuple(_schema_select_options(learning["data_schema"], "learning_method")),
+            (
+                LEARNING_METHOD_READ_ONLY_EVIDENCE,
+                LEARNING_METHOD_ACTIVE_CORRELATION,
+            ),
+        )
+
+    async def test_unbound_inverter_without_provider_still_gets_read_only_sources(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                "collector_pn": "E50000200000000001",
+                "detected_model": "",
+                "detected_serial": "",
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
+                "endpoint_control_policy": "external",
+            }
+        )
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            cloud_evidence_provider="",
+            smartess_collector_pn="E50000200000000001",
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={"driver_key": "auto"},
+            ),
+        )
+
+        menu = await options.async_step_init()
+        tools = await options.async_step_cloud_tools()
+        source = await options.async_step_shadow_learning()
+
+        self.assertIn("cloud_tools", menu["menu_options"])
+        self.assertEqual(
+            tools["menu_options"],
+            ["shadow_learning", "create_support_package"],
+        )
+        self.assertEqual(source["step_id"], "shadow_learning_source")
+        self.assertEqual(
+            tuple(_schema_select_options(source["data_schema"], "learning_source")),
+            ("dessmonitor", "smartess"),
+        )
+        self.assertEqual(
+            options._shadow_learning_state["wizard_method"],
+            LEARNING_METHOD_READ_ONLY_EVIDENCE,
+        )
+
+    async def test_ha_only_unbound_inverter_keeps_metadata_read_but_not_active_learning(
+        self,
+    ) -> None:
+        options = self._make_options_flow()
+        options._config_entry.data.update(
+            {
+                "collector_pn": "E50000200000000001",
+                "detected_model": "",
+                "detected_serial": "",
+                CONF_CONNECTION_STRATEGY: CONNECTION_STRATEGY_INBOUND,
+                "endpoint_control_policy": "integration_managed",
+            }
+        )
+        options._config_entry.runtime_data = types.SimpleNamespace(
+            cloud_evidence_provider="smartess",
+            smartess_collector_pn="E50000200000000001",
+            data=types.SimpleNamespace(
+                collector=types.SimpleNamespace(collector_virtual_bridge=False),
+                values={"driver_key": "auto"},
+            ),
+        )
+
+        menu = await options.async_step_init()
+        tools = await options.async_step_cloud_tools()
+        source = await options.async_step_shadow_learning()
+
+        self.assertIn("cloud_tools", menu["menu_options"])
+        # Proxy remains visible so its page can explain that Cloud + HA is
+        # required; active writes are absent from the learning method set.
+        self.assertEqual(
+            tools["menu_options"],
+            ["shadow_learning", "proxy_capture", "create_support_package"],
+        )
+        self.assertEqual(source["step_id"], "shadow_learning_source")
+        self.assertEqual(
+            options._shadow_learning_state["wizard_method"],
+            LEARNING_METHOD_READ_ONLY_EVIDENCE,
+        )
 
     async def test_options_init_offers_repair_for_degraded_virtual_bridge(self) -> None:
         # Recovery beats capability filtering: a DEGRADED virtual bridge (recovery
@@ -6273,8 +6431,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["data"]["poll_mode"], "manual")
         self.assertEqual(result["data"]["poll_interval"], 15)
         # Changing driver is user intent, not detected identity.  The new
-        # runtime must confirm it before controls can leave read-only mode.
-        self.assertEqual(result["data"]["control_mode"], "read_only")
+        # Runtime binding provides the temporary interlock without replacing
+        # the explicit Full Control choice made in this submission.
+        self.assertEqual(result["data"]["control_mode"], "full")
         self.assertEqual(result["data"]["advertised_server_ip"], "203.0.113.10")
         self.assertEqual(result["data"]["advertised_tcp_port"], 9443)
         self.assertEqual(result["data"]["driver_hint"], "modbus_smg")
@@ -6362,7 +6521,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result["data"][CONF_DRIVER_DETECTION_STRATEGY],
             DRIVER_DETECTION_FULL_SCAN,
         )
-        self.assertEqual(result["data"]["control_mode"], "read_only")
+        self.assertEqual(result["data"]["control_mode"], "full")
         self.assertEqual(options._config_entry.data["detected_driver"], "")
         self.assertEqual(options._config_entry.data["detected_model"], "")
         self.assertEqual(options._config_entry.data["detected_serial"], "")
@@ -6521,9 +6680,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await options.async_step_diagnostics()
         self.assertEqual(result["type"], "menu")
         self.assertIn("diagnostic_commands", result["menu_options"])
-        source = Path(
+        source = (REPO_ROOT / Path(
             "custom_components/eybond_local/flows/options/diagnostics.py"
-        ).read_text(encoding="utf-8")
+        )).read_text(encoding="utf-8")
         self.assertNotIn('getattr(self, "show_advanced_options"', source)
 
     async def test_diagnostic_commands_step_runs_and_displays_result(self) -> None:

@@ -169,7 +169,7 @@ ESPHome YAML and reflashing instead; the options screen reports that limitation.
 This is a support tool. Most users do not need it for normal operation.
 
 Use it only when a developer asks you to collect extra evidence. Open
-**Configure → Cloud traffic tools → Capture collector traffic**. Duration,
+**Configure → Expand device support → Capture collector cloud traffic**. Duration,
 start/stop, live status, and the saved result are owned by this one flow; the
 old proxy buttons and duration entity on the collector device are removed.
 

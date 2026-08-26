@@ -27,7 +27,6 @@ from .connection_form import (
 )
 from ...const import (
     CONF_ADVERTISED_TCP_PORT,
-    CONF_CONTROL_MODE,
     CONF_DETECTED_DRIVER,
     CONF_DETECTED_MODEL,
     CONF_DETECTED_SERIAL,
@@ -42,7 +41,6 @@ from ...const import (
     CONF_UDP_PORT,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
-    CONTROL_MODE_READ_ONLY,
     DRIVER_DETECTION_FIRST_MATCH,
     DRIVER_DETECTION_FULL_SCAN,
     POLL_MODE_AUTO,
@@ -128,13 +126,12 @@ _PRE_ENTRY_INVERTER_METADATA_KEYS = frozenset(
 
 
 def _clear_runtime_inverter_facts(data: dict[str, Any]) -> None:
-    """Clear persisted runtime facts before a new owned-session detection."""
+    """Clear runtime facts without changing the user's control-mode intent."""
 
     data[CONF_DETECTED_DRIVER] = ""
     data[CONF_DETECTION_CONFIDENCE] = "none"
     data[CONF_DETECTED_MODEL] = ""
     data[CONF_DETECTED_SERIAL] = ""
-    data[CONF_CONTROL_MODE] = CONTROL_MODE_READ_ONLY
     for key in _PRE_ENTRY_INVERTER_METADATA_KEYS:
         data.pop(key, None)
 

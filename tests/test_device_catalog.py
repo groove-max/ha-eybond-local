@@ -494,7 +494,7 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
                 self.assertEqual(registry_disabled, [], profile_name)
 
     def test_unknown_known_layout_resolves_family(self) -> None:
-        result = _tree_resolve(load_compiled_detection_catalog(), 
+        result = _tree_resolve(load_compiled_detection_catalog(),
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 1,
@@ -504,8 +504,35 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         self.assertEqual(result.resolution, RESOLUTION_FAMILY)
         self.assertEqual(result.surface_key, "smg_family_read_only")
 
+    def test_issue_13_sandisolar_fingerprint_resolves_exact_protocol_4_surface(self) -> None:
+        result = _tree_resolve(
+            load_compiled_detection_catalog(),
+            protocol_key="modbus_smg",
+            evidence={
+                "fingerprint.layout_code": 4,
+                "fingerprint.model_code": 0x8003,
+            },
+        )
+
+        self.assertEqual(result.resolution, RESOLUTION_EXACT)
+        self.assertEqual(result.candidate_keys, ("sandisolar_sd_11kp48v",))
+        self.assertEqual(result.surface_key, "sandisolar_sd_11kp48v_full")
+
+    def test_unknown_protocol_4_model_never_uses_generic_smg_projection(self) -> None:
+        result = _tree_resolve(
+            load_compiled_detection_catalog(),
+            protocol_key="modbus_smg",
+            evidence={
+                "fingerprint.layout_code": 4,
+                "fingerprint.model_code": 0x8FFF,
+            },
+        )
+
+        self.assertEqual(result.resolution, RESOLUTION_UNRESOLVED)
+        self.assertIsNone(result.surface_key)
+
     def test_conflicting_optional_rated_power_resolves_family(self) -> None:
-        result = _tree_resolve(load_compiled_detection_catalog(), 
+        result = _tree_resolve(load_compiled_detection_catalog(),
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 1,
@@ -516,7 +543,7 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         self.assertEqual(result.resolution, RESOLUTION_FAMILY)
 
     def test_unknown_layout_remains_unresolved(self) -> None:
-        result = _tree_resolve(load_compiled_detection_catalog(), 
+        result = _tree_resolve(load_compiled_detection_catalog(),
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 99,
@@ -526,7 +553,7 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         self.assertEqual(result.resolution, RESOLUTION_UNRESOLVED)
 
     def test_must_pv1800_numeric_marker_resolves_to_issue_5_descriptor(self) -> None:
-        result = _tree_resolve(load_compiled_detection_catalog(), 
+        result = _tree_resolve(load_compiled_detection_catalog(),
             protocol_key="must_pv_ph18",
             evidence={
                 "protocol.protocol_id": "MUST_PV_PH18",

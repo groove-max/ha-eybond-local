@@ -341,7 +341,10 @@ async def test_discovery_inbound_full_ha_lifecycle(
             assert data["detected_model"] == ""
             assert data["detected_serial"] == ""
             assert data["detection_confidence"] == "none"
-            assert data["control_mode"] == "read_only"
+            # Control mode is user-owned intent.  The new collector-first entry
+            # starts in Auto while runtime_driver_state=driver_unbound supplies
+            # the temporary write interlock until inverter detection completes.
+            assert data["control_mode"] == "auto"
             contract = RecoveryContract.from_entry_data(data)
             assert contract is not None and contract.inbound_verified
             # Inbound entries persist no unverified peer address as identity.

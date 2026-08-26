@@ -1,6 +1,6 @@
 {
  "schema_version": 2,
- "catalog_version": "2026.08.4",
+ "catalog_version": "2026.08.5",
  "description": "Universal offline inverter catalog with reusable protocol actions, runtime surfaces, and deterministic identity evidence.",
  "protocols": [
   {
@@ -1279,6 +1279,17 @@
    "support_capture_policy": "smg_anenji_11k"
   },
   {
+   "key": "sandisolar_sd_11kp48v_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "sandisolar_sd_11kp48v_wifi",
+   "profile_name": "modbus_smg/models/sandisolar_sd_11kp48v_wifi.json",
+   "register_schema_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_anenji_11k"
+  },
+  {
    "key": "anenji_hhs_11kw_read_only",
    "protocol_key": "modbus_smg",
    "driver_key": "modbus_smg",
@@ -1854,6 +1865,46 @@
     "sources": [
      "corpus:donor …4544 (3 captures)",
      "catalog-migration:anenji_anj_11kw_48v_wifi_p"
+    ],
+    "confidence": "capture-derived"
+   }
+  },
+  {
+   "entry_key": "sandisolar_sd_11kp48v",
+   "fingerprint": {
+    "layout_code": 4,
+    "model_code": 32771
+   },
+   "structural": [
+    "serial_ascii_plausible"
+   ],
+   "model_name": "Sandisolar SD 11KP48V WIFI",
+   "surface_key": "sandisolar_sd_11kp48v_full",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "protocol_number",
+      "one_of": [
+       4
+      ]
+     }
+    ]
+   },
+   "cloud_hints": {
+    "devcodes": []
+   },
+   "provenance": {
+    "sources": [
+     "project-issue:13 beta.4 support archive (2026-08-25): layout_code=4, model_code=0x8003, valid serial",
+     "Anenji Protocol No. 3-10 documentation: protocol 4 register semantics"
     ],
     "confidence": "capture-derived"
    }

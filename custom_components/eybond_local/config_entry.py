@@ -62,7 +62,7 @@ from .const import (
     CONNECTION_STRATEGIES,
     CONNECTION_STRATEGY_CALLBACK_ON_DEMAND,
     CONNECTION_STRATEGY_INBOUND,
-    CONTROL_MODE_READ_ONLY,
+    DEFAULT_CONTROL_MODE,
     DEFAULT_DRIVER_DETECTION_STRATEGY,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_POLL_MODE,
@@ -359,7 +359,10 @@ class EntryCommitFlowMixin:
             CONF_CONNECTION_TYPE: connection_type,
             **connection_settings,
             CONF_CONNECTION_MODE: stored_connection_mode,
-            CONF_CONTROL_MODE: CONTROL_MODE_READ_ONLY,
+            # ``control_mode`` is durable user intent.  Runtime driver binding
+            # supplies the temporary write interlock while inverter detection
+            # is pending; a new entry must not masquerade as user Read-only.
+            CONF_CONTROL_MODE: DEFAULT_CONTROL_MODE,
             CONF_COLLECTOR_PN: collector_pn,
             CONF_DETECTION_CONFIDENCE: "none",
             CONF_DETECTED_MODEL: "",
@@ -604,7 +607,7 @@ class EntryCommitFlowMixin:
             driver_hint=driver_hint,
         )
         data.setdefault(CONF_CONNECTION_TYPE, connection_type)
-        data[CONF_CONTROL_MODE] = CONTROL_MODE_READ_ONLY
+        data[CONF_CONTROL_MODE] = DEFAULT_CONTROL_MODE
         collector_capabilities = _result_collector_capabilities(result)
         data[CONF_COLLECTOR_IP] = collector_ip
         data[CONF_DETECTION_CONFIDENCE] = "none"

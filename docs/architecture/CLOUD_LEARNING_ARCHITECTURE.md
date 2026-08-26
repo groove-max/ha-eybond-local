@@ -19,6 +19,38 @@ It never chooses a method from a source, or an API from a hostname, collector
 kind, credentials, or cloud-family substring. Defaults are declared per exact
 provider/method pair; an absent or ambiguous default fails closed.
 
+## Support-acquisition readiness
+
+Support tools answer questions about devices that runtime may not recognize
+yet. Their availability therefore comes from the neutral, transient
+`SupportAcquisitionReadiness` projection rather than from inverter-driver
+selection or persisted model guesses.
+
+The projection keeps three operation classes separate:
+
+- metadata-only cloud reads require a durable, validated collector PN and may
+  let the user select a registered API even when no cloud provider or inverter
+  driver has been confirmed yet;
+- proxy capture requires a supported, confirmed cloud provider and a
+  **Cloud + Home Assistant** route;
+- active control learning has the same route/provider requirements and adds
+  explicit consent and engine preflight inside the active workflow.
+
+A positively identified local-only bridge blocks all vendor-cloud operations.
+The projection does not persist a collector kind, select a driver, mint a local
+register mapping, or turn cloud evidence into runtime authority. Endpoint
+syntax and restore safety remain owned by the existing proxy/shadow endpoint
+transaction. Stop and recovery paths never depend on start readiness: once a
+route-owning operation exists, its exact cleanup path remains reachable even if
+the current start preconditions are no longer true.
+
+Active learning uses one explicit consent boundary for the complete critical
+operation: temporarily changing the collector cloud endpoint to the local
+shadow route, asking the selected cloud API to send bounded test commands,
+capturing and blocking the corresponding local writes, and restoring the
+previous endpoint. A cloud success without an exact post-action local
+observation is treated as a possible unproxied write and stops the run.
+
 ## Current sources
 
 | Source | Executable method | Collector endpoint | Cloud writes | Result |

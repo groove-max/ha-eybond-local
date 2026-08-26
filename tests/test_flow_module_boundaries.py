@@ -231,7 +231,7 @@ class ConfigFlowDecompositionBoundaryTests(unittest.TestCase):
         "ConfigFlow",
     ]
     TRANSLATED_METHODS = {
-        "_async_refresh_force_unsupported_override",
+        "_async_prepare_metadata_caches",
         "async_step_integration_discovery",
         "async_step_scan_collector_route",
         "async_step_verify_connection",

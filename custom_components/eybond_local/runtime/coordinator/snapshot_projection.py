@@ -268,9 +268,13 @@ class CoordinatorSnapshotProjectionMixin:
         overview = build_proxy_capture_overview(
             control_mode=self.control_mode,
             collector_control_allowed=self.collector_actions_enabled,
-            collector_proxy_capture_allowed=self.collector_capabilities.proxy_capture,
+            collector_proxy_capture_allowed=(
+                self.support_acquisition_readiness.proxy_capture.visible
+            ),
             collector_connected=bool(snapshot.connected),
-            cloud_tools_allowed=self.collector_cloud_tools_allowed,
+            cloud_tools_allowed=(
+                self.support_acquisition_readiness.proxy_capture.can_start
+            ),
             collector_cloud_family=self.collector_cloud_family,
             collector_session_protocol=self.collector_session_protocol,
             cloud_session_protocol=resolve_collector_cloud_session_protocol(

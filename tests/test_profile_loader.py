@@ -100,6 +100,9 @@ class ProfileLoaderTests(unittest.TestCase):
             self.assertEqual(capability.provenance, "verified")
             self.assertFalse(capability.enabled_default)
             self.assertIn("shadow-learning", capability.support_notes)
+        # PR #35 expands read decoding only.  Base-profile writable choices
+        # remain model-evidence-owned and must not silently gain code 8.
+        self.assertNotIn(8, profile.get_capability("battery_type").enum_value_map)
 
     def test_loads_anenji_4200_protocol_1_profile_overlay(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
@@ -591,6 +594,7 @@ class ProfileLoaderTests(unittest.TestCase):
             profile.get_capability("constant_voltage_to_float_wait_time").register,
             639,
         )
+
         self.assertEqual(profile.get_capability("max_discharge_current_protection").register, 642)
         self.assertEqual(profile.get_capability("op1_offgrid_soc_protection_value").register, 649)
         self.assertEqual(profile.get_capability("battery_type").register, 630)
@@ -616,6 +620,23 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.get_capability("battery_equalization_mode").register, 651)
         with self.assertRaises(KeyError):
             profile.get_capability("remote_switch")
+
+    def test_sandisolar_issue_13_profile_inherits_only_untested_writes(self) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile(
+            "modbus_smg/models/sandisolar_sd_11kp48v_wifi.json"
+        )
+
+        self.assertEqual(profile.key, "modbus_smg_sandisolar_sd_11kp48v_wifi")
+        self.assertEqual(profile.title, "Sandisolar SD 11KP48V WIFI")
+        self.assertEqual(profile.driver_key, "modbus_smg")
+        self.assertEqual(profile.protocol_family, "modbus_smg")
+        self.assertEqual(len(profile.capabilities), 53)
+        self.assertTrue(all(not capability.tested for capability in profile.capabilities))
+        self.assertEqual(profile.get_capability("output_source_priority").register, 601)
+        self.assertEqual(profile.get_capability("secondary_output_priority").register, 602)
+        self.assertEqual(profile.get_capability("secondary_charging_priority").register, 633)
 
     def test_rejects_duplicate_capability_keys(self) -> None:
         raw = {

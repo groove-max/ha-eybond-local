@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_13_sandisolar_sd_11kp48v_beta4",
+  "kind": "github_issue",
+  "title": "Sandisolar SD 11KP48V WIFI beta.4 support archive",
+  "reference": "project-issue:13#support-archive-20260825",
+  "captured_at": "2026-08-25",
+  "visibility": "public",
+  "summary": "A beta.4 support archive captured the exact Modbus fingerprint layout 4 and model code 0x8003 for a Sandisolar SD 11KP48V WIFI reported as an ANJ-11KW-compatible inverter. The live values at registers 227 and 231 follow the documented protocol-4 frequency and temperature layout rather than the generic SMG layout.",
+  "assertions": [
+    "commercial_identity",
+    "fingerprint",
+    "runtime_compatibility",
+    "telemetry_validation"
+  ]
+}

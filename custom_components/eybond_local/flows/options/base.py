@@ -19,6 +19,11 @@ from ...connection.operating_profile import (
     CollectorOperatingProfile,
     collector_operating_profile_from_entry,
 )
+from ...support.acquisition import (
+    SupportAcquisitionReadiness,
+    resolve_support_acquisition_readiness,
+)
+from ...support.cloud_evidence_providers import cloud_evidence_provider_supported
 from ...connection.ui import ConnectionFormField
 from ..common.connection_form import (
     IP_TEXT_SELECTOR as _IP_TEXT_SELECTOR,
@@ -33,6 +38,7 @@ from ..common.connection_form import (
     selector_for_connection_field as _shared_connection_field_selector,
 )
 from ...const import (
+    CONF_COLLECTOR_PN,
     CONF_DETECTED_DRIVER,
     CONF_DRIVER_HINT,
     CONF_STRATEGY_TRANSITION_STATE,
@@ -189,13 +195,46 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
             ha_only_required=self._collector_capabilities().ha_only_required,
         )
 
-    def _cloud_tool_new_operations_allowed(self) -> bool:
-        """Return whether this collector may start a cloud-traffic operation."""
+    def _support_acquisition_readiness(self) -> SupportAcquisitionReadiness:
+        """Return support-tool readiness independent of inverter recognition."""
 
-        capabilities = self._collector_capabilities()
-        return bool(
-            capabilities.cloud_connection_supported
-            and self._collector_operating_profile().cloud_tools_allowed
+        coordinator = self._coordinator()
+        projected = getattr(coordinator, "support_acquisition_readiness", None)
+        if type(projected) is SupportAcquisitionReadiness:
+            return projected
+
+        entry_data = dict(getattr(self._config_entry, "data", {}) or {})
+        entry_options = dict(getattr(self._config_entry, "options", {}) or {})
+        values = getattr(getattr(coordinator, "data", None), "values", None)
+        runtime_values = values if isinstance(values, dict) else {}
+        raw_pn = getattr(coordinator, "smartess_collector_pn", None)
+        if raw_pn is None:
+            raw_pn = entry_data.get(CONF_COLLECTOR_PN, "")
+        raw_provider = getattr(coordinator, "cloud_evidence_provider", "")
+        provider = (
+            raw_provider
+            if type(raw_provider) is str and raw_provider == raw_provider.strip()
+            else ""
+        )
+        route_profile = collector_operating_profile_from_entry(
+            entry_data,
+            entry_options,
+            ha_only_required=False,
+        )
+        return resolve_support_acquisition_readiness(
+            collector_pn=raw_pn,
+            inverter_identified=bool(
+                entry_data.get("detected_model")
+                or entry_data.get("detected_serial")
+                or entry_options.get("detected_model")
+                or entry_options.get("detected_serial")
+                or runtime_values.get("model_name")
+                or runtime_values.get("serial_number")
+            ),
+            virtual_bridge=self._collector_capabilities().virtual_bridge,
+            cloud_provider=provider,
+            cloud_provider_supported=cloud_evidence_provider_supported(provider),
+            cloud_route_allowed=route_profile.cloud_tools_allowed,
         )
 
     def _proxy_capture_lifecycle_active(self, coordinator=None) -> bool:
@@ -210,6 +249,13 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
 
     def _proxy_capture_status_available(self, coordinator=None) -> bool:
         """Return whether a supported collector has proxy status/history to show."""
+
+        # A positively identified local bridge has no vendor-cloud side.  A
+        # stale overview/blocking reason must not manufacture a proxy path for
+        # it; only a genuinely active lifecycle may remain reachable for
+        # mandatory cleanup through the separate lifecycle gate.
+        if self._collector_capabilities().virtual_bridge:
+            return False
 
         coordinator = coordinator or self._coordinator()
         overview = getattr(coordinator, "proxy_capture_overview", None)
@@ -241,12 +287,15 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
         }
 
     def _cloud_tools_menu_available(self, coordinator=None) -> bool:
-        """Return whether the shared cloud-traffic tools path is reachable."""
+        """Return whether the shared support-acquisition path is reachable."""
 
         coordinator = coordinator or self._coordinator()
+        readiness = self._support_acquisition_readiness()
         return bool(
-            self._cloud_tool_new_operations_allowed()
+            readiness.cloud_metadata_read.visible
+            or readiness.proxy_capture.visible
             or self._proxy_capture_lifecycle_active(coordinator)
+            or self._proxy_capture_status_available(coordinator)
             or self._shadow_learning_lifecycle_active(coordinator)
         )
 
@@ -375,14 +424,14 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Expose proxy capture and shadow learning through one product path."""
+        """Expose evidence acquisition and support export through one path."""
 
         coordinator = self._coordinator()
         if coordinator is None:
             return await self._async_show_diagnostics_result(
                 action_title=self._diagnostics_result_tr(
                     "cloud_tools_title",
-                    "Cloud traffic tools",
+                    "Expand device support",
                 ),
                 status=self._diagnostics_result_tr(
                     "coordinator_not_loaded",
@@ -396,19 +445,22 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
         if not self._cloud_tools_menu_available(coordinator):
             return await self._async_cloud_tools_unavailable()
 
-        capabilities = self._collector_capabilities()
-        new_operations_allowed = self._cloud_tool_new_operations_allowed()
+        readiness = self._support_acquisition_readiness()
         menu_options: list[str] = []
         if (
-            new_operations_allowed and capabilities.proxy_capture
-        ) or self._proxy_capture_lifecycle_active(coordinator):
-            menu_options.append("proxy_capture")
-        if (
-            new_operations_allowed and capabilities.shadow_learning
+            readiness.cloud_metadata_read.can_start
+            or readiness.active_control_learning.can_start
         ) or self._shadow_learning_lifecycle_active(coordinator):
             menu_options.append("shadow_learning")
+        if (
+            readiness.proxy_capture.visible
+            or self._proxy_capture_lifecycle_active(coordinator)
+            or self._proxy_capture_status_available(coordinator)
+        ):
+            menu_options.append("proxy_capture")
         if not menu_options:
             return await self.async_step_init()
+        menu_options.append("create_support_package")
         return self.async_show_menu(
             step_id="cloud_tools",
             menu_options=menu_options,

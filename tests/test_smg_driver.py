@@ -449,6 +449,65 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["max_discharge_current_protection"], 0)
         self.assertEqual(inverter.details["output_mode"], "Split-Phase-P1")
 
+    async def test_issue_13_sandisolar_fingerprint_uses_protocol_4_schema(self) -> None:
+        fixture = json.loads(
+            (
+                REPO_ROOT
+                / "tests"
+                / "fixtures"
+                / "issue_13_sandisolar_sd_11kp48v_beta4.json"
+            ).read_text(encoding="utf-8")
+        )
+        registers = self._anenji_registers()
+        for captured_range in fixture["ranges"]:
+            start = int(captured_range["start"])
+            for offset, value in enumerate(captured_range["values"]):
+                registers[start + offset] = int(value)
+
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        transport = FixtureTransport(
+            registers=registers,
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.model_name, "Sandisolar SD 11KP48V WIFI")
+        self.assertEqual(inverter.variant_key, "sandisolar_sd_11kp48v_wifi")
+        self.assertEqual(
+            inverter.profile_name,
+            "modbus_smg/models/sandisolar_sd_11kp48v_wifi.json",
+        )
+        self.assertEqual(
+            inverter.register_schema_name,
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        )
+        self.assertEqual(inverter.details["device_type"], 0x8003)
+        self.assertEqual(inverter.details["protocol_number"], 4)
+        self.assertTrue(all(not capability.tested for capability in inverter.capabilities))
+        self.assertFalse(
+            can_expose_capability(
+                inverter.get_capability("output_source_priority"),
+                control_mode="auto",
+                detection_confidence="high",
+            )
+        )
+        self.assertTrue(
+            can_expose_capability(
+                inverter.get_capability("output_source_priority"),
+                control_mode="full",
+                detection_confidence="high",
+            )
+        )
+
+        values = _full_values(await driver.async_read_values(transport, inverter))
+        self.assertEqual(values["inverter_frequency"], 50.01)
+        self.assertEqual(values["inverter_temperature"], 35)
+        self.assertNotEqual(values["inverter_temperature"], 5001)
+
     async def test_probe_selects_hhs_11kw_telemetry_without_anj_controls(self) -> None:
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
