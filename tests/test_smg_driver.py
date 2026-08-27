@@ -538,13 +538,37 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.profile_name, "")
         self.assertEqual(
             inverter.register_schema_name,
-            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+            "modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json",
         )
         self.assertEqual(inverter.capabilities, ())
         self.assertEqual(inverter.capability_groups, ())
         self.assertEqual(inverter.details["device_catalog"]["tier"], "partial")
         self.assertEqual(inverter.details["device_type"], 29440)
         self.assertEqual(inverter.details["protocol_number"], 3)
+
+    async def test_hhs_grid_power_uses_cloud_correlated_register_340(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        registers = self._anenji_registers()
+        registers[171] = 29440
+        registers[184] = 3
+        registers[204] = 0
+        registers[340] = 1729
+        transport = FixtureTransport(
+            registers=registers,
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(
+            inverter.register_schema_name,
+            "modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json",
+        )
+        values = _full_values(await driver.async_read_values(transport, inverter))
+        self.assertEqual(values["grid_power"], 1729)
 
     async def test_probe_rejects_anenji_variant_when_variant_anchor_fields_are_invalid(self) -> None:
         driver = SmgModbusDriver()

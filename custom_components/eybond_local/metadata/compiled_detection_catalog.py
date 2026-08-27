@@ -332,6 +332,42 @@ def resolve_unique_persisted_model_surface(
     return descriptor, surface
 
 
+def model_names_share_catalog_identity(
+    first_model_name: object,
+    second_model_name: object,
+    *,
+    catalog: CompiledDetectionCatalog | None = None,
+) -> bool:
+    """Return whether two model labels resolve to one exact catalog identity.
+
+    Display names can change while an entry retains the previous name as a
+    declared alias.  Treat that migration as the same inverter only when both
+    labels resolve uniquely to the same device descriptor and runtime surface.
+    Unknown, malformed, family-fallback, and ambiguous labels fail closed.
+    """
+
+    if type(first_model_name) is not str or type(second_model_name) is not str:
+        return False
+    first = first_model_name.strip()
+    second = second_model_name.strip()
+    if not first or not second:
+        return False
+    if first == second:
+        return True
+
+    resolved = catalog if catalog is not None else load_compiled_detection_catalog()
+    first_identity = resolve_unique_persisted_model_surface(first, catalog=resolved)
+    second_identity = resolve_unique_persisted_model_surface(second, catalog=resolved)
+    if first_identity is None or second_identity is None:
+        return False
+    first_descriptor, first_surface = first_identity
+    second_descriptor, second_surface = second_identity
+    return (
+        first_descriptor.key == second_descriptor.key
+        and first_surface.key == second_surface.key
+    )
+
+
 def compile_detection_catalog(
     source: DetectionDescriptorCatalog,
     *,

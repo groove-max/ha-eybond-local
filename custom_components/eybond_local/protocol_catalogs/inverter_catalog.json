@@ -1,6 +1,6 @@
 {
  "schema_version": 2,
- "catalog_version": "2026.08.5",
+ "catalog_version": "2026.08.6",
  "description": "Universal offline inverter catalog with reusable protocol actions, runtime surfaces, and deterministic identity evidence.",
  "protocols": [
   {
@@ -1307,7 +1307,7 @@
    "driver_key": "modbus_smg",
    "variant_key": "anenji_hhs_11kw_wifi_no_parallel",
    "profile_name": "",
-   "register_schema_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+   "register_schema_name": "modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json",
    "tier": "partial",
    "read_only": true,
    "support_capture_policy": "smg_anenji_11k"
@@ -2751,9 +2751,10 @@
   {
    "entry_key": "deye_3ph_high_80kw",
    "surface_key": "deye_3ph_high_80kw_untested",
-   "model_name": "Deye-Compatible Three-Phase Hybrid 80 kW (Modbus)",
+   "model_name": "Deye-Compatible Three-Phase Hybrid 8 kW (Modbus)",
    "aliases": [
-    "Kevolt PD0080G-TPM-EU"
+    "Kevolt PD0080G-TPM-EU",
+    "Deye-Compatible Three-Phase Hybrid 80 kW (Modbus)"
    ],
    "detection_supersedes_protocols": [
     "modbus_smg"
@@ -2783,7 +2784,7 @@
    ],
    "provenance": {
     "sources": [
-     "GitHub issue #15 identifies the commercial hardware as Kevolt PD0080G-TPM-EU. Its SmartValue proxy capture repeatedly shows Modbus FC03, device type 5, protocol version 0x0104, and low-first rated-power words 0x3880/0x0001 (80000 raw), followed by the documented Deye-compatible three-phase runtime map at registers 500-683. The public protocol-document mirror corroborates register meanings, while the captured request/response pairs establish the exact wire layout."
+     "GitHub issue #15 identifies the commercial hardware as Kevolt PD0080G-TPM-EU 8 kW. Its SmartValue proxy capture repeatedly shows Modbus FC03, device type 5, protocol version 0x0104, and low-first rated-power words 0x3880/0x0001 (80000 raw, 0.1 W scale = 8000 W), followed by the documented Deye-compatible three-phase runtime map at registers 500-683. The public protocol-document mirror corroborates register meanings, while the captured request/response pairs establish the exact wire layout."
     ],
     "confidence": "capture-confirmed"
    }

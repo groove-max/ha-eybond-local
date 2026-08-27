@@ -78,6 +78,7 @@ from ...models import CapabilityBlocker, DetectedInverter, RuntimeSnapshot, Writ
 from ...metadata.compiled_detection_catalog import (
     PROBE_ACTION_MODBUS_READ,
     load_compiled_detection_catalog,
+    model_names_share_catalog_identity,
 )
 from ...telemetry import TypedTelemetryFrame, fold_driver_telemetry
 from ...payload.modbus import ModbusSession, to_signed_16
@@ -202,7 +203,12 @@ def _inverter_identities_conflict(current: object, candidate: object) -> bool:
         return True
     cur_model = str(getattr(current, "model_name", "") or "").strip()
     cand_model = str(getattr(candidate, "model_name", "") or "").strip()
-    if cur_model and cand_model and cur_model != cand_model:
+    if (
+        cur_model
+        and cand_model
+        and cur_model != cand_model
+        and not model_names_share_catalog_identity(cur_model, cand_model)
+    ):
         return True
     return False
 

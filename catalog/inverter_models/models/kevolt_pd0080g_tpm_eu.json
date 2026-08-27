@@ -4,13 +4,13 @@
   "manufacturer": "Kevolt",
   "model": "PD0080G-TPM-EU",
   "aliases": [
-    "Kevolt 80 kW Three-Phase Hybrid"
+    "Kevolt 8 kW Three-Phase Hybrid"
   ],
   "lifecycle": "experimental",
   "variants": [
     {
       "variant_key": "deye_3ph_high_80kw",
-      "label": "Deye-compatible FC03 high-power map, protocol 0x0104, 80 kW",
+      "label": "Deye-compatible FC03 high-power map, protocol 0x0104, 8 kW",
       "device_descriptor_keys": [
         "deye_3ph_high_80kw"
       ],
@@ -21,7 +21,7 @@
     }
   ],
   "validation": {
-    "hardware": "captured",
+    "hardware": "confirmed",
     "telemetry": "partial",
     "controls": "partial"
   },
@@ -31,8 +31,9 @@
     "vendor_register_map": "documented",
     "notes": [
       "The supplied SmartValue proxy capture contains repeated, CRC-valid Modbus FC03 request/response pairs for the Deye-compatible three-phase runtime map at registers 500-683.",
-      "Runtime identification uses four local raw anchors: device type 5, protocol version 0x0104, and low-first rated-power words 0x3880/0x0001 (80000 raw W).",
-      "The translated document labels the rated-power words as 0.1 W, but that scale conflicts with both the reported 80 kW hardware and its captured raw value 80000. Runtime therefore uses the hardware-correlated 1 W scale and fingerprints the unscaled words.",
+      "Runtime identification uses four local raw anchors: device type 5, protocol version 0x0104, and low-first rated-power words 0x3880/0x0001 (80000 raw; documented 0.1 W scale = 8000 W).",
+      "Direct hardware feedback confirms this is the 8 kW model, so the runtime now follows the protocol document's 0.1 W rated-power scale. The raw words remain the stable fingerprint anchors.",
+      "Hardware feedback confirms the exposed battery values already use the expected negative-on-charge sign; the integration preserves that wire sign.",
       "Runtime reads use small register blocks of at most 15 words rather than the unsupported 500-599 bulk read reported in the issue.",
       "A bounded document-backed operational subset with unambiguous register encoding is available as 118 untested controls only in Full control mode. It covers battery, charging, generator, smart-load, export, metering, TOU, topology, and selected advanced functions.",
       "Settings read-back is rotated one compact block per poll so the expanded control surface does not delay live telemetry. Every write uses FC 0x10, preserves unrelated shared-register bits, and requires an immediate wire read-back before it is accepted."
@@ -41,16 +42,17 @@
   "known_limitations": [
     "All 118 document-backed controls are untested and disabled by default. Users must explicitly select Full control and then enable only the individual entities they intend to test.",
     "Factory reset, production-test, EEPROM initialization, calibration, BMS-owned live words, parallel-cluster addressing, and grid-code/certification curves are intentionally not exposed as user controls even though they occupy writable registers in the protocol document.",
-    "Battery output power/current retain the documented wire sign as diagnostic values; their charge/discharge sign has not yet been promoted to canonical battery telemetry.",
+    "Battery output power/current retain the hardware-confirmed wire sign; no additional canonical sign projection is inferred.",
     "Heat-sink temperature is diagnostic because the observed raw value requires the offset-1000 convention used by adjacent Deye storage maps, while the translated table omits that offset for register 541.",
-    "The commercial Kevolt identity comes from the public issue report; the local fingerprint identifies the compatible 80 kW Deye-family wire layout and may be shared by OEM siblings.",
+    "The commercial Kevolt identity comes from the public issue report; the local fingerprint identifies the compatible 8 kW Deye-family wire layout and may be shared by OEM siblings.",
     "A current-release hardware retest is still required before telemetry support can be marked confirmed."
   ],
-  "knowledge_summary": "Kevolt PD0080G-TPM-EU is a reported 80 kW three-phase hybrid inverter behind an EyeBond Wi-Fi collector. The latest SmartValue proxy capture proves a Modbus RTU FC03 layout with device type 5, protocol version 0x0104, rated-power words resolving to 80000 raw W, and live telemetry in the Deye-compatible 500-683 register range. Deye Modbus RTU V1.04 corroborates the telemetry and documents a broader FC 0x10 settings range. The exact wire fingerprint therefore exposes the current document-backed telemetry surface plus 118 opt-in, untested controls whose encodings are unambiguous, with shared-field-safe writes and mandatory immediate read-back confirmation.",
+  "knowledge_summary": "Kevolt PD0080G-TPM-EU is a hardware-confirmed 8 kW three-phase hybrid inverter behind an EyeBond Wi-Fi collector. The latest SmartValue proxy capture proves a Modbus RTU FC03 layout with device type 5, protocol version 0x0104, rated-power words 80000 raw at the documented 0.1 W scale (8000 W), and live telemetry in the Deye-compatible 500-683 register range. Deye Modbus RTU V1.04 corroborates the telemetry and documents a broader FC 0x10 settings range. The exact wire fingerprint therefore exposes the current document-backed telemetry surface plus 118 opt-in, untested controls whose encodings are unambiguous, with shared-field-safe writes and mandatory immediate read-back confirmation.",
   "source_keys": [
     "github_issue_15",
     "proxy_capture_issue_15_20260811",
     "documentation_deye_three_phase_modbus_high_map",
-    "maintainer_kevolt_control_readback_20260826"
+    "maintainer_kevolt_control_readback_20260826",
+    "maintainer_kevolt_hardware_feedback_20260827"
   ]
 }

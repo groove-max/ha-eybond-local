@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "maintainer_kevolt_hardware_feedback_20260827",
+  "kind": "private_message",
+  "title": "Kevolt rated-power and battery-sign hardware feedback",
+  "reference": "private:kevolt-hardware-feedback-20260827",
+  "captured_at": "2026-08-27",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "The hardware owner confirmed that the exact captured Kevolt PD0080G-TPM-EU unit is rated for 8 kW, not 80 kW, and that its battery current is negative while the battery is charging. Main telemetry and refresh behavior were reported as working on the maintainer test build.",
+  "assertions": [
+    "commercial_identity",
+    "telemetry_validation",
+    "hardware_test"
+  ]
+}

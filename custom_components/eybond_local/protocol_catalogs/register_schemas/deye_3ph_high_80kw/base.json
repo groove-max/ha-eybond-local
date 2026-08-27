@@ -153,7 +153,9 @@
         "key": "rated_power",
         "register": 20,
         "word_count": 2,
-        "combine": "u32_low_first"
+        "combine": "u32_low_first",
+        "divisor": 10,
+        "decimals": 1
       },
       {
         "key": "run_state",

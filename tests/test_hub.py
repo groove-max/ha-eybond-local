@@ -3282,7 +3282,7 @@ class RuntimeStateMachineTests(unittest.TestCase):
             inverter = DetectedInverter(
                 driver_key="modbus_catalog",
                 protocol_family="modbus_catalog",
-                model_name="Deye-Compatible Three-Phase Hybrid 80 kW (Modbus)",
+                model_name="Deye-Compatible Three-Phase Hybrid 8 kW (Modbus)",
                 serial_number="",
                 probe_target=target,
                 variant_key="deye_3ph_high_80kw",
@@ -3879,6 +3879,45 @@ class RuntimeStateMachineTests(unittest.TestCase):
             self.assertFalse(hub._inverter_binding_needs_live_detection_refresh)
             self.assertEqual(snapshot.values["runtime_inverter_state"], "live_confirmed")
             self.assertNotIn("runtime_identity_conflict", snapshot.values)
+
+        asyncio.run(_run())
+
+    def test_catalog_alias_rename_promotes_live_identity_without_conflict(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            probe_target = ProbeTarget(
+                devcode=0x0001,
+                collector_addr=0x02,
+                device_addr=0x01,
+            )
+            durable = DetectedInverter(
+                driver_key="modbus_catalog",
+                protocol_family="modbus_catalog",
+                model_name="Deye-Compatible Three-Phase Hybrid 80 kW (Modbus)",
+                serial_number="",
+                probe_target=probe_target,
+                details={"runtime_detection_status": "startup_persisted_identity"},
+            )
+            live = DetectedInverter(
+                driver_key="modbus_catalog",
+                protocol_family="modbus_catalog",
+                model_name="Deye-Compatible Three-Phase Hybrid 8 kW (Modbus)",
+                serial_number="",
+                probe_target=probe_target,
+                details={},
+            )
+            hub.set_initial_inverter_binding(_SuccessDriver(), durable)
+
+            with patch(
+                "custom_components.eybond_local.runtime.hub.detection.async_detect_inverter",
+                new=self._fake_detection(live, _SuccessDriver()),
+            ):
+                snapshot = await hub.async_refresh(poll_interval=3.0)
+
+            self.assertEqual(snapshot.inverter.model_name, live.model_name)
+            self.assertEqual(snapshot.values["runtime_inverter_state"], "live_confirmed")
+            self.assertNotIn("runtime_identity_conflict", snapshot.values)
+            self.assertFalse(hub._inverter_binding_needs_live_detection_refresh)
 
         asyncio.run(_run())
 

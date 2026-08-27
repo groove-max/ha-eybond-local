@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_13_hhs_grid_power_20260827",
+  "kind": "github_issue",
+  "title": "Anenji HHS-11kW Grid Power proxy and cloud correlation",
+  "reference": "project-issue:13",
+  "captured_at": "2026-08-27",
+  "visibility": "public",
+  "summary": "A proxy capture from the exact layout-3/model-29440 HHS variant showed the manufacturer cloud repeatedly reading holding register 340 as Grid Power. Two captured values, 1729 W and 1709 W, matched the corresponding DESSMonitor export exactly. The compatible family register 204 remained zero and is not the Grid Power source for this fingerprint.",
+  "assertions": [
+    "telemetry_validation",
+    "register_map",
+    "hardware_test"
+  ]
+}

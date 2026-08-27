@@ -15,6 +15,7 @@ from custom_components.eybond_local.metadata.compiled_detection_catalog import (
     clear_compiled_detection_catalog_cache,
     compile_detection_catalog,
     load_compiled_detection_catalog,
+    model_names_share_catalog_identity,
     resolve_unique_persisted_model_surface,
 )
 from custom_components.eybond_local.metadata.detection_descriptor_loader import (
@@ -139,6 +140,16 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
         self.assertIn((129, 2), surface.support_capture_ranges)
         self.assertIn((142, 4), surface.support_capture_ranges)
 
+        # Entries created before the corrected 8 kW display name must retain
+        # their exact catalog surface after an integration update.
+        legacy = resolve_unique_persisted_model_surface(
+            "Deye-Compatible Three-Phase Hybrid 80 kW (Modbus)"
+        )
+        self.assertIsNotNone(legacy)
+        legacy_descriptor, legacy_surface = legacy
+        self.assertEqual(legacy_descriptor.key, descriptor.key)
+        self.assertEqual(legacy_surface.key, surface.key)
+
     def test_persisted_model_resolution_fails_closed_when_alias_is_ambiguous(self) -> None:
         catalog = load_compiled_detection_catalog()
         ambiguous = replace(
@@ -160,6 +171,31 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
         )
         self.assertIsNone(
             resolve_unique_persisted_model_surface("unknown model", catalog=catalog)
+        )
+
+    def test_catalog_identity_accepts_declared_alias_and_fails_closed(self) -> None:
+        catalog = load_compiled_detection_catalog()
+
+        self.assertTrue(
+            model_names_share_catalog_identity(
+                "Deye-Compatible Three-Phase Hybrid 80 kW (Modbus)",
+                "Deye-Compatible Three-Phase Hybrid 8 kW (Modbus)",
+                catalog=catalog,
+            )
+        )
+        self.assertFalse(
+            model_names_share_catalog_identity(
+                "unknown old label",
+                "Deye-Compatible Three-Phase Hybrid 8 kW (Modbus)",
+                catalog=catalog,
+            )
+        )
+        self.assertFalse(
+            model_names_share_catalog_identity(
+                object(),
+                "Deye-Compatible Three-Phase Hybrid 8 kW (Modbus)",
+                catalog=catalog,
+            )
         )
 
     def test_resolves_exact_and_family_surfaces(self) -> None:

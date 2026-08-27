@@ -460,6 +460,17 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertTrue(pv_generation_day.enabled_default)
         self.assertTrue(pv_generation_day.live)
 
+    def test_hhs_11kw_schema_overrides_only_grid_power_source(self) -> None:
+        base = load_register_schema("modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json")
+        hhs = load_register_schema("modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json")
+
+        self.assertEqual(
+            {spec.key: spec.register for spec in hhs.spec_set("value_overrides")},
+            {"grid_power": 340},
+        )
+        self.assertEqual(hhs.spec_set("live"), base.spec_set("live"))
+        self.assertEqual(hhs.spec_set("config"), base.spec_set("config"))
+
     def test_pi30_driver_uses_loaded_register_schema(self) -> None:
         schema = load_register_schema("pi30_ascii/models/smartess_0925_compat.json")
         driver = Pi30Driver()

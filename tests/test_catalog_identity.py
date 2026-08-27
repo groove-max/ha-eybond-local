@@ -146,7 +146,7 @@ class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             probe.match.entry.binding.register_schema_name,
-            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+            "modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json",
         )
 
     async def test_force_unsupported_uses_compiled_family_resolution(self) -> None:

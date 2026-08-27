@@ -499,6 +499,14 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
         config_block = await session.read_holding(config_block_start, config_block_count)
         values.update(_decode_block(config_block_start, config_block, config_fields))
         values.update(await _read_optional_specs(session, aux_config_fields))
+        # Exact model overlays may correct a value inherited from a compatible
+        # family schema.  Remove the inherited projection before the optional
+        # read so a failed model-specific read is reported as unavailable,
+        # never as a plausible value from the wrong register.
+        value_overrides = schema.spec_sets.get("value_overrides", ())
+        for spec in value_overrides:
+            values.pop(spec.key, None)
+        values.update(await _read_optional_specs(session, value_overrides))
         missing_probe_details = await _read_missing_optional_probe_details(session, inverter)
         if missing_probe_details:
             inverter.details.update(missing_probe_details)

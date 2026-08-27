@@ -221,7 +221,7 @@ def _deye_3ph_high_holding_registers() -> dict[int, int]:
         {
             0: 5,          # observed compact three-phase device type
             2: 260,        # protocol version 0x0104
-            20: 14464,     # low-first u32: 0x0001_3880 = 80000 W
+            20: 14464,     # low-first u32: 0x0001_3880 = 80000 raw
             21: 1,
             115: 10,
             116: 30,
@@ -511,7 +511,7 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         assert inverter is not None
         self.assertEqual(
             inverter.model_name,
-            "Deye-Compatible Three-Phase Hybrid 80 kW (Modbus)",
+            "Deye-Compatible Three-Phase Hybrid 8 kW (Modbus)",
         )
         self.assertEqual(inverter.variant_key, "deye_3ph_high_80kw")
         self.assertEqual(
@@ -544,7 +544,7 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
 
         values = _full_values(await driver.async_read_values(transport, inverter))
 
-        self.assertEqual(values["rated_power"], 80000)
+        self.assertEqual(values["rated_power"], 8000.0)
         self.assertEqual(values["run_state"], "Normal")
         self.assertEqual(values["battery_shutdown_soc"], 10)
         self.assertEqual(values["battery_restart_soc"], 30)
@@ -562,7 +562,6 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["battery_temperature"], 30.7)
         self.assertEqual(values["battery_voltage"], 53.07)
         self.assertEqual(values["battery_percent"], 99)
-        # Sign meaning is not promoted to canonical battery telemetry yet.
         self.assertEqual(values["battery_output_power"], 97)
         self.assertEqual(values["battery_output_current"], 1.84)
         self.assertEqual(values["grid_voltage_l1"], 234.8)
@@ -576,6 +575,8 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(values["output_power"], 544.0)
         self.assertEqual(values["pv_power"], 0.0)
+        # The owner confirmed the native battery sign is already the intended
+        # user-facing sign; do not manufacture a second opposite projection.
         self.assertNotIn("battery_power", values)
 
     async def test_kevolt_controls_are_full_mode_only_and_use_fc16_with_readback_keys(self) -> None:

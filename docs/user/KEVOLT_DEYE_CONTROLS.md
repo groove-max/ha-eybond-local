@@ -1,6 +1,6 @@
 # Kevolt / Deye-Compatible Advanced Controls
 
-EyeBond Local can identify the reported **Kevolt PD0080G-TPM-EU 80 kW**
+EyeBond Local can identify the reported **Kevolt PD0080G-TPM-EU 8 kW**
 inverter by its exact local Modbus fingerprint. Normal monitoring works without
 enabling any advanced control.
 
@@ -58,4 +58,3 @@ or unsafe to present as ordinary Home Assistant controls.
 If a write is rejected, unchanged, or produces unexpected behavior, stop
 testing that setting and create a [Support Archive](SUPPORT_ARCHIVE.md). Include
 the entity name, old value, requested value, and what the inverter displayed.
-

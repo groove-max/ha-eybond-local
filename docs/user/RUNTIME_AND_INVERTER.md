@@ -88,7 +88,7 @@ rejected or unchanged value is reported instead of being treated as success.
 Some experimental models have a large document-backed settings surface whose
 writes have not yet been confirmed on that exact hardware. Those entities stay
 hidden in Auto mode and disabled by default even after Full Control is selected.
-Enable only the individual settings you intend to test. Kevolt 80 kW users
+Enable only the individual settings you intend to test. Kevolt 8 kW users
 should read [Kevolt / Deye-Compatible Advanced Controls](KEVOLT_DEYE_CONTROLS.md)
 before enabling them.
 
