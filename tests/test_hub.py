@@ -459,6 +459,48 @@ class _WriteUnconfirmedDriver:
         return value
 
 
+class _WriteDelayedConfirmationDriver:
+    def __init__(self) -> None:
+        self.read_calls = 0
+        self.write_calls = 0
+        self._written_value = 20
+
+    async def async_read_values(
+        self,
+        transport,
+        inverter,
+        *,
+        runtime_state=None,
+        poll_interval=None,
+        now_monotonic=None,
+    ):
+        self.read_calls += 1
+        # Read 1 is the editability snapshot. Read 2 is the first post-write
+        # full poll and still exposes the old value. Read 3 converges.
+        readback = self._written_value if self.read_calls >= 3 else 20
+        return {
+            "battery_connected": True,
+            "utility_charging_allowed": True,
+            "charging_active": False,
+            "charging_inactive": True,
+            "operating_mode": "Off-Grid",
+            "max_ac_charge_current": readback,
+        }
+
+    async def async_write_capability(
+        self,
+        transport,
+        inverter,
+        capability_key,
+        value,
+        *,
+        runtime_state=None,
+    ):
+        self.write_calls += 1
+        self._written_value = value
+        return value
+
+
 class _AdvancingClockWriteDriver:
     def __init__(self, *, readback: str) -> None:
         self.read_calls = 0
@@ -2366,6 +2408,42 @@ class HubWriteBlockerTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_async_write_capability_confirms_delayed_readback_without_resending(self) -> None:
+        async def _run() -> None:
+            profile = load_driver_profile("smg_modbus.json")
+            hub = EybondHub(
+                connection=EybondConnectionSpec(
+                    server_ip="192.168.1.10",
+                    collector_ip="192.168.1.14",
+                    tcp_port=8899,
+                    udp_port=58899,
+                    discovery_target="192.168.1.255",
+                    discovery_interval=30,
+                    heartbeat_interval=60,
+                    request_timeout=5.0,
+                ),
+            )
+            hub._link_manager = _FakeLinkManager()
+            hub._driver = _WriteDelayedConfirmationDriver()
+            hub._inverter = DetectedInverter(
+                driver_key="modbus_smg",
+                protocol_family="modbus_smg",
+                model_name="SMG 6200",
+                serial_number="92632500000001",
+                probe_target=ProbeTarget(devcode=0x0001, collector_addr=0x02, device_addr=0x01),
+                capabilities=profile.capabilities,
+                capability_groups=profile.groups,
+                capability_presets=profile.presets,
+            )
+
+            written = await hub.async_write_capability("max_ac_charge_current", 30)
+
+            self.assertEqual(written, 30)
+            self.assertEqual(hub._driver.write_calls, 1)
+            self.assertEqual(hub._driver.read_calls, 3)
+
+        asyncio.run(_run())
+
     def test_async_write_capability_raises_when_readback_stays_old(self) -> None:
         async def _run() -> None:
             profile = load_driver_profile("smg_modbus.json")
@@ -2401,7 +2479,7 @@ class HubWriteBlockerTests(unittest.TestCase):
                 await hub.async_write_capability("max_ac_charge_current", 30)
 
             self.assertEqual(hub._driver.write_calls, 1)
-            self.assertEqual(hub._driver.read_calls, 2)
+            self.assertEqual(hub._driver.read_calls, 3)
 
         asyncio.run(_run())
 

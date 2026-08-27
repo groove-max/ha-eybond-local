@@ -103,17 +103,33 @@ class HubManagementMixin:
             logger.warning("Refresh after write reported: %s", snapshot.last_error)
 
         if _should_confirm_write(capability):
-            readback_value = snapshot.runtime_value(capability.value_key)
-            if not _write_readback_matches(
-                capability,
-                requested_value=value,
-                written_value=written_value,
-                readback_value=readback_value,
-                confirmation_elapsed_seconds=max(
-                    0.0,
-                    monotonic() - confirmation_started_at,
-                ),
-            ):
+            # Some inverters acknowledge a setting before their configuration
+            # block exposes it.  One old full read therefore is not terminal
+            # evidence.  Allow exactly one more independent full refresh, but
+            # never resend the write: a second old read remains an explicit
+            # failure.  The refresh itself supplies the bounded settling window,
+            # so this rule needs no model-specific sleep or timeout.
+            for confirmation_attempt in range(2):
+                readback_value = snapshot.runtime_value(capability.value_key)
+                if _write_readback_matches(
+                    capability,
+                    requested_value=value,
+                    written_value=written_value,
+                    readback_value=readback_value,
+                    confirmation_elapsed_seconds=max(
+                        0.0,
+                        monotonic() - confirmation_started_at,
+                    ),
+                ):
+                    break
+                if confirmation_attempt == 0:
+                    logger.debug(
+                        "Write %s was not visible in the first full readback; "
+                        "refreshing once more without resending the write",
+                        capability_key,
+                    )
+                    snapshot = await self.async_refresh()
+                    continue
                 logger.warning(
                     "Write %s was accepted but did not confirm by readback; expected=%r readback=%r refresh_error=%s",
                     capability_key,

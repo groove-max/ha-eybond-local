@@ -24,6 +24,10 @@ from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
     DriverReadMode,
     DriverReadResult,
 )
+from custom_components.eybond_local.drivers.write_confirmation import (  # noqa: E402
+    WRITE_CONFIRMATION_DIAGNOSTIC_KEY,
+    write_confirmation_diagnostics,
+)
 from custom_components.eybond_local.models import RegisterValueSpec  # noqa: E402
 from custom_components.eybond_local.control_policy import can_expose_capability  # noqa: E402
 from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
@@ -721,6 +725,168 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(written, "SBU")
         self.assertEqual(transport._registers[602], 2)
 
+    async def test_secondary_output_write_records_immediate_and_delayed_poll_readback(self) -> None:
+        """Regression for issue #13.3: old -> requested may converge later."""
+
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+
+        class DeferredApplyTransport(FixtureTransport):
+            def __init__(self, **kwargs) -> None:
+                super().__init__(**kwargs)
+                self._pending_write: dict[int, int] = {}
+                self.full_poll_count = 0
+
+            def _handle_write_multiple(self, payload: bytes) -> bytes:
+                address = int.from_bytes(payload[2:4], "big")
+                count = int.from_bytes(payload[4:6], "big")
+                old_values = {
+                    address + offset: self._registers[address + offset]
+                    for offset in range(count)
+                }
+                response = super()._handle_write_multiple(payload)
+                self._pending_write = {
+                    address + offset: self._registers[address + offset]
+                    for offset in range(count)
+                }
+                self._registers.update(old_values)
+                return response
+
+            def _handle_read_holding(self, payload: bytes) -> bytes:
+                address = int.from_bytes(payload[2:4], "big")
+                count = int.from_bytes(payload[4:6], "big")
+                response = super()._handle_read_holding(payload)
+                if (
+                    self._pending_write
+                    and count > 1
+                    and address <= 602 < address + count
+                ):
+                    self.full_poll_count += 1
+                    # The first full poll honestly returns the old value. Apply
+                    # the pending setting only after that response so the next
+                    # normal poll observes convergence.
+                    self._registers.update(self._pending_write)
+                return response
+
+        transport = DeferredApplyTransport(
+            registers=self._anenji_registers(),
+            command_responses=None,
+            probe_target=target,
+        )
+        inverter = await driver.async_probe(transport, target)
+        assert inverter is not None
+        runtime_state: dict[str, object] = {}
+
+        written = await driver.async_write_capability(
+            transport,
+            inverter,
+            "secondary_output_priority",
+            "SBU",
+            runtime_state=runtime_state,
+        )
+
+        self.assertEqual(written, "SBU")
+        immediate = write_confirmation_diagnostics(runtime_state)[
+            WRITE_CONFIRMATION_DIAGNOSTIC_KEY
+        ]
+        self.assertEqual(immediate["requested_words"], [2])
+        self.assertEqual(immediate["immediate_status"], "mismatched")
+        self.assertEqual(immediate["immediate_value"], "OFF")
+        # Detection evidence keeps the pre-write value; the requested value is
+        # never projected optimistically through DetectedInverter.details.
+        self.assertEqual(inverter.details["secondary_output_priority"], "OFF")
+
+        first_poll = await driver.async_read_values(
+            transport,
+            inverter,
+            runtime_state=runtime_state,
+        )
+        self.assertEqual(first_poll.values["secondary_output_priority"], "OFF")
+        first_diagnostic = first_poll.diagnostics[WRITE_CONFIRMATION_DIAGNOSTIC_KEY]
+        self.assertEqual(first_diagnostic["first_full_poll_status"], "mismatched")
+        self.assertEqual(
+            first_diagnostic["convergence"],
+            "requested_value_not_observed",
+        )
+
+        second_poll = await driver.async_read_values(
+            transport,
+            inverter,
+            runtime_state=runtime_state,
+        )
+        self.assertEqual(second_poll.values["secondary_output_priority"], "SBU")
+        second_diagnostic = second_poll.diagnostics[WRITE_CONFIRMATION_DIAGNOSTIC_KEY]
+        self.assertEqual(second_diagnostic["latest_full_poll_status"], "matched")
+        self.assertEqual(second_diagnostic["latest_full_poll_value"], "SBU")
+        self.assertEqual(second_diagnostic["full_poll_observation_count"], 2)
+        self.assertEqual(
+            second_diagnostic["convergence"],
+            "requested_value_observed_after_mismatch",
+        )
+
+    async def test_immediate_read_failure_is_recorded_but_full_poll_can_confirm(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+
+        class ImmediateReadFailsTransport(FixtureTransport):
+            def __init__(self, **kwargs) -> None:
+                super().__init__(**kwargs)
+                self._write_completed = False
+                self._failed_once = False
+
+            def _handle_write_multiple(self, payload: bytes) -> bytes:
+                response = super()._handle_write_multiple(payload)
+                self._write_completed = True
+                return response
+
+            def _handle_read_holding(self, payload: bytes) -> bytes:
+                address = int.from_bytes(payload[2:4], "big")
+                count = int.from_bytes(payload[4:6], "big")
+                if (
+                    self._write_completed
+                    and not self._failed_once
+                    and address == 602
+                    and count == 1
+                ):
+                    self._failed_once = True
+                    raise RuntimeError("simulated_exact_read_failure")
+                return super()._handle_read_holding(payload)
+
+        transport = ImmediateReadFailsTransport(
+            registers=self._anenji_registers(),
+            command_responses=None,
+            probe_target=target,
+        )
+        inverter = await driver.async_probe(transport, target)
+        assert inverter is not None
+        runtime_state: dict[str, object] = {}
+
+        written = await driver.async_write_capability(
+            transport,
+            inverter,
+            "secondary_output_priority",
+            "SBU",
+            runtime_state=runtime_state,
+        )
+        self.assertEqual(written, "SBU")
+        immediate = write_confirmation_diagnostics(runtime_state)[
+            WRITE_CONFIRMATION_DIAGNOSTIC_KEY
+        ]
+        self.assertEqual(immediate["immediate_status"], "unavailable")
+        self.assertEqual(
+            immediate["immediate_error"],
+            "RuntimeError:simulated_exact_read_failure",
+        )
+
+        result = await driver.async_read_values(
+            transport,
+            inverter,
+            runtime_state=runtime_state,
+        )
+        diagnostic = result.diagnostics[WRITE_CONFIRMATION_DIAGNOSTIC_KEY]
+        self.assertEqual(diagnostic["latest_full_poll_status"], "matched")
+        self.assertEqual(diagnostic["convergence"], "requested_value_observed")
+
     def _op2_inverter(self, target: ProbeTarget) -> DetectedInverter:
         from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
 
@@ -749,11 +915,29 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
             probe_target=target,
         )
 
-        written = await driver.async_write_capability(transport, inverter, "output2_enable", True)
+        runtime_state: dict[str, object] = {}
+        written = await driver.async_write_capability(
+            transport,
+            inverter,
+            "output2_enable",
+            True,
+            runtime_state=runtime_state,
+        )
         self.assertEqual(written, "On")
         self.assertEqual(transport._registers[354], 0xABCF)
+        diagnostic = write_confirmation_diagnostics(runtime_state)[
+            WRITE_CONFIRMATION_DIAGNOSTIC_KEY
+        ]
+        self.assertEqual(diagnostic["immediate_words"], [1])
+        self.assertEqual(diagnostic["immediate_status"], "matched")
 
-        written = await driver.async_write_capability(transport, inverter, "output2_enable", False)
+        written = await driver.async_write_capability(
+            transport,
+            inverter,
+            "output2_enable",
+            False,
+            runtime_state=runtime_state,
+        )
         self.assertEqual(written, "Off")
         self.assertEqual(transport._registers[354], 0xABCE)
 
@@ -855,10 +1039,18 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, target)
 
         assert inverter is not None
-        written = await driver.async_write_capability(transport, inverter, "force_eq_charge", None)
+        runtime_state: dict[str, object] = {}
+        written = await driver.async_write_capability(
+            transport,
+            inverter,
+            "force_eq_charge",
+            None,
+            runtime_state=runtime_state,
+        )
 
         self.assertEqual(written, 1)
         self.assertEqual(transport._registers[656], 1)
+        self.assertEqual(write_confirmation_diagnostics(runtime_state), {})
 
 
 class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):

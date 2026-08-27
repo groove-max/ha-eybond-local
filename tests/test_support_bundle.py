@@ -306,6 +306,39 @@ class SupportBundleTests(unittest.TestCase):
             },
         )
 
+    def test_write_confirmation_diagnostics_are_preserved_in_support_bundle(self) -> None:
+        confirmation = {
+            "capability_key": "secondary_output_priority",
+            "requested_value": "SBU",
+            "immediate_status": "mismatched",
+            "first_full_poll_status": "mismatched",
+            "latest_full_poll_status": "matched",
+            "convergence": "requested_value_observed_after_mismatch",
+        }
+        raw = build_support_bundle_payload(
+            entry_id="entry123",
+            entry_title="Sandisolar SD 11KP48V WIFI",
+            connected=True,
+            collector={"collector_pn": "E5000020000000"},
+            inverter={"driver_key": "modbus_smg", "model_name": "Sandisolar"},
+            values={"runtime_capability_write_confirmation": confirmation},
+            data={"collector_pn": "E5000020000000"},
+            options={},
+            profile_name="modbus_smg/models/sandisolar_sd_11kp48v_wifi.json",
+            register_schema_name="modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+        )
+
+        self.assertEqual(
+            raw["roles"]["integration"]["values"][
+                "runtime_capability_write_confirmation"
+            ],
+            confirmation,
+        )
+        self.assertEqual(
+            raw["runtime"]["values"]["runtime_capability_write_confirmation"],
+            confirmation,
+        )
+
     def test_builds_support_bundle_payload_with_descriptor_decision_shadow_evidence(self) -> None:
         descriptor_decision_shadow = {
             "kind": "descriptor_decision_shadow",

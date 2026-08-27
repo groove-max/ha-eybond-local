@@ -33,6 +33,15 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Renamed the four optional PI30 Q1 temperature channels to neutral numbered
+  names. Clone manufacturers can wire the same protocol fields to different
+  physical components, so the integration no longer presents an inferred
+  tracker, inverter, battery, or transformer location as a confirmed fact.
+- Fixed SMG-family setting confirmation when firmware applies a write after a
+  short delay. The integration now records the exact-register read-back and
+  subsequent full-poll convergence, never exposes the requested value as if it
+  had already been observed, and includes the bounded trace in Support
+  Archives for field diagnosis.
 - Fixed stale generic-SMG projections that could survive a stronger runtime
   fingerprint and hide the correct model-specific telemetry surface.
 - Added typed per-route probe evidence so support diagnostics can distinguish

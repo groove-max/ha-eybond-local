@@ -56,6 +56,12 @@ from .capability_codec import (
     find_capability as _find_capability,
     merge_capability_register_word,
 )
+from .write_confirmation import (
+    load_write_confirmation,
+    start_write_confirmation,
+    store_write_confirmation,
+    write_confirmation_diagnostics,
+)
 from .catalog_identity import (
     CatalogIdentityProbe,
     InverterIdentityNoDataError,
@@ -557,8 +563,18 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
         extra_blocks = await _read_out_of_block_capability_registers(
             session, inverter.capabilities, polled_blocks, already_read=aux_registers
         )
-        _apply_capability_read_back(values, inverter.capabilities, polled_blocks + extra_blocks)
-        return DriverReadResult(values=values, mode=DriverReadMode.FULL)
+        all_polled_blocks = polled_blocks + extra_blocks
+        _apply_capability_read_back(values, inverter.capabilities, all_polled_blocks)
+        diagnostics = _observe_capability_write_full_poll(
+            runtime_state,
+            inverter.capabilities,
+            all_polled_blocks,
+        )
+        return DriverReadResult(
+            values=values,
+            mode=DriverReadMode.FULL,
+            diagnostics=diagnostics,
+        )
 
     async def async_write_capability(
         self,
@@ -571,6 +587,7 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
     ) -> Any:
         capability = _find_capability(capability_key, inverter.capabilities or self.write_capabilities)
         raw_words = _encode_capability_words(capability, value)
+        native_value = _decode_capability_value(capability, raw_words)
 
         session = self._session(transport, inverter.probe_target)
         if capability.bitmask:
@@ -602,8 +619,49 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
         else:
             await session.write_holding(capability.register, raw_words)
 
-        native_value = _decode_capability_value(capability, raw_words)
-        inverter.details[capability.key] = native_value
+        # A Modbus write acknowledgement proves only that the request completed
+        # on the wire.  For setting-like capabilities, observe the exact target
+        # register immediately as a separate fact.  A mismatch is retained for
+        # diagnostics but is not declared final here: some SMG firmwares apply
+        # settings asynchronously, and the hub's mandatory full refresh remains
+        # the user-visible confirmation authority.
+        if capability.value_kind != "action":
+            trace = start_write_confirmation(
+                runtime_state,
+                capability_key=capability.key,
+                value_key=capability.value_key,
+                requested_value=value,
+                expected_value=native_value,
+                requested_words=tuple(int(word) for word in raw_words),
+            )
+            try:
+                observed_words = tuple(
+                    int(word)
+                    for word in await session.read_holding(
+                        capability.register,
+                        capability.word_count,
+                    )
+                )
+                comparable_words = _comparable_capability_words(
+                    capability,
+                    observed_words,
+                )
+                observed_value = _decode_capability_value(
+                    capability,
+                    list(comparable_words),
+                )
+                trace = trace.with_immediate_observation(
+                    value=observed_value,
+                    words=comparable_words,
+                    matched=(comparable_words == trace.requested_words),
+                )
+            except Exception as exc:  # the mandatory full poll may still confirm
+                trace = trace.with_immediate_unavailable(error=exc)
+            store_write_confirmation(runtime_state, trace)
+
+        # Never project a requested value through DetectedInverter.details.
+        # That mapping is detection evidence, not runtime state.  The immediate
+        # exact read and subsequent full poll above are the only observations.
         return native_value
 
     async def async_capture_support_evidence(
@@ -833,6 +891,93 @@ def _apply_capability_read_back(
             values[value_key] = round(raw_value / divisor, decimals_for_divisor(divisor))
         else:
             values[value_key] = raw_value
+
+
+def _observe_capability_write_full_poll(
+    runtime_state: dict[str, Any] | None,
+    capabilities,
+    register_blocks: tuple[tuple[int, list[int]], ...],
+) -> dict[str, Any]:
+    """Fold one real SMG full poll into the retained write trace."""
+
+    trace = load_write_confirmation(runtime_state)
+    if trace is None:
+        return {}
+    capability = next(
+        (
+            candidate
+            for candidate in capabilities
+            if getattr(candidate, "key", "") == trace.capability_key
+        ),
+        None,
+    )
+    if capability is None:
+        trace = trace.with_poll_observation(value=None, matched=None)
+        store_write_confirmation(runtime_state, trace)
+        return write_confirmation_diagnostics(runtime_state)
+
+    try:
+        observed_words = _capability_words_from_blocks(
+            capability,
+            register_blocks,
+        )
+        comparable_words = _comparable_capability_words(
+            capability,
+            observed_words,
+        )
+        observed_value = _decode_capability_value(
+            capability,
+            list(comparable_words),
+        )
+    except Exception:
+        trace = trace.with_poll_observation(value=None, matched=None)
+    else:
+        trace = trace.with_poll_observation(
+            value=observed_value,
+            matched=(comparable_words == trace.requested_words),
+        )
+    store_write_confirmation(runtime_state, trace)
+    return write_confirmation_diagnostics(runtime_state)
+
+
+def _capability_words_from_blocks(
+    capability: WriteCapability,
+    register_blocks: tuple[tuple[int, list[int]], ...],
+) -> tuple[int, ...]:
+    """Read one capability's exact raw words from already-polled blocks."""
+
+    register_map: dict[int, int] = {}
+    for start, block in register_blocks:
+        for index, raw in enumerate(block):
+            register_map[start + index] = int(raw)
+    words: list[int] = []
+    for offset in range(capability.word_count):
+        register = capability.register + offset
+        if register not in register_map:
+            raise ValueError(
+                f"capability_full_poll_readback_missing:{capability.key}:{register}"
+            )
+        words.append(register_map[register])
+    return tuple(words)
+
+
+def _comparable_capability_words(
+    capability: WriteCapability,
+    observed_words: tuple[int, ...],
+) -> tuple[int, ...]:
+    """Return raw words in the same shape used by the capability encoder."""
+
+    if len(observed_words) != capability.word_count:
+        raise ValueError(
+            f"capability_post_write_read_length:{capability.key}:"
+            f"expected={capability.word_count}:observed={len(observed_words)}"
+        )
+    if capability.bitmask:
+        observed_field = (
+            int(observed_words[0]) & capability.bitmask
+        ) >> capability.bitmask_shift
+        return (observed_field,)
+    return tuple(int(word) for word in observed_words)
 
 
 def _decode_block(

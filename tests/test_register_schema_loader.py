@@ -184,6 +184,23 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertEqual(schema.source_scope, "builtin")
         self.assertTrue(schema.source_path.endswith("register_schemas/pi30_ascii/base.json"))
         self.assertEqual(schema.measurement_description("protocol_id").name, "Protocol ID")
+        self.assertEqual(
+            {
+                key: schema.measurement_description(key).name
+                for key in (
+                    "tracker_temperature",
+                    "inverter_temperature",
+                    "battery_temperature",
+                    "transformer_temperature",
+                )
+            },
+            {
+                "tracker_temperature": "Additional Temperature 1",
+                "inverter_temperature": "Additional Temperature 2",
+                "battery_temperature": "Additional Temperature 3",
+                "transformer_temperature": "Additional Temperature 4",
+            },
+        )
         self.assertEqual(schema.measurement_description("pv_generation_sum").state_class, "total_increasing")
         self.assertEqual(schema.binary_sensor_description("lcd_backlight_enabled").name, "LCD Backlight Enabled")
         self.assertFalse(schema.binary_sensor_description("lcd_backlight_enabled").live)

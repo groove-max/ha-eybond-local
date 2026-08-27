@@ -565,7 +565,7 @@
     },
     {
       "key": "tracker_temperature",
-      "name": "Tracker Temperature",
+      "name": "Additional Temperature 1",
       "unit": "°C",
       "device_class": "temperature",
       "state_class": "measurement",
@@ -573,7 +573,7 @@
     },
     {
       "key": "inverter_temperature",
-      "name": "Inverter Temperature 2",
+      "name": "Additional Temperature 2",
       "unit": "°C",
       "device_class": "temperature",
       "state_class": "measurement",
@@ -581,7 +581,7 @@
     },
     {
       "key": "battery_temperature",
-      "name": "Battery Temperature",
+      "name": "Additional Temperature 3",
       "unit": "°C",
       "device_class": "temperature",
       "state_class": "measurement",
@@ -589,7 +589,7 @@
     },
     {
       "key": "transformer_temperature",
-      "name": "Transformer Temperature",
+      "name": "Additional Temperature 4",
       "unit": "°C",
       "device_class": "temperature",
       "state_class": "measurement",
