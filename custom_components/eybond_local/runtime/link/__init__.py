@@ -30,6 +30,9 @@ from .cloud_routes import LinkCloudRoutesMixin
 from .connection import LinkConnectionMixin
 from .wire_authority import LinkWireAuthorityMixin
 from .transport_lifecycle import LinkTransportLifecycleMixin
+from ...collector.session_identity_negotiator import (
+    ExactSessionIdentityNegotiator,
+)
 
 
 class EybondRuntimeLinkManager(
@@ -77,6 +80,7 @@ class EybondRuntimeLinkManager(
             else ""
         )
         self._active_identity_challenge_protocol = ""
+        self._session_identity_negotiator = ExactSessionIdentityNegotiator()
         # Configuration derived only from PN-bound confirmed live evidence.
         # The evidence object below remains the authority handed to transports.
         self._configured_collector_session_protocol = str(

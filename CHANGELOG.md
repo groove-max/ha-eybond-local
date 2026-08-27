@@ -15,7 +15,7 @@ the GitHub release body should be rendered from the matching version section her
 - Added a typed support-acquisition boundary so read-only cloud evidence can be
   collected for an identified collector before an inverter driver is known.
 - Added 118 opt-in, document-backed settings for the exact Kevolt
-  PD0080G-TPM-EU / Deye-compatible 80 kW fingerprint. They remain untested,
+  PD0080G-TPM-EU / Deye-compatible 8 kW fingerprint. They remain untested,
   hidden in Auto mode, and disabled by default; six Time of Use schedule fields
   use native Home Assistant time entities.
 
@@ -33,6 +33,26 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Fixed fully silent callback collectors that open a TCP session without an
+  initial payload. Home Assistant now performs one bounded FC=1 identity
+  challenge on the exact observed session, accepts only a correlated full-PN
+  response, and never falls back to peer-IP routing. Unknown wire dialects are
+  tried only on separate callback attempts and separate physical sockets.
+- Correct the Anenji HHS-11kW non-parallel Grid Power source for the exact
+  layout-3/model-29440 fingerprint: hardware-correlated cloud traffic reads
+  holding register 340, not the compatible-family register 204.
+
+- Corrected the Kevolt PD0080G-TPM-EU rated-power scale from 80 kW to its
+  hardware-confirmed 8 kW rating without changing the stable internal
+  fingerprint key or its already-correct battery-value sign.
+- Treat a catalog-declared previous model name as the same runtime inverter
+  identity after a display-name correction. Unknown and ambiguous aliases still
+  fail closed instead of replacing a durable binding.
+- Fixed the admission failure menu so switching a failed selected-route attempt
+  to manual setup starts a fresh callback transaction instead of raising an
+  internal lifecycle error into the Home Assistant UI.
+- Preserve the exact collector-management error in the normal Home Assistant
+  log when restart confirmation fails during recovery verification.
 - Renamed the four optional PI30 Q1 temperature channels to neutral numbered
   names. Clone manufacturers can wire the same protocol fields to different
   physical components, so the integration no longer presents an inferred
@@ -213,7 +233,7 @@ the GitHub release body should be rendered from the matching version section her
   hardware evidence:
   - **Gootu GT-H2436M14P5** — exact G-ASCII fingerprint, telemetry, and only the
     charging-priority writes confirmed by the captured device.
-  - **Kevolt PD0080G-TPM-EU 80 kW** — exact Deye-compatible high-register
+  - **Kevolt PD0080G-TPM-EU 8 kW** — exact Deye-compatible high-register
     fingerprint and read-only three-phase, PV, battery, generator, and energy
     telemetry.
   - **Anenji ANJ-11KW-48V-WIFI-P** — documented Secondary Output Priority

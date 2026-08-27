@@ -72,8 +72,13 @@ DIVERGENT_B = "V001020SYN62349999"   # starts with SHORT_PN; diverges from DIVER
 SAME_IP = "203.0.113.9"              # the SINGLE peer IP shared by every socket
 TS = "2026-07-18T10:00:00+00:00"
 
-# framed FC=2 param 2 and AT DTUPN -- the two strong identity forms.
-STRONG_SOURCES = ("fc2_parameter_2", "at_dtupn")
+# Correlated framed FC=1, framed FC=2 param 2 and AT DTUPN are the strong
+# identity forms. An unsolicited framed heartbeat remains weak.
+STRONG_SOURCES = (
+    "fc1_identity_challenge",
+    "fc2_parameter_2",
+    "at_dtupn",
+)
 
 # Every async case bounded so a hang fails in seconds, not stalls.
 _FAST_POLICY = replace(
@@ -362,7 +367,7 @@ class _FakeBootstrapChannel:
                 "has_strong_identity",
                 bool(enriched.get("collector_pn"))
                 and str(enriched.get("collector_identity_source") or "")
-                in ("fc2_parameter_2", "at_dtupn"),
+                in STRONG_SOURCES,
             )
             out.append(enriched)
         return tuple(out)

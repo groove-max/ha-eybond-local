@@ -26,6 +26,12 @@ from custom_components.eybond_local.connection.spec_factory import (
 from custom_components.eybond_local.collector.discovery import (
     async_send_callback_trigger,
 )
+from custom_components.eybond_local.collector.protocol import (
+    FC_HEARTBEAT,
+    HEADER_SIZE,
+    decode_header,
+    encode_header,
+)
 from custom_components.eybond_local.collector.transport import (
     _acquire_shared_listener,
     _release_shared_listener,
@@ -156,6 +162,65 @@ class _SilentAtCollector:
                 pass
 
 
+class _SilentFramedFc1Collector:
+    """Issue #37 collector: silent until HA sends the server FC=1 request."""
+
+    def __init__(self, pn: str) -> None:
+        self._pn = pn
+        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | None = None
+        self._task: asyncio.Task[None] | None = None
+        self.fc1_queries = 0
+        self.other_queries = 0
+
+    async def connect(self, port: int) -> None:
+        self._reader, self._writer = await asyncio.open_connection(
+            "127.0.0.1", port
+        )
+        self._task = asyncio.create_task(self._serve())
+
+    async def _serve(self) -> None:
+        assert self._reader is not None
+        assert self._writer is not None
+        try:
+            while True:
+                header_bytes = await self._reader.readexactly(HEADER_SIZE)
+                header = decode_header(header_bytes)
+                await self._reader.readexactly(header.payload_len)
+                if header.fcode != FC_HEARTBEAT:
+                    self.other_queries += 1
+                    continue
+                self.fc1_queries += 1
+                response = (
+                    encode_header(
+                        header.tid,
+                        0x0102,
+                        HEADER_SIZE + len(self._pn),
+                        0xFF,
+                        FC_HEARTBEAT,
+                    )
+                    + self._pn.encode("ascii")
+                )
+                self._writer.write(response)
+                await self._writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionResetError, OSError):
+            return
+
+    async def stop(self) -> None:
+        if self._writer is not None:
+            self._writer.close()
+            try:
+                await self._writer.wait_closed()
+            except Exception:
+                pass
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+
+
 class _SilentAtModbusCollector(_SilentAtCollector):
     """AT identity/management plus raw Modbus RTU on the same TCP stream."""
 
@@ -204,11 +269,17 @@ class _SilentAtModbusCollector(_SilentAtCollector):
 
 
 class RuntimeSilentIdentityBootstrapTests(unittest.IsolatedAsyncioTestCase):
-    def _manager(self, *, port: int, challenge: str = "at_text"):
+    def _manager(
+        self,
+        *,
+        port: int,
+        challenge: str = "at_text",
+        collector_pn: str = FULL_PN,
+    ):
         return EybondRuntimeLinkManager(
             server_ip="127.0.0.1",
             collector_ip="127.0.0.1",
-            collector_pn=FULL_PN,
+            collector_pn=collector_pn,
             collector_identity_challenge_protocol=challenge,
             tcp_port=port,
             udp_port=58899,
@@ -270,15 +341,57 @@ class RuntimeSilentIdentityBootstrapTests(unittest.IsolatedAsyncioTestCase):
             "",
         )
 
-    async def test_no_candidate_sends_no_identity_query(self) -> None:
+    async def test_unknown_wire_never_sends_at_after_fc1_on_same_socket(self) -> None:
         connected, queries, handle, _diagnostics = await self._exercise(
             response_pn=FULL_PN,
             challenge="",
         )
 
         self.assertFalse(connected)
+        # The first unknown-wire candidate is framed FC1. This AT-only fake
+        # therefore sees no DTUPN; the negotiator retires the socket rather than
+        # appending AT bytes to the same stream.
         self.assertEqual(queries, 0)
         self.assertFalse(handle.observed)
+
+    async def test_issue37_fully_silent_unknown_wire_is_identified_by_fc1(self) -> None:
+        port = _free_port()
+        # Exact issue #37 shape: the durable entry has only the shortened PN,
+        # while the fully silent collector returns its full PN to the bounded
+        # FC=1 identity challenge on that same physical session.
+        manager = self._manager(
+            port=port,
+            challenge="",
+            collector_pn=ISSUE37_SHORT_PN,
+        )
+        collector = _SilentFramedFc1Collector(ISSUE37_FULL_PN)
+        await manager.async_start()
+        await collector.connect(port)
+        await asyncio.sleep(0.35)
+        fake_probe = types.SimpleNamespace(reply="", reply_from="")
+        try:
+            with patch(
+                "custom_components.eybond_local.runtime.link.callback."
+                "async_send_callback_trigger",
+                new=AsyncMock(return_value=fake_probe),
+            ) as trigger:
+                connected = await manager.async_try_connect(timeout=2.5)
+
+            self.assertTrue(connected)
+            self.assertEqual(trigger.await_count, 1)
+            # One FC1 is the exact-session identity challenge.  Once that
+            # succeeds, normal framed activation may immediately send its own
+            # heartbeat request on the now-owned socket.
+            self.assertGreaterEqual(collector.fc1_queries, 1)
+            self.assertEqual(collector.other_queries, 0)
+            handle = manager.session_handle
+            self.assertTrue(handle.observed)
+            self.assertTrue(handle.uses_framed_wire)
+            self.assertEqual(handle.collector_pn, ISSUE37_FULL_PN)
+            self.assertIn("fc1_identity_challenge", handle.identity_sources)
+        finally:
+            await collector.stop()
+            await manager.async_stop()
 
     async def test_cancellation_releases_probe_lease_and_clears_active_state(self) -> None:
         port = _free_port()

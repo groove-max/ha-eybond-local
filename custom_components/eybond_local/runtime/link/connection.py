@@ -302,57 +302,46 @@ class LinkConnectionMixin:
                 attempt_id, timeout=_RUNTIME_CAUSALITY_LEASE_WAIT
             ):
                 challenge = self._identity_challenge_candidate()
-                if not challenge:
-                    # Preserve the established callback timing exactly when no
-                    # metadata-backed challenge capability exists.
-                    await self._send_callback_trigger()
-                    return await self._async_await_callback_session(
-                        timeout=timeout,
-                        require_heartbeat=require_heartbeat,
-                    )
                 probe_channel = None
                 deadline = asyncio.get_running_loop().time() + max(
                     0.0, float(timeout)
                 )
                 try:
                     baseline: frozenset[str] = frozenset()
-                    if challenge:
-                        from ...collector.silent_session_probe import (
-                            SilentSessionIdentityProbeChannel,
-                        )
+                    from ...collector.silent_session_probe import (
+                        SilentSessionIdentityProbeChannel,
+                    )
 
-                        probe_port = self._identity_challenge_listener_port()
-                        probe_channel = SilentSessionIdentityProbeChannel(
-                            host=self._listener_bind_host,
-                            port=probe_port,
-                        )
-                        await probe_channel.async_open()
-                        if probe_channel.available:
-                            baseline = frozenset(
-                                observation.session_id
-                                for observation in (
-                                    probe_channel.snapshot_session_observations()
-                                )
-                                if observation.session_id
+                    probe_port = self._identity_challenge_listener_port()
+                    probe_channel = SilentSessionIdentityProbeChannel(
+                        host=self._listener_bind_host,
+                        port=probe_port,
+                    )
+                    await probe_channel.async_open()
+                    if probe_channel.available:
+                        baseline = frozenset(
+                            observation.session_id
+                            for observation in (
+                                probe_channel.snapshot_session_observations()
                             )
-                            self._active_identity_challenge_protocol = challenge
+                            if observation.session_id
+                        )
+                        self._active_identity_challenge_protocol = challenge
 
                     await self._send_callback_trigger()
 
                     if probe_channel is not None and probe_channel.available:
-                        identified = await self._async_identify_callback_session(
-                            probe_channel=probe_channel,
-                            session_protocol=challenge,
-                            baseline=baseline,
+                        result = await self._session_identity_negotiator.async_negotiate(
+                            channel=probe_channel,
+                            expected_pn=self._collector_pn,
+                            baseline_session_ids=baseline,
                             deadline=deadline,
+                            preferred_protocol=challenge,
                         )
-                        if not identified:
-                            # A metadata-selected query format is only probe
-                            # permission.  When it cannot establish a strong PN,
-                            # never fall through to the transport's legacy
-                            # PN/route matcher: that would promote the very weak
-                            # heartbeat candidate this boundary is meant to
-                            # certify.
+                        if not result.identified:
+                            # Candidate ordering is permission, never evidence.
+                            # A timeout, foreign PN or ambiguous socket set must
+                            # never fall through to route/peer matching.
                             self._note_callback_failure()
                             return False
                         # The exact-session challenge wrote only a strong PN
@@ -388,7 +377,7 @@ class LinkConnectionMixin:
             return False
 
     def _identity_challenge_candidate(self) -> str:
-        """Return a read-only challenge candidate when no wire is trusted yet.
+        """Return a non-endpoint-changing challenge hint when no wire is trusted.
 
         The candidate is metadata, not evidence. A live handle or a confirmed
         binding always owns the established path and suppresses this bootstrap.
@@ -435,89 +424,6 @@ class LinkConnectionMixin:
         if type(listener_port) is int and 0 < listener_port <= 65535:
             return listener_port
         return self._tcp_port
-
-    async def _async_identify_callback_session(
-        self,
-        *,
-        probe_channel,
-        session_protocol: str,
-        baseline: frozenset[str],
-        deadline: float,
-    ) -> bool:
-        """Find this entry's PN using exact-session read-only challenges only.
-
-        Post-trigger sockets are attempted first. Already-open silent sockets
-        are still eligible because many collectors keep one callback TCP stream
-        open and do not create a second stream for another set>server request.
-        Every socket is keyed by session id, queried at most once, and accepted
-        only after the channel records a strong PN matching the durable entry.
-        Peer IP and arrival order never establish identity or ownership.
-        """
-
-        from ...collector_identity import identity_source_is_strong
-
-        expected_pn = str(self._collector_pn or "").strip()
-        if not expected_pn or not session_protocol:
-            return False
-
-        attempted: set[str] = set()
-        loop = asyncio.get_running_loop()
-        while True:
-            observations = tuple(probe_channel.snapshot_session_observations())
-            for observation in observations:
-                observed_pn = str(observation.collector_pn or "").strip()
-                if (
-                    observed_pn
-                    and identity_source_is_strong(observation.identity_source)
-                    and pn_is_same_identity(expected_pn, observed_pn)
-                ):
-                    return True
-
-            fresh = tuple(
-                observation
-                for observation in observations
-                if observation.session_id not in baseline
-            )
-            existing = tuple(
-                observation
-                for observation in observations
-                if observation.session_id in baseline
-            )
-            for observation in (*fresh, *existing):
-                session_id = str(observation.session_id or "").strip()
-                if not session_id or session_id in attempted:
-                    continue
-                observed_pn = str(observation.collector_pn or "").strip()
-                if observed_pn and identity_source_is_strong(
-                    observation.identity_source
-                ):
-                    # Strong foreign identity is useful negative evidence; it is
-                    # never re-probed with a metadata-selected protocol.
-                    attempted.add(session_id)
-                    continue
-
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    return False
-                attempted.add(session_id)
-                try:
-                    identified_pn = await asyncio.wait_for(
-                        probe_channel.async_identify_exact_session(
-                            session_id,
-                            session_protocol=session_protocol,
-                        ),
-                        timeout=remaining,
-                    )
-                except asyncio.TimeoutError:
-                    return False
-                if identified_pn and pn_is_same_identity(
-                    expected_pn, identified_pn
-                ):
-                    return True
-
-            if loop.time() >= deadline:
-                return False
-            await asyncio.sleep(min(0.05, max(0.0, deadline - loop.time())))
 
     async def _async_await_callback_session(
         self, *, timeout: float, require_heartbeat: bool

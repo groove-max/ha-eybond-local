@@ -58,7 +58,11 @@ def _observed(**overrides) -> ObservedCollectorSession:
 
 class ObservedCollectorSessionModelTests(unittest.TestCase):
     def test_valid_strong_observation_is_recorded_and_strong(self) -> None:
-        for strong in ("fc2_parameter_2", "at_dtupn"):
+        for strong in (
+            "fc1_identity_challenge",
+            "fc2_parameter_2",
+            "at_dtupn",
+        ):
             obs = _observed(identity_source=strong)
             self.assertEqual(obs.collector_pn, FULL_PN)
             self.assertEqual(obs.session_id, SESSION_ID)
@@ -78,7 +82,14 @@ class ObservedCollectorSessionModelTests(unittest.TestCase):
             identity_source_is_strong,
         )
 
-        for source in ("fc2_parameter_2", "at_dtupn", "framed_heartbeat", "", "xx"):
+        for source in (
+            "fc1_identity_challenge",
+            "fc2_parameter_2",
+            "at_dtupn",
+            "framed_heartbeat",
+            "",
+            "xx",
+        ):
             self.assertEqual(
                 _observed(identity_source=source).has_strong_identity,
                 identity_source_is_strong(source),

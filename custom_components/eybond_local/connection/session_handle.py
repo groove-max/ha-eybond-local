@@ -430,7 +430,11 @@ def _capabilities_for_observation(
 
     if "at_dtupn" in identity_sources:
         management.add(ADAPTER_COLLECTOR_AT_COMMANDS)
-    if identity_sources & {"fc2_parameter_2", "framed_heartbeat"}:
+    if identity_sources & {
+        "fc1_identity_challenge",
+        "fc2_parameter_2",
+        "framed_heartbeat",
+    }:
         management.add(ADAPTER_COLLECTOR_FRAMED_COMMANDS)
 
     return SessionCapabilities(

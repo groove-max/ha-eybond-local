@@ -3,7 +3,9 @@
 A first-contact socket that volunteers no bytes is invisible to the public
 session inventory (PN-less sockets are deliberately not discovery candidates).
 Two callers legitimately need to identify such a socket anyway, each holding
-its own explicit wire authority:
+its own explicit wire authority.  Runtime first-contact negotiation may also
+use the same exact-session channel, but the candidate ordering stays in the
+adjacent negotiator rather than in listener internals:
 
 * the callback identity transaction -- the USER's explicit bootstrap protocol
   selection for the exact silent session a previous attempt causally
@@ -14,8 +16,8 @@ its own explicit wire authority:
 Both go through this channel and nothing else: the shared-listener
 acquire/release stays inside the collector layer, no listener internals leak
 out, and the channel itself never infers a wire -- the protocol is always the
-caller's typed authority. One call performs exactly ONE read-only identity
-query (framed FC=2 parameter 2 / ``AT+DTUPN``) on exactly one session id; a
+caller's typed authority. One call performs exactly ONE bounded identity
+query (framed FC=1 or FC=2 / ``AT+DTUPN``) on exactly one session id; a
 valid strong-PN reply is recorded in the listener inventory (making the
 session visible to every normal path), anything else changes nothing.
 """
@@ -37,8 +39,8 @@ class SessionObservation:
 
     Carries ONLY the minimal identity fields the onboarding exact-session selector
     needs -- ``session_id``, ``collector_pn`` (``""`` while silent), the
-    ``identity_source`` (``""`` / ``framed_heartbeat`` / ``fc2_parameter_2`` /
-    ``at_dtupn``), the observed ``protocol_shape`` and lifecycle ``state``. It
+    ``identity_source`` (including weak heartbeat and strong FC1/FC2/AT
+    evidence), the observed ``protocol_shape`` and lifecycle ``state``. It
     deliberately exposes NO peer IP, no bytes and no listener internals, so a
     caller can select the ONE fresh session of an attempt without ever making a
     peer-IP / order / prefix decision.
@@ -170,11 +172,12 @@ class SilentSessionIdentityProbeChannel:
         session_id: str,
         *,
         session_protocol: str,
+        identity_probe_kind: str = "",
     ) -> str:
-        """ONE read-only identity query of one exact session, gated to a STRONG PN.
+        """ONE bounded identity query of one exact session, gated to a STRONG PN.
 
         Returns a full PN ONLY when, AFTER the query, THIS exact session id carries
-        a strong (``fc2_parameter_2`` / ``at_dtupn``) inventory identity; returns
+        a strong (correlated FC1 / FC2 parameter 2 / AT+DTUPN) inventory identity; returns
         ``""`` in every other case. In particular the low-level route probe may
         fall back to a WEAK short ``framed_heartbeat`` PN -- a heartbeat can land
         during its initial read and the subsequent FC=2 upgrade can then time out
@@ -198,8 +201,18 @@ class SilentSessionIdentityProbeChannel:
         if not callable(identify):
             return ""
         try:
+            if identity_probe_kind:
+                result = await identify(
+                    sid,
+                    session_protocol=protocol,
+                    identity_probe_kind=identity_probe_kind,
+                )
+            else:
+                # Preserve the established narrow channel contract for known
+                # wire callers and their strict test doubles.
+                result = await identify(sid, session_protocol=protocol)
             low_level_pn = str(
-                await identify(sid, session_protocol=protocol) or ""
+                result or ""
             ).strip()
         except asyncio.CancelledError:
             raise
@@ -209,6 +222,28 @@ class SilentSessionIdentityProbeChannel:
             )
             return ""
         return self._strong_identity_for_session(sid, low_level_pn)
+
+    async def async_retire_exact_session(self, session_id: str) -> bool:
+        """Close exactly one pending socket after an unknown-wire probe miss."""
+
+        listener = self._listener
+        sid = str(session_id or "").strip()
+        if listener is None or not sid:
+            return False
+        retire = getattr(listener, "async_retire_pending_session", None)
+        if not callable(retire):
+            return False
+        try:
+            return bool(await retire(sid))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.info(
+                "Silent-session retirement failed on %s",
+                sid,
+                exc_info=True,
+            )
+            return False
 
     def _strong_identity_for_session(self, session_id: str, low_level_pn: str) -> str:
         """Gate a low-level probe result to a STRONG, same-identity observation.

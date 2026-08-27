@@ -56,6 +56,10 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.collector.discovery import DiscoveryProbeResult
+from custom_components.eybond_local.collector.session_identity_negotiator import (
+    ExactSessionIdentityResult,
+    NEGOTIATION_IDENTIFIED,
+)
 from custom_components.eybond_local.connection.session_registry import CallbackSessionRegistry
 from custom_components.eybond_local.models import CollectorInfo
 from custom_components.eybond_local.runtime.link import EybondRuntimeLinkManager, resolve_server_ip
@@ -575,6 +579,16 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         manager._announcer = announcer  # type: ignore[assignment]
         manager._started = True
         manager._listener_status = "listening"
+        manager._collector_pn = _OBSERVED_PN
+        manager._session_identity_negotiator.async_negotiate = AsyncMock(
+            return_value=ExactSessionIdentityResult(
+                NEGOTIATION_IDENTIFIED,
+                session_id="unit-session",
+                collector_pn=_OBSERVED_PN,
+                session_protocol="eybond_framed",
+                identity_source="fc1_identity_challenge",
+            )
+        )
         probe = _fake_probe()
 
         with patch(
@@ -588,7 +602,9 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         self.assertEqual(probe.await_count, 1)  # exactly one UDP trigger
         self.assertEqual(manager._callback_trigger_count, 1)
         self.assertEqual(announcer.start_calls, 0)  # no continuous announcer
-        self.assertEqual(transport.connected_waits, [5.0])
+        self.assertEqual(len(transport.connected_waits), 1)
+        self.assertGreater(transport.connected_waits[0], 4.9)
+        self.assertLessEqual(transport.connected_waits[0], 5.0)
         self.assertEqual(transport.heartbeat_waits, [1.5])
         self.assertEqual(
             manager.callback_trigger_diagnostics()["collector_callback_state"],
@@ -691,6 +707,16 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         manager._announcer = _FakeAnnouncer()  # type: ignore[assignment]
         manager._started = True
         manager._listener_status = "listening"
+        manager._collector_pn = _OBSERVED_PN
+        manager._session_identity_negotiator.async_negotiate = AsyncMock(
+            return_value=ExactSessionIdentityResult(
+                NEGOTIATION_IDENTIFIED,
+                session_id="unit-session",
+                collector_pn=_OBSERVED_PN,
+                session_protocol="eybond_framed",
+                identity_source="fc1_identity_challenge",
+            )
+        )
 
         connected = asyncio.run(manager.async_try_connect(timeout=5.0, require_heartbeat=True))
 

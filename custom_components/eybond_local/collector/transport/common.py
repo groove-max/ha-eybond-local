@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Awaitable, Callable, Protocol
 
-from ..at import CollectorAtResponse, build_at_query, build_at_write, parse_at_response
+from ..at import CollectorAtResponse, build_at_write, parse_at_response
 from ..cloud_family import (
     apply_collector_cloud_family_observation,
     collector_cloud_family_observation_from_endpoint,
@@ -36,8 +36,6 @@ from ..protocol import (
     FC_TRIGGER_QUERY_REAL_TIME,
     HEADER_SIZE,
     TIDCounter,
-    build_collector_request,
-    build_heartbeat_request,
     decode_header,
     parse_heartbeat_pn,
 )
@@ -316,21 +314,6 @@ def _collector_pn_from_initial_chunk(chunk: bytes) -> tuple[str, str]:
         collector_pn = _parse_fc2_collector_pn(available_payload)
         return (collector_pn, "fc2_parameter_2") if collector_pn else ("", "")
     return "", ""
-
-
-def _identity_probe_payload_for_session_protocol(session_protocol: str) -> bytes:
-    normalized = str(session_protocol or "").strip().lower()
-    if normalized == "at_text":
-        return build_at_query("DTUPN")
-    if normalized == "eybond_framed":
-        return build_collector_request(
-            1,
-            b"\x02",
-            devcode=1,
-            collector_addr=1,
-            fcode=FC_QUERY_COLLECTOR,
-        )
-    return b""
 
 
 def _bounded_write_timeout(request_timeout: float) -> float:

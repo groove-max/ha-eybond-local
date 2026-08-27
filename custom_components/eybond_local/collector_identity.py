@@ -18,7 +18,9 @@ _COLLECTOR_PN_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{5,63}\Z")
 # below this length a prefix is too ambiguous to treat as the same collector.
 CALLBACK_PN_PREFIX_MATCH_MIN_LEN = 10
 
-_STRONG_IDENTITY_SOURCES = frozenset({"at_dtupn", "fc2_parameter_2"})
+_STRONG_IDENTITY_SOURCES = frozenset(
+    {"at_dtupn", "fc1_identity_challenge", "fc2_parameter_2"}
+)
 
 
 def validated_collector_pn(value: object) -> str:

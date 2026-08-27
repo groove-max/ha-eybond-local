@@ -15,6 +15,11 @@ from ...collector_identity import (
     reconcile_pn,
     validated_collector_pn,
 )
+from ..identity_probe import (
+    IdentityProbeRequest,
+    build_identity_probe_request,
+    parse_identity_probe_response,
+)
 from ..protocol import HEADER_SIZE, decode_header
 from .common import (
     CollectorListenerBindError,
@@ -23,7 +28,6 @@ from .common import (
     _close_writer_bounded,
     _collector_pn_from_initial_chunk,
     _finish_cleanup_on_cancel,
-    _identity_probe_payload_for_session_protocol,
     _is_default_broadcast_alias_candidate,
     _is_hairpin_alias_candidate,
     _is_ipv4_broadcast_placeholder,
@@ -1164,6 +1168,7 @@ class _SharedEybondListener:
         session_id: str,
         *,
         session_protocol: str,
+        identity_probe_kind: str = "",
     ) -> str:
         """ONE read-only identity probe of one exact silent pending socket.
 
@@ -1186,6 +1191,7 @@ class _SharedEybondListener:
             pending_pn = await self._identify_pending_socket_for_route(
                 pending,
                 session_protocol=session_protocol,
+                identity_probe_kind=identity_probe_kind,
             )
             if not self._pending_socket_still_registered(pending):
                 return pending_pn
@@ -1195,6 +1201,33 @@ class _SharedEybondListener:
                 )
             self._resume_pending_watch(pending)
             return pending_pn
+
+    async def async_retire_pending_session(self, session_id: str) -> bool:
+        """Close and retire exactly one still-pending socket by session id.
+
+        This is used only after an unknown-wire identity challenge received no
+        correlated response.  Retiring that physical socket prevents a later
+        attempt from sending a different protocol dialect over the same stream.
+        Selection is session-id only; peer IP, PN prefix and arrival order never
+        participate.
+        """
+
+        async with self._pending_route_lock:
+            pending = self._select_pending_socket_by_session_id(session_id)
+            if pending is None:
+                return False
+            await self._pause_pending_sniff(pending)
+            if not self._pending_socket_still_registered(pending):
+                return False
+            self._remove_pending_socket(pending)
+            if self._last_pending_ip == pending.remote_ip:
+                self._last_pending_ip = ""
+            self._mark_session_state(
+                pending.session_id,
+                "closed_identity_negotiation_retry",
+            )
+            await _close_writer_bounded(pending.writer)
+            return True
 
     def _select_pending_socket_by_session_id(
         self,
@@ -1986,14 +2019,14 @@ class _SharedEybondListener:
 
     async def _async_probe_pending_identity(self, pending: _PendingCollectorSocket) -> bytes:
         session_protocol = self._single_registered_session_protocol()
-        probe = _identity_probe_payload_for_session_protocol(session_protocol)
-        if not probe:
+        request = build_identity_probe_request(session_protocol)
+        if request is None:
             self._mark_session_state(pending.session_id, "waiting_for_identity")
             return b""
 
         self._mark_session_state(pending.session_id, f"probing_identity_{session_protocol}")
         try:
-            pending.writer.write(probe)
+            pending.writer.write(request.payload)
             await asyncio.wait_for(pending.writer.drain(), timeout=1.5)
             return await asyncio.wait_for(pending.reader.read(64), timeout=1.5)
         except asyncio.TimeoutError:
@@ -2008,6 +2041,7 @@ class _SharedEybondListener:
         pending: _PendingCollectorSocket,
         *,
         session_protocol: str = "",
+        identity_probe_kind: str = "",
     ) -> str:
         if not self._pending_socket_still_registered(pending):
             return ""
@@ -2046,16 +2080,26 @@ class _SharedEybondListener:
         protocol = str(session_protocol or "").strip().lower()
         if not protocol:
             protocol = self._single_registered_session_protocol()
-        probe = _identity_probe_payload_for_session_protocol(protocol)
-        if not probe:
+        request = build_identity_probe_request(
+            protocol,
+            probe_kind=identity_probe_kind,
+        )
+        if request is None:
             # No wire to upgrade with: keep whatever weak identity we already read.
             return weak_pn
 
-        self._mark_session_state(pending.session_id, f"probing_route_identity_{protocol}")
+        self._mark_session_state(
+            pending.session_id,
+            f"probing_route_identity_{request.probe_kind}",
+        )
         try:
-            pending.writer.write(probe)
+            pending.writer.write(request.payload)
             await asyncio.wait_for(pending.writer.drain(), timeout=1.5)
-            response = await asyncio.wait_for(pending.reader.read(64), timeout=1.5)
+            response, collector_pn, source = await self._read_identity_probe_response(
+                pending,
+                request,
+                timeout=1.5,
+            )
         except asyncio.TimeoutError:
             self._mark_session_state(pending.session_id, "route_identity_probe_timeout")
             return weak_pn
@@ -2063,13 +2107,77 @@ class _SharedEybondListener:
             self._mark_session_state(pending.session_id, "route_identity_probe_failed")
             return weak_pn
 
-        collector_pn, source = _collector_pn_from_initial_chunk(response)
         if collector_pn:
             self._mark_session_first_bytes(pending.session_id, response)
             self._mark_session_identity(pending.session_id, collector_pn, source)
             return collector_pn
         # The upgrade produced nothing usable: never LOSE the weak identity.
         return weak_pn
+
+    async def _read_identity_probe_response(
+        self,
+        pending: _PendingCollectorSocket,
+        request: IdentityProbeRequest,
+        *,
+        timeout: float,
+    ) -> tuple[bytes, str, str]:
+        """Read one correlated response while preserving useful observations.
+
+        A framed collector can emit an unsolicited heartbeat immediately before
+        answering our request.  Record such a frame, but continue until the
+        request's exact TID/function response arrives or the shared deadline
+        expires.  AT remains line-oriented and uses its existing bounded read.
+        """
+
+        if request.session_protocol == "at_text":
+            response = await asyncio.wait_for(
+                pending.reader.read(128),
+                timeout=max(0.0, float(timeout)),
+            )
+            pn, source = parse_identity_probe_response(request, response)
+            return response, pn, source
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, float(timeout))
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError
+            header_bytes = await asyncio.wait_for(
+                pending.reader.readexactly(HEADER_SIZE),
+                timeout=remaining,
+            )
+            try:
+                header = decode_header(header_bytes)
+            except Exception:
+                return header_bytes, "", ""
+            if header.total_len < HEADER_SIZE or header.total_len > 4096:
+                return header_bytes, "", ""
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError
+            payload = await asyncio.wait_for(
+                pending.reader.readexactly(header.payload_len),
+                timeout=remaining,
+            )
+            frame = header_bytes + payload
+            self._mark_session_first_bytes(pending.session_id, frame)
+
+            # Preserve volunteered strong/weak observations even when this is
+            # not the response correlated to our request.
+            observed_pn, observed_source = _collector_pn_from_initial_chunk(frame)
+            if observed_pn:
+                self._mark_session_identity(
+                    pending.session_id,
+                    observed_pn,
+                    observed_source,
+                )
+                if identity_source_is_strong(observed_source):
+                    return frame, observed_pn, observed_source
+
+            pn, source = parse_identity_probe_response(request, frame)
+            if pn:
+                return frame, pn, source
 
     async def _sniff_pending_socket(self, pending: _PendingCollectorSocket) -> None:
         chunk, exhausted = await self._read_pending_initial_chunk(pending)
