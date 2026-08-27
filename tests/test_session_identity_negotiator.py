@@ -29,8 +29,8 @@ from custom_components.eybond_local.collector.silent_session_probe import (
 )
 
 
-FULL_PN = "E50000253745448949"
-FOREIGN_PN = "E50000253745449999"
+FULL_PN = "E50000200000000001"
+FOREIGN_PN = "E50000200000009777"
 
 
 class _Channel:
