@@ -31,6 +31,7 @@ from custom_components.eybond_local.connection.admission_transaction import (
     HANDOFF_OK,
 )
 from custom_components.eybond_local.connection.recovery.verification import (
+    CallbackRecoveryRoute,
     STATE_INBOUND_VERIFIED,
     InboundRecoveryOutcome,
 )
@@ -57,6 +58,22 @@ def _observed(*, pn=SHORT_PN, source="framed_heartbeat", session_id=S1, port=889
 
 def _request(**kw):
     return CollectorAdmissionRequest(observed_session=_observed(**kw), origin="passive_scan")
+
+
+def _route_request(**kw):
+    observed = _observed(**kw)
+    return CollectorAdmissionRequest(
+        observed_session=observed,
+        origin="scan_selected_route",
+        callback_route=CallbackRecoveryRoute(
+            bind_ip="192.0.2.10",
+            trigger_target_ip="203.0.113.10",
+            trigger_udp_port=58899,
+            advertised_ha_host="192.0.2.10",
+            advertised_ha_port=observed.listener_port,
+            listener_port=observed.listener_port,
+        ),
+    )
 
 
 def _verified_outcome(pn=FULL_PN):
@@ -662,6 +679,48 @@ class TransactionLifecycleHardening(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(txn.failure_reason, atm.FAILURE_OWNERSHIP_UNAVAILABLE)
         self.assertEqual(txn.state, "failed")
         self.assertFalse(txn.holds_claim)
+
+    async def test_manual_callback_bridge_normalizes_both_failure_origins(self):
+        """The failure-menu action always opens one fresh callback lifecycle."""
+
+        # A passive-inbound failure follows the explicit FAILED transition.
+        inbound = _make(_request(), registry=_FakeRegistry())
+        inbound._outcome = InboundRecoveryOutcome(
+            failure_reason="restart_not_confirmed", collector_pn=SHORT_PN
+        )
+        inbound._state = "failed"
+        inbound.begin_manual_callback_continuation()
+        self.assertEqual(inbound.state, "callback_ready")
+        self.assertIsNone(inbound.outcome)
+
+        # A selected route can fail before the first callback authority mutates
+        # READY.  It is still a valid explicit manual continuation and must not
+        # produce admission_transaction_identity_not_runnable on form submit.
+        selected = _make(_route_request(), registry=_FakeRegistry())
+        selected.begin_manual_callback_continuation()
+        self.assertEqual(selected.state, "callback_ready")
+
+        # A held, unadopted callback capability is discarded before the manual
+        # attempt.  Exact owner cleanup remains inside the transaction.
+        held_registry = _FakeRegistry()
+        held = _make(_route_request(), registry=held_registry)
+        held._state = "identity_certified"
+        held._registry = held_registry
+        held._owner = "callback_verification:old"
+        held_registry.claims[held._owner] = S1
+        held.begin_manual_callback_continuation()
+        self.assertEqual(held.state, "callback_ready")
+        self.assertFalse(held.holds_claim)
+        self.assertEqual(held_registry.released, ["callback_verification:old"])
+
+    async def test_manual_callback_bridge_refuses_live_or_committed_authority(self):
+        for state in ("running", "identity_running", "recovery_running", "handed_off", "closed"):
+            with self.subTest(state=state):
+                txn = _make(_route_request(), registry=_FakeRegistry())
+                txn._state = state
+                with self.assertRaises(RuntimeError):
+                    txn.begin_manual_callback_continuation()
+                self.assertEqual(txn.state, state)
 
     async def test_registry_lookup_failure_is_typed_without_wire_io(self):
         reg = _LookupRaisingRegistry()

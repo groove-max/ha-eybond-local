@@ -743,20 +743,11 @@ class CollectorAdmissionFlowMixin:
         transaction = self._admission_transaction
         self._admission_task = None
         if transaction is not None:
-            if transaction.request.callback_route is not None:
-                # The automatic recovery released its failed outcome back to
-                # CALLBACK_READY. Keep the SAME transaction/identity context;
-                # the manual submit runs a full new one-trigger attempt through
-                # the shared continuation, with no PN/session hand-across.
-                self._manual_preselected_strategy = (
-                    CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
-                )
-                return await self.async_step_manual()
-            # Clear the completed inbound attempt and enter the callback-ready
-            # lifecycle IN the same transaction (its inbound owner was already
-            # released and channels closed on the failure path). No hand-across,
-            # no transaction close and no owner/PN/session copy.
-            transaction.begin_callback_continuation()
+            # One transaction operation normalizes both failure origins
+            # (passive inbound and selected callback route) into a fresh manual
+            # callback attempt.  The flow never guesses the transaction's
+            # private lifecycle state and never copies its PN/session authority.
+            transaction.begin_manual_callback_continuation()
         # Only a form DEFAULT; the manual step still requires the user to
         # submit, and the transaction's callback identity/recovery path proves it.
         self._manual_preselected_strategy = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND

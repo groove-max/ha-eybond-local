@@ -769,6 +769,40 @@ class CollectorAdmissionTransaction(CallbackContinuation):
         self._reset_callback_attempt()
         self._state = _STATE_CALLBACK_READY
 
+    def begin_manual_callback_continuation(self) -> None:
+        """Prepare one explicit manual callback attempt after admission failed.
+
+        The failure screen is shared by the passive-inbound verifier and the
+        selected-route callback verifier.  Those authorities end in different
+        private states, but the user's explicit ``configure manually`` action
+        has one meaning: discard every uncommitted attempt capability and start
+        a fresh callback identity transaction with the same durable PN context.
+
+        A failed passive-inbound attempt uses the existing FAILED ->
+        CALLBACK_READY transition.  A selected-route attempt may already be
+        callback-ready or may still hold an unadopted identity/recovery
+        capability; reset it through the transaction's single cleanup boundary.
+        READY is accepted only for an observed request carrying an explicit
+        callback route: this covers a route attempt that failed before its first
+        authority mutation.  Running, adopted, handed-off and closed states
+        remain fail-closed.
+        """
+
+        if self._request is None:
+            raise RuntimeError("collector_admission_request_unavailable")
+        if self._state == _STATE_FAILED:
+            self.begin_callback_continuation()
+            return
+        if self._state == _STATE_READY:
+            if type(self._request.callback_route) is not CallbackRecoveryRoute:
+                raise RuntimeError("admission_transaction_not_callback_ready")
+        elif self._state not in self._CALLBACK_RESETTABLE:
+            raise RuntimeError("admission_transaction_not_callback_ready")
+        if self._close_requested:
+            raise RuntimeError("admission_transaction_closed")
+        self._reset_callback_attempt()
+        self._state = _STATE_CALLBACK_READY
+
     def begin_observed_callback_continuation(self) -> None:
         """Start selected-route verification from one exact observed session.
 

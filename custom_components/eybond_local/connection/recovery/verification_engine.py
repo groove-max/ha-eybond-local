@@ -823,7 +823,12 @@ class _ControlledResetRecoveryEngine:
             await self._close_channel()
             return self._fail(FAILURE_SESSION_UNAVAILABLE)
         except Exception as exc:
-            logger.info(
+            # This is a user-visible admission/transition failure.  Keep the
+            # exact typed management error in the normal HA log so a support
+            # package can distinguish a rejected command, wrong response,
+            # transport loss, and timeout without enabling debug logging or
+            # guessing from the generic UI reason.
+            logger.warning(
                 "Recovery verification: collector %s restart not confirmed: %s",
                 self._collector_pn,
                 exc,

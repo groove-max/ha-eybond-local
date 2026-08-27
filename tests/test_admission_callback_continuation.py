@@ -820,7 +820,7 @@ class AdmissionConvergenceArchitectureGuards(unittest.TestCase):
             if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
         }
         self.assertNotIn("async_close", calls)
-        self.assertIn("begin_callback_continuation", calls)
+        self.assertIn("begin_manual_callback_continuation", calls)
 
     def test_source_boundary_selects_the_transaction_continuation(self) -> None:
         methods = self._flow_methods()

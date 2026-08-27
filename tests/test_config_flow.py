@@ -12295,6 +12295,74 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_selected_route_failure_can_enter_manual_without_unknown_error(
+        self,
+    ) -> None:
+        """Regression: route failure -> manual submit never reuses READY state."""
+
+        from custom_components.eybond_local.connection.callback_identity import (
+            CallbackIdentityOutcome,
+        )
+        from custom_components.eybond_local.connection.recovery.verification import (
+            CallbackRecoveryRoute,
+        )
+
+        flow = self._make_flow()
+        observed = ObservedCollectorSession(
+            collector_pn=self.FULL_PN,
+            identity_source="fc2_parameter_2",
+            session_id=self.OLD_SESSION,
+            listener_port=18899,
+            protocol_shape="eybond_framed",
+            peer_hint=self.PEER_IP,
+        )
+        request = CollectorAdmissionRequest(
+            observed_session=observed,
+            origin="scan_selected_route",
+            callback_route=CallbackRecoveryRoute(
+                bind_ip="192.168.1.50",
+                trigger_target_ip=self.PEER_IP,
+                trigger_udp_port=58899,
+                advertised_ha_host="192.168.1.50",
+                advertised_ha_port=18899,
+                listener_port=18899,
+            ),
+        )
+        transaction = admission_transaction_module.CollectorAdmissionTransaction(
+            request,
+            registry_provider=lambda: None,
+            listener_host="0.0.0.0",
+            hass_provider=lambda: flow.hass,
+        )
+        flow._admission_transaction = transaction
+        flow._callback_continuation = transaction
+
+        # Exact production hole: a selected route can reach its failure menu
+        # before READY changed. Choosing manual used to leave READY untouched;
+        # async_run_identity then raised into aiohttp as an unknown error.
+        manual = await flow.async_step_verify_connection_manual_callback()
+        self.assertEqual(manual["step_id"], "manual")
+        self.assertEqual(transaction.state, "callback_ready")
+
+        async def _identity(_hass, _request):
+            return CallbackIdentityOutcome(result="callback_timeout")
+
+        with patch.object(
+            admission_transaction_module,
+            "async_run_callback_identity_transaction",
+            side_effect=_identity,
+        ):
+            result = await flow.async_step_manual(
+                self._manual_input(
+                    self.PEER_IP,
+                    connection_strategy="callback_on_demand",
+                )
+            )
+
+        self.assertEqual(result["type"], "menu")
+        self.assertEqual(result["step_id"], "manual_confirm")
+        self.assertEqual(transaction.state, "callback_ready")
+
     # ---- blocker 1: weak->strong enrichment must retarget a retry onto the
     # ---- replacement full-PN session, not the stale observation.
 
