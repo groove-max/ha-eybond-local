@@ -415,7 +415,8 @@ class LocalMetadataTests(unittest.TestCase):
         self.assertIn("battery_equalization_mode", plan.profile_enable_keys)
         self.assertIn("power_saving_mode", plan.profile_enable_keys)
         self.assertIn("battery_equalization_time", plan.profile_enable_keys)
-        self.assertIn("clear_generation_data", plan.profile_enable_keys)
+        self.assertNotIn("clear_generation_data", plan.profile_enable_keys)
+        self.assertIn("Clean Generation Power", plan.blocked_field_titles)
         self.assertIn("force_eq_charge", plan.profile_enable_keys)
         self.assertIn("turn_on_mode", plan.profile_enable_keys)
         self.assertTrue(

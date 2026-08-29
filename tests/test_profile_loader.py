@@ -21,26 +21,39 @@ class ProfileLoaderTests(unittest.TestCase):
         profile_loader.set_external_profile_roots(())
         profile_loader.load_driver_profile.cache_clear()
 
-    def test_loads_modbus_smg_base_profile_metadata(self) -> None:
+    def test_loads_classic_smg_rs232_v1_profile_metadata(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
 
-        profile = profile_loader.load_driver_profile("modbus_smg/base.json")
+        profile = profile_loader.load_driver_profile(
+            "modbus_smg/protocols/classic_smg_rs232_v1.json"
+        )
 
-        self.assertEqual(profile.key, "modbus_smg_base")
-        self.assertEqual(profile.title, "SMG / Modbus Base Profile")
+        self.assertEqual(profile.key, "modbus_smg_classic_smg_rs232_v1")
+        self.assertEqual(profile.title, "Classic SMG RS232 Register Map V1")
         self.assertEqual(profile.driver_key, "modbus_smg")
         self.assertEqual(profile.protocol_family, "modbus_smg")
-        self.assertEqual(profile.source_name, "modbus_smg/base.json")
+        self.assertEqual(
+            profile.source_name,
+            "modbus_smg/protocols/classic_smg_rs232_v1.json",
+        )
         self.assertEqual(profile.source_scope, "builtin")
-        self.assertTrue(profile.source_path.endswith("profiles/modbus_smg/base.json"))
+        self.assertTrue(
+            profile.source_path.endswith(
+                "profiles/modbus_smg/protocols/classic_smg_rs232_v1.json"
+            )
+        )
         self.assertEqual(len(profile.groups), 4)
         self.assertEqual(len(profile.capabilities), 30)
         self.assertEqual(len(profile.presets), 2)
         self.assertEqual(sum(capability.tested for capability in profile.capabilities), 0)
+        self.assertEqual(
+            {capability.provenance for capability in profile.capabilities},
+            {"doc_backed"},
+        )
         self.assertEqual(profile.get_capability("charge_source_priority").register, 331)
         self.assertEqual(
             profile.get_capability("power_saving_mode").resolved_support_tier,
-            "standard",
+            "conditional",
         )
         self.assertEqual(profile.get_capability("power_saving_mode").support_notes, "")
         with self.assertRaises(KeyError):
@@ -617,7 +630,7 @@ class ProfileLoaderTests(unittest.TestCase):
             )
         )
         self.assertEqual(len(profile.groups), 4)
-        self.assertEqual(len(profile.capabilities), 53)
+        self.assertEqual(len(profile.capabilities), 63)
         self.assertEqual(len(profile.presets), 0)
 
         self.assertEqual(profile.get_capability("output_mode").register, 600)
@@ -664,12 +677,23 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.get_capability("inverter_date_write").word_count, 3)
         self.assertEqual(profile.get_capability("inverter_time_write").register, 699)
         self.assertEqual(profile.get_capability("inverter_time_write").word_count, 3)
-        self.assertTrue(
-            all(
-                capability.tested
-                for capability in profile.capabilities
-                if capability.key != "secondary_output_priority"
-            )
+        self.assertEqual(
+            {capability.key for capability in profile.capabilities if not capability.tested},
+            {
+                "secondary_output_priority",
+                "secondary_output_priority_start_time",
+                "secondary_output_priority_end_time",
+                "op2_output_enabled",
+                "op2_output_start_hour",
+                "op2_output_end_hour",
+                "lithium_battery_automatic_activation_enabled",
+                "lithium_battery_activation_once",
+                "clear_generation_data",
+                "reset_user_parameters",
+                "op1_offgrid_low_voltage_protection",
+                "secondary_charging_priority_start_time",
+                "secondary_charging_priority_end_time",
+            },
         )
         self.assertEqual(profile.get_capability("clear_generation_data").register, 705)
         self.assertEqual(profile.get_capability("reset_user_parameters").register, 706)
@@ -690,7 +714,7 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.title, "Sandisolar SD 11KP48V WIFI")
         self.assertEqual(profile.driver_key, "modbus_smg")
         self.assertEqual(profile.protocol_family, "modbus_smg")
-        self.assertEqual(len(profile.capabilities), 53)
+        self.assertEqual(len(profile.capabilities), 63)
         self.assertEqual(profile.get_capability("output_source_priority").register, 601)
         secondary_output = profile.get_capability("secondary_output_priority")
         secondary_charging = profile.get_capability("secondary_charging_priority")
@@ -1055,6 +1079,60 @@ class ProfileLoaderTests(unittest.TestCase):
                     r"invalid_capability_provenance:runtime_guess",
                 ):
                     profile_loader.load_driver_profile("bad_provenance_profile.json")
+
+    def test_capability_removal_is_exact_and_a_child_can_reintroduce_it(self) -> None:
+        base = {
+            "capabilities": [
+                {"key": "keep", "register": 100},
+                {"key": "version_specific", "register": 101},
+            ]
+        }
+
+        narrowed = profile_loader._merge_raw_profile(
+            base,
+            {"capability_removals": ["version_specific"]},
+        )
+        self.assertEqual(
+            [item["key"] for item in narrowed["capabilities"]],
+            ["keep"],
+        )
+        self.assertNotIn("capability_removals", narrowed)
+
+        exact_model = profile_loader._merge_raw_profile(
+            narrowed,
+            {
+                "capabilities": [
+                    {"key": "version_specific", "register": 201},
+                ]
+            },
+        )
+        self.assertEqual(
+            [item["key"] for item in exact_model["capabilities"]],
+            ["keep", "version_specific"],
+        )
+        self.assertEqual(exact_model["capabilities"][1]["register"], 201)
+
+    def test_capability_removals_reject_malformed_duplicate_and_unknown_keys(self) -> None:
+        base = {"capabilities": [{"key": "known", "register": 100}]}
+        invalid_cases = (
+            ({"capability_removals": "known"}, "invalid_capability_removals"),
+            (
+                {"capability_removals": [" known"]},
+                "invalid_capability_removal",
+            ),
+            (
+                {"capability_removals": ["known", "known"]},
+                "duplicate_capability_removal:known",
+            ),
+            (
+                {"capability_removals": ["missing"]},
+                "unknown_capability_removal:missing",
+            ),
+        )
+        for overlay, reason in invalid_cases:
+            with self.subTest(reason=reason):
+                with self.assertRaisesRegex(ValueError, reason):
+                    profile_loader._merge_raw_profile(base, overlay)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,7 @@
+{
+  "extends": "./communication_protocol_3_10.json",
+  "profile_key": "modbus_smg_communication_protocol_6",
+  "title": "Communication Protocol No. 6 Controls",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg"
+}

@@ -1,0 +1,16 @@
+{
+  "extends": "./communication_protocol_3_10.json",
+  "profile_key": "modbus_smg_communication_protocol_3",
+  "title": "Communication Protocol No. 3 Controls",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "capability_removals": [
+    "op2_overload_alarm_setting",
+    "op2_output_enabled",
+    "op2_output_start_hour",
+    "op2_output_end_hour",
+    "op1_offgrid_low_voltage_protection",
+    "op1_offgrid_soc_protection_value",
+    "ground_relay_enabled"
+  ]
+}

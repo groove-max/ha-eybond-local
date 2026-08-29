@@ -107,6 +107,8 @@ def can_expose_capability(
 ) -> bool:
     """Return whether a capability should be exposed as a control entity."""
 
+    if capability.resolved_support_tier == "blocked":
+        return False
     if control_mode == CONTROL_MODE_FULL:
         return True
     if control_mode == CONTROL_MODE_READ_ONLY:
@@ -125,6 +127,10 @@ def can_expose_preset(
 ) -> bool:
     """Return whether a preset should be exposed as a control entity."""
 
+    for item in preset.items:
+        capability = capabilities_by_key.get(item.capability_key)
+        if capability is None or capability.resolved_support_tier == "blocked":
+            return False
     if control_mode == CONTROL_MODE_FULL:
         return True
     if control_mode == CONTROL_MODE_READ_ONLY:

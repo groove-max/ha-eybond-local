@@ -44,6 +44,7 @@
   ],
   "knowledge_summary": "Aninerel dual-output 6200 / Aninerel 6.2KW resolves to the OP2 6200 runtime surface (layout 11, model code 30979, rated 6200, firmware 7903_A6260126v1). The aninerel.zip donor capture and the issue #7 support package are treated as the same shared OP2 model family unless a future stable runtime anchor proves otherwise. Owner ESPHome YAML and shadow-learning evidence extend the known Modbus register map for this family.",
   "source_keys": [
+    "documentation_classic_smg_rs232_v1",
     "github_issue_7",
     "corpus_aninerel_op2_6200",
     "private_message_op2_registers",

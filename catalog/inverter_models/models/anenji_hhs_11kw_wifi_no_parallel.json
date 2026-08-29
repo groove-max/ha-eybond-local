@@ -18,25 +18,27 @@
   "validation": {
     "hardware": "captured",
     "telemetry": "partial",
-    "controls": "none"
+    "controls": "partial"
   },
   "coverage": {
-    "runtime_control_surface": "read_only",
+    "runtime_control_surface": "available",
     "smartess_control_surface": "unknown",
     "vendor_register_map": "documented",
     "notes": [
       "The exact layout/model fingerprint is captured from a beta.3 support archive.",
-      "The protocol-3 telemetry projection is enabled read-only.",
+      "The exact fingerprint uses the documented Protocol 3 telemetry and write matrices.",
       "A later proxy capture and matching DESSMonitor export confirmed the documented L1 Grid Power at holding register 340 for this exact fingerprint.",
-      "No ANJ-11KW writable capability is inherited until this exact HHS model is write-validated."
+      "Documented Protocol 3 controls are available only after the user explicitly selects Full Control; none is marked hardware-tested on this model.",
+      "Registers whose protocol-number column is empty, and Protocol 4/6-only OP2 controls, are not inherited."
     ]
   },
   "known_limitations": [
-    "Local controls remain unavailable pending model-specific hardware validation."
+    "No local write has been hardware-validated on this exact model; Auto mode remains read-only and the documented controls are experimental Full-Control candidates."
   ],
-  "knowledge_summary": "An Anenji HHS 11kW non-parallel inverter with an exact captured protocol-3 fingerprint. The integration exposes the shared protocol-3 telemetry projection read-only, including hardware-correlated Grid Power, and deliberately withholds ANJ write controls.",
+  "knowledge_summary": "An Anenji HHS 11kW non-parallel inverter with an exact captured Protocol 3 fingerprint. The integration exposes the shared telemetry projection, including hardware-correlated Grid Power, and offers only the controls explicitly valid for Protocol 3 as untested Full-Control candidates.",
   "source_keys": [
     "github_issue_13_hhs_11kw_beta3",
-    "github_issue_13_hhs_grid_power_20260827"
+    "github_issue_13_hhs_grid_power_20260827",
+    "documentation_anenji_protocol_3_10"
   ]
 }

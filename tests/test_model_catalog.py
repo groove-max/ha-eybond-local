@@ -166,7 +166,7 @@ class RealCatalogTests(unittest.TestCase):
     def test_model_detail_renders_control_surface_coverage(self) -> None:
         journal = render_markdown(runtime_catalog=RUNTIME)
         self.assertIn(
-            "- Coverage: runtime device_scoped_overlay, cloud device_scoped_overlay, vendor map unknown",
+            "- Coverage: runtime device_scoped_overlay, cloud device_scoped_overlay, vendor map documented",
             journal,
         )
         self.assertIn(

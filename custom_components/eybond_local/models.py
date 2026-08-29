@@ -242,6 +242,9 @@ class WriteCapability:
     # writes (0x06) for their config registers. None keeps the driver default
     # (multiple-register write, 0x10).
     write_function: int | None = None
+    # Whether normal polling may add a dedicated read solely to project this
+    # capability's value. Exact write confirmation is independent of this flag.
+    poll_readback: bool = True
 
     @property
     def value_key(self) -> str:

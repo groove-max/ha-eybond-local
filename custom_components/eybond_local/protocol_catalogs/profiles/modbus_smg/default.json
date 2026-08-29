@@ -1,9 +1,12 @@
 {
-  "extends": "modbus_smg/base.json",
+  "extends": "modbus_smg/protocols/classic_smg_rs232_v1.json",
   "profile_key": "smg_modbus",
   "title": "SMG / Modbus",
   "driver_key": "modbus_smg",
   "protocol_family": "modbus_smg",
+  "capability_defaults": {
+    "support_tier": ""
+  },
   "capabilities": [
     {
       "key": "output_source_priority",

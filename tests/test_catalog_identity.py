@@ -128,7 +128,7 @@ class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
             ("modbus_smg.identity.171", "modbus_smg.identity.184"),
         )
 
-    async def test_point_identity_reads_match_hhs_11kw_read_only_variant(self) -> None:
+    async def test_point_identity_reads_match_hhs_11kw_protocol_3_variant(self) -> None:
         session = _PointIdentityOnlySession({171: 29440, 184: 3})
 
         probe = await async_probe_catalog_identity(session)
@@ -139,10 +139,10 @@ class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(probe.match.entry.entry_key, "anenji_hhs_11kw")
         self.assertEqual(probe.layout_code, 3)
         self.assertEqual(probe.model_code, 29440)
-        self.assertEqual(probe.match.entry.tier, "partial")
+        self.assertEqual(probe.match.entry.tier, "full")
         self.assertEqual(
             probe.match.entry.binding.profile_name,
-            "",
+            "modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json",
         )
         self.assertEqual(
             probe.match.entry.binding.register_schema_name,

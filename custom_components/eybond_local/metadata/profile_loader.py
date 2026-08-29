@@ -339,6 +339,7 @@ def _parse_capability(
         experimental=experimental,
         metadata_scope=metadata_scope,
         write_function=_optional_int(resolved_raw.get("write_function")),
+        poll_readback=bool(resolved_raw.get("poll_readback", True)),
     )
 
 
@@ -560,11 +561,32 @@ def _merge_raw_profile(
         overlay.get("groups", []),
         key_field="key",
     )
-    merged["capabilities"] = _merge_keyed_list(
+    merged_capabilities = _merge_keyed_list(
         base.get("capabilities", []),
         overlay.get("capabilities", []),
         key_field="key",
     )
+    capability_removals = _parse_capability_removals(
+        overlay.get("capability_removals", ()),
+    )
+    if capability_removals:
+        known_capabilities = {
+            str(item.get("key", ""))
+            for item in merged_capabilities
+            if isinstance(item, Mapping)
+        }
+        unknown_removals = capability_removals - known_capabilities
+        if unknown_removals:
+            raise ValueError(
+                "unknown_capability_removal:"
+                + ",".join(sorted(unknown_removals))
+            )
+        merged_capabilities = [
+            item
+            for item in merged_capabilities
+            if str(item.get("key", "")) not in capability_removals
+        ]
+    merged["capabilities"] = merged_capabilities
     merged["presets"] = _merge_keyed_list(
         base.get("presets", []),
         overlay.get("presets", []),
@@ -579,6 +601,7 @@ def _merge_raw_profile(
         if key in {
             "capability_defaults",
             "capability_templates",
+            "capability_removals",
             "groups",
             "capabilities",
             "presets",
@@ -587,6 +610,23 @@ def _merge_raw_profile(
             continue
         merged[key] = value
     return merged
+
+
+def _parse_capability_removals(raw: Any) -> set[str]:
+    """Return strict capability keys removed by one profile overlay."""
+
+    if raw in (None, (), []):
+        return set()
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError("invalid_capability_removals")
+    removals: set[str] = set()
+    for item in raw:
+        if type(item) is not str or not item or item != item.strip():
+            raise ValueError(f"invalid_capability_removal:{item!r}")
+        if item in removals:
+            raise ValueError(f"duplicate_capability_removal:{item}")
+        removals.add(item)
+    return removals
 
 
 def _merge_keyed_list(

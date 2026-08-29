@@ -33,7 +33,7 @@ This page describes what has been confirmed for a specific inverter model or mod
 | Anenji | 6200 (single output) | modbus_smg | fingerprint | full | confirmed | partial | captured |
 | Anenji | ANJ-4000W-24V | modbus_smg | fingerprint | full | confirmed | partial | captured |
 | Anenji | ANJ-6200-48PL | modbus_smg | fingerprint | full | confirmed | partial | captured |
-| Anenji | HHS-11kW-WIFI (without parallel) | modbus_smg | fingerprint | partial | partial | none | captured |
+| Anenji | HHS-11kW-WIFI (without parallel) | modbus_smg | fingerprint | full | partial | partial | captured |
 | Aninerel | 6200 (dual output) | modbus_smg | fingerprint | full | confirmed | partial | captured |
 | Aninerel | ANL-4200T-24L-W-PRO | modbus_smg | fingerprint | full | partial | partial | captured |
 | Gootu | GT-H2436M14P5 | eybond_g_ascii | anchors | full | confirmed | partial | captured |
@@ -77,9 +77,9 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Lifecycle: supported
 - Aliases: —
 - Validation: hardware captured, telemetry confirmed, controls partial
-- Coverage: runtime available, cloud unknown, vendor map unknown
+- Coverage: runtime available, cloud unknown, vendor map documented
   - Coverage notes:
-    - Runtime write surface is inherited from the shared SMG base profile; not every write is independently validated on this commercial unit.
+    - Runtime writes inherit the documented classic SMG RS232 V1 surface; not every write is independently validated on this commercial unit.
 - Summary: Anenji single-output 6200 (layout 1) bound to the shared SMG base surface; same control set as the verified SMG 6200.
 - Variants:
   - `layout1_model14080` — Anenji single-output variant
@@ -91,7 +91,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
       - Capabilities: 33 (tested 25, untested 8); support tiers: blocked 2, conditional 24, standard 7 | Telemetry: 100 measurements, 18 binary sensors
 - Known limitations:
   - Controls inherit the SMG 6200 control set; not every writable setting is independently confirmed on this unit.
-- Evidence: 1 source(s)
+- Evidence: 2 source(s)
 
 ### Anenji — ANJ-11KW-48V-WIFI-P (`anenji_anj_11kw_48v_wifi_p`)
 
@@ -111,7 +111,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `anenji_anj_11kw` → surface `anenji_anj_11kw_full` (driver modbus_smg, variant anenji_anj_11kw_48v_wifi_p)
       - Protocol: modbus_smg | Detection: fingerprint (layout 4, model 32768, rated —)
       - Tier: full | Read-only: no | Profile: modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json | Schema: modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json
-      - Capabilities: 53 (tested 52, untested 1); support tiers: conditional 43, standard 10 | Telemetry: 117 measurements, 18 binary sensors
+      - Capabilities: 63 (tested 50, untested 13); support tiers: blocked 2, conditional 52, standard 9 | Telemetry: 117 measurements, 18 binary sensors
 - Known limitations:
   - Secondary Output Priority writes are available only in Full Control until register 602 is write-tested on hardware.
 - Evidence: 4 source(s)
@@ -121,9 +121,9 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Lifecycle: experimental
 - Aliases: 4200 (Protocol 1), Anenji 4200 Protocol 1
 - Validation: hardware captured, telemetry confirmed, controls partial
-- Coverage: runtime device_scoped_overlay, cloud device_scoped_overlay, vendor map unknown
+- Coverage: runtime device_scoped_overlay, cloud device_scoped_overlay, vendor map documented
   - Coverage notes:
-    - Base runtime profile exposes the standard ANJ-4200/SMG Protocol 1 surface.
+    - The common runtime surface comes from the documented classic SMG RS232 V1 map; the observed register-184 value 1 is separate runtime identity evidence.
     - Full cloud shadow-learning correlated 77 cloud write attempts and activated eight device-scoped learned controls; writes were captured but intentionally not applied.
 - Summary: Anenji 4200 Protocol 1 variant has user support captures from an ANJ-4000W-24V device. Runtime detection resolves exactly to the SMG Protocol 1 surface, read telemetry is confirmed, and a full shadow-learning run mapped the SmartESS 0925 write surface without leaking writes to the real inverter. Treat controls as partial until specific Home Assistant writes are user-validated.
 - Variants:
@@ -137,16 +137,16 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Known limitations:
   - Runtime telemetry is confirmed by user support archives.
   - Full shadow-learning completed and activated eight device-scoped learned controls; the learning proxy intentionally captured but did not apply cloud writes, so direct Home Assistant write/readback validation is still pending.
-- Evidence: 5 source(s)
+- Evidence: 6 source(s)
 
 ### Anenji — ANJ-6200-48PL (`anenji_anj_6200_48pl`)
 
 - Lifecycle: supported
 - Aliases: —
 - Validation: hardware captured, telemetry confirmed, controls partial
-- Coverage: runtime available, cloud unknown, vendor map unknown
+- Coverage: runtime available, cloud unknown, vendor map documented
   - Coverage notes:
-    - Runtime write surface is shared with SMG 6200; write behavior is not independently confirmed on this commercial unit.
+    - Runtime writes use the documented classic SMG RS232 V1 surface plus the SMG 6200 model overlay; write behavior is not independently confirmed on this commercial unit.
 - Summary: SMG layout 2 model that reuses the SMG 6200 runtime surface; reported via a GitHub issue and a support capture.
 - Variants:
   - `layout2_model8960` — Known SMG layout 2 variant
@@ -158,31 +158,32 @@ Runtime descriptors with no specific commercial model record. These are generic 
       - Capabilities: 38 (tested 30, untested 8); support tiers: blocked 2, conditional 27, standard 9 | Telemetry: 107 measurements, 18 binary sensors
 - Known limitations:
   - Shares the SMG 6200 runtime surface; writes are not independently hardware-confirmed on this unit.
-- Evidence: 2 source(s)
+- Evidence: 3 source(s)
 
 ### Anenji — HHS-11kW-WIFI (without parallel) (`anenji_hhs_11kw_wifi_no_parallel`)
 
 - Lifecycle: experimental
 - Aliases: —
-- Validation: hardware captured, telemetry partial, controls none
-- Coverage: runtime read_only, cloud unknown, vendor map documented
+- Validation: hardware captured, telemetry partial, controls partial
+- Coverage: runtime available, cloud unknown, vendor map documented
   - Coverage notes:
     - The exact layout/model fingerprint is captured from a beta.3 support archive.
-    - The protocol-3 telemetry projection is enabled read-only.
+    - The exact fingerprint uses the documented Protocol 3 telemetry and write matrices.
     - A later proxy capture and matching DESSMonitor export confirmed the documented L1 Grid Power at holding register 340 for this exact fingerprint.
-    - No ANJ-11KW writable capability is inherited until this exact HHS model is write-validated.
-- Summary: An Anenji HHS 11kW non-parallel inverter with an exact captured protocol-3 fingerprint. The integration exposes the shared protocol-3 telemetry projection read-only, including hardware-correlated Grid Power, and deliberately withholds ANJ write controls.
+    - Documented Protocol 3 controls are available only after the user explicitly selects Full Control; none is marked hardware-tested on this model.
+    - Registers whose protocol-number column is empty, and Protocol 4/6-only OP2 controls, are not inherited.
+- Summary: An Anenji HHS 11kW non-parallel inverter with an exact captured Protocol 3 fingerprint. The integration exposes the shared telemetry projection, including hardware-correlated Grid Power, and offers only the controls explicitly valid for Protocol 3 as untested Full-Control candidates.
 - Variants:
   - `layout3_model29440` — Anenji HHS 11kW non-parallel variant
     - Descriptors: anenji_hhs_11kw
     - Known firmware: —
-    - `anenji_hhs_11kw` → surface `anenji_hhs_11kw_read_only` (driver modbus_smg, variant anenji_hhs_11kw_wifi_no_parallel)
+    - `anenji_hhs_11kw` → surface `anenji_hhs_11kw_protocol_3` (driver modbus_smg, variant anenji_hhs_11kw_wifi_no_parallel)
       - Protocol: modbus_smg | Detection: fingerprint (layout 3, model 29440, rated —)
-      - Tier: partial | Read-only: yes | Profile: — | Schema: modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json
-      - Capabilities: no model-specific profile | Telemetry: 117 measurements, 18 binary sensors
+      - Tier: full | Read-only: no | Profile: modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json | Schema: modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json
+      - Capabilities: 53 (untested 53); support tiers: blocked 2, conditional 51 | Telemetry: 117 measurements, 18 binary sensors
 - Known limitations:
-  - Local controls remain unavailable pending model-specific hardware validation.
-- Evidence: 2 source(s)
+  - No local write has been hardware-validated on this exact model; Auto mode remains read-only and the documented controls are experimental Full-Control candidates.
+- Evidence: 3 source(s)
 
 ### Aninerel — 6200 (dual output) (`aninerel_6200_dual_output`)
 
@@ -209,16 +210,16 @@ Runtime descriptors with no specific commercial model record. These are generic 
   - No official manufacturer register document is available for this exact commercial model family.
   - Charge Source Priority value 4 is exposed from owner-supplied YAML evidence; if a particular unit rejects it, Home Assistant will surface the inverter rejection.
   - Shadow-learning proves cloud-to-local register correlation for selected controls, but does not by itself confirm every Home Assistant write/readback path as user-tested.
-- Evidence: 5 source(s)
+- Evidence: 6 source(s)
 
 ### Aninerel — ANL-4200T-24L-W-PRO (`aninerel_anl_4200t_24l_w_pro`)
 
 - Lifecycle: experimental
 - Aliases: —
 - Validation: hardware captured, telemetry partial, controls partial
-- Coverage: runtime available, cloud cloud_catalog, vendor map unknown
+- Coverage: runtime available, cloud cloud_catalog, vendor map documented
   - Coverage notes:
-    - Binds a model-specific full-control surface (no longer the read-only family fallback). The family-proven SMG control set ships tested (visible in the default control mode); the family's unverified extras stay untested (full-control only).
+    - Binds a model-specific full-control surface over the documented classic SMG RS232 V1 map (no longer the read-only family fallback). Hardware-tested controls are visible in the default control mode; unverified controls stay full-control only.
     - A tester confirmed writes on hardware (2026-07-05); battery-voltage setpoint windows are left wide because this is a 24 V unit and the family templates carry 48 V-class windows, so the inverter's own write validation is the authority.
 - Summary: Aninerel ANL-4200T-24L-W-PRO reported via GitHub issue #3 and donor captures. It resolves exactly (SMG layout code 11) and binds a model-specific full-control surface: the family-proven SMG settings (output/charge source priority, battery voltage windows, charge-current limits, buzzer/LCD/input mode, boot mode) ship tested and a tester confirmed writes on hardware; the family's unverified extras (exit-fault action, output-rating/mode, power-saving, overload-bypass, remote turn-on/shutdown) stay untested and appear only in full control.
 - Variants:
@@ -232,7 +233,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Known limitations:
   - Battery-voltage setpoint limits for this model are undocumented, so the setpoint windows are deliberately wide and rely on the inverter's own write validation.
   - The full control surface is not yet reflected as a hardware-write-validated catalog assertion (validation.controls stays partial pending a backing write-validation source).
-- Evidence: 2 source(s)
+- Evidence: 3 source(s)
 
 ### Gootu — GT-H2436M14P5 (`gootu_gt_h2436m14p5`)
 
@@ -394,7 +395,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `sandisolar_sd_11kp48v` → surface `sandisolar_sd_11kp48v_full` (driver modbus_smg, variant sandisolar_sd_11kp48v_wifi)
       - Protocol: modbus_smg | Detection: fingerprint (layout 4, model 32771, rated —)
       - Tier: full | Read-only: no | Profile: modbus_smg/models/sandisolar_sd_11kp48v_wifi.json | Schema: modbus_smg/models/sandisolar_sd_11kp48v_wifi.json
-      - Capabilities: 53 (tested 2, untested 51); support tiers: conditional 41, standard 12 | Telemetry: 117 measurements, 18 binary sensors
+      - Capabilities: 63 (tested 2, untested 61); support tiers: blocked 2, conditional 50, standard 11 | Telemetry: 117 measurements, 18 binary sensors
 - Known limitations:
   - Only Secondary Charging Priority and Secondary Output Priority have been hardware-validated; every other inherited control remains Full-Control-only until hardware retesting.
 - Evidence: 5 source(s)
@@ -419,7 +420,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
       - Tier: full | Read-only: no | Profile: modbus_smg/models/smg_6200.json | Schema: modbus_smg/models/smg_6200.json
       - Capabilities: 38 (tested 30, untested 8); support tiers: blocked 2, conditional 27, standard 9 | Telemetry: 107 measurements, 18 binary sensors
 - Known limitations: —
-- Evidence: 2 source(s)
+- Evidence: 3 source(s)
 
 ### SRNE-compatible — Modbus family (`srne_modbus_family`)
 

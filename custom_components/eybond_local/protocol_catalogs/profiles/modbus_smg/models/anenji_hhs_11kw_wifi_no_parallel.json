@@ -1,0 +1,12 @@
+{
+  "extends": "../protocols/communication_protocol_3.json",
+  "profile_key": "modbus_smg_anenji_hhs_11kw_wifi_no_parallel",
+  "title": "Anenji HHS-11kW-WIFI (without parallel)",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "capability_defaults": {
+    "tested": false,
+    "provenance": "doc_backed",
+    "support_tier": "conditional"
+  }
+}

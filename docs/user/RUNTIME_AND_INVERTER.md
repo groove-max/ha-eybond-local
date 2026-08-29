@@ -79,7 +79,9 @@ Control mode is independent from the collector's cloud connection profile.
 - **Read-only** hides inverter writes and keeps monitoring.
 - **Auto** exposes controls confirmed for the detected model and is recommended.
 - **Full Control** exposes every available driver control, including advanced
-  items. It does not turn an unverified control into a tested one.
+  items. It does not turn an unverified control into a tested one. Operations
+  explicitly marked blocked, such as an unvalidated factory reset or counter
+  erase, remain unavailable even in Full Control.
 
 The inverter itself is the final authority for a write. EyeBond Local sends the
 requested value and checks readback when the protocol supports confirmation. A
@@ -91,6 +93,21 @@ hidden in Auto mode and disabled by default even after Full Control is selected.
 Enable only the individual settings you intend to test. Kevolt 8 kW users
 should read [Kevolt / Deye-Compatible Advanced Controls](KEVOLT_DEYE_CONTROLS.md)
 before enabling them.
+
+For inverters using the documented Anenji Communication Protocol No. 3-10,
+the integration selects a version-specific write matrix from the inverter's
+reported protocol number. Protocol 3/5 never inherit Protocol 4/6-only OP2
+settings, and fields without a valid protocol number remain model-specific.
+These document-backed controls are untested until confirmed on an exact model,
+so Auto mode does not expose them.
+
+Classic SMG-family inverters use a separate documented RS232 V1 register map.
+The document version is not treated as an inverter identity: compatible devices
+have been observed with layout values 1, 2, and 11. EyeBond Local therefore
+shares only the documented controls, then applies validation and any additional
+registers in the exact model profile. On the maintainer-tested SMG 6200,
+hardware-confirmed controls remain available in Auto mode. An unknown SMG
+fingerprint remains read-only instead of inheriting writes from a similar model.
 
 ## Available, unavailable, and disabled entities
 

@@ -483,7 +483,8 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         # Field regression: capabilities labeled provenance=cloud_hint are
         # write-suppressed in EVERY mode (cloud hints are metadata only), so
         # the tester's Output Priority select vanished entirely. Model-bound
-        # untested capabilities must all pass the full-control exposure gate.
+        # untested capabilities pass the full-control exposure gate unless the
+        # catalog explicitly marks the operation blocked after a device rejection.
         from custom_components.eybond_local.metadata.profile_loader import (
             load_driver_profile,
         )
@@ -513,7 +514,12 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
                     profile_name=profile_name,
                 )
             ]
-            self.assertEqual(hidden, [], profile_name)
+            expected_hidden = (
+                ["power_saving_mode", "overload_bypass_mode"]
+                if profile_name == "modbus_smg/models/anenji_op2_6200.json"
+                else []
+            )
+            self.assertEqual(hidden, expected_hidden, profile_name)
             # An exposable capability must also register ENABLED: entities
             # default-disabled in the registry read as "no controls appeared"
             # (0.3.0-beta.1 MUST PV1800 field report).

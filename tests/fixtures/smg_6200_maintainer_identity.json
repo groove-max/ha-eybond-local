@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source": "maintainer_hardware_anonymized",
+  "registers": {
+    "171": 7680,
+    "184": 1,
+    "643": 6200
+  },
+  "expected": {
+    "entry_key": "smg_6200",
+    "surface_key": "smg_6200_full",
+    "profile_name": "modbus_smg/models/smg_6200.json"
+  }
+}

@@ -1,9 +1,12 @@
 {
-  "extends": "../base.json",
+  "extends": "../protocols/classic_smg_rs232_v1.json",
   "profile_key": "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json",
   "title": "Aninerel ANL-4200T-24L-W-PRO (tested controls, unvalidated voltage windows)",
   "driver_key": "modbus_smg",
   "protocol_family": "modbus_smg",
+  "capability_defaults": {
+    "support_tier": ""
+  },
   "capabilities": [
     {
       "key": "battery_bulk_voltage",

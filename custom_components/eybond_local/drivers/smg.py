@@ -812,6 +812,8 @@ async def _read_out_of_block_capability_registers(
 
     needed: set[int] = set()
     for capability in capabilities:
+        if not bool(getattr(capability, "poll_readback", True)):
+            continue
         if str(getattr(capability, "value_kind", "") or "") == "action":
             continue
         register = int(getattr(capability, "register", 0) or 0)

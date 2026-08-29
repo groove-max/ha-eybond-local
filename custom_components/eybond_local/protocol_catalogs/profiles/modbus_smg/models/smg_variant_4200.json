@@ -1,9 +1,12 @@
 {
-  "extends": "../base.json",
+  "extends": "../protocols/classic_smg_rs232_v1.json",
   "profile_key": "modbus_smg_smg_variant_4200",
   "title": "SMG family 4200 variant",
   "driver_key": "modbus_smg",
   "protocol_family": "modbus_smg",
+  "capability_defaults": {
+    "support_tier": ""
+  },
   "capabilities": [
     {
       "key": "input_voltage_range",

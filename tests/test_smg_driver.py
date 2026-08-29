@@ -363,6 +363,8 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
                 704: 12345,
                 707: 0,
                 709: 6,
+                858: 0,
+                859: 0,
             }
         )
         return registers
@@ -402,7 +404,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         # Pinned control count for this profile. Document-backed controls may
         # be present as explicit Full-Control-only candidates, but must not be
         # silently exposed by the automatic policy before a hardware retest.
-        self.assertEqual(len(inverter.capabilities), 53)
+        self.assertEqual(len(inverter.capabilities), 63)
         self.assertEqual(inverter.get_capability("output_mode").register, 600)
         secondary_output = inverter.get_capability("secondary_output_priority")
         self.assertEqual(secondary_output.register, 602)
@@ -434,12 +436,28 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.get_capability("inverter_time_write").register, 699)
         with self.assertRaises(KeyError):
             inverter.get_capability("remote_switch")
-        self.assertTrue(
-            all(
-                capability.tested
-                for capability in inverter.capabilities
-                if capability.key != "secondary_output_priority"
-            )
+        untested_capability_keys = {
+            capability.key
+            for capability in inverter.capabilities
+            if not capability.tested
+        }
+        self.assertEqual(
+            untested_capability_keys,
+            {
+                "secondary_output_priority",
+                "secondary_output_priority_start_time",
+                "secondary_output_priority_end_time",
+                "op2_output_enabled",
+                "op2_output_start_hour",
+                "op2_output_end_hour",
+                "lithium_battery_automatic_activation_enabled",
+                "lithium_battery_activation_once",
+                "clear_generation_data",
+                "reset_user_parameters",
+                "op1_offgrid_low_voltage_protection",
+                "secondary_charging_priority_start_time",
+                "secondary_charging_priority_end_time",
+            },
         )
         self.assertTrue(
             all(
@@ -449,7 +467,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
                     detection_confidence="high",
                 )
                 for capability in inverter.capabilities
-                if capability.key != "secondary_output_priority"
+                if capability.key not in untested_capability_keys
             )
         )
         self.assertEqual(inverter.details["device_type"], 32768)
@@ -611,7 +629,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.calls[1:], [(register, 1) for register in range(252, 257)])
         self.assertEqual(set(values), {spec.key for spec in specs})
 
-    async def test_probe_selects_hhs_11kw_telemetry_without_anj_controls(self) -> None:
+    async def test_probe_selects_hhs_11kw_protocol_3_untested_controls(self) -> None:
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
         registers = self._anenji_registers()
@@ -634,14 +652,24 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
             inverter.model_name,
             "Anenji HHS-11kW-WIFI (without parallel)",
         )
-        self.assertEqual(inverter.profile_name, "")
+        self.assertEqual(
+            inverter.profile_name,
+            "modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json",
+        )
         self.assertEqual(
             inverter.register_schema_name,
             "modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json",
         )
-        self.assertEqual(inverter.capabilities, ())
-        self.assertEqual(inverter.capability_groups, ())
-        self.assertEqual(inverter.details["device_catalog"]["tier"], "partial")
+        self.assertEqual(len(inverter.capabilities), 53)
+        self.assertEqual(len(inverter.capability_groups), 4)
+        self.assertTrue(
+            all(not capability.tested for capability in inverter.capabilities)
+        )
+        self.assertEqual(
+            {capability.provenance for capability in inverter.capabilities},
+            {"doc_backed"},
+        )
+        self.assertEqual(inverter.details["device_catalog"]["tier"], "full")
         self.assertEqual(inverter.details["device_type"], 29440)
         self.assertEqual(inverter.details["protocol_number"], 3)
 
@@ -1565,12 +1593,20 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(value_key="output_420", key="output_420", register=420, value_kind="bool"),
             SimpleNamespace(value_key="in_block_304", key="in_block_304", register=304, value_kind="bool"),
             SimpleNamespace(value_key="action_460", key="action_460", register=460, value_kind="action"),
+            SimpleNamespace(
+                value_key="opted_out_858",
+                key="opted_out_858",
+                register=858,
+                value_kind="bool",
+                poll_readback=False,
+            ),
         )
         extra = await _read_out_of_block_capability_registers(
             _Session(), caps, ((300, [0] * 44),)
         )
 
-        self.assertEqual(sorted(reads), [406, 420])  # 304 in-block, 460 action -> not read
+        # 304 is in-block, 460 is an action, and 858 explicitly opts out.
+        self.assertEqual(sorted(reads), [406, 420])
         self.assertIn((406, [1]), extra)
         self.assertIn((420, [0]), extra)
 

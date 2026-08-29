@@ -18,6 +18,11 @@ from custom_components.eybond_local.control_policy import (
     controls_summary,
 )
 from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
+from custom_components.eybond_local.models import (
+    CapabilityPreset,
+    CapabilityPresetItem,
+    WriteCapability,
+)
 
 
 class ControlPolicyTests(unittest.TestCase):
@@ -56,6 +61,51 @@ class ControlPolicyTests(unittest.TestCase):
         self.assertEqual(
             controls_reason(control_mode="full", detection_confidence="none"),
             "manual_full_override",
+        )
+
+    def test_blocked_capability_cannot_be_overridden_by_full_control(self) -> None:
+        capability = WriteCapability(
+            key="destructive_action",
+            register=705,
+            value_kind="action",
+            note="blocked",
+            tested=False,
+            provenance="doc_backed",
+            support_tier="blocked",
+            action_value=0xAA,
+        )
+
+        self.assertFalse(
+            can_expose_capability(
+                capability,
+                control_mode="full",
+                detection_confidence="high",
+            )
+        )
+
+    def test_preset_with_blocked_capability_cannot_bypass_full_control(self) -> None:
+        capability = WriteCapability(
+            key="destructive_action",
+            register=705,
+            value_kind="action",
+            note="blocked",
+            support_tier="blocked",
+            action_value=0xAA,
+        )
+        preset = CapabilityPreset(
+            key="destructive_preset",
+            title="Destructive preset",
+            description="Must remain blocked.",
+            items=(CapabilityPresetItem("destructive_action", 0xAA),),
+        )
+
+        self.assertFalse(
+            can_expose_preset(
+                preset,
+                capabilities_by_key={capability.key: capability},
+                control_mode="full",
+                detection_confidence="high",
+            )
         )
 
     def test_no_write_capabilities_keeps_runtime_read_only(self) -> None:

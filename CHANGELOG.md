@@ -9,6 +9,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Added version-specific, document-backed write profiles for Anenji
+  Communication Protocol No. 3-10 variants 3, 4, 5, and 6. The exact HHS-11kW
+  Protocol 3 fingerprint can now opt into its documented controls through Full
+  Control; all new controls remain untested, and destructive reset/counter-clear
+  operations stay blocked.
 - Added built-in detection and telemetry mapping for the Sandisolar SD 11KP48V
   WIFI fingerprint (`layout=4`, `model=0x8003`) from issue #13 evidence.
   Its two hardware-confirmed Secondary Priority controls are available normally;
@@ -22,6 +27,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Replaced the ambiguous writable `modbus_smg/base.json` profile with one
+  explicit, document-backed classic SMG RS232 V1 map shared by compatible
+  layout 1/2/11 model profiles. Exact hardware overlays retain their existing
+  tested controls and model-only registers, while unknown SMG fingerprints
+  remain read-only. The V1 document version is no longer presented as proof
+  that register 184 must contain protocol number 1.
 - Rebuilt the Anenji Protocol No. 3-10 telemetry layer as one documented shared
   schema with separate Protocol 3 and Protocol 4 output projections. ANJ-11KW,
   HHS-11kW and Sandisolar fingerprints now select registers by protocol identity,

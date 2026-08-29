@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "documentation_classic_smg_rs232_v1",
+  "kind": "documentation",
+  "title": "Classic SMG Modbus RTU RS232 protocol V1.0",
+  "reference": "https://github.com/syssi/esphome-smg-ii/blob/main/docs/SMG-RS232%2BCommunication%2BProtocol%2BV1.0.1.pdf",
+  "captured_at": "2026-08-30",
+  "visibility": "public",
+  "summary_publishable": true,
+  "summary": "Public copy of the November 2021 classic SMG Modbus RTU RS232 register document. It defines the shared telemetry and writable configuration map used by the classic SMG runtime family. The document calls register 184 invalid data, so observed values 1, 2, and 11 remain runtime layout evidence rather than being inferred from the document version.",
+  "assertions": [
+    "register_map",
+    "runtime_compatibility"
+  ]
+}

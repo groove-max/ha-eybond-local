@@ -23,9 +23,9 @@
   "coverage": {
     "runtime_control_surface": "available",
     "smartess_control_surface": "cloud_catalog",
-    "vendor_register_map": "unknown",
+    "vendor_register_map": "documented",
     "notes": [
-      "Binds a model-specific full-control surface (no longer the read-only family fallback). The family-proven SMG control set ships tested (visible in the default control mode); the family's unverified extras stay untested (full-control only).",
+      "Binds a model-specific full-control surface over the documented classic SMG RS232 V1 map (no longer the read-only family fallback). Hardware-tested controls are visible in the default control mode; unverified controls stay full-control only.",
       "A tester confirmed writes on hardware (2026-07-05); battery-voltage setpoint windows are left wide because this is a 24 V unit and the family templates carry 48 V-class windows, so the inverter's own write validation is the authority."
     ]
   },
@@ -35,6 +35,7 @@
   ],
   "knowledge_summary": "Aninerel ANL-4200T-24L-W-PRO reported via GitHub issue #3 and donor captures. It resolves exactly (SMG layout code 11) and binds a model-specific full-control surface: the family-proven SMG settings (output/charge source priority, battery voltage windows, charge-current limits, buzzer/LCD/input mode, boot mode) ship tested and a tester confirmed writes on hardware; the family's unverified extras (exit-fault action, output-rating/mode, power-saving, overload-bypass, remote turn-on/shutdown) stay untested and appear only in full control.",
   "source_keys": [
+    "documentation_classic_smg_rs232_v1",
     "github_issue_3",
     "corpus_aninerel_anl_4200t"
   ]

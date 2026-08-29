@@ -23,9 +23,9 @@
   "coverage": {
     "runtime_control_surface": "available",
     "smartess_control_surface": "unknown",
-    "vendor_register_map": "unknown",
+    "vendor_register_map": "documented",
     "notes": [
-      "Runtime write surface is shared with SMG 6200; write behavior is not independently confirmed on this commercial unit."
+      "Runtime writes use the documented classic SMG RS232 V1 surface plus the SMG 6200 model overlay; write behavior is not independently confirmed on this commercial unit."
     ]
   },
   "known_limitations": [
@@ -33,6 +33,7 @@
   ],
   "knowledge_summary": "SMG layout 2 model that reuses the SMG 6200 runtime surface; reported via a GitHub issue and a support capture.",
   "source_keys": [
+    "documentation_classic_smg_rs232_v1",
     "github_issue_8",
     "support_archive_anj6200_48pl"
   ]

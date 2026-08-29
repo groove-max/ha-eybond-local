@@ -1,13 +1,13 @@
 {
-  "extends": "../protocols/communication_protocol_4.json",
-  "profile_key": "modbus_smg_anenji_anj_11kw_48v_wifi_p",
-  "title": "Anenji ANJ-11KW-48V-WIFI-P",
+  "extends": "../family_base.json",
+  "profile_key": "modbus_smg_communication_protocol_3_10",
+  "title": "Communication Protocol No. 3-10 Write Capability Catalog",
   "driver_key": "modbus_smg",
   "protocol_family": "modbus_smg",
   "capability_defaults": {
-    "tested": true,
-    "provenance": "verified",
-    "support_tier": ""
+    "tested": false,
+    "provenance": "doc_backed",
+    "support_tier": "conditional"
   },
   "conditions": {
     "not_off_grid_mode": {
@@ -22,8 +22,8 @@
       "key": "output_mode",
       "template": "output_mode",
       "register": 600,
-      "change_summary": "Changes the inverter output topology mode reported by the Anenji 600+ configuration block.",
-      "note": "Output mode according to the Anenji protocol 4 configuration block.",
+      "change_summary": "Changes the inverter output topology mode reported by the Protocol No. 3-10 configuration block.",
+      "note": "Output mode at Protocol No. 3-10 register 600.",
       "choices": [
         {
           "value": 0,
@@ -74,7 +74,7 @@
       "template": "output_source_priority",
       "register": 601,
       "change_summary": "Changes how the inverter prioritizes PV, battery, and utility when powering the load.",
-      "note": "Output source priority according to the Anenji 600+ configuration block.",
+      "note": "Output source priority at Protocol No. 3-10 register 601.",
       "choices": [
         {
           "value": 1,
@@ -141,6 +141,38 @@
       ]
     },
     {
+      "key": "secondary_output_priority_start_time",
+      "register": 603,
+      "value_kind": "time_hhmm",
+      "title": "Secondary Output Priority Start Time",
+      "group": "output",
+      "order": 127,
+      "advanced": true,
+      "tested": false,
+      "provenance": "doc_backed",
+      "support_tier": "conditional",
+      "requires_confirm": true,
+      "enabled_default": false,
+      "change_summary": "Changes when the secondary output priority schedule starts.",
+      "note": "Protocol No. 3-10 register 603, encoded as HHMM."
+    },
+    {
+      "key": "secondary_output_priority_end_time",
+      "register": 604,
+      "value_kind": "time_hhmm",
+      "title": "Secondary Output Priority End Time",
+      "group": "output",
+      "order": 128,
+      "advanced": true,
+      "tested": false,
+      "provenance": "doc_backed",
+      "support_tier": "conditional",
+      "requires_confirm": true,
+      "enabled_default": false,
+      "change_summary": "Changes when the secondary output priority schedule ends.",
+      "note": "Protocol No. 3-10 register 604, encoded as HHMM."
+    },
+    {
       "key": "output_rating_voltage",
       "template": "output_rating_voltage",
       "register": 606
@@ -164,7 +196,61 @@
       "requires_confirm": true,
       "unsafe_while_running": true,
       "change_summary": "Changes the secondary output overload alarm threshold.",
-      "note": "Write register 608 with the OP2 overload alarm percentage. Confirmed by SmartESS shadow-learning capture on this ANJ-11KW device."
+      "note": "Protocol No. 3-10 register 608; valid only for protocol 4 and 6."
+    },
+    {
+      "key": "op2_output_enabled",
+      "register": 609,
+      "value_kind": "bool",
+      "title": "OP2 Output Enabled",
+      "group": "output",
+      "order": 136,
+      "advanced": true,
+      "tested": false,
+      "provenance": "doc_backed",
+      "support_tier": "conditional",
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Controls whether the secondary output is allowed to operate.",
+      "note": "Protocol No. 3-10 register 609; valid only for protocol 4 and 6."
+    },
+    {
+      "key": "op2_output_start_hour",
+      "register": 610,
+      "value_kind": "u16",
+      "minimum": 0,
+      "maximum": 23,
+      "title": "OP2 Output Start Hour",
+      "group": "output",
+      "order": 137,
+      "unit": "h",
+      "advanced": true,
+      "tested": false,
+      "provenance": "doc_backed",
+      "support_tier": "conditional",
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the first hour in which OP2 may operate.",
+      "note": "Protocol No. 3-10 register 610; valid only for protocol 4 and 6."
+    },
+    {
+      "key": "op2_output_end_hour",
+      "register": 611,
+      "value_kind": "u16",
+      "minimum": 0,
+      "maximum": 23,
+      "title": "OP2 Output End Hour",
+      "group": "output",
+      "order": 138,
+      "unit": "h",
+      "advanced": true,
+      "tested": false,
+      "provenance": "doc_backed",
+      "support_tier": "conditional",
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the last hour in which OP2 may operate.",
+      "note": "Protocol No. 3-10 register 611; valid only for protocol 4 and 6."
     },
     {
       "key": "force_eq_charge",
@@ -192,7 +278,7 @@
       "requires_confirm": true,
       "unsafe_while_running": true,
       "change_summary": "Changes the AC input operating mode used by the inverter.",
-      "note": "Input mode according to the Anenji extended system register set.",
+      "note": "Input mode at Protocol No. 3-10 register 677.",
       "choices": [
         {
           "value": 0,
@@ -219,21 +305,21 @@
       "template": "buzzer_mode",
       "register": 678,
       "requires_confirm": true,
-      "note": "Buzzer mode according to the Anenji extended system register set."
+      "note": "Buzzer mode at Protocol No. 3-10 register 678."
     },
     {
       "key": "lcd_backlight_mode",
       "template": "lcd_backlight_mode",
       "register": 679,
       "requires_confirm": true,
-      "note": "LCD backlight behavior according to the Anenji extended system register set."
+      "note": "LCD backlight behavior at Protocol No. 3-10 register 679."
     },
     {
       "key": "lcd_auto_return_mode",
       "template": "lcd_auto_return_mode",
       "register": 680,
       "requires_confirm": true,
-      "note": "LCD auto-return behavior according to the Anenji extended system register set."
+      "note": "LCD auto-return behavior at Protocol No. 3-10 register 680."
     },
     {
       "key": "power_saving_mode",
@@ -241,55 +327,28 @@
       "register": 681,
       "requires_confirm": true,
       "unsafe_while_running": true,
-      "note": "Power saving flag according to the Anenji extended system register set."
+      "note": "Power-saving flag at Protocol No. 3-10 register 681."
     },
     {
       "key": "overload_restart_mode",
       "template": "overload_restart_mode",
       "register": 682,
       "unsafe_while_running": true,
-      "note": "Overload restart flag according to the Anenji extended system register set."
+      "note": "Overload restart flag at Protocol No. 3-10 register 682."
     },
     {
       "key": "over_temperature_restart_mode",
       "template": "over_temperature_restart_mode",
       "register": 683,
       "unsafe_while_running": true,
-      "note": "Over-temperature restart flag according to the Anenji extended system register set."
+      "note": "Over-temperature restart flag at Protocol No. 3-10 register 683."
     },
     {
       "key": "overload_bypass_mode",
       "template": "overload_bypass_mode",
       "register": 684,
       "unsafe_while_running": true,
-      "note": "Overload bypass flag according to the Anenji extended system register set."
-    },
-    {
-      "key": "external_ct_enabled",
-      "register": 686,
-      "value_kind": "bool",
-      "title": "External CT Enabled",
-      "group": "system",
-      "order": 165,
-      "advanced": true,
-      "requires_confirm": true,
-      "unsafe_while_running": true,
-      "change_summary": "Controls whether the external current transformer input is enabled.",
-      "note": "External CT enable flag according to the Anenji extended system register set.",
-      "choices": [
-        {
-          "value": 0,
-          "label": "Disabled",
-          "order": 0,
-          "description": "Disable the external CT input."
-        },
-        {
-          "value": 1,
-          "label": "Enabled",
-          "order": 1,
-          "description": "Enable the external CT input."
-        }
-      ]
+      "note": "Overload bypass flag at Protocol No. 3-10 register 684."
     },
     {
       "key": "warning_mask_i",
@@ -319,7 +378,7 @@
       "requires_confirm": true,
       "unsafe_while_running": true,
       "change_summary": "Changes the operating mode of the dry-contact output.",
-      "note": "Dry contact mode according to the Anenji extended system register set.",
+      "note": "Dry-contact mode at Protocol No. 3-10 register 689.",
       "choices": [
         {
           "value": 0,
@@ -346,7 +405,7 @@
       "requires_confirm": true,
       "unsafe_while_running": true,
       "change_summary": "Controls whether AC output starts automatically when the power button is not pressed.",
-      "note": "Automatic mains output enable flag according to the Anenji extended system register set.",
+      "note": "Automatic mains-output flag at Protocol No. 3-10 register 690.",
       "choices": [
         {
           "value": 0,
@@ -363,67 +422,23 @@
       ]
     },
     {
-      "key": "pv_grid_connected_max_power",
-      "register": 691,
-      "value_kind": "u16",
-      "minimum": 200,
-      "maximum": 11000,
-      "title": "PV Grid-Connected Max Power",
-      "group": "output",
-      "order": 130,
-      "unit": "W",
-      "device_class": "power",
-      "advanced": true,
-      "requires_confirm": true,
-      "unsafe_while_running": true,
-      "change_summary": "Changes the maximum power allowed for PV grid-connected operation.",
-      "note": "PV grid-connected maximum power in whole watts, limited to the rated power of this 11 kW model."
-    },
-    {
-      "key": "island_detection_enabled",
-      "register": 692,
-      "value_kind": "bool",
-      "title": "Island Detection Enabled",
-      "group": "system",
-      "order": 168,
-      "advanced": true,
-      "requires_confirm": true,
-      "unsafe_while_running": true,
-      "change_summary": "Controls whether island detection is enabled.",
-      "note": "Island detection enable flag according to the Anenji extended system register set.",
-      "choices": [
-        {
-          "value": 0,
-          "label": "Disabled",
-          "order": 0,
-          "description": "Disable island detection."
-        },
-        {
-          "value": 1,
-          "label": "Enabled",
-          "order": 1,
-          "description": "Enable island detection."
-        }
-      ]
-    },
-    {
       "key": "turn_on_mode",
       "template": "turn_on_mode",
       "register": 693,
-      "note": "Turn-on mode according to the Anenji extended system register set."
+      "note": "Turn-on mode at Protocol No. 3-10 register 693."
     },
     {
       "key": "remote_turn_on",
       "template": "remote_turn_on",
       "register": 694,
-      "change_summary": "Requests remote turn-on through the Anenji extended remote control register.",
+      "change_summary": "Requests remote turn-on through Protocol No. 3-10 register 694.",
       "note": "Write register 694 with value 1 to request remote turn-on."
     },
     {
       "key": "remote_shutdown",
       "template": "remote_shutdown",
       "register": 694,
-      "change_summary": "Requests remote shutdown through the Anenji extended remote control register.",
+      "change_summary": "Requests remote shutdown through Protocol No. 3-10 register 694.",
       "note": "Write register 694 with value 0 to request remote shutdown."
     },
     {
@@ -474,7 +489,7 @@
       "requires_confirm": true,
       "unsafe_while_running": true,
       "change_summary": "Controls whether the ground relay is enabled.",
-      "note": "Ground relay enable flag according to the Anenji extended system register set.",
+      "note": "Ground-relay flag at Protocol No. 3-10 register 707; valid only for protocol 4 and 6.",
       "choices": [
         {
           "value": 0,
@@ -504,7 +519,41 @@
       "requires_confirm": true,
       "unsafe_while_running": true,
       "change_summary": "Changes the lithium battery activation time.",
-      "note": "Lithium battery activation time in minutes according to the Anenji extended system register set."
+      "note": "Lithium battery activation time at Protocol No. 3-10 register 709."
+    },
+    {
+      "key": "lithium_battery_automatic_activation_enabled",
+      "register": 858,
+      "value_kind": "bool",
+      "title": "Lithium Battery Automatic Activation",
+      "group": "battery",
+      "order": 445,
+      "advanced": true,
+      "tested": false,
+      "provenance": "doc_backed",
+      "support_tier": "conditional",
+      "poll_readback": false,
+      "requires_confirm": true,
+      "enabled_default": false,
+      "change_summary": "Controls whether one lithium-battery activation is attempted automatically after power-on.",
+      "note": "Protocol No. 3-10 register 858."
+    },
+    {
+      "key": "lithium_battery_activation_once",
+      "register": 859,
+      "value_kind": "action",
+      "action_value": 1,
+      "title": "Activate Lithium Battery Once",
+      "group": "battery",
+      "order": 446,
+      "advanced": true,
+      "tested": false,
+      "provenance": "doc_backed",
+      "support_tier": "conditional",
+      "requires_confirm": true,
+      "enabled_default": false,
+      "change_summary": "Requests one lithium-battery activation cycle.",
+      "note": "Protocol No. 3-10 register 859. This is a write-triggered action and has no durable read-back value."
     },
     {
       "key": "clear_generation_data",
@@ -515,8 +564,12 @@
       "group": "system",
       "order": 920,
       "advanced": true,
+      "tested": false,
+      "provenance": "doc_backed",
       "requires_confirm": true,
       "enabled_default": false,
+      "support_tier": "blocked",
+      "support_notes": "Catalogued from Protocol No. 3-10 but blocked from runtime execution until an exact model validates the irreversible operation.",
       "change_summary": "Clears the inverter's stored generation counters.",
       "note": "Write register 705 with value 0xAA to clear all generation data."
     },
@@ -529,8 +582,12 @@
       "group": "system",
       "order": 930,
       "advanced": true,
+      "tested": false,
+      "provenance": "doc_backed",
       "requires_confirm": true,
       "enabled_default": false,
+      "support_tier": "blocked",
+      "support_notes": "Catalogued from Protocol No. 3-10 but blocked from runtime execution until an exact model validates the destructive reset semantics.",
       "visible_if": [
         "not_off_grid_mode"
       ],
@@ -550,7 +607,7 @@
       "advanced": true,
       "requires_confirm": true,
       "change_summary": "Changes the battery chemistry profile.",
-      "note": "Battery type according to the Anenji 630+ configuration block.",
+      "note": "Battery type at Protocol No. 3-10 register 630.",
       "choices": [
         {
           "value": 0,
@@ -594,7 +651,7 @@
       "key": "battery_equalization_mode",
       "template": "battery_equalization_mode",
       "register": 651,
-      "note": "Battery equalization enable flag according to the Anenji 650+ configuration block."
+      "note": "Battery equalization flag at Protocol No. 3-10 register 651."
     },
     {
       "key": "battery_overvoltage_protection_voltage",
@@ -622,6 +679,27 @@
       "register": 644
     },
     {
+      "key": "op1_offgrid_low_voltage_protection",
+      "register": 645,
+      "value_kind": "scaled_u16",
+      "divisor": 10,
+      "minimum": 400,
+      "maximum": 650,
+      "title": "OP1 Off-Grid Low Voltage Protection",
+      "group": "battery",
+      "order": 350,
+      "unit": "V",
+      "device_class": "voltage",
+      "advanced": true,
+      "tested": false,
+      "provenance": "doc_backed",
+      "support_tier": "conditional",
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "change_summary": "Changes the OP1 battery low-voltage protection threshold in off-grid mode.",
+      "note": "Protocol No. 3-10 register 645; valid only for protocol 4 and 6."
+    },
+    {
       "key": "battery_under_voltage_off_grid",
       "template": "battery_under_voltage_off_grid",
       "register": 646
@@ -630,25 +708,25 @@
       "key": "low_dc_protection_soc_grid_mode",
       "template": "low_dc_protection_soc_grid_mode",
       "register": 647,
-      "note": "Raw unsigned percent threshold from the Anenji 640+ configuration block."
+      "note": "Battery discharge SOC protection threshold at Protocol No. 3-10 register 647."
     },
     {
       "key": "solar_battery_utility_return_soc_threshold",
       "template": "solar_battery_utility_return_soc_threshold",
       "register": 648,
-      "note": "Raw unsigned percent threshold from the Anenji 640+ configuration block."
+      "note": "Battery discharge SOC recovery threshold at Protocol No. 3-10 register 648."
     },
     {
       "key": "low_dc_cutoff_soc",
       "template": "low_dc_cutoff_soc",
       "register": 650,
-      "note": "Raw unsigned percent threshold from the Anenji 650+ configuration block."
+      "note": "Off-grid battery discharge SOC protection threshold at Protocol No. 3-10 register 650."
     },
     {
       "key": "charge_source_priority",
       "template": "charge_source_priority",
       "register": 632,
-      "note": "Charge source priority according to the Anenji 630+ configuration block.",
+      "note": "Charge source priority at Protocol No. 3-10 register 632.",
       "choices": [
         {
           "value": 1,
@@ -687,7 +765,7 @@
       "requires_confirm": true,
       "unsafe_while_running": true,
       "change_summary": "Changes the secondary charging priority used by the inverter.",
-      "note": "Secondary charging priority at register 633. Confirmed by SmartESS shadow-learning capture on this ANJ-11KW device.",
+      "note": "Secondary charging priority at Protocol No. 3-10 register 633.",
       "choices": [
         {
           "value": 0,
@@ -722,6 +800,38 @@
       ]
     },
     {
+      "key": "secondary_charging_priority_start_time",
+      "register": 634,
+      "value_kind": "time_hhmm",
+      "title": "Secondary Charging Priority Start Time",
+      "group": "charging",
+      "order": 243,
+      "advanced": true,
+      "tested": false,
+      "provenance": "doc_backed",
+      "support_tier": "conditional",
+      "requires_confirm": true,
+      "enabled_default": false,
+      "change_summary": "Changes when the secondary charging priority schedule starts.",
+      "note": "Protocol No. 3-10 register 634, encoded as HHMM."
+    },
+    {
+      "key": "secondary_charging_priority_end_time",
+      "register": 635,
+      "value_kind": "time_hhmm",
+      "title": "Secondary Charging Priority End Time",
+      "group": "charging",
+      "order": 244,
+      "advanced": true,
+      "tested": false,
+      "provenance": "doc_backed",
+      "support_tier": "conditional",
+      "requires_confirm": true,
+      "enabled_default": false,
+      "change_summary": "Changes when the secondary charging priority schedule ends.",
+      "note": "Protocol No. 3-10 register 635, encoded as HHMM."
+    },
+    {
       "key": "constant_voltage_to_float_wait_time",
       "register": 639,
       "value_kind": "u16",
@@ -735,7 +845,7 @@
       "requires_confirm": true,
       "unsafe_while_running": true,
       "change_summary": "Changes the wait time before switching from constant-voltage charging to float charging.",
-      "note": "Constant-voltage to float wait time at register 639. Confirmed by SmartESS shadow-learning capture on this ANJ-11KW device."
+      "note": "Constant-voltage to float wait time at Protocol No. 3-10 register 639."
     },
     {
       "key": "max_charge_current",
@@ -762,7 +872,7 @@
       "requires_confirm": true,
       "unsafe_while_running": true,
       "change_summary": "Changes the maximum discharge current protection threshold.",
-      "note": "Maximum discharge current protection at register 642. Confirmed by SmartESS shadow-learning capture on this ANJ-11KW device."
+      "note": "Maximum discharge current protection at Protocol No. 3-10 register 642."
     },
     {
       "key": "op1_offgrid_soc_protection_value",
@@ -778,7 +888,7 @@
       "requires_confirm": true,
       "unsafe_while_running": true,
       "change_summary": "Changes the OP1 SOC protection threshold used in off-grid mode.",
-      "note": "OP1 off-grid SOC protection value at register 649. Confirmed by SmartESS shadow-learning capture on this ANJ-11KW device."
+      "note": "Protocol No. 3-10 register 649; valid only for protocol 4 and 6."
     },
     {
       "key": "battery_equalization_voltage",
