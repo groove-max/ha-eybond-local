@@ -11,7 +11,8 @@ the GitHub release body should be rendered from the matching version section her
 
 - Added built-in detection and telemetry mapping for the Sandisolar SD 11KP48V
   WIFI fingerprint (`layout=4`, `model=0x8003`) from issue #13 evidence.
-  Compatible controls remain explicitly untested and Full-Control-only.
+  Its two hardware-confirmed Secondary Priority controls are available normally;
+  the other compatible controls remain explicitly untested and Full-Control-only.
 - Added a typed support-acquisition boundary so read-only cloud evidence can be
   collected for an identified collector before an inverter driver is known.
 - Added 118 opt-in, document-backed settings for the exact Kevolt
@@ -21,6 +22,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Rebuilt the Anenji Protocol No. 3-10 telemetry layer as one documented shared
+  schema with separate Protocol 3 and Protocol 4 output projections. ANJ-11KW,
+  HHS-11kW and Sandisolar fingerprints now select registers by protocol identity,
+  never by a zero/non-zero value fallback, while ordinary SMG Protocol 1 devices
+  retain their existing map.
 - Moved device-support analysis and collector cloud-traffic capture under one
   **Expand device support** menu with separate readiness rules for read-only
   metadata, active learning, and proxy capture.
@@ -38,10 +44,10 @@ the GitHub release body should be rendered from the matching version section her
   challenge on the exact observed session, accepts only a correlated full-PN
   response, and never falls back to peer-IP routing. Unknown wire dialects are
   tried only on separate callback attempts and separate physical sockets.
-- Correct the Anenji HHS-11kW non-parallel Grid Power source for the exact
-  layout-3/model-29440 fingerprint: hardware-correlated cloud traffic reads
-  holding register 340, not the compatible-family register 204.
-
+- Corrected the canonical grid and inverter power projection for documented
+  Protocol 3/4 layouts. Grid Power now comes from holding register 340, with
+  protocol-specific output/load blocks; legacy total fields remain diagnostic
+  evidence rather than speculative runtime fallbacks.
 - Corrected the Kevolt PD0080G-TPM-EU rated-power scale from 80 kW to its
   hardware-confirmed 8 kW rating without changing the stable internal
   fingerprint key or its already-correct battery-value sign.

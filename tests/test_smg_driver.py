@@ -293,8 +293,15 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
                 304: 75,
                 305: 33,
                 338: 2300,
+                340: 420,
                 342: 2305,
+                343: 456,
+                344: 3800,
                 346: 2298,
+                347: 210,
+                348: 4200,
+                349: 4600,
+                350: 65,
                 351: 649,
                 352: 1,
                 353: 7,
@@ -467,6 +474,8 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
             start = int(captured_range["start"])
             for offset, value in enumerate(captured_range["values"]):
                 registers[start + offset] = int(value)
+        registers[204] = 0
+        registers[340] = 1606
 
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
@@ -487,11 +496,17 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             inverter.register_schema_name,
-            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+            "modbus_smg/models/sandisolar_sd_11kp48v_wifi.json",
         )
         self.assertEqual(inverter.details["device_type"], 0x8003)
         self.assertEqual(inverter.details["protocol_number"], 4)
-        self.assertTrue(all(not capability.tested for capability in inverter.capabilities))
+        tested_capability_keys = {
+            capability.key for capability in inverter.capabilities if capability.tested
+        }
+        self.assertEqual(
+            tested_capability_keys,
+            {"secondary_output_priority", "secondary_charging_priority"},
+        )
         self.assertFalse(
             can_expose_capability(
                 inverter.get_capability("output_source_priority"),
@@ -508,6 +523,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         )
 
         values = _full_values(await driver.async_read_values(transport, inverter))
+        self.assertEqual(values["grid_power"], 1606)
         self.assertEqual(values["inverter_frequency"], 50.01)
         self.assertEqual(values["inverter_temperature"], 35)
         self.assertNotEqual(values["inverter_temperature"], 5001)
@@ -546,7 +562,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["device_type"], 29440)
         self.assertEqual(inverter.details["protocol_number"], 3)
 
-    async def test_hhs_grid_power_uses_cloud_correlated_register_340(self) -> None:
+    async def test_hhs_grid_power_inherits_protocol_family_register_340(self) -> None:
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
         registers = self._anenji_registers()
@@ -569,6 +585,88 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         )
         values = _full_values(await driver.async_read_values(transport, inverter))
         self.assertEqual(values["grid_power"], 1729)
+
+    async def test_protocol_number_selects_output_register_projection(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+
+        protocol_3_registers = self._anenji_registers()
+        protocol_3_registers[171] = 29440
+        protocol_3_registers[184] = 3
+        protocol_3_registers[254] = 1111
+        protocol_3_registers[348] = 3333
+        protocol_3 = await driver.async_probe(
+            FixtureTransport(
+                registers=protocol_3_registers,
+                command_responses=None,
+                probe_target=target,
+            ),
+            target,
+        )
+        assert protocol_3 is not None
+        protocol_3_values = _full_values(
+            await driver.async_read_values(
+                FixtureTransport(
+                    registers=protocol_3_registers,
+                    command_responses=None,
+                    probe_target=target,
+                ),
+                protocol_3,
+            )
+        )
+
+        protocol_4_registers = self._anenji_registers()
+        protocol_4_registers[254] = 4444
+        protocol_4_registers[348] = 2222
+        protocol_4 = await driver.async_probe(
+            FixtureTransport(
+                registers=protocol_4_registers,
+                command_responses=None,
+                probe_target=target,
+            ),
+            target,
+        )
+        assert protocol_4 is not None
+        protocol_4_values = _full_values(
+            await driver.async_read_values(
+                FixtureTransport(
+                    registers=protocol_4_registers,
+                    command_responses=None,
+                    probe_target=target,
+                ),
+                protocol_4,
+            )
+        )
+
+        self.assertEqual(protocol_3_values["output_power"], 3333)
+        self.assertEqual(protocol_4_values["output_power"], 4444)
+
+    async def test_protocol_4_authoritative_values_do_not_fall_back_to_generic_registers(
+        self,
+    ) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+
+        class MissingProtocolValuesTransport(FixtureTransport):
+            def _handle_read_holding(self, payload: bytes) -> bytes:
+                address = int.from_bytes(payload[2:4], "big")
+                count = int.from_bytes(payload[4:6], "big")
+                missing = {338, 340, 343, 344}
+                if missing.intersection(range(address, address + count)):
+                    raise RuntimeError(f"missing_register:{address}")
+                return super()._handle_read_holding(payload)
+
+        transport = MissingProtocolValuesTransport(
+            registers=self._anenji_registers(),
+            command_responses=None,
+            probe_target=target,
+        )
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        values = _full_values(await driver.async_read_values(transport, inverter))
+        for key in ("grid_voltage", "grid_power", "inverter_current", "inverter_power"):
+            self.assertNotIn(key, values)
 
     async def test_probe_rejects_anenji_variant_when_variant_anchor_fields_are_invalid(self) -> None:
         driver = SmgModbusDriver()
@@ -613,6 +711,12 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["operating_mode"], "Off-Grid")
         self.assertEqual(values["grid_voltage"], 230.0)
         self.assertEqual(values["grid_frequency"], 50.0)
+        self.assertEqual(values["grid_power"], 420)
+        self.assertEqual(values["inverter_current"], 45.6)
+        self.assertEqual(values["inverter_power"], 3800)
+        self.assertNotIn("grid_current", values)
+        self.assertNotIn("grid_va", values)
+        self.assertNotIn("inverter_va", values)
         self.assertEqual(values["output_voltage"], 229.8)
         self.assertEqual(values["output_power"], 4200)
         self.assertEqual(values["battery_voltage"], 51.2)
@@ -1279,6 +1383,24 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["rated_cell_count"], 16)
         self.assertEqual(inverter.details["max_discharge_current_protection"], 80)
         self.assertEqual(inverter.details["rated_power"], 6200)
+
+    async def test_generic_smg_keeps_grid_power_at_register_204(self) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        registers = self._smg_family_registers(rated_power=6200)
+        registers[204] = 120
+        registers[340] = 9999
+        transport = FixtureTransport(
+            registers=registers,
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        values = _full_values(await driver.async_read_values(transport, inverter))
+        self.assertEqual(values["grid_power"], 120)
 
     async def test_probe_detects_6200_despite_out_of_enum_settings_and_state(self) -> None:
         # Regression for the real incident: a leaked shadow-learning write pushed

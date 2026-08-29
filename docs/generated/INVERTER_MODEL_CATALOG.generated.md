@@ -40,7 +40,7 @@ This page describes what has been confirmed for a specific inverter model or mod
 | Kevolt | PD0080G-TPM-EU | modbus_catalog | anchors | full | partial | partial | confirmed |
 | LVYUAN | TY-SIC-3.6KBE-W1 | eybond_g_ascii | anchors | full | confirmed | partial | captured |
 | MUST | PV18-3024 | must_pv_ph18 | anchors | full | partial | partial | captured |
-| Sandisolar | SD 11KP48V WIFI | modbus_smg | fingerprint | full | partial | none | captured |
+| Sandisolar | SD 11KP48V WIFI | modbus_smg | fingerprint | full | partial | partial | captured |
 | SRNE-compatible | Modbus family | srne_modbus | anchors | partial | partial | none | none |
 | Yingfa | YF6.2K-2K-LEL-IF | pi30 | anchors | full | confirmed | partial | captured |
 | Yingfa | YF6.2K-LEL-1B | pi30 | anchors | full | confirmed | partial | captured |
@@ -101,9 +101,9 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Coverage: runtime hardware_confirmed, cloud unknown, vendor map documented
   - Coverage notes:
     - Device-specific runtime profile is user-confirmed.
-    - Private Anenji Protocol No. 3-10 documentation backs a model-specific register map for this runtime family.
+    - Communication Protocol No. 3-10 documentation defines the protocol-4 telemetry projection used by this model.
     - Register 602 secondary-output priority is documented and hardware-read-correlated; local write behavior remains conditional pending a device retest.
-- Summary: Anenji 11kW unit with a model-specific profile and register schema, backed by donor captures, user-confirmed controls, and the Protocol No. 3-10 register documentation.
+- Summary: Anenji 11kW unit with a model-specific control profile over the shared protocol-4 register projection, backed by donor captures, user-confirmed controls, and the Protocol No. 3-10 documentation.
 - Variants:
   - `layout4_model32768` — Anenji 11kW variant
     - Descriptors: anenji_anj_11kw
@@ -111,7 +111,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `anenji_anj_11kw` → surface `anenji_anj_11kw_full` (driver modbus_smg, variant anenji_anj_11kw_48v_wifi_p)
       - Protocol: modbus_smg | Detection: fingerprint (layout 4, model 32768, rated —)
       - Tier: full | Read-only: no | Profile: modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json | Schema: modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json
-      - Capabilities: 53 (tested 52, untested 1); support tiers: conditional 43, standard 10 | Telemetry: 122 measurements, 18 binary sensors
+      - Capabilities: 53 (tested 52, untested 1); support tiers: conditional 43, standard 10 | Telemetry: 117 measurements, 18 binary sensors
 - Known limitations:
   - Secondary Output Priority writes are available only in Full Control until register 602 is write-tested on hardware.
 - Evidence: 4 source(s)
@@ -168,10 +168,10 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Coverage: runtime read_only, cloud unknown, vendor map documented
   - Coverage notes:
     - The exact layout/model fingerprint is captured from a beta.3 support archive.
-    - The compatible protocol 3-10 telemetry schema is enabled read-only.
-    - A later proxy capture and matching DESSMonitor export confirmed Grid Power at holding register 340 for this exact fingerprint.
+    - The protocol-3 telemetry projection is enabled read-only.
+    - A later proxy capture and matching DESSMonitor export confirmed the documented L1 Grid Power at holding register 340 for this exact fingerprint.
     - No ANJ-11KW writable capability is inherited until this exact HHS model is write-validated.
-- Summary: An Anenji HHS 11kW non-parallel inverter with an exact captured protocol-3 fingerprint. The integration exposes its compatible telemetry schema read-only, including hardware-correlated Grid Power, and deliberately withholds ANJ write controls.
+- Summary: An Anenji HHS 11kW non-parallel inverter with an exact captured protocol-3 fingerprint. The integration exposes the shared protocol-3 telemetry projection read-only, including hardware-correlated Grid Power, and deliberately withholds ANJ write controls.
 - Variants:
   - `layout3_model29440` — Anenji HHS 11kW non-parallel variant
     - Descriptors: anenji_hhs_11kw
@@ -179,7 +179,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `anenji_hhs_11kw` → surface `anenji_hhs_11kw_read_only` (driver modbus_smg, variant anenji_hhs_11kw_wifi_no_parallel)
       - Protocol: modbus_smg | Detection: fingerprint (layout 3, model 29440, rated —)
       - Tier: partial | Read-only: yes | Profile: — | Schema: modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json
-      - Capabilities: no model-specific profile | Telemetry: 122 measurements, 18 binary sensors
+      - Capabilities: no model-specific profile | Telemetry: 117 measurements, 18 binary sensors
 - Known limitations:
   - Local controls remain unavailable pending model-specific hardware validation.
 - Evidence: 2 source(s)
@@ -378,24 +378,26 @@ Runtime descriptors with no specific commercial model record. These are generic 
 
 - Lifecycle: experimental
 - Aliases: —
-- Validation: hardware captured, telemetry partial, controls none
+- Validation: hardware captured, telemetry partial, controls partial
 - Coverage: runtime available, cloud unknown, vendor map documented
   - Coverage notes:
     - The exact layout/model fingerprint is captured from the issue #13 beta.4 support archive.
-    - Telemetry uses the documented Anenji protocol-4 register schema; this prevents generic SMG interpretation of register 227 as temperature.
-    - The compatible ANJ write surface is inherited only as untested Full-Control candidates. Automatic control mode exposes none of these writes.
-- Summary: Sandisolar SD 11KP48V WIFI with exact layout-4/model-0x8003 identity. Captured telemetry follows the documented ANJ protocol-4 map, while compatible write candidates remain explicitly untested.
+    - Telemetry uses the documented protocol-4 projection; this prevents generic SMG interpretation of register 227 as temperature.
+    - Canonical Grid and inverter power values use the protocol-4 L1 points. Legacy total fields remain available in support captures instead of acting as value-based fallbacks.
+    - Secondary Charging Priority and Secondary Output Priority are hardware-confirmed on this exact fingerprint.
+    - The remaining compatible ANJ write surface is inherited only as untested Full-Control candidates.
+- Summary: Sandisolar SD 11KP48V WIFI with exact layout-4/model-0x8003 identity. Captured telemetry and protocol documentation select the shared protocol-4 projection, while compatible write candidates remain explicitly untested.
 - Variants:
   - `layout4_model32771` — Protocol-4 fingerprint 171=0x8003, 184=4
     - Descriptors: sandisolar_sd_11kp48v
     - Known firmware: —
     - `sandisolar_sd_11kp48v` → surface `sandisolar_sd_11kp48v_full` (driver modbus_smg, variant sandisolar_sd_11kp48v_wifi)
       - Protocol: modbus_smg | Detection: fingerprint (layout 4, model 32771, rated —)
-      - Tier: full | Read-only: no | Profile: modbus_smg/models/sandisolar_sd_11kp48v_wifi.json | Schema: modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json
-      - Capabilities: 53 (untested 53); support tiers: conditional 43, standard 10 | Telemetry: 122 measurements, 18 binary sensors
+      - Tier: full | Read-only: no | Profile: modbus_smg/models/sandisolar_sd_11kp48v_wifi.json | Schema: modbus_smg/models/sandisolar_sd_11kp48v_wifi.json
+      - Capabilities: 53 (tested 2, untested 51); support tiers: conditional 41, standard 12 | Telemetry: 117 measurements, 18 binary sensors
 - Known limitations:
-  - No local write has been validated on this exact Sandisolar fingerprint; every inherited control remains Full-Control-only until hardware retesting.
-- Evidence: 2 source(s)
+  - Only Secondary Charging Priority and Secondary Output Priority have been hardware-validated; every other inherited control remains Full-Control-only until hardware retesting.
+- Evidence: 5 source(s)
 
 ### Sandisolar — SD-HYM-4862HWP (`sandisolar_sd_hym_4862hwp`)
 

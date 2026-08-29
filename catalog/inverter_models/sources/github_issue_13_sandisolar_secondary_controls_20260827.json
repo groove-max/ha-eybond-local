@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_13_sandisolar_secondary_controls_20260827",
+  "kind": "github_issue",
+  "title": "Sandisolar SD 11KP48V WIFI secondary-priority control validation",
+  "reference": "project-issue:13#sandisolar-secondary-priority-validation",
+  "captured_at": "2026-08-27",
+  "visibility": "public",
+  "summary": "The owner of the exact Sandisolar SD 11KP48V WIFI layout-4/model-0x8003 fingerprint confirmed that local writes and subsequent readback for Secondary Charging Priority and Secondary Output Priority both worked correctly. No other inherited write capability was validated by this report.",
+  "assertions": [
+    "hardware_test",
+    "write_validation",
+    "control_behavior"
+  ]
+}

@@ -679,7 +679,7 @@ class ProfileLoaderTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             profile.get_capability("remote_switch")
 
-    def test_sandisolar_issue_13_profile_inherits_only_untested_writes(self) -> None:
+    def test_sandisolar_issue_13_profile_exposes_only_confirmed_writes_as_tested(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
 
         profile = profile_loader.load_driver_profile(
@@ -691,10 +691,23 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.driver_key, "modbus_smg")
         self.assertEqual(profile.protocol_family, "modbus_smg")
         self.assertEqual(len(profile.capabilities), 53)
-        self.assertTrue(all(not capability.tested for capability in profile.capabilities))
         self.assertEqual(profile.get_capability("output_source_priority").register, 601)
-        self.assertEqual(profile.get_capability("secondary_output_priority").register, 602)
-        self.assertEqual(profile.get_capability("secondary_charging_priority").register, 633)
+        secondary_output = profile.get_capability("secondary_output_priority")
+        secondary_charging = profile.get_capability("secondary_charging_priority")
+        self.assertEqual(secondary_output.register, 602)
+        self.assertEqual(secondary_charging.register, 633)
+        self.assertTrue(secondary_output.tested)
+        self.assertTrue(secondary_charging.tested)
+        self.assertEqual(secondary_output.provenance, "verified")
+        self.assertEqual(secondary_charging.provenance, "verified")
+        self.assertTrue(
+            all(
+                not capability.tested
+                for capability in profile.capabilities
+                if capability.key
+                not in {"secondary_output_priority", "secondary_charging_priority"}
+            )
+        )
 
     def test_rejects_duplicate_capability_keys(self) -> None:
         raw = {

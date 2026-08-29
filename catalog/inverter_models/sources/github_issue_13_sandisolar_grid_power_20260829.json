@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_13_sandisolar_grid_power_20260829",
+  "kind": "github_issue",
+  "title": "Sandisolar SD 11KP48V WIFI Grid Power correlation",
+  "reference": "project-issue:13",
+  "captured_at": "2026-08-29",
+  "visibility": "public",
+  "summary": "For the exact layout-4/model-0x8003 Sandisolar fingerprint, manufacturer-cloud screenshots and the inverter display showed non-zero Grid Power while the inherited register-204 projection remained zero in Home Assistant. This is supporting evidence that register 204 is not a usable canonical Grid Power source for this layout; the primary register-340 mapping comes from the protocol-4 documentation rather than from a same-instant raw correlation.",
+  "assertions": [
+    "telemetry_validation",
+    "register_map"
+  ]
+}

@@ -1465,6 +1465,121 @@ class InitModuleTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_cleanup_replaces_obsolete_protocol_3_4_measurements_on_upgrade(self) -> None:
+        async def _run(register_schema_name: str) -> list[str]:
+            obsolete_keys = (
+                "grid_current",
+                "grid_va",
+                "inverter_va",
+                "battery_current",
+                "input_voltage_range",
+            )
+            retained_keys = (
+                "grid_power",
+                "inverter_power",
+                "battery_average_current",
+                "input_mode",
+                "output_power",
+                "pv2_power",
+            )
+            entity_entries = [
+                types.SimpleNamespace(
+                    unique_id=f"entry123_{key}",
+                    entity_id=f"sensor.issue_13_{key}",
+                )
+                for key in (*obsolete_keys, *retained_keys)
+            ]
+
+            class _Registry:
+                def __init__(self) -> None:
+                    self.removed: list[str] = []
+
+                def async_remove(self, entity_id: str) -> None:
+                    self.removed.append(entity_id)
+
+            registry = _Registry()
+            inverter = types.SimpleNamespace(
+                driver_key="modbus_smg",
+                variant_key="issue_13_variant",
+                capabilities=(),
+                capability_presets=(),
+                profile_name="",
+                register_schema_name=register_schema_name,
+                details={},
+            )
+            coordinator = types.SimpleNamespace(
+                current_driver=types.SimpleNamespace(key="modbus_smg"),
+                identified_inverter=inverter,
+                has_inverter_identity=True,
+                collector_session_protocol="eybond_framed",
+                data=types.SimpleNamespace(inverter=inverter),
+                can_expose_capability=lambda _capability: False,
+                can_expose_preset=lambda _preset: False,
+            )
+            hass = types.SimpleNamespace()
+            entry = types.SimpleNamespace(
+                entry_id="entry123",
+                data={},
+                options={},
+            )
+            button_module = types.ModuleType("custom_components.eybond_local.button")
+            button_module._tooling_button_specs = lambda: ()
+            select_module = types.ModuleType("custom_components.eybond_local.select")
+            select_module.runtime_select_keys_for_runtime = (
+                lambda *, has_inverter_identity=True: ()
+            )
+            text_module = types.ModuleType("custom_components.eybond_local.text")
+            text_module.collector_text_keys_for_runtime = lambda: ()
+            tooling_module = types.ModuleType("custom_components.eybond_local.tooling")
+            tooling_module.tooling_button_keys_for_runtime = (
+                lambda capability_keys, profile_name, has_inverter_identity=True, **_kwargs: ()
+            )
+            derived_energy_module = types.ModuleType("custom_components.eybond_local.derived_energy")
+            derived_energy_module.derived_energy_cycle_descriptions_for_keys = lambda _keys: ()
+            derived_energy_module.derived_energy_descriptions_for_keys = lambda _keys: ()
+            derived_energy_module.derived_energy_entity_descriptions_for_keys = lambda _keys: ()
+
+            with (
+                patch("homeassistant.helpers.entity_registry.async_get", return_value=registry),
+                patch(
+                    "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
+                    return_value=entity_entries,
+                ),
+                patch(
+                    "custom_components.eybond_local.drivers.registry.binary_sensors_for_runtime",
+                    return_value=(),
+                ),
+                patch.dict(
+                    sys.modules,
+                    {
+                        "custom_components.eybond_local.button": button_module,
+                        "custom_components.eybond_local.select": select_module,
+                        "custom_components.eybond_local.text": text_module,
+                        "custom_components.eybond_local.tooling": tooling_module,
+                        "custom_components.eybond_local.derived_energy": derived_energy_module,
+                    },
+                ),
+            ):
+                await _async_cleanup_obsolete_entities(hass, entry, coordinator)
+
+            return registry.removed
+
+        schemas = (
+            "modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json",
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+            "modbus_smg/models/sandisolar_sd_11kp48v_wifi.json",
+        )
+        expected = [
+            "sensor.issue_13_grid_current",
+            "sensor.issue_13_grid_va",
+            "sensor.issue_13_inverter_va",
+            "sensor.issue_13_battery_current",
+            "sensor.issue_13_input_voltage_range",
+        ]
+        for schema_name in schemas:
+            with self.subTest(schema_name=schema_name):
+                self.assertEqual(asyncio.run(_run(schema_name)), expected)
+
     def test_remove_legacy_runtime_select_entities_removes_legacy_and_mode_selects(self) -> None:
         # CP2A: the removal targets BOTH the legacy control-mode select and the
         # now-removed writable collector operation-mode select, by their exact

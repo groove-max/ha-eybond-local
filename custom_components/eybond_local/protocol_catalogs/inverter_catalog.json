@@ -1296,7 +1296,7 @@
    "driver_key": "modbus_smg",
    "variant_key": "sandisolar_sd_11kp48v_wifi",
    "profile_name": "modbus_smg/models/sandisolar_sd_11kp48v_wifi.json",
-   "register_schema_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+   "register_schema_name": "modbus_smg/models/sandisolar_sd_11kp48v_wifi.json",
    "tier": "full",
    "read_only": false,
    "support_capture_policy": "smg_anenji_11k"

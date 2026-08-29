@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source_key": "third_party_easun_smg_ii_11kw_register_map",
+  "kind": "third_party_impl",
+  "title": "Easun SMG II 11kW register map implementation",
+  "reference": "https://github.com/alcestide/easun-smg-ii-11kw",
+  "captured_at": "2026-08-29",
+  "visibility": "public",
+  "summary": "An independent compatible implementation maps holding register 340 to signed L1 Grid Active Power and marks it applicable to protocol layouts 3, 4, 5, and 6. Its register 204 Total Grid Active Power entry is not marked applicable to those layouts.",
+  "assertions": [
+    "register_map"
+  ]
+}

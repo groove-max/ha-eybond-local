@@ -1,14 +1,5 @@
 {
-  "extends": "./anenji_anj_11kw_48v_wifi_p.json",
+  "extends": "../protocols/communication_protocol_3.json",
   "schema_key": "modbus_smg_anenji_hhs_11kw_wifi_no_parallel",
-  "title": "Anenji HHS-11kW-WIFI Non-Parallel Register Schema",
-  "spec_sets": {
-    "value_overrides": [
-      {
-        "key": "grid_power",
-        "register": 340,
-        "signed": true
-      }
-    ]
-  }
+  "title": "Anenji HHS-11kW-WIFI Non-Parallel Register Schema"
 }

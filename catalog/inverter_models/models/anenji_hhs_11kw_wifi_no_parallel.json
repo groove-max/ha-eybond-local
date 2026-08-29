@@ -26,15 +26,15 @@
     "vendor_register_map": "documented",
     "notes": [
       "The exact layout/model fingerprint is captured from a beta.3 support archive.",
-      "The compatible protocol 3-10 telemetry schema is enabled read-only.",
-      "A later proxy capture and matching DESSMonitor export confirmed Grid Power at holding register 340 for this exact fingerprint.",
+      "The protocol-3 telemetry projection is enabled read-only.",
+      "A later proxy capture and matching DESSMonitor export confirmed the documented L1 Grid Power at holding register 340 for this exact fingerprint.",
       "No ANJ-11KW writable capability is inherited until this exact HHS model is write-validated."
     ]
   },
   "known_limitations": [
     "Local controls remain unavailable pending model-specific hardware validation."
   ],
-  "knowledge_summary": "An Anenji HHS 11kW non-parallel inverter with an exact captured protocol-3 fingerprint. The integration exposes its compatible telemetry schema read-only, including hardware-correlated Grid Power, and deliberately withholds ANJ write controls.",
+  "knowledge_summary": "An Anenji HHS 11kW non-parallel inverter with an exact captured protocol-3 fingerprint. The integration exposes the shared protocol-3 telemetry projection read-only, including hardware-correlated Grid Power, and deliberately withholds ANJ write controls.",
   "source_keys": [
     "github_issue_13_hhs_11kw_beta3",
     "github_issue_13_hhs_grid_power_20260827"

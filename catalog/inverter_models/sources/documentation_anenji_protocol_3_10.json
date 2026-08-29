@@ -7,7 +7,7 @@
   "captured_at": "2026-06-19",
   "visibility": "private",
   "summary_publishable": true,
-  "summary": "Private local copy of Communication.Protocol.No.3-10.pdf, a 20-page Modbus RTU register document covering protocol numbers 3, 4, 5, and 6 for the ANJ-11KW runtime family.",
+  "summary": "Private local copy of Communication.Protocol.No.3-10.pdf, a Modbus RTU register document that distinguishes shared, total, and per-output points across protocol numbers 3, 4, 5, and 6 for the ANJ-11KW-compatible runtime family.",
   "assertions": [
     "register_map",
     "runtime_compatibility"

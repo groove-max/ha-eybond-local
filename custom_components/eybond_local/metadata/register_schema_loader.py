@@ -462,6 +462,15 @@ def _merge_raw_schema(
         **base.get("scalar_registers", {}),
         **overlay.get("scalar_registers", {}),
     }
+    merged["spec_sets"] = _remove_spec_set_items(
+        merged["spec_sets"],
+        overlay.get("spec_set_removals", {}),
+    )
+    merged["measurement_descriptions"] = _remove_keyed_items(
+        merged["measurement_descriptions"],
+        overlay.get("measurement_description_removals", []),
+        key_field="key",
+    )
 
     for key, value in overlay.items():
         if key in {
@@ -472,6 +481,8 @@ def _merge_raw_schema(
             "enum_tables",
             "bit_labels",
             "scalar_registers",
+            "spec_set_removals",
+            "measurement_description_removals",
         }:
             continue
         merged[key] = value
@@ -500,6 +511,45 @@ def _merge_nested_maps(
     for key, value in overlay.items():
         merged[key] = {**merged.get(key, {}), **value}
     return merged
+
+
+def _remove_spec_set_items(
+    spec_sets: Mapping[str, list[dict[str, Any]]],
+    removals: Any,
+) -> dict[str, list[dict[str, Any]]]:
+    """Remove inherited specs explicitly named by a declarative overlay."""
+
+    merged = {key: [dict(item) for item in value] for key, value in spec_sets.items()}
+    if not isinstance(removals, Mapping):
+        raise ValueError("register_schema:spec_set_removals_must_be_mapping")
+    for set_key, removed_keys in removals.items():
+        if not isinstance(removed_keys, list) or any(
+            type(item) is not str or not item or item != item.strip()
+            for item in removed_keys
+        ):
+            raise ValueError(f"register_schema:invalid_spec_set_removals:{set_key}")
+        removed = set(removed_keys)
+        merged[str(set_key)] = [
+            item for item in merged.get(str(set_key), []) if item.get("key") not in removed
+        ]
+    return merged
+
+
+def _remove_keyed_items(
+    items: list[Mapping[str, Any]],
+    removed_keys: Any,
+    *,
+    key_field: str,
+) -> list[dict[str, Any]]:
+    """Remove inherited keyed records explicitly named by an overlay."""
+
+    if not isinstance(removed_keys, list) or any(
+        type(item) is not str or not item or item != item.strip()
+        for item in removed_keys
+    ):
+        raise ValueError(f"register_schema:invalid_{key_field}_removals")
+    removed = set(removed_keys)
+    return [dict(item) for item in items if item.get(key_field) not in removed]
 
 
 def _merge_keyed_list(

@@ -1,0 +1,5 @@
+{
+  "extends": "../protocols/communication_protocol_4.json",
+  "schema_key": "modbus_smg_sandisolar_sd_11kp48v_wifi",
+  "title": "Sandisolar SD 11KP48V WIFI Register Schema"
+}

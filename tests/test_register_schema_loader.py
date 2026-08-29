@@ -460,16 +460,108 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         self.assertTrue(pv_generation_day.enabled_default)
         self.assertTrue(pv_generation_day.live)
 
-    def test_hhs_11kw_schema_overrides_only_grid_power_source(self) -> None:
-        base = load_register_schema("modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json")
-        hhs = load_register_schema("modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json")
-
-        self.assertEqual(
-            {spec.key: spec.register for spec in hhs.spec_set("value_overrides")},
-            {"grid_power": 340},
+    def test_protocol_3_10_projects_documented_registers_by_protocol_number(self) -> None:
+        generic = load_register_schema("modbus_smg/base.json")
+        common = load_register_schema(
+            "modbus_smg/protocols/communication_protocol_3_10.json"
         )
-        self.assertEqual(hhs.spec_set("live"), base.spec_set("live"))
-        self.assertEqual(hhs.spec_set("config"), base.spec_set("config"))
+        protocol_3 = load_register_schema(
+            "modbus_smg/protocols/communication_protocol_3.json"
+        )
+        protocol_4 = load_register_schema(
+            "modbus_smg/protocols/communication_protocol_4.json"
+        )
+        anj = load_register_schema("modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json")
+        hhs = load_register_schema("modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json")
+        sandisolar = load_register_schema(
+            "modbus_smg/models/sandisolar_sd_11kp48v_wifi.json"
+        )
+
+        common_sources = {
+            spec.key: spec.register
+            for specs in common.spec_sets.values()
+            for spec in specs
+        }
+        common_registers = {
+            spec.register for specs in common.spec_sets.values() for spec in specs
+        }
+        self.assertEqual(
+            {
+                key: common_sources[key]
+                for key in ("grid_power", "inverter_current", "inverter_power")
+            },
+            {"grid_power": 340, "inverter_current": 343, "inverter_power": 344},
+        )
+        for unsupported_key in ("grid_current", "grid_va", "inverter_va"):
+            self.assertNotIn(unsupported_key, common_sources)
+            with self.assertRaises(KeyError):
+                common.measurement_description(unsupported_key)
+        self.assertTrue({202, 204, 205, 226, 228, 229}.isdisjoint(common_registers))
+
+        protocol_3_sources = {
+            spec.key: spec.register
+            for specs in protocol_3.spec_sets.values()
+            for spec in specs
+        }
+        protocol_4_sources = {
+            spec.key: spec.register
+            for specs in protocol_4.spec_sets.values()
+            for spec in specs
+        }
+        self.assertEqual(
+            {
+                key: protocol_3_sources[key]
+                for key in ("output_current", "output_power", "output_va", "load_percent")
+            },
+            {
+                "output_current": 347,
+                "output_power": 348,
+                "output_va": 349,
+                "load_percent": 350,
+            },
+        )
+        self.assertEqual(
+            {
+                key: protocol_4_sources[key]
+                for key in ("output_current", "output_power", "output_va", "load_percent")
+            },
+            {
+                "output_current": 252,
+                "output_power": 254,
+                "output_va": 255,
+                "load_percent": 256,
+            },
+        )
+
+        self.assertEqual(anj.spec_sets, protocol_4.spec_sets)
+        self.assertEqual(sandisolar.spec_sets, protocol_4.spec_sets)
+        self.assertEqual(hhs.spec_sets, protocol_3.spec_sets)
+        for schema in (protocol_3, protocol_4, anj, hhs, sandisolar):
+            keys = [spec.key for specs in schema.spec_sets.values() for spec in specs]
+            self.assertEqual(len(keys), len(set(keys)))
+        self.assertEqual(
+            {spec.key: spec.register for spec in generic.spec_set("live")}["grid_power"],
+            204,
+        )
+
+    def test_schema_overlay_can_remove_inherited_spec_and_description(self) -> None:
+        raw = {
+            "extends": "builtin:modbus_smg/base.json",
+            "schema_key": "external_smg_without_grid_power",
+            "title": "External SMG Without Grid Power",
+            "spec_set_removals": {"live": ["grid_power"]},
+            "measurement_description_removals": ["grid_power"],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            schema_path = Path(temp_dir) / "without_grid_power.json"
+            schema_path.write_text(json.dumps(raw), encoding="utf-8")
+            set_external_register_schema_roots((Path(temp_dir),))
+            schema = load_register_schema("without_grid_power.json")
+
+        self.assertNotIn("grid_power", {spec.key for spec in schema.spec_set("live")})
+        with self.assertRaises(KeyError):
+            schema.measurement_description("grid_power")
 
     def test_pi30_driver_uses_loaded_register_schema(self) -> None:
         schema = load_register_schema("pi30_ascii/models/smartess_0925_compat.json")

@@ -80,7 +80,7 @@ class FixtureReplayContractTests(unittest.TestCase):
         self.assertEqual(context.inverter.variant_key, "sandisolar_sd_11kp48v_wifi")
         self.assertEqual(
             context.inverter.register_schema_name,
-            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
+            "modbus_smg/models/sandisolar_sd_11kp48v_wifi.json",
         )
         self.assertEqual(values["inverter_frequency"], 50.01)
         self.assertEqual(values["inverter_temperature"], 35)

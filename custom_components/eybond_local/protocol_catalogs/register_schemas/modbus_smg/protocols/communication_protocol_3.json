@@ -1,0 +1,76 @@
+{
+  "extends": "./communication_protocol_3_10.json",
+  "schema_key": "modbus_smg_communication_protocol_3",
+  "title": "Communication Protocol No. 3 Register Schema",
+  "spec_sets": {
+    "aux_config": [
+      {
+        "key": "output_current",
+        "register": 347,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_power",
+        "register": 348,
+        "signed": true
+      },
+      {
+        "key": "output_va",
+        "register": 349,
+        "signed": true
+      },
+      {
+        "key": "load_percent",
+        "register": 350,
+        "signed": true
+      },
+      {
+        "key": "pv2_voltage",
+        "register": 389,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv2_current",
+        "register": 390,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv2_power",
+        "register": 391,
+        "signed": true
+      }
+    ]
+  },
+  "measurement_descriptions": [
+    {
+      "key": "pv2_voltage",
+      "name": "PV2 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "live": true
+    },
+    {
+      "key": "pv2_current",
+      "name": "PV2 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "live": true
+    },
+    {
+      "key": "pv2_power",
+      "name": "PV2 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "live": true
+    }
+  ]
+}
