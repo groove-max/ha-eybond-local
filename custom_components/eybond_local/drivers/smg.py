@@ -1041,13 +1041,13 @@ async def _read_optional_specs(
         try:
             raw_values = await session.read_holding(start_register, register_count)
         except Exception as exc:
-            if not _is_optional_spec_error(exc):
+            if not _is_explicit_optional_register_rejection(exc):
                 raise
             for spec in grouped_specs:
                 try:
                     raw_values = await session.read_holding(spec.register, spec.word_count)
                 except Exception as fallback_exc:
-                    if not _is_optional_spec_error(fallback_exc):
+                    if not _is_explicit_optional_register_rejection(fallback_exc):
                         raise
                     continue
                 decoded.update(_decode_block(spec.register, raw_values, (spec,)))
@@ -1067,7 +1067,7 @@ async def _read_optional_ascii_ranges(
         try:
             raw_values = await session.read_holding(register, word_count)
         except Exception as exc:
-            if not _is_optional_spec_error(exc):
+            if not _is_explicit_optional_register_rejection(exc):
                 raise
             continue
         text = _decode_ascii_words(raw_values).strip()
@@ -1100,11 +1100,24 @@ async def _read_missing_optional_probe_details(
     return decoded
 
 
-def _is_optional_spec_error(exc: Exception) -> bool:
-    """Return whether one optional-register read failure should be ignored."""
+def _is_explicit_optional_register_rejection(exc: Exception) -> bool:
+    """Return whether the inverter explicitly rejected an optional register.
+
+    A Modbus exception response (normally illegal function/address/value) is
+    positive wire evidence that the exact optional range is unavailable.  It
+    is therefore safe to split a rejected group into individual reads, or to
+    skip one individually rejected field.
+
+    ``request_timeout`` is deliberately NOT accepted here.  Silence says
+    nothing about register support: the collector session may have stopped
+    responding.  Treating it as an optional-field rejection used to fan one
+    lost session out into every grouped and individual optional read (hundreds
+    of seconds on the Protocol 3/4 maps), preventing runtime recovery from
+    acquiring the operation boundary.
+    """
 
     if isinstance(exc, ModbusError):
-        return True
+        return str(exc).startswith("exception_code:")
     return str(exc).startswith("missing_register:")
 
 

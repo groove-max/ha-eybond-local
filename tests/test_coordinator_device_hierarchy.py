@@ -10772,6 +10772,76 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(len(notifications), 1)
         self.assertIn("polling cycle is using", notifications[0]["body"])
 
+    def test_support_package_refreshes_snapshot_after_capture_reconnect(self) -> None:
+        async def _run() -> None:
+            coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator.config_entry = types.SimpleNamespace(entry_id="entry-support")
+            coordinator._runtime_operation_lock = asyncio.Lock()
+            coordinator.data = self.RuntimeSnapshot(connected=False)
+            events: list[str] = []
+            snapshots = iter(
+                (
+                    self.RuntimeSnapshot(
+                        connected=False,
+                        values={"runtime_session_state": "offline"},
+                    ),
+                    self.RuntimeSnapshot(
+                        connected=True,
+                        values={"runtime_session_state": "online"},
+                    ),
+                )
+            )
+
+            async def _refresh():
+                snapshot = next(snapshots)
+                events.append(f"refresh:{snapshot.connected}")
+                return snapshot
+
+            async def _registry_lookup():
+                events.append("registry")
+                return ("found", object())
+
+            async def _capture():
+                events.append("capture")
+                return {
+                    "capture_kind": "modbus_register_dump",
+                    "captured_ranges": [{"start": 100, "count": 10}],
+                    "range_failures": [],
+                }
+
+            def _build_payload(**_kwargs):
+                events.append("build")
+                return {
+                    "runtime": {
+                        "connected": coordinator.data.connected,
+                        "values": dict(coordinator.data.values),
+                    }
+                }
+
+            coordinator._async_update_data_with_runtime_lock = _refresh
+            coordinator._async_collector_registry_lookup = _registry_lookup
+            coordinator._runtime = types.SimpleNamespace(
+                async_capture_support_evidence=_capture
+            )
+            coordinator._build_support_bundle_payload = _build_payload
+
+            payload, raw_capture = await coordinator._async_build_support_package_payloads(
+                integration_build_values={}
+            )
+
+            self.assertEqual(
+                events,
+                ["refresh:False", "registry", "capture", "refresh:True", "build"],
+            )
+            self.assertTrue(payload["runtime"]["connected"])
+            self.assertEqual(
+                payload["runtime"]["values"]["runtime_session_state"],
+                "online",
+            )
+            self.assertEqual(raw_capture["capture_kind"], "modbus_register_dump")
+
+        asyncio.run(_run())
+
 
 if __name__ == "__main__":
     unittest.main()

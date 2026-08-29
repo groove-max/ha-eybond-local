@@ -42,6 +42,9 @@ the GitHub release body should be rendered from the matching version section her
 - Fixed stale callback-session inventory that could outlive its physical TCP
   socket, suppress a new callback request, and leave Home Assistant waiting for
   a connection that no longer existed.
+- Fixed Protocol 3/4 optional-register polling so one silent collector session
+  fails fast instead of expanding into minutes of per-register retries. Support
+  archives also refresh their runtime snapshot after a capture reconnect.
 - Fixed fully silent callback collectors that open a TCP session without an
   initial payload. Home Assistant now performs one bounded FC=1 identity
   challenge on the exact observed session, accepts only a correlated full-PN

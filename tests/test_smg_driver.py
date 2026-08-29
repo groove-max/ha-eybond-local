@@ -18,6 +18,7 @@ from custom_components.eybond_local.drivers.smg import (  # noqa: E402
     SmgModbusDriver,
     _apply_capability_read_back,
     _decode_block,
+    _read_optional_specs,
     _support_capture_ranges,
 )
 from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
@@ -36,7 +37,10 @@ from custom_components.eybond_local.metadata.register_schema_loader import (  # 
     set_external_register_schema_roots,
 )
 from custom_components.eybond_local.models import DetectedInverter, ProbeTarget  # noqa: E402
-from custom_components.eybond_local.payload.modbus import crc16_modbus  # noqa: E402
+from custom_components.eybond_local.payload.modbus import (  # noqa: E402
+    ModbusError,
+    crc16_modbus,
+)
 from custom_components.eybond_local.telemetry import (  # noqa: E402
     TelemetryFreshness,
     TypedTelemetryFrame,
@@ -527,6 +531,85 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["inverter_frequency"], 50.01)
         self.assertEqual(values["inverter_temperature"], 35)
         self.assertNotEqual(values["inverter_temperature"], 5001)
+
+    async def test_issue_13_sandisolar_timeout_does_not_fan_out_optional_reads(
+        self,
+    ) -> None:
+        """One silent session must not become a 55-register timeout cascade."""
+
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        inverter = DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="Sandisolar SD 11KP48V WIFI",
+            serial_number="92B32511113147",
+            probe_target=target,
+            variant_key="sandisolar_sd_11kp48v_wifi",
+            profile_name="modbus_smg/models/sandisolar_sd_11kp48v_wifi.json",
+            register_schema_name=(
+                "modbus_smg/models/sandisolar_sd_11kp48v_wifi.json"
+            ),
+            capabilities=(),
+        )
+        schema = load_register_schema(inverter.register_schema_name)
+        self.assertEqual(len(schema.spec_set("aux_config")), 55)
+
+        class _Session:
+            def __init__(self) -> None:
+                self.calls: list[tuple[int, int]] = []
+
+            async def read_holding(self, register: int, count: int) -> list[int]:
+                self.calls.append((register, count))
+                if (register, count) in {(100, 10), (198, 34), (600, 57)}:
+                    return [0] * count
+                raise ModbusError("request_timeout")
+
+        session = _Session()
+        with patch.object(
+            SmgModbusDriver,
+            "_session",
+            staticmethod(lambda *_args, **_kwargs: session),
+        ):
+            with self.assertRaisesRegex(ModbusError, "^request_timeout$"):
+                await driver.async_read_values(object(), inverter)
+
+        self.assertEqual(
+            session.calls,
+            [(100, 10), (198, 34), (600, 57), (171, 1)],
+        )
+
+    async def test_explicit_optional_group_rejection_keeps_single_read_fallback(
+        self,
+    ) -> None:
+        """An explicit illegal-range reply may still isolate supported fields."""
+
+        schema = load_register_schema(
+            "modbus_smg/models/sandisolar_sd_11kp48v_wifi.json"
+        )
+        specs = tuple(
+            spec
+            for spec in schema.spec_set("aux_config")
+            if 252 <= spec.register <= 256
+        )
+        self.assertEqual(len(specs), 5)
+
+        class _Session:
+            def __init__(self) -> None:
+                self.calls: list[tuple[int, int]] = []
+
+            async def read_holding(self, register: int, count: int) -> list[int]:
+                self.calls.append((register, count))
+                if count > 1:
+                    raise ModbusError("exception_code:2")
+                return [register]
+
+        session = _Session()
+        values = await _read_optional_specs(session, specs)
+
+        self.assertEqual(session.calls[0], (252, 5))
+        self.assertEqual(session.calls[1:], [(register, 1) for register in range(252, 257)])
+        self.assertEqual(set(values), {spec.key for spec in specs})
 
     async def test_probe_selects_hhs_11kw_telemetry_without_anj_controls(self) -> None:
         driver = SmgModbusDriver()

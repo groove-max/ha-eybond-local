@@ -461,6 +461,7 @@ class CoordinatorSupportMixin:
         """Build support bundle payload and raw capture under one runtime operation lock."""
 
         async with self._runtime_operation_lock:
+            refreshed_connected = bool(getattr(self.data, "connected", False))
             try:
                 snapshot = await self._async_update_data_with_runtime_lock()
             except Exception as exc:  # noqa: BLE001 - support export must remain available
@@ -472,12 +473,12 @@ class CoordinatorSupportMixin:
             else:
                 if snapshot is not None:
                     self.data = snapshot
+                    refreshed_connected = bool(
+                        getattr(snapshot, "connected", False)
+                    )
 
             collector_registry_lookup = await self._async_collector_registry_lookup()
-            support_bundle_payload = self._build_support_bundle_payload(
-                integration_build_values=integration_build_values,
-                collector_registry_lookup=collector_registry_lookup,
-            )
+            capture_completed = False
             try:
                 raw_capture = await self._runtime.async_capture_support_evidence()
             except Exception as exc:
@@ -487,6 +488,32 @@ class CoordinatorSupportMixin:
                     "captured_ranges": [],
                     "range_failures": [],
                 }
+            else:
+                capture_completed = True
+
+            # Evidence capture owns its own bounded reconnect path.  When the
+            # pre-capture refresh was offline but the capture then completed,
+            # rebuild one runtime snapshot on the now-live session before
+            # serializing the bundle.  Previously the bundle was frozen before
+            # capture, so one archive could claim "offline" while its raw
+            # capture had just read every planned range successfully.
+            if capture_completed and not refreshed_connected:
+                try:
+                    snapshot = await self._async_update_data_with_runtime_lock()
+                except Exception as exc:  # noqa: BLE001 - preserve captured evidence
+                    logger.warning(
+                        "Support archive post-capture refresh failed for entry %s: %s",
+                        self.config_entry.entry_id,
+                        exc,
+                    )
+                else:
+                    if snapshot is not None:
+                        self.data = snapshot
+
+            support_bundle_payload = self._build_support_bundle_payload(
+                integration_build_values=integration_build_values,
+                collector_registry_lookup=collector_registry_lookup,
+            )
 
         return support_bundle_payload, raw_capture
 
