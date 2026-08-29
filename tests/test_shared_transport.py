@@ -37,6 +37,9 @@ from custom_components.eybond_local.collector.protocol import (
     decode_header,
     parse_heartbeat_pn,
 )
+from custom_components.eybond_local.connection.session_registry import (
+    CallbackSessionRegistry,
+)
 from custom_components.eybond_local.link_models import AtMixedLinkRoute, EybondLinkRoute, RawSerialLinkRoute
 from custom_components.eybond_local.models import CollectorInfo
 from custom_components.eybond_local.payload.ascii_line import build_ascii_line_request
@@ -854,6 +857,13 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             session_id="session-strong",
             remote_ip="203.0.113.10",
             remote_port=41000,
+        )
+        listener._pending_sockets["session-strong"] = _PendingCollectorSocket(
+            session_id="session-strong",
+            remote_ip="203.0.113.10",
+            remote_port=41000,
+            reader=asyncio.StreamReader(),
+            writer=_FakeWriter(),  # type: ignore[arg-type]
         )
 
         listener._mark_session_identity(
@@ -4114,6 +4124,241 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
+    async def test_released_pending_socket_cannot_remain_a_registry_live_session(
+        self,
+    ) -> None:
+        """Closing the physical pending socket terminalizes its inventory row."""
+
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        collector_pn = "E50000200000009777"
+        listener._remember_session(
+            session_id="listener-8899-2",
+            remote_ip="192.168.0.102",
+            remote_port=58197,
+        )
+        listener._mark_session_identity(
+            "listener-8899-2",
+            collector_pn,
+            "fc2_parameter_2",
+        )
+        listener._mark_session_state(
+            "listener-8899-2",
+            "probing_route_identity_framed_fc2",
+        )
+        pending = _PendingCollectorSocket(
+            remote_ip="192.168.0.102",
+            remote_port=58197,
+            session_id="listener-8899-2",
+            reader=asyncio.StreamReader(),
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets[pending.session_id] = pending
+
+        await listener.release_collector_connections(
+            "192.168.0.102",
+            collector_pn,
+            close_payload=True,
+            close_pending=True,
+        )
+
+        self.assertTrue(pending.writer.closed)
+        self.assertEqual(
+            listener._session_inventory[pending.session_id].state,
+            "closed_disconnected",
+        )
+        self.assertEqual(listener.discovered_collector_sessions(), ())
+        registry = CallbackSessionRegistry(
+            sessions_source=listener.discovered_collector_sessions
+        )
+        registry.claim_identity("entry-sandisolar", collector_pn)
+        self.assertIsNone(registry.owned_session_location("entry-sandisolar"))
+
+    def test_unbacked_probe_inventory_is_diagnostic_history_not_live_authority(
+        self,
+    ) -> None:
+        """The exact issue-13 ghost shape cannot suppress a future callback."""
+
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        collector_pn = "E50000200000009777"
+        listener._remember_session(
+            session_id="listener-8899-2",
+            remote_ip="192.168.0.102",
+            remote_port=58197,
+        )
+        listener._mark_session_identity(
+            "listener-8899-2",
+            collector_pn,
+            "fc2_parameter_2",
+        )
+        listener._mark_session_state(
+            "listener-8899-2",
+            "probing_route_identity_framed_fc2",
+        )
+
+        # The support archive had exactly this contradiction: no pending socket
+        # and no activated exact-session connection, but a non-terminal inventory
+        # row. Keep it in diagnostics, never in the live registry projection.
+        self.assertEqual(
+            listener.session_inventory_diagnostics()["recent_session_count"],
+            1,
+        )
+        self.assertEqual(listener.discovered_collector_sessions(), ())
+        registry = CallbackSessionRegistry(
+            sessions_source=listener.discovered_collector_sessions
+        )
+        registry.claim_identity("entry-sandisolar", collector_pn)
+        self.assertEqual(registry.claimed_session_id("entry-sandisolar"), "")
+        self.assertIsNone(registry.owned_session_location("entry-sandisolar"))
+
+    async def test_exact_identity_probe_settles_state_and_rearms_close_watch(
+        self,
+    ) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener._remember_session(
+            session_id="listener-8899-2",
+            remote_ip="192.168.0.102",
+            remote_port=58197,
+        )
+        reader = asyncio.StreamReader()
+
+        class _ProbeWriter(_FakeWriter):
+            async def drain(self) -> None:
+                reader.feed_data(
+                    build_collector_request(
+                        1,
+                        b"\x00\x02E50000200000009777",
+                        devcode=2376,
+                        collector_addr=1,
+                        fcode=2,
+                    )
+                )
+
+        pending = _PendingCollectorSocket(
+            remote_ip="192.168.0.102",
+            remote_port=58197,
+            session_id="listener-8899-2",
+            reader=reader,
+            writer=_ProbeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets[pending.session_id] = pending
+
+        identified = await listener.async_identify_pending_session(
+            pending.session_id,
+            session_protocol="eybond_framed",
+        )
+
+        self.assertEqual(identified, "E50000200000009777")
+        self.assertEqual(
+            listener._session_inventory[pending.session_id].state,
+            "parked_identified_strong",
+        )
+        self.assertIsNotNone(pending.sniff_task)
+        self.assertFalse(pending.sniff_task.done())
+
+        reader.feed_eof()
+        await asyncio.wait_for(pending.sniff_task, timeout=2.0)
+        self.assertTrue(pending.writer.closed)
+        self.assertEqual(listener.discovered_collector_sessions(), ())
+
+    async def test_cancelled_exact_identity_probe_rearms_close_watch(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener._remember_session(
+            session_id="listener-8899-2",
+            remote_ip="192.168.0.102",
+            remote_port=58197,
+        )
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        pending = _PendingCollectorSocket(
+            remote_ip="192.168.0.102",
+            remote_port=58197,
+            session_id="listener-8899-2",
+            reader=reader,
+            writer=writer,  # type: ignore[arg-type]
+        )
+        listener._pending_sockets[pending.session_id] = pending
+
+        probe = asyncio.create_task(
+            listener.async_identify_pending_session(
+                pending.session_id,
+                session_protocol="eybond_framed",
+            )
+        )
+        deadline = monotonic() + 1.0
+        while not writer.buffer and monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        self.assertTrue(writer.buffer)
+
+        probe.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await probe
+
+        self.assertTrue(listener._pending_socket_still_registered(pending))
+        self.assertEqual(
+            listener._session_inventory[pending.session_id].state,
+            "waiting_for_route_identity",
+        )
+        self.assertIsNotNone(pending.sniff_task)
+        self.assertFalse(pending.sniff_task.done())
+
+        reader.feed_eof()
+        await asyncio.wait_for(pending.sniff_task, timeout=2.0)
+        self.assertTrue(writer.closed)
+        self.assertEqual(listener.discovered_collector_sessions(), ())
+
+    async def test_cancel_during_sniff_pause_drains_child_then_propagates(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        listener._remember_session(
+            session_id="listener-8899-2",
+            remote_ip="192.168.0.102",
+            remote_port=58197,
+        )
+        reader = asyncio.StreamReader()
+        pending = _PendingCollectorSocket(
+            remote_ip="192.168.0.102",
+            remote_port=58197,
+            session_id="listener-8899-2",
+            reader=reader,
+            writer=_FakeWriter(),  # type: ignore[arg-type]
+        )
+        listener._pending_sockets[pending.session_id] = pending
+        sniff_cancelled = asyncio.Event()
+        release_sniff = asyncio.Event()
+
+        async def _slow_sniff_cleanup() -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                sniff_cancelled.set()
+                await release_sniff.wait()
+                raise
+
+        pending.sniff_task = asyncio.create_task(_slow_sniff_cleanup())
+        probe = asyncio.create_task(
+            listener.async_identify_pending_session(
+                pending.session_id,
+                session_protocol="eybond_framed",
+            )
+        )
+        await asyncio.wait_for(sniff_cancelled.wait(), timeout=1.0)
+
+        probe.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(probe.done())
+        release_sniff.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await probe
+        self.assertTrue(probe.cancelled())
+
+        # The public probe boundary re-arms the physical close watcher even
+        # though cancellation arrived while its previous watcher was draining.
+        self.assertTrue(listener._pending_socket_still_registered(pending))
+        self.assertIsNotNone(pending.sniff_task)
+        self.assertFalse(pending.sniff_task.done())
+        reader.feed_eof()
+        await asyncio.wait_for(pending.sniff_task, timeout=2.0)
+        self.assertTrue(pending.writer.closed)
+
     async def test_callback_storm_is_bounded_and_releases_process_descriptors(self) -> None:
         """Repeated ownerless accepts never accumulate sockets after teardown."""
 
@@ -5211,6 +5456,13 @@ class SessionCapabilityInventoryTests(unittest.TestCase):
             session_id=session_id,
             remote_ip="192.0.2.55",
             remote_port=41000,
+        )
+        listener._pending_sockets[session_id] = _PendingCollectorSocket(
+            session_id=session_id,
+            remote_ip="192.0.2.55",
+            remote_port=41000,
+            reader=object(),  # type: ignore[arg-type]
+            writer=_FakeWriter(),  # type: ignore[arg-type]
         )
         listener._mark_session_first_bytes(
             session_id,

@@ -826,11 +826,28 @@ class _SharedEybondListener:
         for entry in self._session_inventory.values():
             collector_pn = str(entry.collector_pn or "").strip()
             remote_ip = str(entry.remote_ip or "").strip()
+            session_id = str(entry.session_id or "").strip()
+            has_live_backing = bool(session_id) and (
+                any(
+                    str(pending.session_id or "").strip() == session_id
+                    for pending in self._pending_sockets.values()
+                )
+                or session_id in self._session_payload_connections
+                or session_id in self._session_at_connections
+            )
             if (
                 not collector_pn
                 or not remote_ip
                 or str(entry.state or "").startswith("closed")
                 or str(entry.state or "") == "parked_peer_closed"
+                # Inventory is diagnostic history, not socket authority.  A
+                # cancelled/released route can leave a non-terminal historical
+                # state behind after its pending/activated backing is already
+                # gone.  Publishing that record as live makes the domain
+                # registry pin an entry to a ghost session; callback-on-demand
+                # then refuses to send a new trigger forever because it believes
+                # an exact owned socket is still available.
+                or not has_live_backing
             ):
                 continue
             sessions.append(
@@ -1185,22 +1202,42 @@ class _SharedEybondListener:
             pending = self._select_pending_socket_by_session_id(session_id)
             if pending is None:
                 return ""
-            await self._pause_pending_sniff(pending)
-            if not self._pending_socket_still_registered(pending):
-                return ""
-            pending_pn = await self._identify_pending_socket_for_route(
-                pending,
-                session_protocol=session_protocol,
-                identity_probe_kind=identity_probe_kind,
-            )
-            if not self._pending_socket_still_registered(pending):
-                return pending_pn
-            if not pending_pn:
-                self._mark_session_state(
-                    pending.session_id, "waiting_for_route_identity"
+            pending_pn = ""
+            try:
+                await self._pause_pending_sniff(pending)
+                if not self._pending_socket_still_registered(pending):
+                    return ""
+                pending_pn = await self._identify_pending_socket_for_route(
+                    pending,
+                    session_protocol=session_protocol,
+                    identity_probe_kind=identity_probe_kind,
                 )
-            self._resume_pending_watch(pending)
-            return pending_pn
+                return pending_pn
+            finally:
+                # The probe temporarily owns the reader.  On success, failure,
+                # or cancellation the still-pending socket must return to one
+                # settled/watchable state.  Otherwise its peer close is never
+                # observed and the registry keeps advertising a dead exact
+                # session indefinitely.
+                if self._pending_socket_still_registered(pending):
+                    entry = self._session_inventory.get(pending.session_id)
+                    observed_pn = str(
+                        getattr(entry, "collector_pn", "") or ""
+                    ).strip()
+                    observed_source = str(
+                        getattr(entry, "collector_identity_source", "") or ""
+                    ).strip()
+                    if observed_pn and identity_source_is_strong(observed_source):
+                        self._mark_session_state(
+                            pending.session_id,
+                            "parked_identified_strong",
+                        )
+                    else:
+                        self._mark_session_state(
+                            pending.session_id,
+                            "waiting_for_route_identity",
+                        )
+                    self._resume_pending_watch(pending)
 
     async def async_retire_pending_session(self, session_id: str) -> bool:
         """Close and retire exactly one still-pending socket by session id.
@@ -1310,12 +1347,26 @@ class _SharedEybondListener:
         if sniff_task is None or sniff_task.done():
             return
         sniff_task.cancel()
-        try:
-            await sniff_task
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            pass
+        # ``return_exceptions`` turns the deliberate child cancellation into a
+        # normal drain result.  A CancelledError raised by shield therefore
+        # belongs to this caller and must be propagated after mandatory cleanup.
+        drain_task = asyncio.gather(sniff_task, return_exceptions=True)
+        parent_cancelled = False
+        while not drain_task.done():
+            try:
+                await asyncio.shield(drain_task)
+            except asyncio.CancelledError:
+                # The drain task converts the deliberate child cancellation
+                # into normal completion, so every CancelledError observed here
+                # belongs to this caller.  Finish draining the owned task, then
+                # propagate cancellation across the public probe boundary.
+                parent_cancelled = True
+                # Repeated parent cancellation cannot interrupt mandatory
+                # child cleanup; shield and wait again.
+                continue
+        await drain_task
+        if parent_cancelled:
+            raise asyncio.CancelledError
 
     def _collector_pn_matches(self, expected_pn: str, observed_pn: str) -> bool:
         return pn_is_same_identity(expected_pn, observed_pn)
@@ -1366,6 +1417,10 @@ class _SharedEybondListener:
                 pass
             except Exception:
                 pass
+        # Closing a pending socket is a physical terminal event.  Keep the
+        # bounded inventory record for diagnostics, but never leave its last
+        # probe/park state looking live to discovery and the ownership registry.
+        self._mark_session_state(pending.session_id, "closed_disconnected")
         try:
             await _close_writer_bounded(pending.writer)
         except asyncio.CancelledError:
