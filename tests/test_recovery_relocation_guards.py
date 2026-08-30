@@ -213,7 +213,8 @@ class RecoveryRelocationGuards(unittest.TestCase):
             "import custom_components.eybond_local.connection.recovery.verification\n"
             "import custom_components.eybond_local.connection.recovery.terminal\n"
             "import custom_components.eybond_local.connection.callback_matching\n"
-            "bad = sorted(m for m in sys.modules if any(s in m for s in "
+            "prefix = 'custom_components.eybond_local.'\n"
+            "bad = sorted(m for m in sys.modules if m.startswith(prefix) and any(s in m for s in "
             "('.onboarding.', '.config_flow', '.runtime.')))\n"
             "print('BAD:' + ','.join(bad) if bad else 'CLEAN')\n"
         )

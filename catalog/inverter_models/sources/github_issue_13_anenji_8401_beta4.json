@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_13_anenji_8401_beta4",
+  "kind": "github_issue",
+  "title": "Anenji ANJ-11KW-48V-WIFI-P 0x8401 beta.4 support archive",
+  "reference": "project-issue:13#support-archive-20260830",
+  "captured_at": "2026-08-30",
+  "visibility": "public",
+  "summary": "A beta.4 support archive captured the exact Modbus fingerprint layout 4 and model code 0x8401 for an Anenji ANJ-11KW-48V-WIFI-P. The same collector and inverter identity had previously been classified by the cloud as devcode 6544 and had operated through the Anenji Protocol 4 map on v0.2.0. The new fingerprint therefore receives exact commercial identity and Protocol 4 telemetry, while its local write controls remain explicitly untested.",
+  "assertions": [
+    "commercial_identity",
+    "fingerprint",
+    "runtime_compatibility",
+    "telemetry_validation"
+  ]
+}

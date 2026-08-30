@@ -583,6 +583,19 @@ def validate_catalog(catalog_dir: Path = CATALOG_DIR, *, runtime_catalog=None) -
                 warnings.append(
                     f"{ctx}: validation.{dimension}=confirmed without a backing source assertion {sorted(backing)}"
                 )
+        for vindex, variant in enumerate(model.get("variants", [])):
+            if not isinstance(variant.get("validation"), dict):
+                continue
+            variant_validation = _variant_validation(model, variant)
+            for dimension, backing in _CONFIRMED_BACKING.items():
+                if (
+                    variant_validation.get(dimension) == "confirmed"
+                    and not (model_assertions & backing)
+                ):
+                    warnings.append(
+                        f"{ctx}.variants[{vindex}]: validation.{dimension}=confirmed "
+                        f"without a backing source assertion {sorted(backing)}"
+                    )
         # Research models with no source.
         if model.get("lifecycle") == "research" and not model.get("source_keys"):
             warnings.append(f"{ctx}: research model has no source")
@@ -677,6 +690,28 @@ def _variant_resolution(variant: dict, catalog) -> ResolvedDescriptor | None:
     return None
 
 
+def _variant_validation(model: dict, variant: dict) -> dict:
+    """Return the variant-specific validation state, or the model default."""
+
+    validation = variant.get("validation")
+    return validation if isinstance(validation, dict) else model.get("validation", {})
+
+
+def _variant_is_fully_supported(model: dict, variant: dict, catalog) -> bool:
+    """Return whether one hardware variant belongs in the Supported table."""
+
+    if model.get("lifecycle") != "supported":
+        return False
+    validation = _variant_validation(model, variant)
+    if (
+        validation.get("controls") != "confirmed"
+        or validation.get("telemetry") != "confirmed"
+    ):
+        return False
+    resolved = _variant_resolution(variant, catalog)
+    return resolved is not None and not resolved.read_only
+
+
 def _is_fully_supported(model: dict, catalog) -> bool:
     """Return whether a model belongs in the Supported (not Limited) table.
 
@@ -685,26 +720,27 @@ def _is_fully_supported(model: dict, catalog) -> bool:
     journal never overstates a model's support level.
     """
 
-    if model.get("lifecycle") != "supported":
-        return False
-    validation = model.get("validation", {})
-    if validation.get("controls") != "confirmed" or validation.get("telemetry") != "confirmed":
-        return False
-    for variant in model.get("variants", []):
-        resolved = _variant_resolution(variant, catalog)
-        if resolved is None or resolved.read_only:
-            return False
-    return bool(model.get("variants"))
+    variants = model.get("variants", [])
+    return bool(variants) and all(
+        _variant_is_fully_supported(model, variant, catalog)
+        for variant in variants
+    )
 
 
-def _table_rows(model: dict, catalog) -> list[str]:
+def _table_rows(
+    model: dict,
+    catalog,
+    *,
+    variants: list[dict] | None = None,
+) -> list[str]:
     """Return one table row per variant so multi-variant models are not hidden."""
 
-    validation = model.get("validation", {})
-    variants = model.get("variants", [])
-    multi = len(variants) > 1
+    all_variants = model.get("variants", [])
+    selected_variants = all_variants if variants is None else variants
+    multi = len(all_variants) > 1
     rows: list[str] = []
-    for variant in variants:
+    for variant in selected_variants:
+        validation = _variant_validation(model, variant)
         resolved = _variant_resolution(variant, catalog)
         protocol = resolved.protocol if resolved else "?"
         detection = resolved.detection if resolved else "?"
@@ -782,6 +818,14 @@ def _render_model_detail(model: dict, catalog, sources_index: dict) -> list[str]
     lines.append("- Variants:")
     for variant in model.get("variants", []):
         lines.append(f"  - `{variant.get('variant_key')}` — {variant.get('label')}")
+        if isinstance(variant.get("validation"), dict):
+            variant_validation = _variant_validation(model, variant)
+            lines.append(
+                "    - Validation override: "
+                f"hardware {variant_validation.get('hardware', '?')}, "
+                f"telemetry {variant_validation.get('telemetry', '?')}, "
+                f"controls {variant_validation.get('controls', '?')}"
+            )
         descriptors = variant.get("device_descriptor_keys", [])
         lines.append(f"    - Descriptors: {', '.join(descriptors)}")
         firmware = variant.get("known_firmware", [])
@@ -881,24 +925,34 @@ def render_markdown(catalog_dir: Path = CATALOG_DIR, *, runtime_catalog=None) ->
     )
     lines.append("")
 
-    # Grouping is by derived support state, not lifecycle alone: a supported
-    # model with unconfirmed controls / partial telemetry / a read-only surface
-    # is presented under Limited so the journal never overstates support.
-    research = [m for m in ordered if m.get("lifecycle") == "research"]
-    supported = [
-        m for m in ordered
-        if m.get("lifecycle") != "research" and _is_fully_supported(m, runtime_catalog)
-    ]
-    limited = [
-        m for m in ordered
-        if m.get("lifecycle") != "research" and not _is_fully_supported(m, runtime_catalog)
-    ]
+    # Grouping is variant-specific: two immutable hardware fingerprints sold
+    # under the same commercial name can have different validation states.
+    # This keeps a confirmed variant in Supported without presenting its newer,
+    # untested sibling there as well.
+    research: list[tuple[dict, dict]] = []
+    supported: list[tuple[dict, dict]] = []
+    limited: list[tuple[dict, dict]] = []
+    for model in ordered:
+        for variant in model.get("variants", []):
+            row = (model, variant)
+            if model.get("lifecycle") == "research":
+                research.append(row)
+            elif _variant_is_fully_supported(model, variant, runtime_catalog):
+                supported.append(row)
+            else:
+                limited.append(row)
 
-    def _emit_table(models_group: list[dict], empty_text: str) -> None:
-        if models_group:
+    def _emit_table(rows_group: list[tuple[dict, dict]], empty_text: str) -> None:
+        if rows_group:
             lines.append(_TABLE_HEADER)
-            for model in models_group:
-                lines.extend(_table_rows(model, runtime_catalog))
+            for model, variant in rows_group:
+                lines.extend(
+                    _table_rows(
+                        model,
+                        runtime_catalog,
+                        variants=[variant],
+                    )
+                )
         else:
             lines.append(empty_text)
         lines.append("")

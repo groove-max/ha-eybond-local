@@ -378,7 +378,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         driver = SmgModbusDriver()
         target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
         registers = self._anenji_registers()
-        registers[171] = 0x8401
+        registers[171] = 0x8FFE
         transport = FixtureTransport(
             registers=registers,
             command_responses=None,
@@ -430,6 +430,75 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(inverter.details["protocol_number"], 4)
         self.assertEqual(inverter.details["device_catalog"]["kind"], "family")
+
+        values = _full_values(await driver.async_read_values(transport, inverter))
+        self.assertEqual(values["output_power"], 4200)
+        self.assertEqual(values["load_percent"], 65)
+        self.assertEqual(values["grid_power"], 420)
+
+    async def test_issue_13_anenji_8401_uses_exact_identity_and_unverified_protocol_4_writes(
+        self,
+    ) -> None:
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        registers = self._anenji_registers()
+        registers[171] = 0x8401
+        transport = FixtureTransport(
+            registers=registers,
+            command_responses=None,
+            probe_target=target,
+        )
+
+        inverter = await driver.async_probe(transport, target)
+
+        assert inverter is not None
+        self.assertEqual(inverter.model_name, "Anenji ANJ-11KW-48V-WIFI-P")
+        self.assertEqual(inverter.variant_key, "protocol_4_family_fallback")
+        self.assertEqual(
+            inverter.profile_name,
+            "modbus_smg/protocols/communication_protocol_4.json",
+        )
+        self.assertEqual(
+            inverter.register_schema_name,
+            "modbus_smg/protocols/communication_protocol_4.json",
+        )
+        self.assertEqual(inverter.details["device_catalog"]["kind"], "device")
+        self.assertEqual(
+            inverter.details["device_catalog"]["entry_key"],
+            "anenji_anj_11kw_8401",
+        )
+        self.assertEqual(inverter.details["device_catalog"]["model_code"], 0x8401)
+        self.assertEqual(inverter.details["protocol_number"], 4)
+        self.assertTrue(inverter.capabilities)
+        self.assertTrue(all(not capability.tested for capability in inverter.capabilities))
+        self.assertTrue(
+            all(
+                not capability_write_exposure_allowed(
+                    capability,
+                    control_mode="auto",
+                    detection_confidence="high",
+                    variant_key=inverter.variant_key,
+                    profile_source_scope="builtin",
+                    schema_source_scope="builtin",
+                    profile_name=inverter.profile_name,
+                )
+                for capability in inverter.capabilities
+            )
+        )
+        self.assertTrue(
+            any(
+                capability_write_exposure_allowed(
+                    capability,
+                    control_mode="full",
+                    detection_confidence="high",
+                    variant_key=inverter.variant_key,
+                    profile_source_scope="builtin",
+                    schema_source_scope="builtin",
+                    profile_name=inverter.profile_name,
+                )
+                for capability in inverter.capabilities
+            )
+        )
 
         values = _full_values(await driver.async_read_values(transport, inverter))
         self.assertEqual(values["output_power"], 4200)

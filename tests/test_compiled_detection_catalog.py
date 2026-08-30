@@ -2,8 +2,15 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import replace
+from pathlib import Path
+import sys
 
-from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from custom_components.eybond_local.metadata.compiled_detection_catalog import (  # noqa: E402
     PROBE_ACTION_ASCII_COMMAND,
     PROBE_ACTION_COLLECTOR_METADATA,
     PROBE_ACTION_MODBUS_READ,
@@ -18,7 +25,7 @@ from custom_components.eybond_local.metadata.compiled_detection_catalog import (
     model_names_share_catalog_identity,
     resolve_unique_persisted_model_surface,
 )
-from custom_components.eybond_local.metadata.detection_descriptor_loader import (
+from custom_components.eybond_local.metadata.detection_descriptor_loader import (  # noqa: E402
     DetectionAnchorCondition,
     DetectionBindingDescriptor,
     DetectionDescriptorCatalog,
@@ -101,21 +108,16 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
             ("modbus_smg",),
         )
 
-    def test_unique_persisted_model_resolves_full_writable_surface(self) -> None:
-        resolved = resolve_unique_persisted_model_surface(
-            "  anenji anj-11kw-48v-wifi-p  "
+    def test_persisted_anenji_model_waits_for_live_hardware_fingerprint(self) -> None:
+        # The same commercial model name is now confirmed with model codes
+        # 0x8000 and 0x8401.  Their control surfaces differ, so a persisted
+        # display name alone must not restore either surface while live probing
+        # is degraded.  Exact runtime evidence selects the proper descriptor.
+        self.assertIsNone(
+            resolve_unique_persisted_model_surface(
+                "  anenji anj-11kw-48v-wifi-p  "
+            )
         )
-
-        self.assertIsNotNone(resolved)
-        descriptor, surface = resolved
-        self.assertEqual(descriptor.key, "anenji_anj_11kw")
-        self.assertEqual(surface.driver_key, "modbus_smg")
-        self.assertEqual(
-            surface.profile_name,
-            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json",
-        )
-        self.assertFalse(surface.read_only)
-        self.assertEqual(surface.support_tier, "full")
 
     def test_unique_persisted_model_resolves_exact_untested_control_surface(self) -> None:
         resolved = resolve_unique_persisted_model_surface(
@@ -201,7 +203,7 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
     def test_resolves_exact_and_family_surfaces(self) -> None:
         catalog = load_compiled_detection_catalog()
 
-        exact = _tree_resolve(catalog, 
+        exact = _tree_resolve(catalog,
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 1,
@@ -209,7 +211,7 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
                 "fingerprint.rated_power": 6200,
             },
         )
-        family = _tree_resolve(catalog, 
+        family = _tree_resolve(catalog,
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 1,
@@ -240,14 +242,14 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
             PROBE_ACTION_SMARTESS_QUERY,
         )
 
-        vmii = _tree_resolve(catalog, 
+        vmii = _tree_resolve(catalog,
             protocol_key="pi30",
             evidence={
                 "protocol.protocol_id": "PI30",
                 "identity.model_number": "VMII-NXPW5KW",
             },
         )
-        pi30_max = _tree_resolve(catalog, 
+        pi30_max = _tree_resolve(catalog,
             protocol_key="pi30",
             evidence={
                 "protocol.protocol_id": "PI30",
@@ -258,7 +260,7 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
                 "shape.qpiws_bit_count": 35,
             },
         )
-        pi18 = _tree_resolve(catalog, 
+        pi18 = _tree_resolve(catalog,
             protocol_key="pi18",
             evidence={"protocol.protocol_id": "PI18"},
         )
@@ -284,7 +286,7 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
         # demand the missing anchors by executing more probe actions, so
         # exact candidates are not lost - they are simply not claimable from
         # a static evidence dict.)
-        result = _tree_resolve(load_compiled_detection_catalog(), 
+        result = _tree_resolve(load_compiled_detection_catalog(),
             protocol_key="pi30",
             evidence={"protocol.protocol_id": "PI30"},
         )
@@ -293,7 +295,7 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
         self.assertEqual(result.candidate_keys, ("pi30_family",))
 
     def test_local_pi_variant_outranks_smartess_supporting_evidence(self) -> None:
-        result = _tree_resolve(load_compiled_detection_catalog(), 
+        result = _tree_resolve(load_compiled_detection_catalog(),
             protocol_key="pi30",
             evidence={
                 "protocol.protocol_id": "PI30",
@@ -325,7 +327,7 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
             catalog_version="test",
         )
 
-        result = _tree_resolve(catalog, 
+        result = _tree_resolve(catalog,
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 1,
@@ -368,7 +370,7 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
             catalog_version="test",
         )
 
-        result = _tree_resolve(catalog, 
+        result = _tree_resolve(catalog,
             protocol_key="modbus_smg",
             evidence={
                 "fingerprint.layout_code": 1,

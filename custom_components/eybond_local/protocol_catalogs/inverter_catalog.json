@@ -1,6 +1,6 @@
 {
  "schema_version": 2,
- "catalog_version": "2026.08.7",
+ "catalog_version": "2026.08.8",
  "description": "Universal offline inverter catalog with reusable protocol actions, runtime surfaces, and deterministic identity evidence.",
  "protocols": [
   {
@@ -1921,6 +1921,48 @@
     "sources": [
      "corpus:donor …4544 (3 captures)",
      "catalog-migration:anenji_anj_11kw_48v_wifi_p"
+    ],
+    "confidence": "capture-derived"
+   }
+  },
+  {
+   "entry_key": "anenji_anj_11kw_8401",
+   "fingerprint": {
+    "layout_code": 4,
+    "model_code": 33793
+   },
+   "structural": [
+    "serial_ascii_plausible"
+   ],
+   "model_name": "Anenji ANJ-11KW-48V-WIFI-P",
+   "surface_key": "smg_protocol_4_family_fallback",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "protocol_number",
+      "one_of": [
+       4
+      ]
+     }
+    ]
+   },
+   "cloud_hints": {
+    "devcodes": [
+     6544
+    ]
+   },
+   "provenance": {
+    "sources": [
+     "project-issue:13 support archive (2026-08-30): layout_code=4, model_code=0x8401, stable serial and responsive Protocol 4 telemetry",
+     "project-issue:13 historical evidence: the same collector/inverter identity was cloud-classified as devcode 6544 and operated through the Anenji Protocol 4 map on v0.2.0"
     ],
     "confidence": "capture-derived"
    }

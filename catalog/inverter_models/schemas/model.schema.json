@@ -46,6 +46,17 @@
             "items": {"type": "string"},
             "description": "Keys of devices[] entries in the runtime inverter catalog."
           },
+          "validation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["hardware", "telemetry", "controls"],
+            "description": "Optional hardware-variant validation override. Omit when the model-level validation applies unchanged.",
+            "properties": {
+              "hardware": {"type": "string", "enum": ["none", "reported", "captured", "confirmed"]},
+              "telemetry": {"type": "string", "enum": ["unknown", "partial", "confirmed"]},
+              "controls": {"type": "string", "enum": ["none", "partial", "confirmed"]}
+            }
+          },
           "known_firmware": {"type": "array", "items": {"type": "string"}}
         }
       }

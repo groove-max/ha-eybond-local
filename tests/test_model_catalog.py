@@ -190,6 +190,26 @@ class RealCatalogTests(unittest.TestCase):
             msg="run: python3 tools/model_catalog.py render --output docs/generated/INVERTER_MODEL_CATALOG.generated.md",
         )
 
+    def test_variant_validation_override_prevents_support_overstatement(self) -> None:
+        model = _ok_model(
+            lifecycle="supported",
+            validation={
+                "hardware": "confirmed",
+                "telemetry": "confirmed",
+                "controls": "confirmed",
+            },
+        )
+        model["variants"][0]["validation"] = {
+            "hardware": "captured",
+            "telemetry": "confirmed",
+            "controls": "partial",
+        }
+
+        self.assertFalse(_is_fully_supported(model, RUNTIME))
+        rows = _table_rows(model, RUNTIME)
+        self.assertEqual(len(rows), 1)
+        self.assertIn("| confirmed | partial | captured |", rows[0])
+
 
 class ValidationGuardTests(unittest.TestCase):
     def _validate(self, models, sources):
@@ -401,7 +421,7 @@ class JournalGroupingTests(unittest.TestCase):
     def test_partial_controls_model_not_fully_supported(self) -> None:
         models = {m["model_key"]: m for m in load_models()}
         self.assertTrue(_is_fully_supported(models["sandisolar_sd_hym_4862hwp"], RUNTIME))
-        self.assertTrue(_is_fully_supported(models["anenji_anj_11kw_48v_wifi_p"], RUNTIME))
+        self.assertFalse(_is_fully_supported(models["anenji_anj_11kw_48v_wifi_p"], RUNTIME))
         # controls=partial -> Limited, not Supported.
         self.assertFalse(_is_fully_supported(models["anenji_anj_6200_48pl"], RUNTIME))
 
@@ -430,7 +450,14 @@ class JournalGroupingTests(unittest.TestCase):
         self.assertNotIn("ANJ-6200-48PL", supported_block)
         self.assertIn("SD-HYM-4862HWP", supported_block)
         self.assertIn("ANJ-11KW-48V-WIFI-P", supported_block)
+        self.assertNotIn("model-code 0x8401 variant", supported_block)
         self.assertIn("4.2KW", supported_block)
+
+        limited_block = journal.split("## Limited Or Experimental Models", 1)[1].split(
+            "## Research Queue", 1
+        )[0]
+        self.assertIn("model-code 0x8401 variant", limited_block)
+        self.assertIn("| confirmed | partial | captured |", limited_block)
 
     def test_multi_variant_renders_one_row_per_variant(self) -> None:
         model = {

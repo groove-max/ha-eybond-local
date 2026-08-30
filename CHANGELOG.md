@@ -55,6 +55,15 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Restored exact Anenji ANJ-11KW-48V-WIFI-P identification for the captured
+  Protocol 4 fingerprint `layout=4`, `model=0x8401`. Unlike the broad legacy
+  heuristic, the new catalog entry affects only this proven fingerprint; it
+  uses the documented Protocol 4 telemetry map while keeping all writes
+  untested and Full-Control-only until hardware confirmation.
+- Fixed cancellation cleanup for an in-progress inverter driver sweep on
+  Python 3.14. Expected late probe failures are now consumed by an owned
+  no-fail outcome relay instead of being reported as unhandled event-loop
+  exceptions after Home Assistant cancels or replaces the refresh.
 - Fixed AT-text collector restart verification by separating the vendor's
   dedicated soft-reset command from its staged-settings apply command. A command
   acknowledgement still does not count as recovery until the old session drops

@@ -26,7 +26,33 @@ from .common import (
 )
 
 
-async def _async_cancel_and_drain_task(task: asyncio.Task) -> bool:
+async def _async_capture_task_outcome(task: asyncio.Task) -> tuple[bool, object]:
+    """Capture one owned task outcome without failing the relay task."""
+
+    try:
+        return True, await task
+    except asyncio.CancelledError as exc:
+        return False, exc
+    except Exception as exc:
+        return False, exc
+
+
+async def _async_await_captured_task(outcome_task: asyncio.Task) -> object:
+    """Await a no-fail outcome relay and restore the captured semantics."""
+
+    succeeded, outcome = await asyncio.shield(outcome_task)
+    if succeeded:
+        return outcome
+    if isinstance(outcome, BaseException):
+        raise outcome
+    raise RuntimeError("invalid_task_outcome")
+
+
+async def _async_cancel_and_drain_task(
+    task: asyncio.Task,
+    *,
+    outcome_task: asyncio.Task | None = None,
+) -> bool:
     """Cancel one owned child task and retrieve its terminal outcome.
 
     Driver detection races the wire probe against an owned-session guard.  If
@@ -37,25 +63,29 @@ async def _async_cancel_and_drain_task(task: asyncio.Task) -> bool:
     interrupting mandatory cleanup.
     """
 
-    parent_cancel_interrupted = False
     if not task.done():
         task.cancel()
+
+    # Python 3.14 deliberately reports an exception from the inner future when
+    # a shield wrapper is cancelled.  Shield a no-fail outcome relay instead of
+    # the owned wire task itself.  Callers that already use such a relay pass it
+    # in so the wire task is never directly wrapped by shield.
+    drain_task = outcome_task or asyncio.create_task(
+        _async_capture_task_outcome(task),
+        name=f"{task.get_name()}_drain",
+    )
+    parent_cancel_interrupted = False
     while True:
         try:
-            await asyncio.shield(task)
+            await asyncio.shield(drain_task)
             return parent_cancel_interrupted
         except asyncio.CancelledError:
-            if task.done():
+            if drain_task.done():
                 return parent_cancel_interrupted
-            # Shield keeps the owned child alive, so a cancellation observed
+            # Shield keeps the outcome consumer alive, so cancellation observed
             # while it is still pending belongs to this parent task.  Remember
             # it and finish draining before the caller re-raises it.
             parent_cancel_interrupted = True
-        except Exception:
-            # The caller already consumed normal-path failures.  A failure that
-            # races parent cancellation is still retrieved here and remains an
-            # ordinary detection outcome rather than an orphan task exception.
-            return parent_cancel_interrupted
 
 
 class HubDetectionMixin:
@@ -241,6 +271,10 @@ class HubDetectionMixin:
             ),
             name="eybond_inverter_detection",
         )
+        detection_outcome_task = asyncio.create_task(
+            _async_capture_task_outcome(detection_task),
+            name="eybond_inverter_detection_outcome",
+        )
         wait_for_session_change = getattr(
             self._link_manager,
             "async_wait_for_owned_session_change",
@@ -255,19 +289,29 @@ class HubDetectionMixin:
         parent_cancel_requested = False
         try:
             if session_change_task is None:
-                detection_result = await asyncio.shield(detection_task)
+                detection_result = await _async_await_captured_task(
+                    detection_outcome_task
+                )
             else:
                 done, _pending = await asyncio.wait(
-                    (detection_task, session_change_task),
+                    (detection_outcome_task, session_change_task),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
-                if session_change_task in done and detection_task not in done:
-                    await _async_cancel_and_drain_task(detection_task)
+                if (
+                    session_change_task in done
+                    and detection_outcome_task not in done
+                ):
+                    await _async_cancel_and_drain_task(
+                        detection_task,
+                        outcome_task=detection_outcome_task,
+                    )
                     logger.info(
                         "Discarding inverter detection after owned collector session changed"
                     )
                     return "collector_session_changed"
-                detection_result = await asyncio.shield(detection_task)
+                detection_result = await _async_await_captured_task(
+                    detection_outcome_task
+                )
         except asyncio.CancelledError:
             parent_cancel_requested = True
             raise
@@ -288,7 +332,10 @@ class HubDetectionMixin:
             return str(exc)
         finally:
             parent_cancel_requested = (
-                await _async_cancel_and_drain_task(detection_task)
+                await _async_cancel_and_drain_task(
+                    detection_task,
+                    outcome_task=detection_outcome_task,
+                )
                 or parent_cancel_requested
             )
             if session_change_task is not None:

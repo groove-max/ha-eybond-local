@@ -130,6 +130,25 @@ class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
             ("modbus_smg.identity.171", "modbus_smg.identity.184"),
         )
 
+    async def test_point_identity_reads_match_issue_13_anenji_8401_variant(self) -> None:
+        session = _PointIdentityOnlySession({171: 0x8401, 184: 4})
+
+        probe = await async_probe_catalog_identity(session)
+
+        self.assertIsNotNone(probe)
+        assert probe is not None
+        self.assertEqual(probe.match.kind, MATCH_DEVICE)
+        self.assertEqual(probe.match.entry.entry_key, "anenji_anj_11kw_8401")
+        self.assertEqual(probe.match.entry.model_name, "Anenji ANJ-11KW-48V-WIFI-P")
+        self.assertEqual(probe.match.entry.binding.variant_key, "protocol_4_family_fallback")
+        self.assertEqual(
+            probe.match.entry.binding.profile_name,
+            "modbus_smg/protocols/communication_protocol_4.json",
+        )
+        self.assertEqual(probe.layout_code, 4)
+        self.assertEqual(probe.model_code, 0x8401)
+        self.assertEqual(session.reads, [(171, 1), (184, 1)])
+
     async def test_point_identity_reads_match_hhs_11kw_protocol_3_variant(self) -> None:
         session = _PointIdentityOnlySession({171: 29440, 184: 3})
 
