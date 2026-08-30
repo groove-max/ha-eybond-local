@@ -5,14 +5,13 @@ from __future__ import annotations
 import logging
 
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import EVENT_COMPONENT_LOADED
-
 from ...const import DOMAIN
 from ...metadata.effective_metadata_snapshot import EffectiveMetadataSnapshot
 
 logger = logging.getLogger(__name__)
 
 _COMPONENT_SETUP_COMPLETE_KEY = "component_setup_complete"
+_COMPONENT_SETUP_RELOAD_WAITERS_KEY = "component_setup_reload_waiters"
 
 
 class CoordinatorEntityReloadMixin:
@@ -113,17 +112,29 @@ class CoordinatorEntityReloadMixin:
         if domain_data.get(_COMPONENT_SETUP_COMPLETE_KEY, True) is not True:
             if getattr(self, "_component_loaded_reload_unsub", None) is None:
 
-                def _component_loaded(event) -> None:
-                    if event.data.get("component") != DOMAIN:
-                        return
-                    if self.hass.loop.is_closed():
+                def _component_setup_complete() -> None:
+                    if (
+                        getattr(self, "_shutdown_complete", False)
+                        or self.hass.loop.is_closed()
+                    ):
                         return
                     self.hass.loop.call_soon_threadsafe(
                         self._dispatch_entry_reload_when_loaded
                     )
 
-                self._component_loaded_reload_unsub = self.hass.bus.async_listen(
-                    EVENT_COMPONENT_LOADED, _component_loaded
+                waiters = domain_data.setdefault(
+                    _COMPONENT_SETUP_RELOAD_WAITERS_KEY, set()
+                )
+                if not isinstance(waiters, set):
+                    waiters = set()
+                    domain_data[_COMPONENT_SETUP_RELOAD_WAITERS_KEY] = waiters
+                waiters.add(_component_setup_complete)
+
+                def _unsubscribe_component_setup_waiter() -> None:
+                    waiters.discard(_component_setup_complete)
+
+                self._component_loaded_reload_unsub = (
+                    _unsubscribe_component_setup_waiter
                 )
             return
         if getattr(self, "_component_loaded_reload_unsub", None) is not None:

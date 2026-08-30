@@ -79,6 +79,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _COMPONENT_SETUP_COMPLETE_KEY = "component_setup_complete"
+_COMPONENT_SETUP_RELOAD_WAITERS_KEY = "component_setup_reload_waiters"
 
 CONFIG_SCHEMA: Any = (
     cv.config_entry_only_config_schema("eybond_local")
@@ -95,6 +96,7 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
 
     domain_data = hass.data.setdefault(DOMAIN, {})
     domain_data[_COMPONENT_SETUP_COMPLETE_KEY] = False
+    domain_data[_COMPONENT_SETUP_RELOAD_WAITERS_KEY] = set()
 
     def _component_loaded(event) -> None:
         if event.data.get("component") != DOMAIN:
@@ -108,6 +110,12 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
 
     def _mark_component_setup_complete() -> None:
         domain_data[_COMPONENT_SETUP_COMPLETE_KEY] = True
+        waiters = domain_data.get(_COMPONENT_SETUP_RELOAD_WAITERS_KEY)
+        if isinstance(waiters, set):
+            callbacks = tuple(waiters)
+            waiters.clear()
+            for callback in callbacks:
+                callback()
         remove_component_listener()
 
     remove_component_listener = hass.bus.async_listen(

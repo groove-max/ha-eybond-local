@@ -5872,6 +5872,68 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(reload_requests, ["entry-setup-race"])
         self.assertTrue(coordinator._entity_platform_reload_dispatched)
 
+    def test_identity_reload_waits_on_component_readiness_without_event_race(self) -> None:
+        reload_requests: list[str] = []
+        waiters: set[object] = set()
+
+        class _ConfigEntries:
+            async def async_reload(self, entry_id: str) -> None:
+                reload_requests.append(entry_id)
+
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.hass = types.SimpleNamespace(
+            data={
+                "eybond_local": {
+                    "component_setup_complete": False,
+                    "component_setup_reload_waiters": waiters,
+                }
+            },
+            config_entries=_ConfigEntries(),
+            async_create_task=lambda coro: asyncio.create_task(coro),
+            loop=types.SimpleNamespace(
+                is_closed=lambda: False,
+                call_soon_threadsafe=lambda callback: asyncio.get_running_loop().call_soon(
+                    callback
+                ),
+            ),
+        )
+        coordinator.config_entry = types.SimpleNamespace(entry_id="entry-component-race")
+        coordinator.data = self.RuntimeSnapshot(
+            inverter=types.SimpleNamespace(
+                model_name="PowMr 4.2kW",
+                serial_number="55355535553555",
+            )
+        )
+        coordinator._entity_platforms_initialized = False
+        coordinator._entity_platform_reload_requested = False
+        coordinator._entity_platform_reload_dispatched = False
+        coordinator._component_loaded_reload_unsub = None
+        coordinator._shutdown_complete = False
+
+        async def _run() -> None:
+            coordinator.mark_entity_platforms_initialized(
+                has_inverter_identity=False
+            )
+            self.assertEqual(reload_requests, [])
+            self.assertEqual(len(waiters), 1)
+
+            # EVENT_COMPONENT_LOADED has already been delivered, but its
+            # call_soon readiness marker has not run yet. Publishing readiness
+            # must wake the registered reload without requiring a second event.
+            domain_data = coordinator.hass.data["eybond_local"]
+            domain_data["component_setup_complete"] = True
+            callbacks = tuple(waiters)
+            waiters.clear()
+            for callback in callbacks:
+                callback()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        asyncio.run(_run())
+
+        self.assertEqual(reload_requests, ["entry-component-race"])
+        self.assertTrue(coordinator._entity_platform_reload_dispatched)
+
     def test_remember_runtime_identity_requests_reload_on_effective_metadata_drift(self) -> None:
         reload_requests: list[str] = []
 
