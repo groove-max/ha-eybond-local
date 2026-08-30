@@ -350,6 +350,13 @@ async def test_collector_first_entry_is_enriched_by_runtime_detection(
     # the second setup then materializes driver-specific entities from the
     # persisted identity instead of polling in the setup path.
     allow_detection.set()
+    # The production reload is intentionally dispatched through call_later(0)
+    # so it cannot race the current ConfigEntry setup success return.  A bare
+    # async_block_till_done() does not own that timer handle and can therefore
+    # return one event-loop tick before the reload task is created.
+    async with asyncio.timeout(5):
+        while len(fake_runtime) < 2:
+            await asyncio.sleep(0)
     await hass.async_block_till_done()
 
     assert entry.state is ConfigEntryState.LOADED
