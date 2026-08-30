@@ -1205,7 +1205,7 @@ class ObservedSessionRestartChannelTests(unittest.TestCase):
         )
         self.assertIn((FC_SET_COLLECTOR, bytes((29,)) + b"1"), wire.calls)
 
-    def test_at_adapter_reboot_uses_exact_session_vendor_command(self) -> None:
+    def test_at_adapter_reboot_uses_exact_session_soft_reset_command(self) -> None:
         from custom_components.eybond_local.collector.at import CollectorAtResponse
 
         class _AtWire:
@@ -1241,7 +1241,7 @@ class ObservedSessionRestartChannelTests(unittest.TestCase):
         receipt = asyncio.run(channel.async_send_restart())
 
         self.assertEqual(wire.queries, ["CLDSRVHOST1"])
-        self.assertEqual(wire.writes, [("INTPARA", "29,1")])
+        self.assertEqual(wire.writes, [("RESET", "S")])
         self.assertEqual(receipt["status"], "reboot_requested")
         self.assertEqual(receipt["action"], "reboot")
         self.assertTrue(receipt["performed"])

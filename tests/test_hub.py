@@ -4621,7 +4621,7 @@ class HubCollectorManagementTests(unittest.TestCase):
 
         asyncio.run(_run())
 
-    def test_at_reboot_uses_intpara_and_returns_confirmed_result(self) -> None:
+    def test_at_reboot_uses_soft_reset_and_returns_confirmed_result(self) -> None:
         async def _run() -> None:
             hub, link = self._at_hub()
 
@@ -4630,9 +4630,7 @@ class HubCollectorManagementTests(unittest.TestCase):
             self.assertEqual(result["status"], "reboot_triggered")
             self.assertEqual(result["action"], "reboot")
             self.assertIn("CLDSRVHOST1", link.collector_at_transport.queries)
-            self.assertIn(
-                ("INTPARA", "29,1"), link.collector_at_transport.writes
-            )
+            self.assertIn(("RESET", "S"), link.collector_at_transport.writes)
 
         asyncio.run(_run())
 

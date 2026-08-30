@@ -106,6 +106,8 @@ class _FakeAtTransport:
             if self._reject_intpara:
                 return CollectorAtResponse(command="ERR", value="", raw="")
             return CollectorAtResponse(command="INTPARA", value="W000", raw="")
+        if command == "RESET":
+            return CollectorAtResponse(command="RESET", value="W000", raw="")
         return CollectorAtResponse(command=command, value="", raw="")
 
 
@@ -268,13 +270,13 @@ class AtTextCollectorManagementAdapterTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(CollectorManagementConfirmationError):
             await self._adapter(transport).async_apply_changes()
 
-    async def test_reboot_uses_vendor_intpara_restart_command(self) -> None:
+    async def test_reboot_uses_dedicated_vendor_soft_reset_command(self) -> None:
         transport = _FakeAtTransport()
 
         result = await self._adapter(transport).async_reboot()
 
         self.assertEqual(transport.queries, ["CLDSRVHOST1"])
-        self.assertEqual(transport.writes, [("INTPARA", "29,1")])
+        self.assertEqual(transport.writes, [("RESET", "S")])
         self.assertEqual(result.action, "reboot")
         self.assertTrue(result.performed)
         self.assertEqual(result.current_endpoint, "iot.eybond.com,18899,TCP")
@@ -440,6 +442,26 @@ class AtStatusSemanticsTests(unittest.IsolatedAsyncioTestCase):
 
         return AtTextCollectorManagementAdapter(lambda: _At())
 
+    def _reboot_adapter(self, reset_command: str, reset_value: str):
+        class _At:
+            async def async_query(self, command):
+                return CollectorAtResponse(
+                    command="CLDSRVHOST1",
+                    value="1.2.3.4,18899,TCP",
+                    raw="",
+                )
+
+            async def async_write(self, command, value):
+                if command == "RESET":
+                    return CollectorAtResponse(
+                        command=reset_command,
+                        value=reset_value,
+                        raw="",
+                    )
+                return CollectorAtResponse(command=command, value=value, raw="")
+
+        return AtTextCollectorManagementAdapter(lambda: _At())
+
     async def test_intpara_w000_apply_succeeds(self) -> None:
         result = await self._apply_adapter("INTPARA", "W000").async_apply_changes()
         self.assertTrue(result.performed)
@@ -455,6 +477,22 @@ class AtStatusSemanticsTests(unittest.IsolatedAsyncioTestCase):
     async def test_intpara_foreign_command_is_confirmation_error(self) -> None:
         with self.assertRaises(CollectorManagementConfirmationError):
             await self._apply_adapter("SOMETHINGELSE", "W000").async_apply_changes()
+
+    async def test_reset_w000_reboot_succeeds(self) -> None:
+        result = await self._reboot_adapter("RESET", "W000").async_reboot()
+        self.assertTrue(result.performed)
+
+    async def test_reset_w001_reboot_rejected_is_command_error(self) -> None:
+        with self.assertRaises(CollectorManagementCommandError):
+            await self._reboot_adapter("RESET", "W001").async_reboot()
+
+    async def test_reset_empty_status_is_confirmation_error(self) -> None:
+        with self.assertRaises(CollectorManagementConfirmationError):
+            await self._reboot_adapter("RESET", "").async_reboot()
+
+    async def test_reset_foreign_command_is_confirmation_error(self) -> None:
+        with self.assertRaises(CollectorManagementConfirmationError):
+            await self._reboot_adapter("SOMETHINGELSE", "W000").async_reboot()
 
     async def test_cldsrvhost1_w001_write_and_empty_readback_rejected(self) -> None:
         class _At:

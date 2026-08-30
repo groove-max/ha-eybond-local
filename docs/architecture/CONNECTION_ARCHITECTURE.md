@@ -165,6 +165,12 @@ session-pinned and its teardown preserves that socket; it cannot switch to a
 same-PN sibling and cannot create reconnect evidence by closing the socket
 itself.
 
+The negotiated wire adapter owns the distinction between applying staged
+collector settings and requesting a reboot. On AT-text sessions these are
+separate vendor operations; an acknowledgement proves only command acceptance.
+The recovery authority still requires observable reset activity and a new
+same-PN session before it confirms a completed restart.
+
 Reset activity is observed against the complete pre-action session cohort, not
 against one selected socket's EOF. Some collectors briefly keep several
 same-PN sockets alive: a baseline sibling may close, or a new socket may open,

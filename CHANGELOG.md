@@ -55,6 +55,10 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Fixed AT-text collector restart verification by separating the vendor's
+  dedicated soft-reset command from its staged-settings apply command. A command
+  acknowledgement still does not count as recovery until the old session drops
+  and the same collector reconnects on a new physical session.
 - Fixed canonical power-flow estimates that could count the same PV watts both
   as home consumption and battery charging when asynchronously sampled
   Protocol 3/4 registers disagreed. Instantaneous routes and their accumulated

@@ -7,9 +7,9 @@ which wire protocol carries them. The negotiated
 ONLY thing that selects an implementation here.
 
 Each adapter encapsulates its wire (framed FC=2/FC=3, or AT-text CLDSRVHOST1 /
-INTPARA) entirely; the parameter numbers and AT command strings live only inside
-the implementations. Every operation returns the SAME normalized model, and an
-operation a wire cannot confirm fails with a typed error under
+INTPARA / RESET) entirely; the parameter numbers and AT command strings live only
+inside the implementations. Every operation returns the SAME normalized model,
+and an operation a wire cannot confirm fails with a typed error under
 ``CollectorManagementError`` -- it never simulates success. Adapters resolve the
 live transport lazily through a provider callable, so a reconnect/handover never
 leaves them holding a stale socket.
@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 
 from ..connection.session_handle import (
@@ -51,6 +51,8 @@ from .collector_wire import (
 _AT_ENDPOINT_COMMAND = "CLDSRVHOST1"
 _AT_APPLY_COMMAND = "INTPARA"
 _AT_APPLY_VALUE = "29,1"
+_AT_REBOOT_COMMAND = "RESET"
+_AT_REBOOT_VALUE = "S"
 # The project's confirmed AT success status (see smartess_ble.extract_at_status_code).
 _AT_SUCCESS_STATUS = "W000"
 
@@ -566,12 +568,13 @@ class FramedCollectorManagementAdapter(CollectorManagementAdapter):
 
 
 class AtTextCollectorManagementAdapter(CollectorManagementAdapter):
-    """Collector management over the AT-text wire (CLDSRVHOST1 / INTPARA).
+    """Collector management over the AT-text wire.
 
-    The AT command strings live only inside this class. Endpoint read/write and
-    apply/reboot are real and confirmed by the command response. The vendor's
-    collector-restart flow uses ``AT+INTPARA=29,1``; a recovery transaction
-    separately proves the resulting disconnect and same-identity reconnect.
+    The AT command strings live only inside this class. ``AT+INTPARA=29,1``
+    applies staged settings; ``AT+RESET=S`` requests a soft reboot. A ``W000``
+    response confirms only that the collector accepted the selected command.
+    Recovery transactions separately prove the physical disconnect and a new
+    same-identity session before treating a reboot as completed.
     """
 
     adapter_id = ADAPTER_COLLECTOR_AT_COMMANDS
@@ -672,6 +675,22 @@ class AtTextCollectorManagementAdapter(CollectorManagementAdapter):
             )
         return status
 
+    async def _reboot(self, transport: object) -> str:
+        """Send RESET S and require a confirmed ``W000`` acceptance status."""
+
+        status = await self._send_write(
+            transport, _AT_REBOOT_COMMAND, _AT_REBOOT_VALUE
+        )
+        if not status:
+            raise CollectorManagementConfirmationError(
+                f"collector_at_reboot_unconfirmed:command={_AT_REBOOT_COMMAND}"
+            )
+        if status != _AT_SUCCESS_STATUS:
+            raise CollectorManagementCommandError(
+                f"collector_at_reboot_rejected:command={_AT_REBOOT_COMMAND}:status={status}"
+            )
+        return status
+
     async def async_read_endpoint_state(self) -> CollectorEndpointState:
         transport = self._resolve_transport()
         current = await self._query(transport, _AT_ENDPOINT_COMMAND)
@@ -716,28 +735,38 @@ class AtTextCollectorManagementAdapter(CollectorManagementAdapter):
             extra=extra,
         )
 
-    async def _system_action(self, action: str) -> CollectorSystemActionResult:
+    async def _system_action(
+        self,
+        *,
+        action: str,
+        operation: Callable[[object], Awaitable[str]],
+        warning: str,
+    ) -> CollectorSystemActionResult:
         transport = self._resolve_transport(needs_write=True)
         current = await self._query(transport, _AT_ENDPOINT_COMMAND)
-        await self._apply(transport)
+        await operation(transport)
         return CollectorSystemActionResult(
             action=action,
             current_endpoint=current,
             reboot_required_before="",
             performed=True,
             adapter_id=self.adapter_id,
-            warnings=(
-                self._REBOOT_ACTION_WARNING
-                if action == "reboot"
-                else self._APPLY_ACTION_WARNING,
-            ),
+            warnings=(warning,),
         )
 
     async def async_apply_changes(self) -> CollectorSystemActionResult:
-        return await self._system_action("apply")
+        return await self._system_action(
+            action="apply",
+            operation=self._apply,
+            warning=self._APPLY_ACTION_WARNING,
+        )
 
     async def async_reboot(self) -> CollectorSystemActionResult:
-        return await self._system_action("reboot")
+        return await self._system_action(
+            action="reboot",
+            operation=self._reboot,
+            warning=self._REBOOT_ACTION_WARNING,
+        )
 
     async def async_query_parameters(
         self,
