@@ -1,6 +1,6 @@
 {
  "schema_version": 2,
- "catalog_version": "2026.08.6",
+ "catalog_version": "2026.08.7",
  "description": "Universal offline inverter catalog with reusable protocol actions, runtime surfaces, and deterministic identity evidence.",
  "protocols": [
   {
@@ -1344,6 +1344,50 @@
    "tier": "partial",
    "read_only": true,
    "support_capture_policy": "smg_protocol_1"
+  },
+  {
+   "key": "smg_protocol_3_family_fallback",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "protocol_3_family_fallback",
+   "profile_name": "modbus_smg/protocols/communication_protocol_3.json",
+   "register_schema_name": "modbus_smg/protocols/communication_protocol_3.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_anenji_11k"
+  },
+  {
+   "key": "smg_protocol_4_family_fallback",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "protocol_4_family_fallback",
+   "profile_name": "modbus_smg/protocols/communication_protocol_4.json",
+   "register_schema_name": "modbus_smg/protocols/communication_protocol_4.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_anenji_11k"
+  },
+  {
+   "key": "smg_protocol_5_family_fallback",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "protocol_5_family_fallback",
+   "profile_name": "modbus_smg/protocols/communication_protocol_5.json",
+   "register_schema_name": "modbus_smg/protocols/communication_protocol_5.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_anenji_11k"
+  },
+  {
+   "key": "smg_protocol_6_family_fallback",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "protocol_6_family_fallback",
+   "profile_name": "modbus_smg/protocols/communication_protocol_6.json",
+   "register_schema_name": "modbus_smg/protocols/communication_protocol_6.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_anenji_11k"
   },
   {
    "key": "pi30_default_full",
@@ -2838,6 +2882,110 @@
     ]
    },
    "note": "Known SMG layout, unknown model: base reads only; writes require learning."
+  },
+  {
+   "when_layout_codes": [
+    3
+   ],
+   "model_name": "SMG Protocol 3 (Unverified Variant)",
+   "surface_key": "smg_protocol_3_family_fallback",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "protocol_number",
+      "one_of": [
+       3
+      ]
+     }
+    ]
+   },
+   "note": "Documented Protocol 3, unknown model: protocol-specific telemetry; document-backed untested controls require explicit Full Control."
+  },
+  {
+   "when_layout_codes": [
+    4
+   ],
+   "model_name": "SMG Protocol 4 (Unverified Variant)",
+   "surface_key": "smg_protocol_4_family_fallback",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "protocol_number",
+      "one_of": [
+       4
+      ]
+     }
+    ]
+   },
+   "note": "Documented Protocol 4, unknown model: protocol-specific telemetry; document-backed untested controls require explicit Full Control."
+  },
+  {
+   "when_layout_codes": [
+    5
+   ],
+   "model_name": "SMG Protocol 5 (Unverified Variant)",
+   "surface_key": "smg_protocol_5_family_fallback",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "protocol_number",
+      "one_of": [
+       5
+      ]
+     }
+    ]
+   },
+   "note": "Documented Protocol 5, unknown model: protocol-specific telemetry; document-backed untested controls require explicit Full Control."
+  },
+  {
+   "when_layout_codes": [
+    6
+   ],
+   "model_name": "SMG Protocol 6 (Unverified Variant)",
+   "surface_key": "smg_protocol_6_family_fallback",
+   "runtime_probe": {
+    "validation": [
+     {
+      "key": "output_rating_voltage",
+      "min": 1
+     },
+     {
+      "key": "output_rating_frequency",
+      "min": 1
+     },
+     {
+      "key": "protocol_number",
+      "one_of": [
+       6
+      ]
+     }
+    ]
+   },
+   "note": "Documented Protocol 6, unknown model: protocol-specific telemetry; document-backed untested controls require explicit Full Control."
   }
  ]
 }

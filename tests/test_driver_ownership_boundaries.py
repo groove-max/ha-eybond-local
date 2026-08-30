@@ -296,6 +296,14 @@ class SmgMarkerAuthorityGuard(unittest.TestCase):
             self.assertTrue(payload["read_only"])
             self.assertEqual(payload["verification"], "unverified")
 
+        self.assertIsNone(
+            driver_support_marker(
+                "modbus_smg",
+                variant_key="protocol_4_family_fallback",
+                profile_name="modbus_smg/protocols/communication_protocol_4.json",
+            )
+        )
+
     def test_real_smg_model_produces_no_marker(self) -> None:
         self.assertIsNone(
             driver_support_marker(

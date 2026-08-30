@@ -27,6 +27,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Unknown inverter models that report documented Anenji Communication Protocol
+  3, 4, 5, or 6 now select the matching protocol-specific telemetry map
+  automatically instead of requiring a new exact-model catalog entry. Their
+  document-backed controls remain untested and monitoring-only in Auto mode;
+  users can opt into non-blocked controls through Full Control.
 - Replaced the ambiguous writable `modbus_smg/base.json` profile with one
   explicit, document-backed classic SMG RS232 V1 map shared by compatible
   layout 1/2/11 model profiles. Exact hardware overlays retain their existing

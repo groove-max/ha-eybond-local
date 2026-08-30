@@ -111,6 +111,24 @@ class DetectionDescriptorLoaderTests(unittest.TestCase):
         self.assertEqual(fallback.anchors[0].key, "fingerprint.layout_code")
         self.assertEqual(fallback.anchors[0].one_of, (1, 2, 11))
 
+    def test_protocol_family_fallback_carries_only_untested_controls(self) -> None:
+        catalog = load_detection_descriptor_catalog()
+
+        fallback = catalog.descriptor_for_key(
+            "modbus_smg.protocol_4_family_fallback"
+        )
+
+        self.assertIsNotNone(fallback)
+        assert fallback is not None
+        self.assertTrue(fallback.family_fallback)
+        self.assertFalse(fallback.read_only)
+        self.assertEqual(fallback.tier, "full")
+        self.assertEqual(
+            fallback.binding.profile_name,
+            "modbus_smg/protocols/communication_protocol_4.json",
+        )
+        self.assertEqual(fallback.anchors[0].one_of, (4,))
+
     def test_anchor_costs_are_stable_for_planner_inputs(self) -> None:
         self.assertLess(
             detection_anchor_cost("fingerprint.layout_code"),

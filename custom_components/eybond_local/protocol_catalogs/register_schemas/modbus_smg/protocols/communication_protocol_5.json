@@ -1,0 +1,49 @@
+{
+  "extends": "./communication_protocol_3_10.json",
+  "schema_key": "modbus_smg_communication_protocol_5",
+  "title": "Communication Protocol No. 5 Register Schema",
+  "spec_set_removals": {
+    "aux_config": [
+      "pv_power",
+      "pv_charging_power",
+      "pv_charging_current",
+      "pv2_voltage",
+      "pv2_current",
+      "pv2_power"
+    ]
+  },
+  "measurement_description_removals": [
+    "pv_power",
+    "pv_charging_power",
+    "pv_charging_current",
+    "pv2_voltage",
+    "pv2_current",
+    "pv2_power"
+  ],
+  "spec_sets": {
+    "aux_config": [
+      {
+        "key": "output_current",
+        "register": 347,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_power",
+        "register": 348,
+        "signed": true
+      },
+      {
+        "key": "output_va",
+        "register": 349,
+        "signed": true
+      },
+      {
+        "key": "load_percent",
+        "register": 350,
+        "signed": true
+      }
+    ]
+  }
+}

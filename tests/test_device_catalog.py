@@ -20,7 +20,10 @@ from custom_components.eybond_local.metadata.compiled_detection_catalog import (
     RESOLUTION_UNRESOLVED,
     load_compiled_detection_catalog,
 )
-from custom_components.eybond_local.metadata.profile_loader import builtin_profile_path  # noqa: E402
+from custom_components.eybond_local.metadata.profile_loader import (  # noqa: E402
+    builtin_profile_path,
+    load_driver_profile,
+)
 from custom_components.eybond_local.metadata.device_catalog_loader import (  # noqa: E402
     FORCE_UNSUPPORTED_SENTINEL_NAME,
     TIER_PARTIAL,
@@ -32,6 +35,9 @@ from custom_components.eybond_local.metadata.device_catalog_loader import (  # n
     resolve_runtime_probe_policy,
     resolve_support_capture_policy,
     serial_ascii_plausible,
+)
+from custom_components.eybond_local.schema import (  # noqa: E402
+    capability_write_exposure_allowed,
 )
 
 
@@ -227,12 +233,47 @@ class DeviceCatalogLoadTest(unittest.TestCase):
             self.assertNotIn(key, seen, f"duplicate fingerprint: {entry.entry_key}")
             seen.add(key)
 
-    def test_writes_locked_outside_device_entries(self) -> None:
+    def test_family_defaults_own_safe_control_policy(self) -> None:
         catalog = load_device_catalog()
         for default in catalog.family_defaults:
-            self.assertEqual(default.binding.profile_name, "")
-            self.assertEqual(default.tier, TIER_PARTIAL)
             self.assertTrue(default.model_name)
+            if default.binding.variant_key == "family_fallback":
+                self.assertEqual(default.binding.profile_name, "")
+                self.assertEqual(default.tier, TIER_PARTIAL)
+                continue
+            profile = load_driver_profile(default.binding.profile_name)
+            self.assertEqual(default.tier, "full")
+            self.assertTrue(profile.capabilities)
+            self.assertTrue(
+                all(not capability.tested for capability in profile.capabilities)
+            )
+            common = {
+                "detection_confidence": "medium",
+                "variant_key": default.binding.variant_key,
+                "profile_source_scope": "builtin",
+                "schema_source_scope": "builtin",
+                "profile_name": default.binding.profile_name,
+            }
+            self.assertTrue(
+                all(
+                    not capability_write_exposure_allowed(
+                        capability,
+                        control_mode="auto",
+                        **common,
+                    )
+                    for capability in profile.capabilities
+                )
+            )
+            self.assertTrue(
+                any(
+                    capability_write_exposure_allowed(
+                        capability,
+                        control_mode="full",
+                        **common,
+                    )
+                    for capability in profile.capabilities
+                )
+            )
 
     def test_catalog_models_own_runtime_probe_policy(self) -> None:
         catalog = load_device_catalog()
@@ -560,18 +601,36 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         self.assertEqual(result.candidate_keys, ("sandisolar_sd_11kp48v",))
         self.assertEqual(result.surface_key, "sandisolar_sd_11kp48v_full")
 
-    def test_unknown_protocol_4_model_never_uses_generic_smg_projection(self) -> None:
-        result = _tree_resolve(
-            load_compiled_detection_catalog(),
-            protocol_key="modbus_smg",
-            evidence={
-                "fingerprint.layout_code": 4,
-                "fingerprint.model_code": 0x8FFF,
-            },
-        )
+    def test_unknown_documented_protocol_models_use_protocol_specific_safe_surfaces(
+        self,
+    ) -> None:
+        catalog = load_compiled_detection_catalog()
+        source = load_device_catalog()
 
-        self.assertEqual(result.resolution, RESOLUTION_UNRESOLVED)
-        self.assertIsNone(result.surface_key)
+        for protocol_number in (3, 4, 5, 6):
+            with self.subTest(protocol_number=protocol_number):
+                result = _tree_resolve(
+                    catalog,
+                    protocol_key="modbus_smg",
+                    evidence={
+                        "fingerprint.layout_code": protocol_number,
+                        "fingerprint.model_code": 0x8FFF,
+                    },
+                )
+
+                surface_key = f"smg_protocol_{protocol_number}_family_fallback"
+                self.assertEqual(result.resolution, RESOLUTION_FAMILY)
+                self.assertEqual(result.surface_key, surface_key)
+                surface = source.surfaces[surface_key]
+                self.assertFalse(surface.read_only)
+                self.assertEqual(
+                    surface.binding.profile_name,
+                    f"modbus_smg/protocols/communication_protocol_{protocol_number}.json",
+                )
+                self.assertEqual(
+                    surface.binding.register_schema_name,
+                    f"modbus_smg/protocols/communication_protocol_{protocol_number}.json",
+                )
 
     def test_conflicting_optional_rated_power_resolves_family(self) -> None:
         result = _tree_resolve(load_compiled_detection_catalog(),

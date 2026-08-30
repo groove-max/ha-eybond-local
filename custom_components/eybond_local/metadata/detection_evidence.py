@@ -157,7 +157,7 @@ def _descriptor_report_agreement(
     if catalog_match_kind == "device":
         return "match" if catalog_entry_key and catalog_entry_key == resolved_key else "mismatch"
     if catalog_match_kind == "family":
-        return "match" if resolved_key.endswith(".family_fallback") else "mismatch"
+        return "match" if resolved_key.endswith("family_fallback") else "mismatch"
     if catalog_match_kind in {"no_data", "unidentified"}:
         return "not_applicable"
     return "unknown"

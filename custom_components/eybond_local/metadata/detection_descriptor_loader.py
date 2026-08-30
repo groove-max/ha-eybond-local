@@ -427,7 +427,7 @@ def _descriptor_from_family_default(default: FamilyDefault) -> DetectionDeviceDe
         optional_ascii=_optional_ascii_descriptors(default.runtime_probe.optional_ascii),
         provenance_sources=(default.note,) if default.note else (),
         source_catalog="device_catalog.family_defaults",
-        read_only=True,
+        read_only=catalog_surface.read_only,
         family_fallback=True,
         priority=0,
     )

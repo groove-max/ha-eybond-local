@@ -101,6 +101,16 @@ settings, and fields without a valid protocol number remain model-specific.
 These document-backed controls are untested until confirmed on an exact model,
 so Auto mode does not expose them.
 
+The reported protocol number also selects a version-specific telemetry and
+control map for an inverter model that is not yet listed in the catalog. Normal
+monitoring starts without pretending that a similar commercial model was
+detected. All document-backed controls remain marked untested and are available
+only after the user explicitly selects Full Control; Auto mode stays
+monitoring-only. Protocol 3/5 and Protocol 4/6 use their documented
+output-register locations, and fields documented only for Protocol 3/4 are not
+projected on Protocol 5/6. An exact catalog model still takes priority when
+available.
+
 Classic SMG-family inverters use a separate documented RS232 V1 register map.
 The document version is not treated as an inverter identity: compatible devices
 have been observed with layout values 1, 2, and 11. EyeBond Local therefore

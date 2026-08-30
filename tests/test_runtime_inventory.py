@@ -20,7 +20,7 @@ class RuntimeInventoryTests(unittest.TestCase):
     def test_profile_names_are_derived_from_compiled_runtime_surfaces(self) -> None:
         names = runtime_profile_names()
 
-        self.assertEqual(len(names), 21)
+        self.assertEqual(len(names), 25)
         self.assertIn("eybond_g_ascii/models/gootu_gt_h2436m14p5.json", names)
         self.assertIn("eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json", names)
         self.assertIn("modbus_smg/default.json", names)
@@ -31,6 +31,11 @@ class RuntimeInventoryTests(unittest.TestCase):
         self.assertIn("modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json", names)
         self.assertIn("modbus_smg/models/sandisolar_sd_11kp48v_wifi.json", names)
         self.assertIn("modbus_smg/models/anenji_op2_6200.json", names)
+        for protocol_number in (3, 4, 5, 6):
+            self.assertIn(
+                f"modbus_smg/protocols/communication_protocol_{protocol_number}.json",
+                names,
+            )
         self.assertIn("modbus_catalog/deye_3ph_high_80kw.json", names)
         self.assertIn("pi30_ascii/models/smartess_0925_compat.json", names)
         self.assertNotIn("modbus_smg/family_fallback.json", names)
@@ -40,12 +45,12 @@ class RuntimeInventoryTests(unittest.TestCase):
         summary = inventory["summary"]
 
         self.assertEqual(summary["profiles"], len(inventory["profiles"]))
-        self.assertEqual(summary["profiles"], 21)
-        self.assertEqual(summary["capabilities"], 741)
-        self.assertEqual(summary["validation_state_counts"], {"tested": 364, "untested": 377})
+        self.assertEqual(summary["profiles"], 25)
+        self.assertEqual(summary["capabilities"], 967)
+        self.assertEqual(summary["validation_state_counts"], {"tested": 364, "untested": 603})
         self.assertEqual(
             summary["support_tier_counts"],
-            {"blocked": 12, "conditional": 392, "standard": 337},
+            {"blocked": 20, "conditional": 610, "standard": 337},
         )
 
         profile_by_key = {item["profile_key"]: item for item in inventory["profiles"]}

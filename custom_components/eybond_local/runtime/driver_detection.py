@@ -936,7 +936,7 @@ def _build_driver_match(driver: InverterDriver, inverter: DetectedInverter) -> D
     if inverter.details.get("rated_power"):
         reasons.append("rated_power_present")
     surface, candidates = _catalog_surface_context(inverter)
-    if surface is not None and surface.read_only and inverter.variant_key == "family_fallback":
+    if str(inverter.variant_key or "").strip().endswith("family_fallback"):
         reasons.append("family_fallback_variant")
     elif candidates and all(
         candidate.provenance_confidence == "rule-migrated"

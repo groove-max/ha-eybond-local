@@ -471,6 +471,12 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
         protocol_4 = load_register_schema(
             "modbus_smg/protocols/communication_protocol_4.json"
         )
+        protocol_5 = load_register_schema(
+            "modbus_smg/protocols/communication_protocol_5.json"
+        )
+        protocol_6 = load_register_schema(
+            "modbus_smg/protocols/communication_protocol_6.json"
+        )
         anj = load_register_schema("modbus_smg/models/anenji_anj_11kw_48v_wifi_p.json")
         hhs = load_register_schema("modbus_smg/models/anenji_hhs_11kw_wifi_no_parallel.json")
         sandisolar = load_register_schema(
@@ -508,6 +514,16 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
             for specs in protocol_4.spec_sets.values()
             for spec in specs
         }
+        protocol_5_sources = {
+            spec.key: spec.register
+            for specs in protocol_5.spec_sets.values()
+            for spec in specs
+        }
+        protocol_6_sources = {
+            spec.key: spec.register
+            for specs in protocol_6.spec_sets.values()
+            for spec in specs
+        }
         self.assertEqual(
             {
                 key: protocol_3_sources[key]
@@ -532,11 +548,47 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
                 "load_percent": 256,
             },
         )
+        self.assertEqual(
+            {
+                key: protocol_5_sources[key]
+                for key in ("output_current", "output_power", "output_va", "load_percent")
+            },
+            {
+                "output_current": 347,
+                "output_power": 348,
+                "output_va": 349,
+                "load_percent": 350,
+            },
+        )
+        self.assertEqual(
+            {
+                key: protocol_6_sources[key]
+                for key in ("output_current", "output_power", "output_va", "load_percent")
+            },
+            {
+                "output_current": 252,
+                "output_power": 254,
+                "output_va": 255,
+                "load_percent": 256,
+            },
+        )
+        protocol_3_4_only = {
+            "pv_power",
+            "pv_charging_power",
+            "pv_charging_current",
+            "pv2_voltage",
+            "pv2_current",
+            "pv2_power",
+        }
+        self.assertTrue(protocol_3_4_only.issubset(protocol_3_sources))
+        self.assertTrue(protocol_3_4_only.issubset(protocol_4_sources))
+        self.assertTrue(protocol_3_4_only.isdisjoint(protocol_5_sources))
+        self.assertTrue(protocol_3_4_only.isdisjoint(protocol_6_sources))
 
         self.assertEqual(anj.spec_sets, protocol_4.spec_sets)
         self.assertEqual(sandisolar.spec_sets, protocol_4.spec_sets)
         self.assertEqual(hhs.spec_sets, protocol_3.spec_sets)
-        for schema in (protocol_3, protocol_4, anj, hhs, sandisolar):
+        for schema in (protocol_3, protocol_4, protocol_5, protocol_6, anj, hhs, sandisolar):
             keys = [spec.key for specs in schema.spec_sets.values() for spec in specs]
             self.assertEqual(len(keys), len(set(keys)))
         self.assertEqual(

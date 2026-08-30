@@ -127,6 +127,14 @@ Create or extend a profile JSON under `custom_components/eybond_local/protocol_c
 
 Prefer shared family-level metadata plus model overlays over copy-pasting full profiles. If multiple variants reuse the same logical controls with different register locations, put the common capability shape into `capability_templates` in the family base and materialize the variant-specific entries from the overlay. If a device is clearly in the same protocol family but still lacks verified write semantics, add a separate read-only fallback profile instead of inheriting a writable default surface prematurely.
 
+When a device reports a documented protocol/layout number, prefer one
+protocol-specific family surface over adding an exact catalog model only to
+expose telemetry. Keep separate surfaces wherever protocol numbers move or
+remove fields. A family surface may attach the matching document-backed control
+profile only when every capability is untested and therefore requires an
+explicit Full Control choice. Add an exact model record for commercial naming,
+model-specific register differences, or controls with stronger validation.
+
 The profile should carry:
 
 - groups

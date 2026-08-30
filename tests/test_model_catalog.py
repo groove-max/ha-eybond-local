@@ -108,13 +108,20 @@ class RealCatalogTests(unittest.TestCase):
             for key in variant["device_descriptor_keys"]
         }
         runtime_keys = {d.entry_key for d in RUNTIME.devices}
-        self.assertEqual(family, runtime_keys - referenced)
+        family_default_keys = {
+            f"{RUNTIME.surfaces[item.surface_key].protocol_key}."
+            f"{RUNTIME.surfaces[item.surface_key].binding.variant_key}"
+            for item in RUNTIME.family_defaults
+        }
+        self.assertEqual(family, (runtime_keys - referenced) | family_default_keys)
         self.assertIn("pi30_family", family)
         self.assertIn("smg_variant_4200", family)
+        self.assertIn("modbus_smg.protocol_4_family_fallback", family)
         # Family-level descriptors are rendered as coverage, not in Model Details.
         journal = render_markdown(runtime_catalog=RUNTIME)
         self.assertIn("## Family-Level Runtime Coverage", journal)
         self.assertIn("`pi30_family`", journal)
+        self.assertIn("`modbus_smg.protocol_4_family_fallback`", journal)
 
     def test_supported_models_resolve_to_safe_surface(self) -> None:
         for model in load_models():

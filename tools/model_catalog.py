@@ -169,25 +169,11 @@ def _detection_method(device) -> str:
     return "unspecified"
 
 
-def resolve_descriptor(device_key: str, catalog=None) -> ResolvedDescriptor:
-    """Resolve one runtime device descriptor key into derived support state."""
-
-    if catalog is None:
-        catalog = load_device_catalog()
-    device = next((d for d in catalog.devices if d.entry_key == device_key), None)
-    if device is None:
-        return ResolvedDescriptor(
-            device_key=device_key, found=False, model_name="", surface_key="",
-            surface_found=False, protocol="", driver="", variant="", profile_name="",
-            register_schema_name="", tier="", read_only=None, detection="",
-            fingerprint=None, anchors=(), capability_count=0,
-            validation_state_counts={}, support_tier_counts={},
-            measurement_count=0, binary_sensor_count=0,
-        )
-
-    surface = catalog.surfaces.get(device.surface_key)
-    profile_name = surface.binding.profile_name if surface else ""
-    schema_name = surface.binding.register_schema_name if surface else ""
+def _surface_payload_counts(
+    profile_name: str,
+    schema_name: str,
+) -> tuple[int, dict, dict, int, int]:
+    """Derive capability and telemetry counts for one runtime surface."""
 
     capability_count = 0
     validation_state_counts: dict = {}
@@ -211,6 +197,42 @@ def resolve_descriptor(device_key: str, catalog=None) -> ResolvedDescriptor:
             binary_sensor_count = len(schema.binary_sensor_descriptions)
         except Exception:  # noqa: BLE001
             pass
+    return (
+        capability_count,
+        validation_state_counts,
+        support_tier_counts,
+        measurement_count,
+        binary_sensor_count,
+    )
+
+
+def resolve_descriptor(device_key: str, catalog=None) -> ResolvedDescriptor:
+    """Resolve one runtime device descriptor key into derived support state."""
+
+    if catalog is None:
+        catalog = load_device_catalog()
+    device = next((d for d in catalog.devices if d.entry_key == device_key), None)
+    if device is None:
+        return ResolvedDescriptor(
+            device_key=device_key, found=False, model_name="", surface_key="",
+            surface_found=False, protocol="", driver="", variant="", profile_name="",
+            register_schema_name="", tier="", read_only=None, detection="",
+            fingerprint=None, anchors=(), capability_count=0,
+            validation_state_counts={}, support_tier_counts={},
+            measurement_count=0, binary_sensor_count=0,
+        )
+
+    surface = catalog.surfaces.get(device.surface_key)
+    profile_name = surface.binding.profile_name if surface else ""
+    schema_name = surface.binding.register_schema_name if surface else ""
+
+    (
+        capability_count,
+        validation_state_counts,
+        support_tier_counts,
+        measurement_count,
+        binary_sensor_count,
+    ) = _surface_payload_counts(profile_name, schema_name)
 
     fp = getattr(device, "fingerprint", None)
     fingerprint = None
@@ -237,6 +259,48 @@ def resolve_descriptor(device_key: str, catalog=None) -> ResolvedDescriptor:
         detection=_detection_method(device),
         fingerprint=fingerprint,
         anchors=tuple(device.anchors),
+        capability_count=capability_count,
+        validation_state_counts=validation_state_counts,
+        support_tier_counts=support_tier_counts,
+        measurement_count=measurement_count,
+        binary_sensor_count=binary_sensor_count,
+    )
+
+
+def _resolve_family_default(default, catalog) -> ResolvedDescriptor:
+    """Resolve one source family default for generated runtime coverage docs."""
+
+    surface = catalog.surfaces.get(default.surface_key)
+    profile_name = surface.binding.profile_name if surface else ""
+    schema_name = surface.binding.register_schema_name if surface else ""
+    (
+        capability_count,
+        validation_state_counts,
+        support_tier_counts,
+        measurement_count,
+        binary_sensor_count,
+    ) = _surface_payload_counts(profile_name, schema_name)
+    descriptor_key = (
+        f"{surface.protocol_key}.{surface.binding.variant_key}"
+        if surface is not None
+        else default.surface_key
+    )
+    return ResolvedDescriptor(
+        device_key=descriptor_key,
+        found=surface is not None,
+        model_name=default.model_name,
+        surface_key=default.surface_key,
+        surface_found=surface is not None,
+        protocol=surface.protocol_key if surface else "",
+        driver=surface.binding.driver_key if surface else "",
+        variant=surface.binding.variant_key if surface else "",
+        profile_name=profile_name,
+        register_schema_name=schema_name,
+        tier=surface.tier if surface else "",
+        read_only=surface.read_only if surface else None,
+        detection="family",
+        fingerprint=None,
+        anchors=(),
         capability_count=capability_count,
         validation_state_counts=validation_state_counts,
         support_tier_counts=support_tier_counts,
@@ -579,11 +643,16 @@ def family_level_descriptors(catalog_dir: Path = CATALOG_DIR, *, runtime_catalog
         for variant in model.get("variants", []):
             if isinstance(variant, dict):
                 referenced.update(variant.get("device_descriptor_keys", []))
-    return [
+    unclaimed_devices = [
         resolve_descriptor(device.entry_key, runtime_catalog)
         for device in runtime_catalog.devices
         if device.entry_key not in referenced
     ]
+    family_defaults = [
+        _resolve_family_default(default, runtime_catalog)
+        for default in runtime_catalog.family_defaults
+    ]
+    return [*unclaimed_devices, *family_defaults]
 
 
 # --- Rendering ------------------------------------------------------------

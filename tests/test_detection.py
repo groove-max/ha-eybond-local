@@ -258,6 +258,28 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(match.confidence, "medium")
         self.assertIn("family_fallback_variant", match.reasons)
 
+    def test_build_driver_match_recognizes_protocol_specific_family_fallback(self) -> None:
+        inverter = DetectedInverter(
+            driver_key="modbus_smg",
+            protocol_family="modbus_smg",
+            model_name="SMG Protocol 4 (Unverified Variant)",
+            serial_number="SMG11K240001",
+            probe_target=ProbeTarget(
+                devcode=0x0001,
+                collector_addr=0xFF,
+                device_addr=0x01,
+            ),
+            variant_key="protocol_4_family_fallback",
+            register_schema_name=(
+                "modbus_smg/protocols/communication_protocol_4.json"
+            ),
+        )
+
+        match = _build_driver_match(SmgModbusDriver(), inverter)
+
+        self.assertEqual(match.confidence, "medium")
+        self.assertIn("family_fallback_variant", match.reasons)
+
     def test_build_driver_match_keeps_non_fallback_read_only_smg_profile_at_medium_confidence(self) -> None:
         inverter = DetectedInverter(
             driver_key="modbus_smg",
