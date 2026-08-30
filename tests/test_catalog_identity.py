@@ -15,6 +15,7 @@ from custom_components.eybond_local.drivers.catalog_identity import (  # noqa: E
     ERROR_INVERTER_LINK_DOWN,
     InverterIdentityNoDataError,
     async_probe_catalog_identity,
+    async_probe_catalog_identity_attempt,
     probe_indicates_link_down,
 )
 from custom_components.eybond_local.drivers.smg import SmgModbusDriver  # noqa: E402
@@ -28,6 +29,7 @@ from custom_components.eybond_local.models import (  # noqa: E402
     DetectedInverter,
     ProbeTarget,
 )
+from custom_components.eybond_local.payload.modbus import ModbusError  # noqa: E402
 from custom_components.eybond_local.runtime.driver_detection import (  # noqa: E402
     async_detect_inverter,
     async_detect_inverter_candidates,
@@ -191,6 +193,68 @@ class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(probe)
         self.assertFalse(probe_indicates_link_down(probe))
 
+    async def test_unknown_fingerprint_retains_typed_identity_evidence(self) -> None:
+        attempt = await async_probe_catalog_identity_attempt(
+            _PointIdentityOnlySession({171: 0x4321, 184: 9})
+        )
+
+        self.assertIsNotNone(attempt.probe)
+        evidence = attempt.no_match_evidence
+        self.assertIsNotNone(evidence)
+        assert evidence is not None
+        self.assertTrue(evidence.has_wire_evidence)
+        self.assertEqual(evidence.status, "unresolved_identity")
+        self.assertEqual(evidence.layout_code, 9)
+        self.assertEqual(evidence.model_code, 0x4321)
+        self.assertEqual(evidence.resolution, "unresolved")
+        self.assertEqual(
+            evidence.executed_actions,
+            ("modbus_smg.identity.171", "modbus_smg.identity.184"),
+        )
+
+    async def test_partial_identity_retains_explicit_modbus_rejection(self) -> None:
+        class _PartialSession:
+            async def read_holding(self, register: int, count: int) -> list[int]:
+                if register == 171:
+                    return [0x4321]
+                raise ModbusError("exception_code:2")
+
+        attempt = await async_probe_catalog_identity_attempt(_PartialSession())
+
+        self.assertIsNone(attempt.probe)
+        evidence = attempt.no_match_evidence
+        self.assertIsNotNone(evidence)
+        assert evidence is not None
+        self.assertTrue(evidence.has_wire_evidence)
+        self.assertEqual(evidence.status, "partial_identity")
+        self.assertIsNone(evidence.layout_code)
+        self.assertEqual(evidence.model_code, 0x4321)
+        self.assertEqual(
+            evidence.action_failures[0].as_public_dict(),
+            {
+                "action": "modbus_smg.identity.184",
+                "reason": "modbus_exception",
+                "exception_code": 2,
+            },
+        )
+
+    async def test_short_identity_response_is_retained_as_partial(self) -> None:
+        class _ShortReadSession:
+            async def read_holding(self, register: int, count: int) -> list[int]:
+                return []
+
+        attempt = await async_probe_catalog_identity_attempt(_ShortReadSession())
+
+        self.assertIsNone(attempt.probe)
+        evidence = attempt.no_match_evidence
+        self.assertIsNotNone(evidence)
+        assert evidence is not None
+        self.assertTrue(evidence.has_wire_evidence)
+        self.assertEqual(evidence.status, "partial_identity")
+        self.assertIsNone(evidence.layout_code)
+        self.assertIsNone(evidence.model_code)
+        self.assertTrue(evidence.executed_actions)
+
     async def test_as_details_serializes_match(self) -> None:
         probe = await async_probe_catalog_identity(
             _RegisterSession(_smg_6200_identity_registers())
@@ -332,6 +396,61 @@ class SmgProbeCatalogAuthorityTest(unittest.IsolatedAsyncioTestCase):
 
 
 class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
+    async def test_unknown_smg_fingerprint_reaches_driver_probe_log(self) -> None:
+        target = ProbeTarget(devcode=1, collector_addr=0xFF, device_addr=1)
+        transport = FixtureTransport(
+            registers={171: 0x4321, 184: 9},
+            command_responses=None,
+            probe_target=target,
+        )
+
+        with patch(
+            "custom_components.eybond_local.runtime.driver_detection.iter_drivers",
+            return_value=(SmgModbusDriver(),),
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                await async_detect_inverter(transport, driver_hint="auto")
+
+        self.assertEqual(str(ctx.exception), "modbus_smg:no_match")
+        self.assertEqual(
+            ctx.exception.probe_log[0]["diagnostic"],
+            {
+                "kind": "catalog_identity",
+                "status": "unresolved_identity",
+                "protocol": "modbus_smg",
+                "layout_code": 9,
+                "model_code": 0x4321,
+                "resolution": "unresolved",
+                "executed_actions": [
+                    "modbus_smg.identity.171",
+                    "modbus_smg.identity.184",
+                ],
+            },
+        )
+
+    async def test_full_scan_retains_unknown_smg_fingerprint_evidence(self) -> None:
+        target = ProbeTarget(devcode=1, collector_addr=0xFF, device_addr=1)
+        transport = FixtureTransport(
+            registers={171: 0x4321, 184: 9},
+            command_responses=None,
+            probe_target=target,
+        )
+
+        with patch(
+            "custom_components.eybond_local.runtime.driver_detection.iter_drivers",
+            return_value=(SmgModbusDriver(),),
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                await async_detect_inverter_candidates(
+                    transport,
+                    driver_hint="auto",
+                )
+
+        diagnostic = ctx.exception.probe_log[0]["diagnostic"]
+        self.assertEqual(diagnostic["status"], "unresolved_identity")
+        self.assertEqual(diagnostic["layout_code"], 9)
+        self.assertEqual(diagnostic["model_code"], 0x4321)
+
     async def test_probe_log_records_only_the_typed_link_route(self) -> None:
         class _Transport:
             async def async_send_payload(self, payload, *, route):

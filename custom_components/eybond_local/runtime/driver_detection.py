@@ -7,11 +7,12 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from ..drivers.base import InverterDriver
+from ..drivers.base import DriverProbeAttempt, InverterDriver
 from ..drivers.catalog_identity import (
     ERROR_INVERTER_LINK_DOWN,
     InverterIdentityNoDataError,
 )
+from ..drivers.probe_evidence import DriverProbeNoMatchError
 from ..drivers.registry import iter_drivers
 from ..metadata.compiled_detection_catalog import (
     CompiledDeviceDescriptor,
@@ -370,6 +371,24 @@ async def async_detect_inverter(
             )
             logger.debug("Identity region read as zeros driver=%s", driver.key)
             continue
+        except DriverProbeNoMatchError as exc:
+            saw_any_response = saw_any_response or tracked.saw_response
+            _append_probe_log(
+                probe_log,
+                driver=driver,
+                started=probe_started,
+                outcome="no_match",
+                saw_response=tracked.saw_response,
+                routes=tracked.route_records,
+                diagnostic=exc.evidence.as_public_dict(),
+                loop=loop,
+            )
+            logger.debug(
+                "Probe returned typed no-match evidence driver=%s status=%s",
+                driver.key,
+                exc.evidence.status,
+            )
+            continue
         except Exception as exc:
             saw_any_response = saw_any_response or tracked.saw_response
             errors.append(f"{driver.key}:{exc}")
@@ -483,6 +502,7 @@ async def async_detect_inverter_candidates(
         *,
         saw_response: bool = False,
         routes: tuple[dict[str, object], ...] = (),
+        diagnostic: dict[str, object] | None = None,
     ) -> int:
         elapsed_ms = int(round(max(0.0, loop.time() - started) * 1000.0))
         record: dict[str, object] = {
@@ -493,6 +513,8 @@ async def async_detect_inverter_candidates(
         }
         if routes:
             record["routes"] = list(routes)
+        if diagnostic is not None:
+            record["diagnostic"] = dict(diagnostic)
         probe_log.append(record)
         return elapsed_ms
 
@@ -543,6 +565,21 @@ async def async_detect_inverter_candidates(
                 routes=tracked.route_records,
             )
             logger.debug("Identity region read as zeros driver=%s", driver.key)
+            continue
+        except DriverProbeNoMatchError as exc:
+            _log_probe(
+                driver,
+                probe_started,
+                "no_match",
+                saw_response=tracked.saw_response,
+                routes=tracked.route_records,
+                diagnostic=exc.evidence.as_public_dict(),
+            )
+            logger.debug(
+                "Probe returned typed no-match evidence driver=%s status=%s",
+                driver.key,
+                exc.evidence.status,
+            )
             continue
         except Exception as exc:
             errors.append(f"{driver.key}:{exc}")
@@ -801,17 +838,34 @@ async def _async_probe_driver_targets(
     transport: Any,
     targets: tuple[ProbeTarget, ...],
 ) -> DetectedInverter | None:
+    typed_no_match: DriverProbeNoMatchError | None = None
     for target in targets:
         try:
-            inverter = await driver.async_probe(transport, target)
+            probe_with_evidence = getattr(driver, "async_probe_with_evidence", None)
+            if callable(probe_with_evidence):
+                attempt = await probe_with_evidence(transport, target)
+                if type(attempt) is not DriverProbeAttempt:
+                    raise TypeError("invalid_driver_probe_attempt")
+                inverter = attempt.inverter
+                if attempt.no_match_evidence is not None:
+                    typed_no_match = DriverProbeNoMatchError(
+                        attempt.no_match_evidence
+                    )
+            else:
+                inverter = await driver.async_probe(transport, target)
         except InverterIdentityNoDataError:
             raise
+        except DriverProbeNoMatchError as exc:
+            typed_no_match = exc
+            continue
         except Exception as exc:
             logger.debug("Probe failed driver=%s target=%s error=%s", driver.key, target, exc)
             continue
 
         if inverter is not None:
             return inverter
+    if typed_no_match is not None:
+        raise typed_no_match
     return None
 
 
@@ -852,6 +906,7 @@ def _append_probe_log(
     outcome: str,
     saw_response: bool,
     routes: tuple[dict[str, object], ...] = (),
+    diagnostic: dict[str, object] | None = None,
     loop,
 ) -> int:
     elapsed_ms = int(round(max(0.0, loop.time() - started) * 1000.0))
@@ -863,6 +918,8 @@ def _append_probe_log(
     }
     if routes:
         record["routes"] = list(routes)
+    if diagnostic is not None:
+        record["diagnostic"] = dict(diagnostic)
     probe_log.append(record)
     return elapsed_ms
 

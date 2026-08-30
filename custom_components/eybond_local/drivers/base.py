@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any
 
 from ..link_transport import PayloadLinkTransport
@@ -20,7 +21,27 @@ from .support_marker import DriverSupportMarker
 from .support_probe import SupportProbeRequest
 from .read_result import DriverReadResult
 from .local_register_evidence import LocalRegisterSnapshot
+from .probe_evidence import DriverProbeEvidence
 from .write_error import EMPTY_WRITE_ERROR_CLASSIFICATION, WriteErrorClassification
+
+
+@dataclass(frozen=True, slots=True)
+class DriverProbeAttempt:
+    """One driver probe result plus optional typed no-match evidence."""
+
+    inverter: DetectedInverter | None
+    no_match_evidence: DriverProbeEvidence | None = None
+
+    def __post_init__(self) -> None:
+        if self.inverter is not None and type(self.inverter) is not DetectedInverter:
+            raise TypeError("invalid_detected_inverter")
+        if (
+            self.no_match_evidence is not None
+            and type(self.no_match_evidence) is not DriverProbeEvidence
+        ):
+            raise TypeError("invalid_probe_no_match_evidence")
+        if self.inverter is not None and self.no_match_evidence is not None:
+            raise ValueError("matched_probe_cannot_have_no_match_evidence")
 
 
 class InverterDriver(ABC):
@@ -178,6 +199,17 @@ class InverterDriver(ABC):
         target: ProbeTarget,
     ) -> DetectedInverter | None:
         """Try to identify a matching inverter behind the collector."""
+
+    async def async_probe_with_evidence(
+        self,
+        transport: PayloadLinkTransport,
+        target: ProbeTarget,
+    ) -> DriverProbeAttempt:
+        """Probe with optional typed diagnostics; default preserves old drivers."""
+
+        return DriverProbeAttempt(
+            inverter=await self.async_probe(transport, target),
+        )
 
     @abstractmethod
     async def async_read_values(

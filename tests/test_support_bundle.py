@@ -254,6 +254,14 @@ class SupportBundleTests(unittest.TestCase):
                         "elapsed_ms": 1234,
                         "outcome": "matched",
                         "saw_response": True,
+                        "diagnostic": {
+                            "kind": "catalog_identity",
+                            "status": "unresolved_identity",
+                            "protocol": "modbus_smg",
+                            "layout_code": 9,
+                            "model_code": 0x4321,
+                            "resolution": "unresolved",
+                        },
                     }
                 ],
                 "runtime_inverter_probe_total_ms": 1234,
@@ -281,6 +289,12 @@ class SupportBundleTests(unittest.TestCase):
                 "driver"
             ],
             "pi30",
+        )
+        self.assertEqual(
+            raw["roles"]["integration"]["values"]["runtime_inverter_probe_log"][0][
+                "diagnostic"
+            ]["model_code"],
+            0x4321,
         )
         self.assertEqual(
             raw["roles"]["integration"]["values"][

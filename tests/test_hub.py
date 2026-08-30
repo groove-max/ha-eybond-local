@@ -3462,13 +3462,29 @@ class RuntimeStateMachineTests(unittest.TestCase):
             hub = self._hub(full_scan=True)
             failure = DriverSweepNoMatch(
                 "pi30:probe_timeout",
-                silent=True,
+                silent=False,
                 probe_log=(
                     {
                         "driver": "modbus_smg",
                         "elapsed_ms": 45000,
-                        "outcome": "probe_timeout",
-                        "saw_response": False,
+                        "outcome": "no_match",
+                        "saw_response": True,
+                        "diagnostic": {
+                            "kind": "catalog_identity",
+                            "status": "partial_identity",
+                            "protocol": "modbus_smg",
+                            "model_code": 0x4321,
+                            "executed_actions": ["modbus_smg.identity.171"],
+                            "failed_actions": ["modbus_smg.identity.184"],
+                            "action_failures": [
+                                {
+                                    "action": "modbus_smg.identity.184",
+                                    "reason": "modbus_exception",
+                                    "exception_code": 2,
+                                }
+                            ],
+                            "endpoint": "must-not-survive",
+                        },
                     },
                     {
                         "driver": "pi30",
@@ -3494,7 +3510,24 @@ class RuntimeStateMachineTests(unittest.TestCase):
                     entry["outcome"]
                     for entry in snapshot.values["runtime_inverter_probe_log"]
                 ],
-                ["probe_timeout", "probe_timeout"],
+                ["no_match", "probe_timeout"],
+            )
+            diagnostic = snapshot.values["runtime_inverter_probe_log"][0][
+                "diagnostic"
+            ]
+            self.assertEqual(diagnostic["model_code"], 0x4321)
+            self.assertNotIn("endpoint", diagnostic)
+
+            hub._link_manager.owned_session_generation = 1
+            stale_snapshot = hub._build_snapshot()
+            self.assertFalse(
+                stale_snapshot.values["runtime_inverter_probe_current_session"]
+            )
+            self.assertEqual(
+                stale_snapshot.values["runtime_inverter_probe_log"][0][
+                    "diagnostic"
+                ]["model_code"],
+                0x4321,
             )
 
         asyncio.run(_run())

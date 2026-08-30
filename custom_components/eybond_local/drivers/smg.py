@@ -40,7 +40,7 @@ from ..metadata.device_catalog_loader import (
     resolve_runtime_probe_policy,
     resolve_support_capture_policy,
 )
-from .base import InverterDriver
+from .base import DriverProbeAttempt, InverterDriver
 from .local_register_evidence import (
     LocalRegisterReadPlan,
     LocalRegisterSnapshot,
@@ -65,15 +65,37 @@ from .write_confirmation import (
 from .catalog_identity import (
     CatalogIdentityProbe,
     InverterIdentityNoDataError,
-    async_probe_catalog_identity,
+    async_probe_catalog_identity_attempt,
     attach_catalog_match_details,
     catalog_match_from_resolution,
     probe_indicates_link_down,
 )
+from .probe_evidence import DriverProbeEvidence
 
 
 _SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
 _SMG_FAMILY_FALLBACK_PROFILE_NAME = "modbus_smg/family_fallback.json"
+
+
+def _runtime_validation_no_match_evidence(
+    probe: CatalogIdentityProbe,
+) -> DriverProbeEvidence:
+    """Explain a resolved identity whose selected surface did not validate."""
+
+    resolution = probe.compiled_resolution
+    return DriverProbeEvidence(
+        kind="catalog_identity",
+        status="runtime_validation_failed",
+        protocol_key=(
+            resolution.protocol_key if resolution is not None else "modbus_smg"
+        ),
+        layout_code=probe.layout_code,
+        model_code=probe.model_code,
+        resolution=(resolution.resolution if resolution is not None else ""),
+        candidate_keys=(resolution.candidate_keys if resolution is not None else ()),
+        executed_actions=probe.probe_action_keys,
+        failed_actions=probe.failed_probe_action_keys,
+    )
 
 
 def _smg_family_fallback_support_marker() -> DriverSupportMarker:
@@ -242,6 +264,16 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
         transport,
         target: ProbeTarget,
     ) -> DetectedInverter | None:
+        attempt = await self.async_probe_with_evidence(transport, target)
+        return attempt.inverter
+
+    async def async_probe_with_evidence(
+        self,
+        transport,
+        target: ProbeTarget,
+    ) -> DriverProbeAttempt:
+        """Probe SMG identity while retaining a safe no-match explanation."""
+
         session = self._session(transport, target)
 
         # The offline device catalog is the identification authority. An
@@ -249,18 +281,51 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
         # inverter link right now — probing deeper would only misreport an
         # unsupported device (the 2026-06-08 false negative class).
         try:
-            catalog_probe = await async_probe_catalog_identity(session)
+            identity_attempt = await async_probe_catalog_identity_attempt(session)
         except Exception:
-            catalog_probe = None
+            identity_attempt = None
+        catalog_probe = (
+            identity_attempt.probe if identity_attempt is not None else None
+        )
         if probe_indicates_link_down(catalog_probe):
             raise InverterIdentityNoDataError()
 
-        if catalog_probe is not None:
-            return await self._async_probe_with_catalog(session, target, catalog_probe)
+        if catalog_probe is None:
+            no_match_evidence = (
+                identity_attempt.no_match_evidence
+                if identity_attempt is not None
+                else None
+            )
+            if (
+                type(no_match_evidence) is DriverProbeEvidence
+                and no_match_evidence.has_wire_evidence
+            ):
+                return DriverProbeAttempt(
+                    inverter=None,
+                    no_match_evidence=no_match_evidence,
+                )
+            return DriverProbeAttempt(inverter=None)
 
-        # No catalog opinion: descriptor-driven SMG detection abstains instead
-        # of guessing through legacy variant scoring.
-        return None
+        detected = await self._async_probe_with_catalog(
+            session,
+            target,
+            catalog_probe,
+        )
+        if detected is not None:
+            return DriverProbeAttempt(inverter=detected)
+        no_match_evidence = (
+            identity_attempt.no_match_evidence
+            if identity_attempt is not None
+            else None
+        )
+        if type(no_match_evidence) is not DriverProbeEvidence:
+            no_match_evidence = _runtime_validation_no_match_evidence(
+                catalog_probe
+            )
+        return DriverProbeAttempt(
+            inverter=None,
+            no_match_evidence=no_match_evidence,
+        )
 
     async def _async_probe_with_catalog(
         self,

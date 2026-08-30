@@ -28,6 +28,7 @@ from ..metadata.detection_evidence import (
     build_descriptor_decision_report_from_catalog_identity_probe,
 )
 from .catalog_probe import async_walk_detection_dag
+from .probe_evidence import DriverProbeEvidence, ProbeActionFailure
 
 logger = logging.getLogger(__name__)
 
@@ -113,16 +114,46 @@ class CatalogIdentityProbe:
         return payload
 
 
+@dataclass(frozen=True, slots=True)
+class CatalogIdentityAttempt:
+    """One identity attempt plus safe evidence when it could not resolve."""
+
+    probe: CatalogIdentityProbe | None
+    no_match_evidence: DriverProbeEvidence | None = None
+
+    def __post_init__(self) -> None:
+        if self.probe is not None and type(self.probe) is not CatalogIdentityProbe:
+            raise TypeError("invalid_catalog_identity_probe")
+        if (
+            self.no_match_evidence is not None
+            and type(self.no_match_evidence) is not DriverProbeEvidence
+        ):
+            raise TypeError("invalid_catalog_identity_evidence")
+
+
 async def async_probe_catalog_identity(
     session: Any,
     *,
     transport_key: str = DEFAULT_TRANSPORT_KEY,
 ) -> CatalogIdentityProbe | None:
+    """Return the legacy probe projection for callers that need no diagnostics."""
+
+    attempt = await async_probe_catalog_identity_attempt(
+        session,
+        transport_key=transport_key,
+    )
+    return attempt.probe
+
+
+async def async_probe_catalog_identity_attempt(
+    session: Any,
+    *,
+    transport_key: str = DEFAULT_TRANSPORT_KEY,
+) -> CatalogIdentityAttempt:
     """Read the identity window and match it against the device catalog.
 
-    Returns ``None`` when no identity block could be read at all (a non-modbus
-    device, or transport failure) — callers must treat that as "no opinion",
-    NOT as link-down.
+    The attempt retains only typed identity facts and typed action failures.
+    It never records raw payloads, endpoint details, or arbitrary exceptions.
     """
 
     compiled_catalog = load_compiled_detection_catalog()
@@ -135,11 +166,12 @@ async def async_probe_catalog_identity(
         None,
     )
     if protocol is None:
-        return None
+        return CatalogIdentityAttempt(probe=None)
 
     words: dict[int, int] = {}
     raw_fields: dict[str, object] = {}
     evidence: dict[str, object] = {}
+    action_failures: list[ProbeActionFailure] = []
     tree = compiled_catalog.decision_trees[protocol.key]
 
     async def _execute(action) -> str:
@@ -159,6 +191,9 @@ async def async_probe_catalog_identity(
             except Exception as exc:  # pylint: disable=broad-except
                 last_error = exc
         if values is None:
+            action_failures.append(
+                _probe_action_failure(action.key, last_error)
+            )
             logger.debug(
                 "Catalog identity action failed action=%s error=%s",
                 action.key,
@@ -187,7 +222,18 @@ async def async_probe_catalog_identity(
     failed_actions = list(walk.failed_actions)
     failed_evidence = set(walk.failed_evidence) | set(walk.unsupported_evidence)
     if not executed_actions:
-        return None
+        return CatalogIdentityAttempt(
+            probe=None,
+            no_match_evidence=_catalog_no_match_evidence(
+                protocol_key=protocol.key,
+                status="read_failed",
+                layout_code=None,
+                model_code=None,
+                executed_actions=executed_actions,
+                failed_actions=failed_actions,
+                action_failures=action_failures,
+            ),
+        )
 
     layout_code = _optional_int(raw_fields.get("layout_code"))
     model_code = _optional_int(raw_fields.get("model_code"))
@@ -195,11 +241,22 @@ async def async_probe_catalog_identity(
         # The fingerprint registers themselves were unreadable: that is "no
         # opinion" (e.g. a layout that rejects this block read), NOT link-down.
         # Link-down is specifically a SUCCESSFUL read returning zeros.
-        return None
+        return CatalogIdentityAttempt(
+            probe=None,
+            no_match_evidence=_catalog_no_match_evidence(
+                protocol_key=protocol.key,
+                status="partial_identity",
+                layout_code=layout_code,
+                model_code=model_code,
+                executed_actions=executed_actions,
+                failed_actions=failed_actions,
+                action_failures=action_failures,
+            ),
+        )
     rated_power = _optional_int(raw_fields.get("rated_power"))
     serial_ascii = str(raw_fields.get("serial_ascii") or "")
     if layout_code == 0 and model_code == 0:
-        return CatalogIdentityProbe(
+        return CatalogIdentityAttempt(probe=CatalogIdentityProbe(
             layout_code=layout_code,
             model_code=model_code,
             rated_power=rated_power,
@@ -216,7 +273,7 @@ async def async_probe_catalog_identity(
             ),
             probe_action_keys=tuple(executed_actions),
             failed_probe_action_keys=tuple(failed_actions),
-        )
+        ))
     if serial_ascii:
         evidence["structural.serial_ascii_plausible"] = serial_ascii_plausible(
             serial_ascii
@@ -277,7 +334,7 @@ async def async_probe_catalog_identity(
         rated_power=rated_power,
         serial_ascii=serial_ascii,
     )
-    return CatalogIdentityProbe(
+    probe = CatalogIdentityProbe(
         layout_code=layout_code,
         model_code=model_code,
         rated_power=rated_power,
@@ -286,6 +343,27 @@ async def async_probe_catalog_identity(
         compiled_resolution=compiled_resolution,
         probe_action_keys=tuple(executed_actions),
         failed_probe_action_keys=tuple(failed_actions),
+    )
+    no_match_evidence = None
+    if not compiled_resolution.resolved:
+        no_match_evidence = _catalog_no_match_evidence(
+            protocol_key=protocol.key,
+            status="unresolved_identity",
+            layout_code=layout_code,
+            model_code=model_code,
+            resolution=compiled_resolution.resolution,
+            candidate_keys=(
+                compiled_resolution.candidate_keys
+                if 0 < len(compiled_resolution.candidate_keys) <= 4
+                else ()
+            ),
+            executed_actions=executed_actions,
+            failed_actions=failed_actions,
+            action_failures=action_failures,
+        )
+    return CatalogIdentityAttempt(
+        probe=probe,
+        no_match_evidence=no_match_evidence,
     )
 
 
@@ -413,3 +491,55 @@ def _optional_int(value: object) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def _probe_action_failure(
+    action_key: str,
+    error: BaseException | None,
+) -> ProbeActionFailure:
+    """Classify one failed identity read without retaining exception text."""
+
+    message = str(error or "")
+    if message.startswith("exception_code:"):
+        raw_code = message.removeprefix("exception_code:")
+        try:
+            exception_code = int(raw_code, 10)
+        except ValueError:
+            exception_code = 0
+        if 1 <= exception_code <= 0xFF:
+            return ProbeActionFailure(
+                action_key=action_key,
+                reason="modbus_exception",
+                exception_code=exception_code,
+            )
+    if isinstance(error, asyncio.TimeoutError) or message == "request_timeout":
+        return ProbeActionFailure(action_key=action_key, reason="timeout")
+    return ProbeActionFailure(action_key=action_key, reason="read_error")
+
+
+def _catalog_no_match_evidence(
+    *,
+    protocol_key: str,
+    status: str,
+    layout_code: int | None,
+    model_code: int | None,
+    resolution: str = "",
+    candidate_keys: tuple[str, ...] = (),
+    executed_actions: list[str],
+    failed_actions: list[str],
+    action_failures: list[ProbeActionFailure],
+) -> DriverProbeEvidence:
+    """Build the typed public evidence for one unresolved identity attempt."""
+
+    return DriverProbeEvidence(
+        kind="catalog_identity",
+        status=status,
+        protocol_key=protocol_key,
+        layout_code=layout_code,
+        model_code=model_code,
+        resolution=resolution,
+        candidate_keys=tuple(candidate_keys),
+        executed_actions=tuple(executed_actions),
+        failed_actions=tuple(failed_actions),
+        action_failures=tuple(action_failures),
+    )

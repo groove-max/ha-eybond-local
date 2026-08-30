@@ -75,6 +75,122 @@ def _sanitize_probe_routes(value: object) -> list[dict[str, object]]:
     return sanitized
 
 
+def _sanitize_probe_identifiers(
+    value: object,
+    *,
+    maximum: int = 32,
+) -> list[str] | None:
+    """Validate one bounded list of public catalog identifiers."""
+
+    if type(value) is not list or len(value) > maximum:
+        return None
+    result: list[str] = []
+    for item in value:
+        if (
+            type(item) is not str
+            or not item
+            or item != item.strip()
+            or len(item) > 128
+            or item in result
+        ):
+            return None
+        result.append(item)
+    return result
+
+
+def _sanitize_probe_diagnostic(value: object) -> dict[str, object] | None:
+    """Keep only the closed, non-sensitive no-match diagnostic schema."""
+
+    if type(value) is not dict:
+        return None
+    kind = value.get("kind")
+    status = value.get("status")
+    protocol = value.get("protocol")
+    if (
+        type(kind) is not str
+        or kind != "catalog_identity"
+        or type(status) is not str
+        or status not in {
+            "read_failed",
+            "partial_identity",
+            "unresolved_identity",
+            "runtime_validation_failed",
+        }
+        or type(protocol) is not str
+        or not protocol
+        or protocol != protocol.strip()
+        or len(protocol) > 128
+    ):
+        return None
+    result: dict[str, object] = {
+        "kind": kind,
+        "status": status,
+        "protocol": protocol,
+    }
+    for key in ("layout_code", "model_code"):
+        item = value.get(key)
+        if item is None:
+            continue
+        if type(item) is not int or not 0 <= item <= 0xFFFF:
+            return None
+        result[key] = item
+    resolution = value.get("resolution")
+    if resolution is not None:
+        if type(resolution) is not str or resolution not in {
+            "unresolved",
+            "exact",
+            "family",
+        }:
+            return None
+        result["resolution"] = resolution
+    for key in ("candidate_keys", "executed_actions", "failed_actions"):
+        items = value.get(key)
+        if items is None:
+            continue
+        sanitized = _sanitize_probe_identifiers(items)
+        if sanitized is None:
+            return None
+        if sanitized:
+            result[key] = sanitized
+    failures = value.get("action_failures")
+    if failures is not None:
+        if type(failures) is not list or len(failures) > 32:
+            return None
+        sanitized_failures: list[dict[str, object]] = []
+        for failure in failures:
+            if type(failure) is not dict:
+                return None
+            action = failure.get("action")
+            reason = failure.get("reason")
+            if (
+                type(action) is not str
+                or not action
+                or action != action.strip()
+                or len(action) > 128
+                or type(reason) is not str
+                or reason not in {"timeout", "modbus_exception", "read_error"}
+            ):
+                return None
+            sanitized_failure: dict[str, object] = {
+                "action": action,
+                "reason": reason,
+            }
+            exception_code = failure.get("exception_code")
+            if reason == "modbus_exception":
+                if (
+                    type(exception_code) is not int
+                    or not 1 <= exception_code <= 0xFF
+                ):
+                    return None
+                sanitized_failure["exception_code"] = exception_code
+            elif exception_code is not None:
+                return None
+            sanitized_failures.append(sanitized_failure)
+        if sanitized_failures:
+            result["action_failures"] = sanitized_failures
+    return result
+
+
 class HubRefreshMixin:
     """Methods owned by HubRefreshMixin."""
 
@@ -550,6 +666,9 @@ class HubRefreshMixin:
                 routes = _sanitize_probe_routes(entry.get("routes"))
                 if routes:
                     record["routes"] = routes
+                diagnostic = _sanitize_probe_diagnostic(entry.get("diagnostic"))
+                if diagnostic is not None:
+                    record["diagnostic"] = diagnostic
                 sanitized.append(record)
         self._inverter_detection_probe_log = tuple(sanitized)
         self._inverter_detection_probe_budget_exhausted = (
