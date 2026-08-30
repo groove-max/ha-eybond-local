@@ -101,6 +101,11 @@ Phase 4 removed that copy after all of the following became true:
   hub. They remain in the broad compatibility snapshot, never enter the typed
   measurement frame, and disappear when omitted by the next successful result
   or when the selected inverter identity changes.
+- Canonical power-flow routes share finite measured source and sink budgets.
+  Derived routes may leave contradictory or stale power unattributed, but the
+  sum of routes cannot duplicate PV, grid, battery, or home-load watts. Optional
+  route evidence consulted by that calculation remains part of typed
+  provenance and freshness propagation.
 - The typed layer must not decide connection, recovery, ownership, or driver
   selection.
 

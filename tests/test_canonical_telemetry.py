@@ -163,7 +163,7 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["battery_power"], -300.0)
         self.assertEqual(values["pv_to_home_power"], 500.0)
         self.assertEqual(values["battery_to_home_power"], 300.0)
-        self.assertEqual(values["grid_to_home_power"], 700.0)
+        self.assertEqual(values["grid_to_home_power"], 400.0)
         self.assertEqual(values["grid_to_battery_power"], 0.0)
 
     def test_apply_canonical_measurements_builds_modbus_catalog_card_values(self) -> None:
@@ -293,6 +293,39 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertIn("battery_power", flow.source_keys)
         self.assertIs(flow.freshness, TelemetryFreshness.FRESH)
 
+    def test_typed_flow_provenance_tracks_optional_route_evidence(self) -> None:
+        projected = project_canonical_telemetry(
+            self._typed_frame(
+                "modbus_smg",
+                {
+                    "operating_mode": "Mains",
+                    "output_power": 1601.0,
+                    "pv_power": 1711.0,
+                    "battery_power": 1730.0,
+                    "grid_power": 204.0,
+                    "grid_voltage": 242.3,
+                    "pv_charging_power": 1730.0,
+                    "power_flow_charge_source_state": "PV",
+                },
+            )
+        )
+
+        flow = projected.point("pv_to_home_power")
+        self.assertEqual(flow.value, 0.0)
+        self.assertTrue(
+            {
+                "operating_mode",
+                "output_power",
+                "pv_power",
+                "battery_power",
+                "grid_power",
+                "grid_voltage",
+                "pv_charging_power",
+                "power_flow_charge_source_state",
+            }.issubset(flow.source_keys)
+        )
+        self.assertIs(flow.freshness, TelemetryFreshness.FRESH)
+
     def test_typed_projection_propagates_carried_freshness_through_chain(self) -> None:
         first = self._typed_frame(
             "pi30",
@@ -383,12 +416,9 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["battery_power"], -315.0)
 
     def test_apply_canonical_measurements_builds_flow_split_from_direct_pv_charge(self) -> None:
-        # The charger's own measurement (pv_charging_power) covers the whole
-        # battery charge, so none of it is grid-bound even though the
-        # under-reading pv_power register leaves no derived headroom; the
-        # grid import measurement then belongs to the home.  (The old
-        # headroom clamp attributed 246 W to grid_to_battery — MORE than the
-        # 203 W the grid was actually importing.)
+        # The charger's own measurement proves the route but is not a second
+        # PV source. Every derived route remains bounded by the measured PV,
+        # grid, battery, and load budgets even when the registers disagree.
         values = {
             "output_power": 109.0,
             "pv_power": 492.0,
@@ -400,12 +430,12 @@ class CanonicalTelemetryTests(unittest.TestCase):
         apply_canonical_measurements("modbus_smg", values)
 
         self.assertEqual(values["battery_power"], 629.0)
-        self.assertEqual(values["pv_to_home_power"], 109.0)
-        self.assertEqual(values["pv_to_battery_power"], 629.0)
+        self.assertEqual(values["pv_to_home_power"], 0.0)
+        self.assertEqual(values["pv_to_battery_power"], 492.0)
         self.assertEqual(values["pv_to_grid_power"], 0.0)
         self.assertEqual(values["battery_to_home_power"], 0.0)
-        self.assertEqual(values["grid_to_battery_power"], 0.0)
-        self.assertEqual(values["grid_to_home_power"], 203.0)
+        self.assertEqual(values["grid_to_battery_power"], 94.0)
+        self.assertEqual(values["grid_to_home_power"], 109.0)
 
     def test_pv_only_charging_is_not_reattributed_to_grid_when_pv_power_under_reads(
         self,
@@ -422,15 +452,58 @@ class CanonicalTelemetryTests(unittest.TestCase):
             "grid_power": 30.0,
             "pv_charging_power": 1786.0,
             "grid_voltage": 230.0,
+            "charge_source_priority": "PV Only",
         }
 
         apply_canonical_measurements("modbus_smg", values)
 
-        self.assertEqual(values["pv_to_home_power"], 781.0)
-        self.assertEqual(values["pv_to_battery_power"], 1786.0)
-        self.assertEqual(values["grid_to_battery_power"], 1.0)
-        self.assertEqual(values["grid_to_home_power"], 29.0)
+        self.assertEqual(values["pv_to_home_power"], 0.0)
+        self.assertEqual(values["pv_to_battery_power"], 1718.0)
+        self.assertEqual(values["grid_to_battery_power"], 0.0)
+        self.assertEqual(values["grid_to_home_power"], 30.0)
         self.assertEqual(values["battery_to_home_power"], 0.0)
+
+    def test_field_regression_pv_routes_never_double_count_total_pv_power(self) -> None:
+        # Issue #13, Sandisolar Protocol 4: the old split published 1601 W
+        # PV->home plus 1730 W PV->battery from only 1711 W total PV.
+        values = {
+            "operating_mode": "Mains",
+            "output_power": 1601.0,
+            "pv_power": 1711.0,
+            "battery_average_power": 1730.0,
+            "grid_power": 204.0,
+            "grid_voltage": 242.3,
+            "pv_charging_power": 1730.0,
+            "power_flow_charge_source_state": "PV",
+        }
+
+        apply_canonical_measurements("modbus_smg", values)
+
+        self.assertEqual(values["pv_to_home_power"], 0.0)
+        self.assertEqual(values["pv_to_battery_power"], 1711.0)
+        self.assertEqual(values["pv_to_grid_power"], 0.0)
+        self.assertEqual(values["grid_to_home_power"], 204.0)
+        self.assertEqual(values["grid_to_battery_power"], 0.0)
+        self.assertLessEqual(
+            values["pv_to_home_power"]
+            + values["pv_to_battery_power"]
+            + values["pv_to_grid_power"],
+            values["pv_power"],
+        )
+        self.assertLessEqual(
+            values["grid_to_home_power"] + values["grid_to_battery_power"],
+            values["grid_power"],
+        )
+        self.assertLessEqual(
+            values["pv_to_home_power"]
+            + values["battery_to_home_power"]
+            + values["grid_to_home_power"],
+            values["output_power"],
+        )
+        self.assertLessEqual(
+            values["pv_to_battery_power"] + values["grid_to_battery_power"],
+            values["battery_average_power"],
+        )
 
     def test_apply_canonical_measurements_routes_residual_grid_import_to_home(self) -> None:
         values = {
@@ -446,7 +519,7 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["pv_to_battery_power"], 0.0)
         self.assertEqual(values["battery_to_home_power"], 0.0)
         self.assertEqual(values["grid_to_battery_power"], 36.0)
-        self.assertEqual(values["grid_to_home_power"], 106.0)
+        self.assertEqual(values["grid_to_home_power"], 85.0)
 
     def test_apply_canonical_measurements_builds_pi18_flow_values(self) -> None:
         values = {
@@ -465,7 +538,7 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["battery_power"], -204.8)
         self.assertEqual(values["pv_to_home_power"], 600.0)
         self.assertEqual(values["battery_to_home_power"], 204.8)
-        self.assertEqual(values["grid_to_home_power"], 145.2)
+        self.assertEqual(values["grid_to_home_power"], 0.0)
         self.assertEqual(values["grid_to_battery_power"], 0.0)
 
     def test_apply_canonical_measurements_builds_eybond_g_ascii_card_values(self) -> None:

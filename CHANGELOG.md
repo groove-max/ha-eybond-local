@@ -55,6 +55,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Fixed canonical power-flow estimates that could count the same PV watts both
+  as home consumption and battery charging when asynchronously sampled
+  Protocol 3/4 registers disagreed. Instantaneous routes and their accumulated
+  energy now share bounded source/sink budgets and leave unexplained remainder
+  unattributed instead of inventing a second power path.
 - Fixed stale callback-session inventory that could outlive its physical TCP
   socket, suppress a new callback request, and leave Home Assistant waiting for
   a connection that no longer existed.

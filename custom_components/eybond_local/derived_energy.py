@@ -73,6 +73,10 @@ _DERIVED_ENERGY_DESCRIPTIONS: tuple[DerivedEnergyDescription, ...] = (
         icon="mdi:solar-power",
         variants=(
             DerivedEnergyVariant(
+                source_keys=("pv_to_home_power",),
+                compute="passthrough",
+            ),
+            DerivedEnergyVariant(
                 source_keys=("output_power", "pv_power"),
                 compute="split_pv_to_home",
             ),
@@ -85,6 +89,10 @@ _DERIVED_ENERGY_DESCRIPTIONS: tuple[DerivedEnergyDescription, ...] = (
         icon="mdi:battery-arrow-down",
         variants=(
             DerivedEnergyVariant(
+                source_keys=("battery_to_home_power",),
+                compute="passthrough",
+            ),
+            DerivedEnergyVariant(
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="split_battery_to_home",
             ),
@@ -96,6 +104,10 @@ _DERIVED_ENERGY_DESCRIPTIONS: tuple[DerivedEnergyDescription, ...] = (
         name="Estimated Grid to Home Energy",
         icon="mdi:transmission-tower-import",
         variants=(
+            DerivedEnergyVariant(
+                source_keys=("grid_to_home_power",),
+                compute="passthrough",
+            ),
             DerivedEnergyVariant(
                 source_keys=("output_power", "pv_power", "battery_power"),
                 compute="split_grid_to_home",

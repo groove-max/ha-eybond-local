@@ -208,6 +208,43 @@ class DerivedEnergyTests(unittest.TestCase):
             1500.0,
         )
 
+    def test_canonical_flow_routes_outrank_legacy_energy_split(self) -> None:
+        available = {
+            "output_power",
+            "pv_power",
+            "battery_power",
+            "grid_power",
+            "pv_to_home_power",
+            "battery_to_home_power",
+            "grid_to_home_power",
+        }
+        descriptions = {
+            description.key: description
+            for description in derived_energy_descriptions_for_keys(available)
+        }
+        values = {
+            "output_power": 1601.0,
+            "pv_power": 1711.0,
+            "battery_power": 1730.0,
+            "grid_power": 204.0,
+            "pv_to_home_power": 0.0,
+            "battery_to_home_power": 0.0,
+            "grid_to_home_power": 204.0,
+        }
+
+        self.assertEqual(
+            compute_derived_power(values, descriptions["estimated_pv_to_home_energy"]),
+            0.0,
+        )
+        self.assertEqual(
+            compute_derived_power(values, descriptions["estimated_battery_to_home_energy"]),
+            0.0,
+        )
+        self.assertEqual(
+            compute_derived_power(values, descriptions["estimated_grid_to_home_energy"]),
+            204.0,
+        )
+
     def test_grid_to_home_falls_back_to_residual_without_grid_power(self) -> None:
         descriptions = {
             description.key: description

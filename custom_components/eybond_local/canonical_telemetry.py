@@ -873,37 +873,129 @@ def _compute_flow_split(values: dict[str, Any]) -> dict[str, float] | None:
         grid_import = 0.0 if grid_power is not None else None
         grid_export = 0.0
         pv_export_power = 0.0
+    elif grid_present is True and grid_import is None:
+        # Some text protocols report a trustworthy grid-presence voltage but
+        # no grid-power register. In that narrower case the missing import can
+        # be inferred as the non-negative source deficit needed by the measured
+        # home and battery sinks. This remains a single finite budget below.
+        grid_import = max(
+            0.0,
+            load + battery_charge - pv - battery_discharge,
+        )
 
-    pv_to_home = min(load, pv)
-    pv_remaining = max(0.0, pv - pv_to_home)
+    # These registers are sampled from several blocks and some firmwares expose
+    # mutually inconsistent instantaneous values. Treat every measured source
+    # and sink as a finite budget: a derived route may explain part of a budget,
+    # but it must never manufacture a second copy of the same watts. In
+    # particular, ``pv_charging_power`` is evidence for the PV->battery route,
+    # not an additional PV source beside ``pv_power``.
+    pv_remaining = pv
+    grid_remaining = grid_import
+    battery_charge_remaining = battery_charge
+    battery_discharge_remaining = battery_discharge
+    load_remaining = load
 
-    if pv_charging_power is not None:
-        # The charger's own PV-side measurement outranks the derived
-        # headroom: units whose pv_power register under-reads (measured
-        # 1718 W while the charger logged 1786 W into the battery and the
-        # load drew 781 W) would otherwise have real PV charge clamped to
-        # the phantom remainder and re-attributed to the grid — a PV-only
-        # system accumulated 1.17 kWh of fake daily grid import that way.
-        pv_to_battery = min(battery_charge, pv_charging_power)
-    else:
-        pv_to_battery = min(battery_charge, pv_remaining)
-    pv_remaining = max(0.0, pv_remaining - pv_to_battery)
+    charge_source = _flow_charge_source(values)
+    explicit_pv_charge = pv_charging_power is not None or charge_source in {
+        "PV",
+        "PV + Utility",
+    }
+
+    # A direct PV-charger measurement or a documented PV charging state is
+    # stronger than a guessed load-first split. Reserve that route first, but
+    # cap it by both the battery sink and the total measured PV source.
+    pv_to_battery = 0.0
+    if charge_source != "Utility" and explicit_pv_charge:
+        desired_pv_charge = (
+            battery_charge
+            if pv_charging_power is None
+            else min(battery_charge, pv_charging_power)
+        )
+        pv_to_battery = min(pv_remaining, desired_pv_charge)
+        pv_remaining -= pv_to_battery
+        battery_charge_remaining -= pv_to_battery
+
+    # When the wire explicitly says utility charging is active, reserve the
+    # measured grid budget for that sink before assigning the remainder to the
+    # home. A PV-only state must never be reinterpreted as grid charging.
+    grid_to_battery = 0.0
+    if (
+        grid_remaining is not None
+        and charge_source in {"Utility", "PV + Utility"}
+        and battery_charge_remaining > 0.0
+    ):
+        grid_to_battery = min(grid_remaining, battery_charge_remaining)
+        grid_remaining -= grid_to_battery
+        battery_charge_remaining -= grid_to_battery
+
+    pv_to_home = 0.0
+    battery_to_home = 0.0
+    grid_to_home = 0.0
+
+    def _route_to_home(source: str) -> None:
+        nonlocal pv_remaining
+        nonlocal grid_remaining
+        nonlocal battery_discharge_remaining
+        nonlocal load_remaining
+        nonlocal pv_to_home
+        nonlocal battery_to_home
+        nonlocal grid_to_home
+
+        if load_remaining <= 0.0:
+            return
+        if source == "pv":
+            routed = min(pv_remaining, load_remaining)
+            pv_remaining -= routed
+            pv_to_home += routed
+        elif source == "battery":
+            routed = min(battery_discharge_remaining, load_remaining)
+            battery_discharge_remaining -= routed
+            battery_to_home += routed
+        elif source == "grid" and grid_remaining is not None:
+            routed = min(grid_remaining, load_remaining)
+            grid_remaining -= routed
+            grid_to_home += routed
+        else:
+            return
+        load_remaining -= routed
+
+    operating_mode = values.get("operating_mode")
+    home_source_order = (
+        ("grid", "pv", "battery")
+        if operating_mode in {"Mains", "Bypass"}
+        else ("pv", "battery", "grid")
+    )
+    for source in home_source_order:
+        _route_to_home(source)
+
+    # Without a direct charging-source proof, remaining measured source power
+    # may explain the battery sink after the home allocation. This preserves
+    # useful estimates for simpler protocols while keeping every source bounded.
+    if not explicit_pv_charge and charge_source != "Utility":
+        routed = min(pv_remaining, battery_charge_remaining)
+        pv_remaining -= routed
+        battery_charge_remaining -= routed
+        pv_to_battery += routed
+
+    if (
+        grid_remaining is not None
+        and charge_source != "PV"
+        and battery_charge_remaining > 0.0
+    ):
+        routed = min(grid_remaining, battery_charge_remaining)
+        grid_remaining -= routed
+        battery_charge_remaining -= routed
+        grid_to_battery += routed
+
+    # An explicitly absent grid cannot own any derived route. When the grid was
+    # merely present without a power meter, the finite inferred source budget
+    # above is still subject to the same conservation rules as a measured one.
+    if grid_present is False:
+        grid_to_home = 0.0
+        grid_to_battery = 0.0
 
     desired_pv_to_grid = pv_export_power if pv_export_power is not None else grid_export
     pv_to_grid = min(pv_remaining, max(0.0, desired_pv_to_grid))
-
-    battery_to_home = min(battery_discharge, max(0.0, load - pv_to_home))
-    base_grid_to_home = max(0.0, load - pv_to_home - battery_to_home)
-    grid_to_battery = 0.0 if grid_present is False else max(0.0, battery_charge - pv_to_battery)
-
-    if grid_present is False:
-        # When the grid is explicitly absent, residual power mismatch should
-        # stay unattributed rather than being drawn as a fake grid import.
-        grid_to_home = 0.0
-    elif grid_import is None:
-        grid_to_home = base_grid_to_home
-    else:
-        grid_to_home = max(base_grid_to_home, grid_import - grid_to_battery)
 
     return {
         "pv_to_home": round(pv_to_home, 4),
@@ -913,6 +1005,19 @@ def _compute_flow_split(values: dict[str, Any]) -> dict[str, float] | None:
         "grid_to_home": round(grid_to_home, 4),
         "grid_to_battery": round(grid_to_battery, 4),
     }
+
+
+def _flow_charge_source(values: dict[str, Any]) -> str | None:
+    """Return the strongest available battery-charging source observation."""
+
+    for key in ("power_flow_charge_source_state", "charging_source_state"):
+        state = values.get(key)
+        if state in {"PV", "Utility", "PV + Utility"}:
+            return state
+
+    if values.get("charge_source_priority") == "PV Only":
+        return "PV"
+    return None
 
 
 def _numeric(value: Any) -> float | None:
