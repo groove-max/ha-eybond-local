@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_38_anenji_8401_op2_controls",
+  "kind": "github_issue",
+  "title": "Anenji 0x8401 OP2 hardware control validation",
+  "reference": "project-issue:38#issuecomment-5482296845",
+  "captured_at": "2026-08-31",
+  "visibility": "public",
+  "summary": "The owner of the captured layout 4, model 0x8401 Protocol 4 inverter confirmed successful local writes and resulting behavior for OP2 output enable, OP2 start hour, and OP2 end hour. The overload-alarm setting was visible but was not explicitly reported as write-tested.",
+  "assertions": [
+    "hardware_test",
+    "write_validation",
+    "control_behavior"
+  ]
+}

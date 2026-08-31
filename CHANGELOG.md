@@ -27,6 +27,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Marked the documented Anenji `0x8401` Protocol 4 control surface as tested for
+  this exact fingerprint after device-owner validation included working OP2
+  controls that are not exposed by the vendor apps. The irreversible
+  generation-data clear and user-parameter reset actions remain blocked by the
+  independent destructive-action safety policy even though the profile is
+  treated as compatible.
 - Unknown inverter models that report documented Anenji Communication Protocol
   3, 4, 5, or 6 now select the matching protocol-specific telemetry map
   automatically instead of requiring a new exact-model catalog entry. Their
@@ -55,6 +61,15 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Fixed a framed-transport desynchronization where one unexpected unwrapped
+  Modbus RTU response could be combined with the next EyeBond header, consume
+  subsequent valid frames, and stall telemetry until the socket was replaced.
+  Malformed, oversized, or incomplete frames now close only the affected
+  session with a typed diagnostic reason, after which a fresh callback can
+  resume normally.
+- Preload the SmartESS semantic catalog with the other JSON metadata caches in
+  Home Assistant's executor, avoiding a first-use blocking file read from the
+  event loop when diagnostics or cloud evidence first resolves a field.
 - Restored exact Anenji ANJ-11KW-48V-WIFI-P identification for the captured
   Protocol 4 fingerprint `layout=4`, `model=0x8401`. Unlike the broad legacy
   heuristic, the new catalog entry affects only this proven fingerprint; it

@@ -436,7 +436,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["load_percent"], 65)
         self.assertEqual(values["grid_power"], 420)
 
-    async def test_issue_13_anenji_8401_uses_exact_identity_and_unverified_protocol_4_writes(
+    async def test_issue_13_anenji_8401_exposes_documented_controls_automatically(
         self,
     ) -> None:
         driver = SmgModbusDriver()
@@ -453,10 +453,13 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
 
         assert inverter is not None
         self.assertEqual(inverter.model_name, "Anenji ANJ-11KW-48V-WIFI-P")
-        self.assertEqual(inverter.variant_key, "protocol_4_family_fallback")
+        self.assertEqual(
+            inverter.variant_key,
+            "anenji_anj_11kw_48v_wifi_p_8401",
+        )
         self.assertEqual(
             inverter.profile_name,
-            "modbus_smg/protocols/communication_protocol_4.json",
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p_8401.json",
         )
         self.assertEqual(
             inverter.register_schema_name,
@@ -470,7 +473,23 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["device_catalog"]["model_code"], 0x8401)
         self.assertEqual(inverter.details["protocol_number"], 4)
         self.assertTrue(inverter.capabilities)
-        self.assertTrue(all(not capability.tested for capability in inverter.capabilities))
+        tested_keys = {
+            capability.key
+            for capability in inverter.capabilities
+            if capability.tested
+        }
+        self.assertEqual(len(tested_keys), 60)
+        self.assertTrue(inverter.get_capability("op2_overload_alarm_setting").tested)
+        self.assertTrue(inverter.get_capability("secondary_output_priority").tested)
+        blocked_keys = {
+            capability.key
+            for capability in inverter.capabilities
+            if capability.resolved_support_tier == "blocked"
+        }
+        self.assertEqual(
+            blocked_keys,
+            {"clear_generation_data", "reset_user_parameters"},
+        )
         self.assertTrue(
             all(
                 not capability_write_exposure_allowed(
@@ -483,11 +502,27 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
                     profile_name=inverter.profile_name,
                 )
                 for capability in inverter.capabilities
+                if capability.key in blocked_keys
             )
         )
         self.assertTrue(
-            any(
+            all(
                 capability_write_exposure_allowed(
+                    capability,
+                    control_mode="auto",
+                    detection_confidence="high",
+                    variant_key=inverter.variant_key,
+                    profile_source_scope="builtin",
+                    schema_source_scope="builtin",
+                    profile_name=inverter.profile_name,
+                )
+                for capability in inverter.capabilities
+                if capability.key not in blocked_keys
+            )
+        )
+        self.assertTrue(
+            all(
+                not capability_write_exposure_allowed(
                     capability,
                     control_mode="full",
                     detection_confidence="high",
@@ -497,6 +532,7 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
                     profile_name=inverter.profile_name,
                 )
                 for capability in inverter.capabilities
+                if capability.key in blocked_keys
             )
         )
 
@@ -583,9 +619,6 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
                 "secondary_output_priority",
                 "secondary_output_priority_start_time",
                 "secondary_output_priority_end_time",
-                "op2_output_enabled",
-                "op2_output_start_hour",
-                "op2_output_end_hour",
                 "lithium_battery_automatic_activation_enabled",
                 "lithium_battery_activation_once",
                 "clear_generation_data",
@@ -593,6 +626,9 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
                 "op1_offgrid_low_voltage_protection",
                 "secondary_charging_priority_start_time",
                 "secondary_charging_priority_end_time",
+                "op2_output_enabled",
+                "op2_output_start_hour",
+                "op2_output_end_hour",
             },
         )
         self.assertTrue(

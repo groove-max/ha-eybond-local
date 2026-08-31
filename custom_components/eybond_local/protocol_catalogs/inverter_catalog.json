@@ -1368,6 +1368,17 @@
    "support_capture_policy": "smg_anenji_11k"
   },
   {
+   "key": "smg_anenji_11kw_8401_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "anenji_anj_11kw_48v_wifi_p_8401",
+   "profile_name": "modbus_smg/models/anenji_anj_11kw_48v_wifi_p_8401.json",
+   "register_schema_name": "modbus_smg/protocols/communication_protocol_4.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_anenji_11k"
+  },
+  {
    "key": "smg_protocol_5_family_fallback",
    "protocol_key": "modbus_smg",
    "driver_key": "modbus_smg",
@@ -1935,7 +1946,7 @@
     "serial_ascii_plausible"
    ],
    "model_name": "Anenji ANJ-11KW-48V-WIFI-P",
-   "surface_key": "smg_protocol_4_family_fallback",
+   "surface_key": "smg_anenji_11kw_8401_full",
    "runtime_probe": {
     "validation": [
      {

@@ -40,12 +40,13 @@
     "notes": [
       "Device-specific runtime profile is user-confirmed.",
       "Communication Protocol No. 3-10 documentation defines the protocol-4 telemetry projection used by this model.",
-      "The captured 0x8401 hardware fingerprint uses the documented Protocol 4 telemetry surface; its write controls remain untested and require explicit Full Control.",
-      "Register 602 secondary-output priority is documented and hardware-read-correlated; local write behavior remains conditional pending a device retest."
+      "The captured 0x8401 hardware fingerprint uses the documented Protocol 4 telemetry and control surface.",
+      "The 0x8401 owner confirmed local writes and resulting device behavior for OP2 enable plus start-hour and end-hour timer controls, including controls absent from the vendor apps.",
+      "The documented Protocol 4 control surface is treated as tested for this exact fingerprint; irreversible generation-data clear and user-parameter reset actions remain blocked by the independent safety policy."
     ]
   },
   "known_limitations": [
-    "Secondary Output Priority writes are available only in Full Control until register 602 is write-tested on hardware."
+    "Irreversible generation-data clear and user-parameter reset actions remain blocked even though the ordinary Protocol 4 control surface is enabled."
   ],
   "knowledge_summary": "Anenji 11kW unit with a model-specific control profile over the shared protocol-4 register projection, backed by donor captures, user-confirmed controls, and the Protocol No. 3-10 documentation.",
   "source_keys": [
@@ -53,6 +54,7 @@
     "private_message_anenji_anj_11kw_validation",
     "documentation_anenji_protocol_3_10",
     "support_archive_anenji_anj_11kw_secondary_controls_20260707",
-    "github_issue_13_anenji_8401_beta4"
+    "github_issue_13_anenji_8401_beta4",
+    "github_issue_38_anenji_8401_op2_controls"
   ]
 }

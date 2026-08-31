@@ -27,8 +27,6 @@ from ..protocol import (
     parse_heartbeat_pn,
 )
 from .common import (
-    _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN,
-    _AT_TEXT_MIXED_FRAME_FCODES,
     _AT_TEXT_MIXED_FRAME_READ_TIMEOUT,
     _PrefixedAsyncReader,
     _cancel_and_join_task,
@@ -38,10 +36,19 @@ from .common import (
     _looks_like_plain_raw_response_start,
     _looks_like_uart_passthrough_value,
     _parse_fc2_collector_pn,
+    _runtime_eybond_header_error,
     _short_ascii,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# An idle connection may remain silent indefinitely. Once the collector has
+# started a frame, however, every remaining structural part is bounded. This
+# prevents a truncated header or a false payload length from pinning the one
+# reader task and swallowing later valid responses on the same TCP socket.
+_FRAMED_HEADER_COMPLETION_TIMEOUT = 2.0
+_FRAMED_PAYLOAD_COMPLETION_TIMEOUT = 5.0
 
 
 def _modbus_rtu_response_length(prefix: bytes) -> int | None:
@@ -422,17 +429,82 @@ class _CollectorConnection:
             reader = _PrefixedAsyncReader(reader)
         try:
             while True:
-                prefix = await reader.readexactly(3)
+                first = await reader.readexactly(1)
+                try:
+                    prefix = first + await asyncio.wait_for(
+                        reader.readexactly(2),
+                        timeout=_FRAMED_HEADER_COMPLETION_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    self._collector.last_disconnect_reason = (
+                        "collector_frame_header_timeout"
+                    )
+                    logger.warning(
+                        "Closing collector session after partial frame prefix "
+                        "remote=%s prefix=%s",
+                        self._collector.remote_ip,
+                        first.hex(),
+                    )
+                    return
                 if prefix == b"AT+":
                     line = prefix + await reader.read_at_response()
                     self._handle_at_response(line)
                     continue
 
-                header_bytes = prefix + await reader.readexactly(HEADER_SIZE - len(prefix))
+                try:
+                    header_bytes = prefix + await asyncio.wait_for(
+                        reader.readexactly(HEADER_SIZE - len(prefix)),
+                        timeout=_FRAMED_HEADER_COMPLETION_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    self._collector.last_disconnect_reason = (
+                        "collector_frame_header_timeout"
+                    )
+                    logger.warning(
+                        "Closing collector session after incomplete frame header "
+                        "remote=%s prefix=%s",
+                        self._collector.remote_ip,
+                        prefix.hex(),
+                    )
+                    return
                 header = decode_header(header_bytes)
+                header_error = _runtime_eybond_header_error(header)
+                if header_error:
+                    self._collector.last_disconnect_reason = header_error
+                    logger.warning(
+                        "Closing collector session after malformed frame header "
+                        "remote=%s reason=%s header=%s tid=%d devcode=0x%04X "
+                        "devaddr=0x%02X fc=%d payload=%d",
+                        self._collector.remote_ip,
+                        header_error,
+                        header_bytes.hex(),
+                        header.tid,
+                        header.devcode,
+                        header.devaddr,
+                        header.fcode,
+                        header.payload_len,
+                    )
+                    return
                 payload = b""
                 if header.payload_len > 0:
-                    payload = await reader.readexactly(header.payload_len)
+                    try:
+                        payload = await asyncio.wait_for(
+                            reader.readexactly(header.payload_len),
+                            timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError:
+                        self._collector.last_disconnect_reason = (
+                            "collector_frame_payload_timeout"
+                        )
+                        logger.warning(
+                            "Closing collector session after incomplete frame payload "
+                            "remote=%s tid=%d fc=%d expected=%d",
+                            self._collector.remote_ip,
+                            header.tid,
+                            header.fcode,
+                            header.payload_len,
+                        )
+                        return
 
                 self._collector.last_devcode = header.devcode
                 logger.debug(
@@ -1218,13 +1290,7 @@ class _CollectorAtConnection:
             return None
 
     def _looks_like_mixed_frame_header(self, header: EybondHeader) -> bool:
-        if header.payload_len < 0:
-            return False
-        if header.payload_len > _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN:
-            return False
-        if header.fcode not in _AT_TEXT_MIXED_FRAME_FCODES:
-            return False
-        return True
+        return _runtime_eybond_header_error(header) == ""
 
     def _record_unhandled_raw_fragment(self, payload: bytes, *, parser: str) -> None:
         self._collector.raw_unhandled_line_count += 1

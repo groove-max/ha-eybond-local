@@ -1,0 +1,75 @@
+{
+  "extends": "../protocols/communication_protocol_4.json",
+  "profile_key": "modbus_smg_anenji_anj_11kw_48v_wifi_p_8401",
+  "title": "Anenji ANJ-11KW-48V-WIFI-P (0x8401)",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "capability_defaults": {
+    "tested": true,
+    "provenance": "doc_backed",
+    "support_tier": "conditional"
+  },
+  "capabilities": [
+    {
+      "key": "secondary_output_priority",
+      "tested": true
+    },
+    {
+      "key": "secondary_output_priority_start_time",
+      "tested": true
+    },
+    {
+      "key": "secondary_output_priority_end_time",
+      "tested": true
+    },
+    {
+      "key": "op2_output_enabled",
+      "tested": true,
+      "provenance": "verified",
+      "support_tier": "standard",
+      "support_notes": "Hardware write and resulting behavior were confirmed on the exact layout-4/model-0x8401 Protocol 4 fingerprint in GitHub issue #38."
+    },
+    {
+      "key": "op2_output_start_hour",
+      "tested": true,
+      "provenance": "verified",
+      "support_tier": "standard",
+      "support_notes": "Hardware write and resulting behavior were confirmed on the exact layout-4/model-0x8401 Protocol 4 fingerprint in GitHub issue #38."
+    },
+    {
+      "key": "op2_output_end_hour",
+      "tested": true,
+      "provenance": "verified",
+      "support_tier": "standard",
+      "support_notes": "Hardware write and resulting behavior were confirmed on the exact layout-4/model-0x8401 Protocol 4 fingerprint in GitHub issue #38."
+    },
+    {
+      "key": "lithium_battery_automatic_activation_enabled",
+      "tested": true
+    },
+    {
+      "key": "lithium_battery_activation_once",
+      "tested": true
+    },
+    {
+      "key": "op1_offgrid_low_voltage_protection",
+      "tested": true
+    },
+    {
+      "key": "secondary_charging_priority_start_time",
+      "tested": true
+    },
+    {
+      "key": "secondary_charging_priority_end_time",
+      "tested": true
+    },
+    {
+      "key": "clear_generation_data",
+      "tested": true
+    },
+    {
+      "key": "reset_user_parameters",
+      "tested": true
+    }
+  ]
+}

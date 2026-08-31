@@ -21,6 +21,7 @@ from ..metadata.device_catalog_loader import load_device_catalog
 from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from ..metadata.smartess_protocol_catalog_loader import load_smartess_protocol_catalog
+from ..metadata.smartess_semantic_catalog_loader import load_smartess_semantic_catalog
 from ..models import (
     BinarySensorDescription,
     CapabilityGroup,
@@ -393,6 +394,7 @@ def _prime_catalog_driven_metadata() -> None:
     load_device_catalog()
     compiled_catalog = load_compiled_detection_catalog()
     load_collector_cloud_profile_catalog()
+    load_smartess_semantic_catalog()
 
     for surface in compiled_catalog.surfaces.values():
         if surface.profile_name:

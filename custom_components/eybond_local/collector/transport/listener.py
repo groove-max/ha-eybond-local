@@ -81,6 +81,7 @@ class _CollectorSessionInventoryEntry:
     collector_identity_source: str = ""
     collector_identity_sources: set[str] = field(default_factory=set)
     observed_protocol_shapes: set[str] = field(default_factory=set)
+    close_reason: str = ""
 
     def diagnostics(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -106,6 +107,8 @@ class _CollectorSessionInventoryEntry:
             result["observed_protocol_shapes"] = sorted(
                 self.observed_protocol_shapes
             )
+        if self.close_reason:
+            result["close_reason"] = self.close_reason
         return result
 
 
@@ -922,6 +925,15 @@ class _SharedEybondListener:
         ):
             if mapping.get(normalized) is connection:
                 mapping.pop(normalized, None)
+        entry = self._session_inventory.get(normalized)
+        if entry is not None:
+            try:
+                collector = connection.collector_info  # type: ignore[attr-defined]
+            except Exception:
+                collector = None
+            entry.close_reason = str(
+                getattr(collector, "last_disconnect_reason", "") or ""
+            ).strip()
         self._mark_session_state(normalized, "closed_disconnected")
         logger.info(
             "Collector socket session closed listener_port=%s session=%s",
@@ -1091,6 +1103,8 @@ class _SharedEybondListener:
                 pending = self._select_pending_socket_by_session_id(normalized_session_id)
                 if pending is None:
                     return None
+                if self._reserved_for_transparent_route(pending):
+                    return None
                 await self._pause_pending_sniff(pending)
                 if not self._pending_socket_still_registered(pending):
                     return None
@@ -1101,6 +1115,8 @@ class _SharedEybondListener:
                 pending = self._select_pending_socket(collector_ip)
                 if pending is None:
                     return None
+                if self._reserved_for_transparent_route(pending):
+                    return None
                 await self._pause_pending_sniff(pending)
                 if not self._pending_socket_still_registered(pending):
                     return None
@@ -1108,6 +1124,8 @@ class _SharedEybondListener:
 
             matched = self._select_pending_socket_by_collector_pn(normalized_pn)
             if matched is not None:
+                if self._reserved_for_transparent_route(matched):
+                    return None
                 return self._claim_pending_socket(matched)
 
             candidates = self._route_identity_candidates(collector_ip)
@@ -1116,6 +1134,14 @@ class _SharedEybondListener:
 
             for pending in candidates:
                 if not self._pending_socket_still_registered(pending):
+                    continue
+                # A causally-new socket reserved by a byte-transparent cloud
+                # route must never be identity-probed or claimed by the normal
+                # runtime.  The transparent route owns the first read so the
+                # real collector/cloud handshake remains unmodified.  Baseline
+                # sessions and fresh sockets whose observed wire cannot belong
+                # to that route are intentionally unaffected.
+                if self._reserved_for_transparent_route(pending):
                     continue
                 # Ownership safety: when a PN is present, never probe or claim a
                 # socket already identified as a DIFFERENT collector (e.g. a

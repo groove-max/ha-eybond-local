@@ -2474,6 +2474,49 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await sniff
 
+    async def test_runtime_cannot_probe_fresh_transparent_route_socket(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=8899)
+        collector_pn = "E50000200000000001"
+        token = listener.register_exclusive_collector_route(
+            collector_ip="192.168.1.55",
+            collector_pn=collector_pn,
+            transparent=True,
+            expected_session_protocol="at_text",
+        )
+
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        pending = _PendingCollectorSocket(
+            session_id="fresh-cloud-session",
+            remote_ip="192.168.1.1",
+            reader=reader,
+            writer=writer,  # type: ignore[arg-type]
+        )
+        listener._remember_session(
+            session_id=pending.session_id,
+            remote_ip=pending.remote_ip,
+            remote_port=41000,
+        )
+        listener._pending_sockets[pending.session_id] = pending
+        sniff = asyncio.create_task(listener._sniff_pending_socket(pending))
+        pending.sniff_task = sniff
+
+        await asyncio.sleep(0.35)
+        claimed_by_runtime = await listener.pop_pending_socket_for_route(
+            collector_ip="192.168.1.55",
+            collector_pn=collector_pn,
+            session_protocol="eybond_framed",
+        )
+
+        self.assertIsNone(claimed_by_runtime)
+        self.assertEqual(bytes(writer.buffer), b"")
+        claimed_by_proxy = await listener.pop_pending_socket_for_transparent_route(
+            token
+        )
+        self.assertIs(claimed_by_proxy, pending)
+        with self.assertRaises(asyncio.CancelledError):
+            await sniff
+
     async def test_transparent_route_refuses_ambiguous_or_strong_foreign_socket(
         self,
     ) -> None:
@@ -4490,6 +4533,190 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(closed_sessions, ["session-old", "session-new"])
         self.assertTrue(writer2.closed)
 
+    async def test_unwrapped_rtu_response_closes_only_corrupted_framed_session(
+        self,
+    ) -> None:
+        """Regression for #39: raw RTU must not consume later EyeBond frames."""
+
+        async def _quiet_heartbeat(self) -> None:
+            return None
+
+        connection = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        connection._tid._value = 0x6AED
+        reader1 = asyncio.StreamReader()
+        writer1 = _FakeWriter()
+
+        with patch.object(
+            _CollectorConnection,
+            "_heartbeat_loop",
+            new=_quiet_heartbeat,
+        ):
+            run1 = asyncio.create_task(
+                connection.run(reader1, writer1)  # type: ignore[arg-type]
+            )
+            self.assertTrue(await connection.wait_until_connected(1.0))
+            request1 = asyncio.create_task(
+                connection.async_send_forward(
+                    b"\x01\x03\x00\xAB\x00\x01\xF5\xEA",
+                    devcode=0x0200,
+                    collector_addr=1,
+                    request_timeout=1.0,
+                )
+            )
+            await _wait_for_writer_buffer(
+                writer1,
+                build_collector_request(
+                    0x6AEE,
+                    b"\x01\x03\x00\xAB\x00\x01\xF5\xEA",
+                    devcode=0x0200,
+                    collector_addr=1,
+                    fcode=4,
+                ),
+            )
+
+            # The first seven bytes are the exact CRC-valid raw Modbus response
+            # from the issue capture. The old reader borrowed 0x6A from the next
+            # valid frame, decoded a 364-byte pseudo-payload, and stalled while
+            # consuming every response that followed.
+            raw_rtu = bytes.fromhex("01030235016ed4")
+            valid_later = build_collector_request(
+                0x6AEE,
+                b"\x01\x03\x02\x35\x01\x6E\xD4",
+                devcode=0x0200,
+                collector_addr=1,
+                fcode=4,
+            )
+            reader1.feed_data(raw_rtu + valid_later)
+
+            await asyncio.wait_for(run1, timeout=1.0)
+            with self.assertRaisesRegex(ConnectionError, "collector_disconnected"):
+                await request1
+
+            first_snapshot = connection.collector_info
+            self.assertEqual(
+                first_snapshot.last_disconnect_reason,
+                "collector_frame_function_invalid",
+            )
+            self.assertEqual(first_snapshot.pending_request_drop_count, 1)
+            self.assertTrue(writer1.closed)
+
+            # A fresh callback session on the same connection facade accepts a
+            # normally fragmented frame and resumes request dispatch.
+            reader2 = asyncio.StreamReader()
+            writer2 = _FakeWriter()
+            run2 = asyncio.create_task(
+                connection.run(reader2, writer2)  # type: ignore[arg-type]
+            )
+            self.assertTrue(await connection.wait_until_connected(1.0))
+            request2 = asyncio.create_task(
+                connection.async_send_forward(
+                    b"\x01\x03\x00\xAC\x00\x01\x44\x2A",
+                    devcode=0x0200,
+                    collector_addr=1,
+                    request_timeout=1.0,
+                )
+            )
+            expected_request = build_collector_request(
+                0x6AEF,
+                b"\x01\x03\x00\xAC\x00\x01\x44\x2A",
+                devcode=0x0200,
+                collector_addr=1,
+                fcode=4,
+            )
+            await _wait_for_writer_buffer(writer2, expected_request)
+            response_payload = b"\x01\x03\x02\x12\x34\xB5\x33"
+            response = build_collector_request(
+                0x6AEF,
+                response_payload,
+                devcode=0x0200,
+                collector_addr=1,
+                fcode=4,
+            )
+            reader2.feed_data(response[:1])
+            await asyncio.sleep(0.01)
+            reader2.feed_data(response[1:HEADER_SIZE])
+            await asyncio.sleep(0.01)
+            reader2.feed_data(response[HEADER_SIZE:])
+            self.assertEqual(await request2, response_payload)
+            reader2.feed_eof()
+            await asyncio.wait_for(run2, timeout=1.0)
+
+    async def test_framed_reader_bounds_partial_header_and_payload(self) -> None:
+        async def _quiet_heartbeat(self) -> None:
+            return None
+
+        async def _run_failure(
+            wire: bytes,
+            *,
+            expected_reason: str,
+            header_timeout: float = 2.0,
+            payload_timeout: float = 5.0,
+        ) -> None:
+            connection = _CollectorConnection(
+                remote_ip_hint="203.0.113.10",
+                heartbeat_interval=60.0,
+                write_timeout=0.5,
+            )
+            reader = asyncio.StreamReader()
+            writer = _FakeWriter()
+            with (
+                patch.object(
+                    _CollectorConnection,
+                    "_heartbeat_loop",
+                    new=_quiet_heartbeat,
+                ),
+                patch(
+                    "custom_components.eybond_local.collector.transport.connections._FRAMED_HEADER_COMPLETION_TIMEOUT",
+                    header_timeout,
+                ),
+                patch(
+                    "custom_components.eybond_local.collector.transport.connections._FRAMED_PAYLOAD_COMPLETION_TIMEOUT",
+                    payload_timeout,
+                ),
+            ):
+                run = asyncio.create_task(
+                    connection.run(reader, writer)  # type: ignore[arg-type]
+                )
+                self.assertTrue(await connection.wait_until_connected(1.0))
+                reader.feed_data(wire)
+                await asyncio.wait_for(run, timeout=1.0)
+            self.assertEqual(
+                connection.collector_info.last_disconnect_reason,
+                expected_reason,
+            )
+            self.assertTrue(writer.closed)
+
+        await _run_failure(
+            b"\x00",
+            expected_reason="collector_frame_header_timeout",
+            header_timeout=0.05,
+        )
+        await _run_failure(
+            build_collector_request(
+                1,
+                b"\x00" * 8,
+                devcode=0x0200,
+                collector_addr=1,
+                fcode=4,
+            )[: HEADER_SIZE + 2],
+            expected_reason="collector_frame_payload_timeout",
+            payload_timeout=0.05,
+        )
+        await _run_failure(
+            build_collector_request(
+                1,
+                b"\x00" * 4097,
+                devcode=0x0200,
+                collector_addr=1,
+                fcode=4,
+            )[:HEADER_SIZE],
+            expected_reason="collector_frame_payload_too_large",
+        )
+
     async def test_replaced_socket_closes_only_its_session_inventory(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         connection = _CollectorConnection(
@@ -4507,6 +4734,9 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
         listener._mark_session_state("session-new", "routed_framed")
         listener._session_payload_connections["session-old"] = connection
         listener._session_payload_connections["session-new"] = connection
+        connection._collector.last_disconnect_reason = (
+            "collector_frame_function_invalid"
+        )
 
         listener._mark_socket_session_closed("session-old", connection)
 
@@ -4515,6 +4745,10 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
             for item in listener.session_inventory_diagnostics()["sessions"]
         }
         self.assertEqual(inventory["session-old"]["state"], "closed_disconnected")
+        self.assertEqual(
+            inventory["session-old"]["close_reason"],
+            "collector_frame_function_invalid",
+        )
         self.assertEqual(inventory["session-new"]["state"], "routed_framed")
         self.assertNotIn("session-old", listener._session_payload_connections)
         self.assertIs(

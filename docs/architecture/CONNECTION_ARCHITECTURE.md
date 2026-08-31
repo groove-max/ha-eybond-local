@@ -103,6 +103,15 @@ no longer exposed and new options writes normalize the field to `false`.
 Temporary **Collector traffic capture** is a separate, explicit diagnostics
 action with its own route lease and timer; it is not controlled by this field.
 
+The byte-transparent capture lease is also the exclusive **first-reader** of
+any causally new socket compatible with that route. While the lease is active,
+the normal runtime must not identity-probe or claim the reserved socket, even
+when its peer address or a previously observed PN looks familiar. Reading or
+writing before the transparent relay owns the socket would alter the real
+collector/cloud handshake. Baseline sessions and sockets whose observed wire
+shape cannot belong to the transparent route remain available to their normal
+owners. Unregistering the lease releases this reservation.
+
 ## Session registry owns identity
 
 `connection/session_registry.py` (`CallbackSessionRegistry`) is the single object
@@ -128,6 +137,16 @@ entry-claimed `SessionHandle` (via the runtime-scoped registry over the public
 wire from the *observed* session, not from a persisted `collector_session_protocol`
 hint. Untrusted states (`route_identity_mismatch`, `waiting_for_route_identity`,
 `parked_*`, `closed_*`) can never override a claimed, routed session.
+
+The framed runtime reader is fail-closed at the physical socket boundary. An
+idle socket may remain silent indefinitely, but once the first byte of a frame
+arrives, header and payload completion are bounded and the decoded local-runtime
+header must have a supported function code and plausible length. A malformed or
+truncated frame closes only that socket, fails its pending request, and records a
+typed close reason in the session inventory; a later callback starts with a new
+reader. The reader never scans forward for a convenient byte pattern and never
+reclassifies an unexpected raw RTU response as a framed reply, because either
+would risk dispatching bytes from different transactions together.
 
 ## `callback_on_demand` is one-shot
 

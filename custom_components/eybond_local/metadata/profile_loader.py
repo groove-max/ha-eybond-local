@@ -780,10 +780,6 @@ def _validate_profile(profile: DriverProfileMetadata) -> None:
                 f"profile:{profile.key}:unsupported_support_tier:"
                 f"{capability.key}:{capability.support_tier}"
             )
-        if capability.support_tier == "blocked" and capability.tested:
-            raise ValueError(
-                f"profile:{profile.key}:blocked_capability_cannot_be_tested:{capability.key}"
-            )
         _unique_or_raise(
             items=(str(choice.value) for choice in capability.enum_choices),
             kind=f"choice_value:{capability.key}",

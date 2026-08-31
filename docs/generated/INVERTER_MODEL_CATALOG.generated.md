@@ -108,8 +108,9 @@ Runtime descriptors with no specific commercial model record. These are generic 
   - Coverage notes:
     - Device-specific runtime profile is user-confirmed.
     - Communication Protocol No. 3-10 documentation defines the protocol-4 telemetry projection used by this model.
-    - The captured 0x8401 hardware fingerprint uses the documented Protocol 4 telemetry surface; its write controls remain untested and require explicit Full Control.
-    - Register 602 secondary-output priority is documented and hardware-read-correlated; local write behavior remains conditional pending a device retest.
+    - The captured 0x8401 hardware fingerprint uses the documented Protocol 4 telemetry and control surface.
+    - The 0x8401 owner confirmed local writes and resulting device behavior for OP2 enable plus start-hour and end-hour timer controls, including controls absent from the vendor apps.
+    - The documented Protocol 4 control surface is treated as tested for this exact fingerprint; irreversible generation-data clear and user-parameter reset actions remain blocked by the independent safety policy.
 - Summary: Anenji 11kW unit with a model-specific control profile over the shared protocol-4 register projection, backed by donor captures, user-confirmed controls, and the Protocol No. 3-10 documentation.
 - Variants:
   - `layout4_model32768` — Anenji 11kW variant
@@ -123,13 +124,13 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - Validation override: hardware captured, telemetry confirmed, controls partial
     - Descriptors: anenji_anj_11kw_8401
     - Known firmware: —
-    - `anenji_anj_11kw_8401` → surface `smg_protocol_4_family_fallback` (driver modbus_smg, variant protocol_4_family_fallback)
+    - `anenji_anj_11kw_8401` → surface `smg_anenji_11kw_8401_full` (driver modbus_smg, variant anenji_anj_11kw_48v_wifi_p_8401)
       - Protocol: modbus_smg | Detection: fingerprint (layout 4, model 33793, rated —)
-      - Tier: full | Read-only: no | Profile: modbus_smg/protocols/communication_protocol_4.json | Schema: modbus_smg/protocols/communication_protocol_4.json
-      - Capabilities: 60 (untested 60); support tiers: blocked 2, conditional 58 | Telemetry: 117 measurements, 18 binary sensors
+      - Tier: full | Read-only: no | Profile: modbus_smg/models/anenji_anj_11kw_48v_wifi_p_8401.json | Schema: modbus_smg/protocols/communication_protocol_4.json
+      - Capabilities: 60 (tested 60); support tiers: blocked 2, conditional 55, standard 3 | Telemetry: 117 measurements, 18 binary sensors
 - Known limitations:
-  - Secondary Output Priority writes are available only in Full Control until register 602 is write-tested on hardware.
-- Evidence: 5 source(s)
+  - Irreversible generation-data clear and user-parameter reset actions remain blocked even though the ordinary Protocol 4 control surface is enabled.
+- Evidence: 6 source(s)
 
 ### Anenji — ANJ-4000W-24V (`anenji_4200_protocol_1`)
 

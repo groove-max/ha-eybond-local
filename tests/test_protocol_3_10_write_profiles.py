@@ -181,9 +181,6 @@ class CommunicationProtocolWriteProfileTests(unittest.TestCase):
                 "secondary_output_priority",
                 "secondary_output_priority_start_time",
                 "secondary_output_priority_end_time",
-                "op2_output_enabled",
-                "op2_output_start_hour",
-                "op2_output_end_hour",
                 "lithium_battery_automatic_activation_enabled",
                 "lithium_battery_activation_once",
                 "clear_generation_data",
@@ -191,10 +188,24 @@ class CommunicationProtocolWriteProfileTests(unittest.TestCase):
                 "op1_offgrid_low_voltage_protection",
                 "secondary_charging_priority_start_time",
                 "secondary_charging_priority_end_time",
+                "op2_output_enabled",
+                "op2_output_start_hour",
+                "op2_output_end_hour",
             },
         )
         self.assertTrue(anenji.get_capability("op2_overload_alarm_setting").tested)
         self.assertTrue(anenji.get_capability("external_ct_enabled").tested)
+
+        anenji_8401 = load_driver_profile(
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p_8401.json"
+        )
+        self.assertEqual(len(anenji_8401.capabilities), 60)
+        self.assertTrue(
+            all(capability.tested for capability in anenji_8401.capabilities)
+        )
+        self.assertTrue(
+            anenji_8401.get_capability("op2_overload_alarm_setting").tested
+        )
 
         sandisolar = load_driver_profile(
             "modbus_smg/models/sandisolar_sd_11kp48v_wifi.json"

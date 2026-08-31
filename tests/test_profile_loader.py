@@ -683,9 +683,6 @@ class ProfileLoaderTests(unittest.TestCase):
                 "secondary_output_priority",
                 "secondary_output_priority_start_time",
                 "secondary_output_priority_end_time",
-                "op2_output_enabled",
-                "op2_output_start_hour",
-                "op2_output_end_hour",
                 "lithium_battery_automatic_activation_enabled",
                 "lithium_battery_activation_once",
                 "clear_generation_data",
@@ -693,6 +690,9 @@ class ProfileLoaderTests(unittest.TestCase):
                 "op1_offgrid_low_voltage_protection",
                 "secondary_charging_priority_start_time",
                 "secondary_charging_priority_end_time",
+                "op2_output_enabled",
+                "op2_output_start_hour",
+                "op2_output_end_hour",
             },
         )
         self.assertEqual(profile.get_capability("clear_generation_data").register, 705)
@@ -702,6 +702,33 @@ class ProfileLoaderTests(unittest.TestCase):
         self.assertEqual(profile.get_capability("battery_equalization_mode").register, 651)
         with self.assertRaises(KeyError):
             profile.get_capability("remote_switch")
+
+    def test_anenji_8401_profile_treats_documented_non_destructive_surface_as_tested(
+        self,
+    ) -> None:
+        profile_loader.load_driver_profile.cache_clear()
+
+        profile = profile_loader.load_driver_profile(
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p_8401.json"
+        )
+
+        self.assertEqual(
+            profile.key,
+            "modbus_smg_anenji_anj_11kw_48v_wifi_p_8401",
+        )
+        self.assertEqual(len(profile.capabilities), 60)
+        self.assertTrue(all(capability.tested for capability in profile.capabilities))
+        self.assertTrue(profile.get_capability("op2_overload_alarm_setting").tested)
+        self.assertTrue(profile.get_capability("secondary_output_priority").tested)
+        self.assertTrue(profile.get_capability("lithium_battery_activation_once").tested)
+        self.assertEqual(
+            {
+                capability.key
+                for capability in profile.capabilities
+                if capability.resolved_support_tier == "blocked"
+            },
+            {"clear_generation_data", "reset_user_parameters"},
+        )
 
     def test_sandisolar_issue_13_profile_exposes_only_confirmed_writes_as_tested(self) -> None:
         profile_loader.load_driver_profile.cache_clear()

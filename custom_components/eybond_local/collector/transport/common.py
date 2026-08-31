@@ -162,21 +162,7 @@ def _looks_like_eybond_frame_start(chunk: bytes) -> bool:
         header = decode_header(chunk)
     except Exception:
         return False
-    if header.total_len < HEADER_SIZE:
-        return False
-    if header.total_len > 4096:
-        return False
-    if header.fcode not in {
-        FC_HEARTBEAT,
-        FC_QUERY_COLLECTOR,
-        FC_SET_COLLECTOR,
-        FC_FORWARD_TO_DEVICE,
-        FC_SET_DEVICE_REG,
-        FC_TRIGGER_QUERY_REAL_TIME,
-        FC_TRIGGER_QUERY_HISTORY,
-    }:
-        return False
-    return True
+    return _runtime_eybond_header_error(header) == ""
 
 
 def _classify_initial_protocol_shape(chunk: bytes) -> str:
@@ -240,6 +226,26 @@ _AT_TEXT_MIXED_FRAME_FCODES = {
     FC_SET_DEVICE_REG,
     FC_TRIGGER_QUERY_HISTORY,
 }
+
+
+def _runtime_eybond_header_error(header: EybondHeader) -> str:
+    """Return a typed reason when a runtime EyeBond header is implausible.
+
+    ``decode_header`` deliberately stays a mechanical wire decoder because the
+    transparent cloud tooling understands more function codes than the local
+    runtime.  The runtime reader, protocol sniffing, and the mixed AT reader do
+    need one shared fail-closed definition, however: accepting an arbitrary
+    eight-byte sequence as a header can turn one raw RTU response into a large
+    pseudo-frame and consume every valid frame that follows it.
+    """
+
+    if header.payload_len < 0:
+        return "collector_frame_length_invalid"
+    if header.payload_len > _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN:
+        return "collector_frame_payload_too_large"
+    if header.fcode not in _AT_TEXT_MIXED_FRAME_FCODES:
+        return "collector_frame_function_invalid"
+    return ""
 
 
 def _mask_identity_token(value: str) -> str:

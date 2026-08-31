@@ -140,9 +140,16 @@ class CatalogIdentityProbeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(probe.match.kind, MATCH_DEVICE)
         self.assertEqual(probe.match.entry.entry_key, "anenji_anj_11kw_8401")
         self.assertEqual(probe.match.entry.model_name, "Anenji ANJ-11KW-48V-WIFI-P")
-        self.assertEqual(probe.match.entry.binding.variant_key, "protocol_4_family_fallback")
+        self.assertEqual(
+            probe.match.entry.binding.variant_key,
+            "anenji_anj_11kw_48v_wifi_p_8401",
+        )
         self.assertEqual(
             probe.match.entry.binding.profile_name,
+            "modbus_smg/models/anenji_anj_11kw_48v_wifi_p_8401.json",
+        )
+        self.assertEqual(
+            probe.match.entry.binding.register_schema_name,
             "modbus_smg/protocols/communication_protocol_4.json",
         )
         self.assertEqual(probe.layout_code, 4)

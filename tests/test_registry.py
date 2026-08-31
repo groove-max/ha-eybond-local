@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -16,11 +17,20 @@ from custom_components.eybond_local.drivers.registry import (
     get_driver,
     measurements_for_driver,
     measurements_for_runtime,
+    prime_metadata_caches,
 )
 from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
 
 
 class RegistryTests(unittest.TestCase):
+    def test_metadata_priming_includes_smartess_semantic_catalog(self) -> None:
+        with patch(
+            "custom_components.eybond_local.drivers.registry.load_smartess_semantic_catalog"
+        ) as load_semantic_catalog:
+            prime_metadata_caches()
+
+        load_semantic_catalog.assert_called_once_with()
+
     def test_common_primary_core_is_consistent_across_smg_and_pi30(self) -> None:
         expected_primary = {
             "operating_mode": ("Operating Mode", "mdi:state-machine"),
