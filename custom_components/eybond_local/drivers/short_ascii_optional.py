@@ -177,8 +177,12 @@ class OptionalReads:
                 sample.outcome = "not_checked"
         due = [sample for sample in self.samples
                if sample.outcome != "unsupported" and now >= sample.next_due]
-        # Oldest scheduled group first; an unsupported RB cannot starve F/RH.
-        sample = min(due, key=lambda item: item.next_due) if due else None
+        # Oldest due first within the chosen set. Prefer FC4 (RB/F/RH) over aux
+        # MPPT when both are due so a virgin MPPT next_due=0 cannot starve an
+        # intentional RB refresh; MPPT still runs when it is the only due sample.
+        fc4_due = [sample for sample in due if sample.command != MPPT_COMMAND]
+        candidates = fc4_due or due
+        sample = min(candidates, key=lambda item: item.next_due) if candidates else None
         if sample is not None:
             key = _PREFIX + sample.command
             try:
