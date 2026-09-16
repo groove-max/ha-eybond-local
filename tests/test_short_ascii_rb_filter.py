@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 
 from test_eybond_short_ascii import _Transport, _responses
-from test_short_ascii_optional import _rb
+from test_short_ascii_optional import _rb, _rh
 from custom_components.eybond_local.drivers.eybond_short_ascii import EybondShortAsciiDriver
 from custom_components.eybond_local.drivers.short_ascii_optional import STATE_KEY
 from custom_components.eybond_local.drivers.short_ascii_rb_filter import (
@@ -73,10 +73,14 @@ class HardRejectUnitTests(unittest.TestCase):
         ratings = dict(rated_voltage=115.0, rated_current=105.0, rated_battery_voltage=48.0)
         # F VA / F Vbat ≈ 251.6 A
         self.assertIsNone(hard_reject_reason(
-            _good_rb_values(bms_discharge_current=250.0), **ratings,
+            _good_rb_values(bms_discharging_current=250.0), **ratings,
         ))
         self.assertEqual(
-            hard_reject_reason(_good_rb_values(bms_discharge_current=260.0), **ratings),
+            hard_reject_reason(_good_rb_values(bms_discharging_current=260.0), **ratings),
+            "current",
+        )
+        self.assertEqual(
+            hard_reject_reason(_good_rb_values(bms_charging_current=300.0), **ratings),
             "current",
         )
 
@@ -84,7 +88,7 @@ class HardRejectUnitTests(unittest.TestCase):
         # SoC 0 + 16 V + |P|≈28.7 kW (< 3×12 kVA). Must die on V.
         values = _good_rb_values(
             battery_soc=0, bms_total_voltage=16.0, battery_power=-28740.8,
-            bms_charging_current=2048.0, bms_discharge_current=3844.3,
+            bms_charging_current=2048.0, bms_discharging_current=3844.3,
         )
         ratings = dict(rated_voltage=115.0, rated_current=105.0, rated_battery_voltage=48.0)
         self.assertEqual(hard_reject_reason(values, **ratings), "pack_voltage")
@@ -239,7 +243,9 @@ class LinkLossFilterUnitTests(unittest.TestCase):
 class RbFilterDriverTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.driver = EybondShortAsciiDriver()
-        responses = _responses() | {"RB": _rb(), "F": b"#115.0 105 48.00 60.0\r"}
+        responses = _responses() | {
+            "RB": _rb(), "F": b"#115.0 105 48.00 60.0\r", "RH": _rh(accuracy=1),
+        }
         self.transport = _Transport(responses)
         self.inverter = await self.driver.async_probe(self.transport, ProbeTarget(767, 255, 1))
         self.state = {}
@@ -254,8 +260,8 @@ class RbFilterDriverTests(unittest.IsolatedAsyncioTestCase):
         for raw_voltage, decoded in ((160, 16.0), (12301, 1230.1)):
             with self.subTest(decoded_v=decoded):
                 await self.asyncSetUp()
-                await self.read(0); await self.read(1)
-                self.assertEqual((await self.read(2)).values.get("bms_total_voltage"), 52)
+                await self.read(0); await self.read(1); await self.read(2)
+                self.assertEqual((await self.read(3)).values.get("bms_total_voltage"), 52)
                 self.transport.responses["RB"] = _rb(voltage=raw_voltage, soc=0 if raw_voltage == 160 else 1)
                 rejected = await self.read(31)
                 self.assertNotEqual(rejected.values.get("bms_total_voltage"), decoded)
@@ -264,7 +270,7 @@ class RbFilterDriverTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("RB=rejected", rejected.diagnostics["short_ascii_optional_status"])
 
     async def test_soc_zero_with_sane_voltage_publishes(self):
-        await self.read(0); await self.read(1)
+        await self.read(0); await self.read(1); await self.read(2)
         self.transport.responses["RB"] = _rb(soc=0)
         result = await self.read(31)
         self.assertEqual(result.values["battery_soc"], 0)
@@ -272,7 +278,7 @@ class RbFilterDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.values["short_ascii_bms_data_available"])
 
     async def test_link_loss_hold_keeps_last_good_stale_until_180s(self):
-        await self.read(0); await self.read(1)
+        await self.read(0); await self.read(1); await self.read(2)
         self.transport.responses["RB"] = _rb(voltage=0, soc=0)
         held = await self.read(31)
         self.assertEqual(held.values["battery_soc"], 80)
@@ -292,7 +298,7 @@ class RbFilterDriverTests(unittest.IsolatedAsyncioTestCase):
     async def test_ttl_expiry_clears_last_good_so_link_loss_cannot_resurrect(self):
         # critical regression: TTL must kill last_good; later link-loss must not
         # republish with sampled_at is None.
-        await self.read(0); await self.read(1)
+        await self.read(0); await self.read(1); await self.read(2)
         rb = self.state[STATE_KEY].samples[0]
         rb.next_due = 10_000
         expired = await self.read(61)
@@ -312,7 +318,7 @@ class RbFilterDriverTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_continuous_link_loss_stops_after_180s_from_last_good(self):
         # serious regression: every link-loss frame must not sticky-extend hold.
-        await self.read(0); await self.read(1)
+        await self.read(0); await self.read(1); await self.read(2)
         self.transport.responses["RB"] = _rb(voltage=0, soc=0)
         self.assertEqual((await self.read(31)).values.get("battery_soc"), 80)
         for t in (61, 91, 121, 151):
@@ -324,7 +330,7 @@ class RbFilterDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("bms_total_voltage", gone.values)
 
     async def test_checksum_fail_drops_without_starting_hold(self):
-        await self.read(0); await self.read(1)
+        await self.read(0); await self.read(1); await self.read(2)
         wire = bytearray(_rb())
         wire[-2] ^= 1
         self.transport.responses["RB"] = bytes(wire)
@@ -340,7 +346,7 @@ class RbFilterDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(reads.rb_filter.last_good)
 
     async def test_optional_rb_sixty_second_ttl_without_link_loss(self):
-        await self.read(0); await self.read(1)
+        await self.read(0); await self.read(1); await self.read(2)
         # Do not re-query RB; age past 60 s clears without link-loss hold.
         self.state[STATE_KEY].samples[0].next_due = 10_000
         late = await self.read(61)
@@ -348,8 +354,8 @@ class RbFilterDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("RB=expired", late.diagnostics["short_ascii_optional_status"])
 
     async def test_diagnostic_counters_publish_transitions_and_hold_pending_stays_zero(self):
-        await self.read(0); await self.read(1)
-        baseline = await self.read(2)
+        await self.read(0); await self.read(1); await self.read(2)
+        baseline = await self.read(3)
         self.assertEqual(baseline.diagnostics["bms_link_loss_count"], 0)
         self.assertEqual(baseline.diagnostics["rb_hard_reject_count"], 0)
         self.assertEqual(baseline.diagnostics["reading_hold_pending_count"], 0)
@@ -387,8 +393,7 @@ class RbFilterDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.diagnostics["reading_hold_pending_count"], 0)
 
     async def test_hard_reject_publishes_reject_counter(self):
-        await self.read(0); await self.read(1)
-        await self.read(2)
+        await self.read(0); await self.read(1); await self.read(2)
         self.transport.responses["RB"] = _rb(voltage=160, soc=0)  # 16.0 V
         rejected = await self.read(31)
         self.assertIn("RB=rejected", rejected.diagnostics["short_ascii_optional_status"])

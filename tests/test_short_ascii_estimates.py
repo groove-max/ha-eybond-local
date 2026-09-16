@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 
 from test_eybond_short_ascii import _Transport, _responses
-from test_short_ascii_optional import _rb
+from test_short_ascii_optional import _rb, _rh
 from custom_components.eybond_local.drivers.eybond_short_ascii import EybondShortAsciiDriver
 from custom_components.eybond_local.drivers.short_ascii_estimates import estimated_ac_load_values
 from custom_components.eybond_local.metadata.register_schema_loader import load_register_schema
@@ -53,7 +53,9 @@ class EstimatedAcLoadUnitTests(unittest.TestCase):
 class EstimatedAcLoadDriverTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.driver = EybondShortAsciiDriver()
-        responses = _responses() | {"RB": _rb(), "F": b"#115.0 105 48.00 60.0\r"}
+        responses = _responses() | {
+            "RB": _rb(), "F": b"#115.0 105 48.00 60.0\r", "RH": _rh(accuracy=1),
+        }
         self.transport = _Transport(responses)
         self.inverter = await self.driver.async_probe(self.transport, ProbeTarget(767, 255, 1))
         self.state = {}

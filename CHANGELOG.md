@@ -21,10 +21,16 @@ the GitHub release body should be rendered from the matching version section her
   or inverter controls are inferred.
 
 - Short-ASCII devices can also expose documented BMS and rated readings through
-  optional read-only RB/F queries. These entities are disabled by default.
+  optional read-only RB/F/RH queries. These entities are disabled by default.
   Missing, invalid or expired BMS samples remove their old values without
-  interrupting basic telemetry. BMS current scaling and PV remain unqualified;
-  this is not full device or control support (#45).
+  interrupting basic telemetry. Charge/discharge currents and measured
+  `battery_power` publish at 19B4 segment-7 `multiply=0.1` only while optional
+  RH reports BMS current display accuracy `1` (with decimals) and F ratings are
+  present for I/P bounds; RH `0`, unread or failed RH omits those keys. RH=1 is
+  the discriminator (no retail-model gate). One live family member has
+  SmartValue correlation for that path; other members (e.g. Maxinn) are not
+  separately live-proven. Live PV remains absent; this is not full device or
+  control support (#45).
 
 ### Fixed
 

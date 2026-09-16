@@ -36,6 +36,7 @@ POWER_OVERLOAD_FACTOR = 3.0
 _CURRENT_KEYS = (
     "battery_current",
     "bms_charging_current",
+    "bms_discharging_current",
     "bms_discharge_current",
     "bms_charge_current",
 )

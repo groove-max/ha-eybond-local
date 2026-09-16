@@ -80,31 +80,41 @@ candidate revisions, resolution and evidence fingerprint. Reload must restore
 that schema without borrowing default driver controls. Unqualified schema-only
 hints remain invalid.
 
-Optional F (22-byte fixed text) and RB (40 bytes, unsigned **8-bit** body sum,
-not Q1's 16-bit checksum) are runtime reads, not additional detection probes.
-The documented 25-byte RB field layout and captured 12 zero padding bytes are
-required; unknown extensions are rejected. Vendor 19B4 segments 6/7 and the
-correlated saved exchanges qualify these fields. Segment 5 also describes a
-BMS precision setting, but only one variant was captured: RB currents remain
-raw evidence until their scaling is established for both variants.
+Optional F (22-byte fixed text), RH (30 bytes, unsigned **8-bit** body sum) and
+RB (40 bytes, unsigned **8-bit** body sum, not Q1's 16-bit checksum) are runtime
+reads, not additional detection probes. The documented 25-byte RB field layout
+and captured 12 zero padding bytes are required; unknown extensions are
+rejected. Vendor 19B4 segments 6/7 and the correlated saved exchanges qualify
+the non-current RB fields. Segment 7 documents charge/discharge
+``multiply=0.1``; those currents and measured ``battery_power``
+(V × (Icharge − Idischarge)) publish only while optional RH reports BMS current
+display accuracy ``1`` (with decimals) and F ratings are available for I/P
+hard-reject bounds. RH ``0``, unread, expired or failed RH omits the keys —
+do not publish ÷10 blindly. RH=1 is the discriminator (no retail-model gate).
+That RH=1 path is SmartValue-correlated on one live family member; other
+members (e.g. Maxinn) are not separately live-proven and only light up if
+RH=1.
 
 `short_ascii_optional` owns per-runtime samples, scoped to the transport and
 inverter binding. The hub discards this state on recovery; samples are never
 persisted as identity. Each successful Q1 cycle performs at most one optional
 request (4-second bound), oldest due group first: RB every 30 seconds with a
-60-second TTL, F every 900 seconds with a 900-second TTL. Freshness is checked
-after the await. Invalid/timeout replies clear that group immediately, and
-FULL-result omission removes it from the hub. A failed or cancelled mandatory
-cycle, lost connection, changed binding or clock rollback clears all samples.
-Only optional failures alongside a successful Q1 count towards the shared
-four-strike command cache; the existing re-check action re-enables requests.
+60-second TTL, F and RH every 900 seconds with a 900-second TTL. Freshness is
+checked after the await. Invalid/timeout replies clear that group immediately,
+and FULL-result omission removes it from the hub. A failed or cancelled
+mandatory cycle, lost connection, changed binding or clock rollback clears all
+samples. Only optional failures alongside a successful Q1 count towards the
+shared four-strike command cache; the existing re-check action re-enables
+requests.
 
 An RB reply with zero voltage and zero SOC explicitly withdraws **all** BMS
 measurements/path flags, including nonzero trailing fields seen in the capture.
 Positive voltage with zero SOC remains valid. Data availability is not a
 physical connection detector. Reference voltage, BMS voltage and ratings have
-separate owners; no current scaling, VA-to-watts or pack-voltage inference is
-allowed. Optional entities are disabled by default. Support evidence capture
+separate owners; pack-voltage is never inferred from reference voltage.
+Measured battery DC watts use published BMS currents; the labelled AC-load
+estimate uses load% × rated VA — never substitute one for the other.
+Optional entities are disabled by default. Support evidence capture
 can read MP/Q1/MD/F/RB without changing command-support state.
 
 AABB/PV admission and inverter controls remain separate work. Do not report
