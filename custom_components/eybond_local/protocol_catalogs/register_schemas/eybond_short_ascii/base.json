@@ -15,6 +15,7 @@
     {"key": "grid_voltage", "name": "Grid Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
     {"key": "output_voltage", "name": "Output Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
     {"key": "load_percent", "name": "Load Percent", "unit": "%", "state_class": "measurement", "icon": "mdi:gauge"},
+    {"key": "estimated_ac_load_power", "name": "Estimated AC Load Power", "unit": "W", "device_class": "power", "state_class": "measurement", "icon": "mdi:flash", "enabled_default": true},
     {"key": "output_frequency", "name": "Output Frequency", "unit": "Hz", "device_class": "frequency", "state_class": "measurement"},
     {"key": "battery_reference_voltage", "name": "Battery Reference Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement", "diagnostic": true},
     {"key": "temperature", "name": "Inverter Temperature", "unit": "°C", "device_class": "temperature", "state_class": "measurement"},
@@ -52,9 +53,10 @@
     "Baseline FC4 payloads: MP 38 bytes, Q1 51 bytes, MD 24 bytes; no retail-model or serial-number inference.",
     "Q1 has fixed columns and an unsigned additive 16-bit checksum. Missing columns, truncation and shifted replies are rejected.",
     "Battery Reference Voltage is the vendor's single-battery value, not an inferred whole-pack voltage.",
-    "Output frequency is not grid frequency. The Q1 trailing output word has unresolved semantics and stays in raw support evidence.",
+    "Output frequency is not grid frequency; do not alias the two. The Q1 trailing output word has unresolved semantics and stays in raw support evidence.",
     "Optional F and qualified 40-byte RB replies are sampled after detection, with bounded cache lifetime and immediate invalidation on failure. They are disabled-by-default entities because support varies by device.",
     "RB current scaling depends on RH configuration and is not inferred. RB zero voltage plus zero SOC withdraws all BMS measurements, including trailing retained fields.",
-    "Auxiliary AABB/PV fields and all controls remain absent. Ratings are not a source of measured power."
+    "Auxiliary AABB/PV fields and all controls remain absent. Ratings are not a source of measured power.",
+    "estimated_ac_load_power is load_percent × (rated voltage × rated current) from F. It is an estimate, not measured active power; wire load_percent stays published separately."
   ]
 }
