@@ -4,10 +4,13 @@ This project is designed to grow through transport-aware payload drivers plus de
 
 ### Internal auxiliary-channel foundation
 
-The short-ASCII auxiliary channel is not yet exposed by a driver, catalog entry
-or discovery route. Its socket-level implementation is shared by the framed and
-AT connections. Do not enable it merely because an incoming packet starts with
-`AA BB`, or because a collector name or endpoint looks familiar.
+The short-ASCII auxiliary channel is not yet admitted by a driver, catalog entry
+or discovery route, and it still publishes no PV entities. Socket-level
+`async_send_auxiliary_read` is shared by the framed and AT connections;
+`SharedEybondTransport` now exposes the same method as a thin facade so a future
+optional module can call it without reaching into `connections.py`. Do not
+enable it merely because an incoming packet starts with `AA BB`, or because a
+collector name or endpoint looks familiar.
 
 The internal `async_send_auxiliary_read` accepts only the two documented
 21-byte read queries (subtypes `0200` and `0202`), without a UART bootstrap or
@@ -15,16 +18,19 @@ device-setting write. A socket-scoped owner keeps mixed binary framing enabled
 after a caller finishes; it never derives the grammar from a live future.
 Only the request present at the start of a frame can receive that frame.
 Cancellation or timeout after sending closes that exact socket, since these
-replies have no transaction identifier. Reconnection starts a new owner.
+replies have no transaction identifier. Reconnection starts a new owner. The
+framed facade forwards ownership, timeout and query gating to that connection
+method; it does not reimplement framing.
 
 Integrity or boundary failures close the session. In particular, a valid
 EyeBond frame with transaction ID `0xAABB` can overlap the auxiliary grammar:
 neither a valid checksum nor an absent waiter resolves that ambiguity. The
 current foundation refuses such a frame; it does **not** guarantee auxiliary
-availability for every possible payload. Driver-level admission, truthful
+availability for every possible payload. Driver/catalog admission, truthful
 model/field semantics and optional-data expiry remain separate work before
-user-facing support. Normal connections keep their existing grammar until an
-explicit auxiliary read is requested.
+user-facing support (facade exposure alone is incomplete admission). Normal
+connections keep their existing grammar until an explicit auxiliary read is
+requested.
 
 Ordinary framed, AT-management and raw-payload sends also pin their physical
 writer and run epoch before waiting for request/write locks. `SocketSendOwner`
