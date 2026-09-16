@@ -110,15 +110,23 @@ requests.
 An RB reply with zero voltage and zero SOC explicitly withdraws **all** BMS
 measurements/path flags, including nonzero trailing fields seen in the capture.
 Positive voltage with zero SOC remains valid. Data availability is not a
-physical connection detector. Reference voltage, BMS voltage and ratings have
-separate owners; pack-voltage is never inferred from reference voltage.
-Measured battery DC watts use published BMS currents; the labelled AC-load
-estimate uses load% × rated VA — never substitute one for the other.
-Optional entities are disabled by default. Support evidence capture
-can read MP/Q1/MD/F/RB without changing command-support state.
+physical connection detector. After envelope parse, ``short_ascii_rb_filter``
+hard-rejects impossible V/SoC/I/P (pack window, SoC 0–100, current above
+1× ``rated_va / rated_battery_voltage``, power only above 3× ``rated_va``).
+Link-loss alone may keep last-good publishable while
+``age_from_last_good < 180 s`` without refreshing ``sampled_at``; normal RB TTL
+stays 60 s. Counters ``bms_link_loss_count`` / ``rb_hard_reject_count`` are
+runtime-scoped; ``reading_hold_pending_count`` stays 0 (physics confirmation-hold
+deferred). Reference voltage, BMS voltage and ratings have separate owners;
+pack-voltage is never inferred from reference voltage. Measured battery DC
+watts use published BMS currents; the labelled AC-load estimate uses
+load% × rated VA — never substitute one for the other. Optional entities are
+disabled by default. Support evidence capture can read MP/Q1/MD/F/RH/RB without
+changing command-support state.
 
-AABB/PV admission and inverter controls remain separate work. Do not report
-full PR/device support based on these fields or a saved-wire replay alone.
+Live PV (AABB) admission and inverter controls remain separate work (T4 still
+omitted). Do not report full PR/device support based on these fields or a
+saved-wire replay alone. Family identity only — no retail-model catalog claim.
 
 The preferred workflow is:
 

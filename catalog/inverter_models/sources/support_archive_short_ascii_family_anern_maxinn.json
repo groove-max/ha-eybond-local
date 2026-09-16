@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_short_ascii_family_anern_maxinn",
+  "kind": "support_archive",
+  "title": "Short-ASCII family FC4 captures (Anern and Maxinn sites)",
+  "reference": "private:short-ascii-family-anern-maxinn-captures",
+  "captured_at": "2026-09-16",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Read-only FC4 MP/Q1/MD plus optional F/RH/RB exchanges from Anern- and Maxinn-site support evidence share one fixed-length Short-ASCII dialect. Evidence qualifies the family runtime path only; it is not proof of any retail model name. One live member correlates RH=1 BMS current decimals with SmartValue; Maxinn currents remain unproven separately. Live PV and controls are absent from these captures.",
+  "assertions": [
+    "runtime_compatibility",
+    "telemetry_validation"
+  ]
+}
