@@ -162,6 +162,8 @@ class OptionalReads:
         diagnostics["driver_unsupported_commands"] = ", ".join(
             key for key in unsupported_commands(runtime_state) if key.startswith(_PREFIX)
         )
+        # Q1.C1: publish every cycle (hub replaces diagnostics wholesale).
+        diagnostics.update(self.rb_filter.diagnostic_counters())
         return values, diagnostics
 
 

@@ -9,6 +9,17 @@ signature (V=0 ∧ SoC=0) alone may keep last-good publishable while
 ``age_from_last_good < 180 s``. Hold is capped from last-good time — continuous
 link-loss frames must not refresh ``hold_until``. Held values never look fresh
 (``sampled_at`` stays on the last good sample).
+
+Q1.C1 counters (runtime-scoped, not persisted):
+- ``bms_link_loss_count`` — increments on each *transition into* the link-loss
+  signature (V=0 ∧ SoC=0), not on every subsequent poll while still in that
+  streak. Hold-start is the usual case after a good sample; link-loss with no
+  last-good still counts once per streak. Streak ends only on true ``ok``
+  recovery (hard-reject / envelope ``clear()`` mid-dropout must not re-count).
+- ``rb_hard_reject_count`` — increments on each field hard-reject outcome
+  (ADR 0001 reject observability).
+- ``reading_hold_pending_count`` — always 0 in this PR (ADR 0001 / Q3.P1: no
+  physics confirmation-hold). Published so the entity contract exists.
 """
 
 from __future__ import annotations
@@ -119,17 +130,33 @@ class RbPublishFilter:
     last_good: dict[str, object] = field(default_factory=dict)
     last_good_at: float | None = None
     hold_until: float | None = None
+    # Q1.C1 — cumulative for this OptionalReads lifetime; clear() keeps them.
+    bms_link_loss_count: int = 0
+    rb_hard_reject_count: int = 0
+    reading_hold_pending_count: int = 0
+    _in_link_loss: bool = False
 
     def clear(self) -> None:
         self.last_good.clear()
         self.last_good_at = None
         self.hold_until = None
+        # Counters and link-loss streak survive envelope drops / TTL clears so
+        # one dropout is not double-counted after a checksum fail mid-streak.
 
     def clear_hold(self) -> None:
         self.hold_until = None
 
     def holding(self, now: float) -> bool:
         return self.hold_until is not None and now < self.hold_until
+
+    def diagnostic_counters(self) -> dict[str, int]:
+        """Quiet MX2 counters published every optional refresh (diagnostics)."""
+        return {
+            "bms_link_loss_count": self.bms_link_loss_count,
+            "rb_hard_reject_count": self.rb_hard_reject_count,
+            # ADR 0001 / Q3.P1: confirmation-hold deferred; contract stays at 0.
+            "reading_hold_pending_count": self.reading_hold_pending_count,
+        }
 
     def decide(
         self,
@@ -141,6 +168,9 @@ class RbPublishFilter:
         rated_battery_voltage: float | None = None,
     ) -> RbFilterDecision:
         if is_link_loss_signature(parsed):
+            if not self._in_link_loss:
+                self.bms_link_loss_count += 1
+                self._in_link_loss = True
             # Q1.H5: hold at most 180 s from last good — never refresh on each
             # link-loss frame.
             if (
@@ -170,6 +200,8 @@ class RbPublishFilter:
         if reason is not None:
             # Corrupt/impossible after a good envelope: drop this frame only.
             # Do not start 180 s hold; leave prior sample for the ~60 s TTL.
+            # Do not exit link-loss streak — junk mid-dropout must not re-count.
+            self.rb_hard_reject_count += 1
             return RbFilterDecision(outcome="rejected", keep_previous=True)
 
         self.clear_hold()
@@ -182,6 +214,8 @@ class RbPublishFilter:
                 refresh_sampled_at=True,
             )
 
+        # True recovery only — ends link-loss streak for Q1.C1 counting.
+        self._in_link_loss = False
         self.last_good = dict(parsed)
         self.last_good_at = now
         return RbFilterDecision(
