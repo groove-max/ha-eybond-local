@@ -11,6 +11,7 @@ from .command_support import (
     command_skipped_as_unsupported, commit_cycle_failures, record_command_failure,
     record_command_success, unsupported_commands,
 )
+from .short_ascii_rb_filter import RbPublishFilter
 
 STATE_KEY = "short_ascii_optional_reads"
 _PREFIX = "short_ascii:"
@@ -31,10 +32,14 @@ class OptionalSample:
         self.values.clear()
         self.sampled_at = None
 
-    def fresh_values(self, now: float) -> dict[str, object]:
-        if self.sampled_at is not None and not 0 <= now - self.sampled_at < self.ttl:
-            self.clear()
-            self.outcome = "expired"
+    def fresh_values(self, now: float, *, hold_until: float | None = None) -> dict[str, object]:
+        if self.sampled_at is not None:
+            age = now - self.sampled_at
+            within_ttl = 0 <= age < self.ttl
+            within_hold = hold_until is not None and now < hold_until and age >= 0
+            if not within_ttl and not within_hold:
+                self.clear()
+                self.outcome = "expired"
         return dict(self.values)
 
 
@@ -49,12 +54,50 @@ class OptionalReads:
         OptionalSample("RB", interval=30, ttl=60, parser=parse_rb),
         OptionalSample("F", interval=900, ttl=900, parser=parse_f),
     ))
+    rb_filter: RbPublishFilter = field(default_factory=RbPublishFilter)
 
     def clear(self) -> None:
         for sample in self.samples:
             sample.clear()
             sample.next_due = 0
             sample.outcome = "not_checked"
+        self.rb_filter.clear()
+
+    def _f_ratings(self) -> tuple[float | None, float | None, float | None]:
+        for sample in self.samples:
+            if sample.command != "F":
+                continue
+            rated_v = sample.values.get("short_ascii_rated_voltage")
+            rated_a = sample.values.get("short_ascii_rated_current")
+            rated_bat = sample.values.get("short_ascii_rated_battery_voltage")
+            return (
+                float(rated_v) if isinstance(rated_v, (int, float)) else None,
+                float(rated_a) if isinstance(rated_a, (int, float)) else None,
+                float(rated_bat) if isinstance(rated_bat, (int, float)) else None,
+            )
+        return None, None, None
+
+    def _apply_rb_parse(self, sample: OptionalSample, parsed: dict[str, object], now: float) -> None:
+        rated_v, rated_a, rated_bat = self._f_ratings()
+        decision = self.rb_filter.decide(
+            parsed, now=now,
+            rated_voltage=rated_v, rated_current=rated_a, rated_battery_voltage=rated_bat,
+        )
+        sample.outcome = decision.outcome
+        sample.next_due = now + sample.interval
+        if decision.keep_previous:
+            # Never restore held values without a real sampled_at (zombie guard).
+            if (
+                decision.outcome == "link_loss_hold"
+                and decision.values is not None
+                and sample.sampled_at is not None
+                and not sample.values
+            ):
+                sample.values = dict(decision.values)
+            return
+        sample.values = dict(decision.values or ())
+        if decision.refresh_sampled_at:
+            sample.sampled_at = now
 
     async def refresh_one(
         self, session: ShortAsciiSession, runtime_state: dict,
@@ -79,17 +122,23 @@ class OptionalReads:
             try:
                 parsed = sample.parser(await session.request(sample.command))
             except (ShortAsciiError, asyncio.TimeoutError) as exc:
+                # Envelope/transport failure: drop; do not start 180 s hold.
                 sample.clear()
+                if sample.command == "RB":
+                    self.rb_filter.clear()
                 sample.outcome = "timeout" if isinstance(exc, asyncio.TimeoutError) else "invalid_response"
                 sample.next_due = clock() + 30
                 if not session.transport.connected:
                     raise ConnectionError("short_ascii_optional_connection_lost") from None
                 record_command_failure(runtime_state, key)
             else:
-                sample.values = dict(parsed)
-                sample.sampled_at = clock()
-                sample.next_due = sample.sampled_at + sample.interval
-                sample.outcome = "no_data" if parsed.get("short_ascii_bms_data_available") is False else "ok"
+                if sample.command == "RB":
+                    self._apply_rb_parse(sample, parsed, clock())
+                else:
+                    sample.values = dict(parsed)
+                    sample.sampled_at = clock()
+                    sample.next_due = sample.sampled_at + sample.interval
+                    sample.outcome = "ok"
                 record_command_success(runtime_state, key)
         # No staged strike survives a failed/cancelled cycle. Q1 was confirmed
         # by our caller, and from here to commit there are no suspension points.
@@ -99,7 +148,12 @@ class OptionalReads:
         self.last_clock = now
         values, diagnostics = {}, {}
         for sample in self.samples:
-            values.update(sample.fresh_values(now))
+            hold_until = self.rb_filter.hold_until if sample.command == "RB" else None
+            values.update(sample.fresh_values(now, hold_until=hold_until))
+            # TTL/expiry cleared the sample: drop last_good so a later link-loss
+            # cannot resurrect values with sampled_at is None.
+            if sample.command == "RB" and sample.sampled_at is None:
+                self.rb_filter.clear()
             if sample.sampled_at is not None:
                 diagnostics[f"short_ascii_{sample.command.lower()}_age_seconds"] = round(now - sample.sampled_at, 3)
         diagnostics["short_ascii_optional_status"] = "; ".join(

@@ -143,13 +143,15 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("short_ascii_rb_age_seconds", result.diagnostics)
         self.assertNotIn("battery_soc", (await self.read(32)).values)
 
-    async def test_no_data_reply_withdraws_all_bms_values_and_can_recover_to_zero_soc(self):
+    async def test_link_loss_holds_last_good_then_recovers_to_zero_soc(self):
         await self.read(0); await self.read(1)
         self.transport.responses["RB"] = _rb(voltage=0, soc=0)
-        result = await self.read(31)
-        self.assertFalse(result.values["short_ascii_bms_data_available"])
-        self.assertFalse(any(key.startswith("bms_") for key in result.values))
-        self.assertNotIn("battery_soc", result.values)
+        held = await self.read(31)
+        self.assertEqual(held.values["battery_soc"], 80)
+        self.assertEqual(held.values["bms_total_voltage"], 52)
+        self.assertTrue(held.values["short_ascii_bms_data_available"])
+        self.assertIn("RB=link_loss_hold", held.diagnostics["short_ascii_optional_status"])
+        self.assertGreater(held.diagnostics["short_ascii_rb_age_seconds"], 30)
         self.transport.responses["RB"] = _rb(soc=0)
         recovered = await self.read(62)
         self.assertEqual(recovered.values["battery_soc"], 0)
