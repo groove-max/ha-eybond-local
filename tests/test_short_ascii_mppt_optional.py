@@ -19,7 +19,24 @@ from custom_components.eybond_local.drivers.short_ascii_mppt_optional import (
     RUNTIME_QUERY_0200, assert_runtime_query_only, values_from_reply,
 )
 from custom_components.eybond_local.drivers.short_ascii_optional import STATE_KEY
+from custom_components.eybond_local.metadata.register_schema_loader import (
+    clear_register_schema_loader_cache,
+    load_register_schema,
+)
 from custom_components.eybond_local.models import ProbeTarget
+
+
+MPPT_SCHEMA_KEYS = (
+    "pv_voltage",
+    "pv_power",
+    "mppt_battery_voltage",
+    "mppt_temperature",
+    "dc_load_current",
+    "mppt_work_mode_code",
+    "mppt_daily_energy",
+    "mppt_total_energy",
+    "mppt_error_code",
+)
 
 
 def _settings_query() -> bytes:
@@ -48,10 +65,70 @@ class MpptOptionalHelpersTests(unittest.TestCase):
         self.assertEqual(values["mppt_error_code"], 0)
         for key in ("battery_voltage", "temperature", "load_power", "aabb_last_wire"):
             self.assertNotIn(key, values)
+        for key in MPPT_SCHEMA_KEYS:
+            self.assertIn(key, values)
 
     def test_settings_0202_reply_is_not_live_telemetry(self):
         with self.assertRaises(ValueError):
             values_from_reply(runtime_frame(subtype=0x0202).wire)
+
+
+class MpptSchemaAdmissionTests(unittest.TestCase):
+    def setUp(self):
+        clear_register_schema_loader_cache()
+        self.driver = EybondShortAsciiDriver()
+        self.schema = load_register_schema(self.driver.register_schema_name)
+
+    def test_mppt_keys_present_and_opt_in(self):
+        keys = {item.key for item in self.schema.measurement_descriptions}
+        for key in MPPT_SCHEMA_KEYS:
+            with self.subTest(key=key):
+                self.assertIn(key, keys)
+                description = self.schema.measurement_description(key)
+                self.assertFalse(description.enabled_default)
+
+    def test_mppt_units_device_classes_and_quiet_error(self):
+        expected = {
+            "pv_voltage": ("V", "voltage", "measurement", False),
+            "pv_power": ("W", "power", "measurement", False),
+            "mppt_battery_voltage": ("V", "voltage", "measurement", False),
+            "mppt_temperature": ("°C", "temperature", "measurement", False),
+            "dc_load_current": ("A", "current", "measurement", False),
+            "mppt_work_mode_code": (None, None, None, True),
+            "mppt_daily_energy": ("kWh", "energy", "total_increasing", False),
+            "mppt_total_energy": ("kWh", "energy", "total_increasing", False),
+            "mppt_error_code": (None, None, None, True),
+        }
+        for key, (unit, device_class, state_class, diagnostic) in expected.items():
+            with self.subTest(key=key):
+                description = self.schema.measurement_description(key)
+                self.assertEqual(description.unit, unit)
+                self.assertEqual(description.device_class, device_class)
+                self.assertEqual(description.state_class, state_class)
+                self.assertEqual(description.diagnostic, diagnostic)
+                self.assertFalse(description.enabled_default)
+
+        # Distinct owners: names must not collide with BMS / AC / inverter labels.
+        self.assertEqual(
+            self.schema.measurement_description("mppt_battery_voltage").name,
+            "MPPT Battery Voltage",
+        )
+        self.assertEqual(
+            self.schema.measurement_description("dc_load_current").name,
+            "MPPT DC Load Current",
+        )
+        self.assertEqual(
+            self.schema.measurement_description("mppt_temperature").name,
+            "MPPT Temperature",
+        )
+        self.assertNotEqual(
+            self.schema.measurement_description("mppt_battery_voltage").name,
+            self.schema.measurement_description("bms_total_voltage").name,
+        )
+        self.assertNotEqual(
+            self.schema.measurement_description("mppt_temperature").name,
+            self.schema.measurement_description("temperature").name,
+        )
 
 
 class MpptOptionalReadTests(unittest.IsolatedAsyncioTestCase):

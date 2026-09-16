@@ -4,9 +4,9 @@ This project is designed to grow through transport-aware payload drivers plus de
 
 ### Internal auxiliary-channel foundation
 
-The short-ASCII auxiliary channel is admitted only as an optional driver read
-for the documented `0200` runtime query; it still publishes no PV entities
-(schema/catalog slice pending). Socket-level `async_send_auxiliary_read` is
+The short-ASCII auxiliary channel is admitted as an optional driver read for the
+documented `0200` runtime query, with matching register-schema entities that stay
+**disabled by default** (opt-in). Socket-level `async_send_auxiliary_read` is
 shared by the framed and AT connections; `SharedEybondTransport` exposes the
 same method as a thin facade so optional modules call it without reaching into
 `connections.py`. Do not enable it merely because an incoming packet starts
@@ -26,11 +26,11 @@ Integrity or boundary failures close the session. In particular, a valid
 EyeBond frame with transaction ID `0xAABB` can overlap the auxiliary grammar:
 neither a valid checksum nor an absent waiter resolves that ambiguity. The
 current foundation refuses such a frame; it does **not** guarantee auxiliary
-availability for every possible payload. User-facing catalog/schema admission
-and truthful model/field semantics remain separate work before published
-support (optional aux samples alone are incomplete admission). Normal
-connections keep their existing grammar until an explicit auxiliary read is
-requested.
+availability for every possible payload. Catalog `known_limitations` / retail
+model claims remain separate work (see documentation pass after admission).
+Live-qualify with Support Archive evidence before treating PV as device-proven.
+Normal connections keep their existing grammar until an explicit auxiliary read
+is requested.
 
 Ordinary framed, AT-management and raw-payload sends also pin their physical
 writer and run epoch before waiting for request/write locks. `SocketSendOwner`
@@ -68,17 +68,20 @@ read through `link_transport.async_auxiliary_read` (framed/AT
 holds values with the same OptionalSample TTL pattern as RB (30 s interval /
 60 s TTL). It is paced inside `short_ascii_optional` at most once per successful
 Q1 cycle and clears on lost connection, binding change or failed mandatory
-reads. User-facing PV schema entities remain a later slice.
+reads. Matching register-schema sensors (`pv_*`, `mppt_*`, `dc_load_current`)
+are **opt-in** (`enabled_default: false`); `mppt_error_code` is diagnostic and
+quiet. Do not force-enable them from catalog overlays.
 
 ### Qualified short-ASCII baseline
 
 `eybond_short_ascii` is a separate read-only FC4 payload driver. Optional live
 PV uses the auxiliary facade above for the documented `0200` read only; it does
-not harvest tip AABB, admit settings `0202`, or publish PV entities yet. The
-driver still uses the existing catalog probe DAG and requires all three
-mandatory replies: MP (38 bytes), Q1 (51 bytes with unsigned additive checksum)
-and MD (24 bytes including fixed padding). Every query has a fixed timeout;
-there is no UART-mode change or fallback to a raw-serial route.
+not harvest tip AABB or admit settings `0202`. Schema entities for those PV/MPPT
+keys exist but stay disabled by default. The driver still uses the existing
+catalog probe DAG and requires all three mandatory replies: MP (38 bytes), Q1
+(51 bytes with unsigned additive checksum) and MD (24 bytes including fixed
+padding). Every query has a fixed timeout; there is no UART-mode change or
+fallback to a raw-serial route.
 
 The field layout follows vendor 19B4 segment 1 and saved exchanges from two
 devices. Fixed widths, status bits, checksum and envelope are validated before
@@ -140,11 +143,10 @@ load% × rated VA — never substitute one for the other. Optional entities are
 disabled by default. Support evidence capture can read MP/Q1/MD/F/RH/RB without
 changing command-support state.
 
-Live PV values may already land in runtime state via optional `0200` aux reads,
-but schema/catalog entities and controls remain a later slice (no user-facing
-PV sensors until that admission). Do not report full PR/device support based on
-these fields or a saved-wire replay alone. Family identity only — no retail-model
-catalog claim.
+Optional MPPT/PV schema entities are disabled by default and must be enabled
+explicitly in HA. Live-qualify with Support Archive before claiming device
+support; do not report full PR/device support from a saved-wire replay alone.
+Family identity only — no retail-model catalog claim. Controls remain absent.
 
 The preferred workflow is:
 

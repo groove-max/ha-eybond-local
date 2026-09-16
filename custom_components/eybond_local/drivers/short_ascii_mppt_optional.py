@@ -1,8 +1,9 @@
 """Optional live MPPT via the documented auxiliary 0200 read only.
 
 Solicits through ``link_transport.async_auxiliary_read`` (framed/AT facade).
-Does not harvest tip AABB, wait on EyeBond TID ambiguity, merge settings
-0202, or register schema entities — those remain separate admission work.
+Does not harvest tip AABB, wait on EyeBond TID ambiguity, or merge settings
+0202. Register-schema entities for these keys are opt-in
+(``enabled_default: false``) in ``eybond_short_ascii/base.json``.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ REQUEST_TIMEOUT = 4.0
 INTERVAL = 30.0
 TTL = 60.0
 
-# Keys suitable for a later schema slice; distinct owners stay distinct.
+# Keys admitted as opt-in schema sensors; distinct owners stay distinct.
 _VALUE_KEYS = (
     ("pv_voltage", "pv_voltage_v"),
     ("pv_power", "pv_power_w"),
