@@ -77,3 +77,24 @@ def select_payload_route(
         if isinstance(selected, LinkRoute):
             return selected
     return route
+
+
+async def async_auxiliary_read(
+    transport: Any,
+    payload: bytes,
+    *,
+    request_timeout: float,
+) -> bytes:
+    """Send one documented auxiliary read through the framed/AT facade.
+
+    Drivers call this helper instead of naming the transport method, so grammar
+    ownership stays on the collector session. Missing facade support is a hard
+    error — never invent AABB from payload magic.
+    """
+
+    sender = getattr(transport, "async_send_auxiliary_read", None)
+    if not callable(sender):
+        raise TypeError(
+            f"unsupported_auxiliary_transport:{type(transport).__name__}"
+        )
+    return await sender(payload, request_timeout=float(request_timeout))

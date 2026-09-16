@@ -41,9 +41,11 @@ class _Transport:
     connected = True
     collector_info = CollectorInfo(collector_pn="I30000200000000001")
 
-    def __init__(self, responses=None):
+    def __init__(self, responses=None, *, aux_responses=None):
         self.responses = _responses() if responses is None else responses
         self.requests = []
+        self.aux_requests = []
+        self.aux_responses = {} if aux_responses is None else aux_responses
 
     async def async_send_payload(self, payload, *, route, request_timeout=None):
         assert type(route) is EybondLinkRoute
@@ -51,6 +53,13 @@ class _Transport:
         assert payload[-2:] == b"\x01\r"
         self.requests.append(payload)
         result = self.responses.get(payload[:-2].decode("ascii"), b"NAK\r")
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    async def async_send_auxiliary_read(self, payload, *, request_timeout):
+        self.aux_requests.append(payload)
+        result = self.aux_responses.get(payload, self.aux_responses.get(None, b""))
         if isinstance(result, BaseException):
             raise result
         return result

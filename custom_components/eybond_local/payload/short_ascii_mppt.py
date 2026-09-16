@@ -3,7 +3,8 @@
 This module cannot find a TCP boundary, admit a session or send a query. AABB
 and EyeBond can overlap on the wire; the caller must establish the grammar
 independently. Offline tooling may explicitly assume it and label that choice.
-No fields here are merged into live inverter telemetry yet.
+An optional driver module may merge decoded keys into runtime FULL results;
+this payload module itself still does not solicit, admit, or send.
 """
 
 from __future__ import annotations
@@ -102,3 +103,11 @@ def parse_mppt_runtime(frame: BinaryFrame) -> MpptRuntimeSample:
         total_energy_kwh=word(17) / 10,
         fault_code=wire[19],
     )
+
+
+def parse_mppt_runtime_wire(wire: bytes) -> MpptRuntimeSample:
+    """Decode raw AABB/0200 reply bytes without drivers naming the grammar."""
+
+    if type(wire) is not bytes:
+        raise ValueError("mppt_frame_contract_invalid")
+    return parse_mppt_runtime(BinaryFrame(BinaryGrammar.AABB, wire))

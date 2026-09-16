@@ -15,6 +15,10 @@ from .command_support import (
     record_command_success, unsupported_commands,
 )
 from .short_ascii_battery_dc import battery_dc_power_values
+from .short_ascii_mppt_optional import (
+    COMMAND as MPPT_COMMAND, INTERVAL as MPPT_INTERVAL, TTL as MPPT_TTL,
+    request_runtime_sample,
+)
 from .short_ascii_rb_filter import RbPublishFilter
 
 STATE_KEY = "short_ascii_optional_reads"
@@ -59,6 +63,8 @@ class OptionalReads:
         OptionalSample("F", interval=900, ttl=900, parser=parse_f),
         # Settings block; same cadence as F. Gate for RB current ÷10 publish.
         OptionalSample("RH", interval=900, ttl=900, parser=parse_rh),
+        # Aux 0200 only; parser unused — request path is special-cased below.
+        OptionalSample(MPPT_COMMAND, interval=MPPT_INTERVAL, ttl=MPPT_TTL, parser=dict),
     ))
     rb_filter: RbPublishFilter = field(default_factory=RbPublishFilter)
 
@@ -125,6 +131,11 @@ class OptionalReads:
             out.pop(key, None)
         return out
 
+    async def _request_mppt(self) -> dict[str, object]:
+        """Solicit documented 0200 only via the shared facade; never 0202."""
+
+        return await request_runtime_sample(self.transport)
+
     def _apply_rb_parse(self, sample: OptionalSample, parsed: dict[str, object], now: float) -> None:
         rated_v, rated_a, rated_bat = self._f_ratings(now)
         candidate = self._strip_ungated_currents(dict(parsed), now)
@@ -171,8 +182,11 @@ class OptionalReads:
         if sample is not None:
             key = _PREFIX + sample.command
             try:
-                parsed = sample.parser(await session.request(sample.command))
-            except (ShortAsciiError, asyncio.TimeoutError) as exc:
+                if sample.command == MPPT_COMMAND:
+                    parsed = await self._request_mppt()
+                else:
+                    parsed = sample.parser(await session.request(sample.command))
+            except (ShortAsciiError, asyncio.TimeoutError, ValueError, TypeError) as exc:
                 # Envelope/transport failure: drop; do not start 180 s hold.
                 sample.clear()
                 if sample.command == "RB":

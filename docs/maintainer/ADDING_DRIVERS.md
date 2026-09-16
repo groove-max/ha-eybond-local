@@ -4,13 +4,13 @@ This project is designed to grow through transport-aware payload drivers plus de
 
 ### Internal auxiliary-channel foundation
 
-The short-ASCII auxiliary channel is not yet admitted by a driver, catalog entry
-or discovery route, and it still publishes no PV entities. Socket-level
-`async_send_auxiliary_read` is shared by the framed and AT connections;
-`SharedEybondTransport` now exposes the same method as a thin facade so a future
-optional module can call it without reaching into `connections.py`. Do not
-enable it merely because an incoming packet starts with `AA BB`, or because a
-collector name or endpoint looks familiar.
+The short-ASCII auxiliary channel is admitted only as an optional driver read
+for the documented `0200` runtime query; it still publishes no PV entities
+(schema/catalog slice pending). Socket-level `async_send_auxiliary_read` is
+shared by the framed and AT connections; `SharedEybondTransport` exposes the
+same method as a thin facade so optional modules call it without reaching into
+`connections.py`. Do not enable it merely because an incoming packet starts
+with `AA BB`, or because a collector name or endpoint looks familiar.
 
 The internal `async_send_auxiliary_read` accepts only the two documented
 21-byte read queries (subtypes `0200` and `0202`), without a UART bootstrap or
@@ -26,9 +26,9 @@ Integrity or boundary failures close the session. In particular, a valid
 EyeBond frame with transaction ID `0xAABB` can overlap the auxiliary grammar:
 neither a valid checksum nor an absent waiter resolves that ambiguity. The
 current foundation refuses such a frame; it does **not** guarantee auxiliary
-availability for every possible payload. Driver/catalog admission, truthful
-model/field semantics and optional-data expiry remain separate work before
-user-facing support (facade exposure alone is incomplete admission). Normal
+availability for every possible payload. User-facing catalog/schema admission
+and truthful model/field semantics remain separate work before published
+support (optional aux samples alone are incomplete admission). Normal
 connections keep their existing grammar until an explicit auxiliary read is
 requested.
 
@@ -54,20 +54,29 @@ parser awaits inside that guard; do not wrap only the inner socket read of a
 
 `payload/short_ascii_mppt.py` now decodes an explicitly framed AABB/0200 sample
 into an immutable, unit-labelled value object. It does not choose the grammar,
-send requests, supply a register schema or populate live telemetry. Settings
+send requests, supply a register schema or populate HA entities. Settings
 0202 are rejected. MPPT voltage/temperature/DC load current remain distinct
 from BMS/reference voltage, main-inverter temperature and AC load power.
 Unknown enums remain raw codes; zero/maximum words are decoded wire values,
 not a proved availability or sentinel policy. The sample has no timestamp or
 freshness claim. See the [offline inspector](../../tools/README.md#inspect-a-short-ascii-mppt-frame-offline)
-for capture analysis; enabling live PV still requires the admission contract
-and per-session optional-sample expiry/invalidation described above.
+for capture analysis.
+
+`drivers/short_ascii_mppt_optional.py` solicits the documented 21-byte `0200`
+read through `link_transport.async_auxiliary_read` (framed/AT
+`async_send_auxiliary_read` facade), decodes via `parse_mppt_runtime_wire`, and
+holds values with the same OptionalSample TTL pattern as RB (30 s interval /
+60 s TTL). It is paced inside `short_ascii_optional` at most once per successful
+Q1 cycle and clears on lost connection, binding change or failed mandatory
+reads. User-facing PV schema entities remain a later slice.
 
 ### Qualified short-ASCII baseline
 
-`eybond_short_ascii` is a separate read-only FC4 payload driver. It does not call
-the auxiliary API above. It uses the existing catalog probe DAG and requires
-all three replies: MP (38 bytes), Q1 (51 bytes with unsigned additive checksum)
+`eybond_short_ascii` is a separate read-only FC4 payload driver. Optional live
+PV uses the auxiliary facade above for the documented `0200` read only; it does
+not harvest tip AABB, admit settings `0202`, or publish PV entities yet. The
+driver still uses the existing catalog probe DAG and requires all three
+mandatory replies: MP (38 bytes), Q1 (51 bytes with unsigned additive checksum)
 and MD (24 bytes including fixed padding). Every query has a fixed timeout;
 there is no UART-mode change or fallback to a raw-serial route.
 
@@ -105,7 +114,8 @@ RH=1.
 inverter binding. The hub discards this state on recovery; samples are never
 persisted as identity. Each successful Q1 cycle performs at most one optional
 request (4-second bound), oldest due group first: RB every 30 seconds with a
-60-second TTL, F and RH every 900 seconds with a 900-second TTL. Freshness is
+60-second TTL, F and RH every 900 seconds with a 900-second TTL, and optional
+MPPT (`0200` aux) every 30 seconds with a 60-second TTL. Freshness is
 checked after the await. Invalid/timeout replies clear that group immediately,
 and FULL-result omission removes it from the hub. A failed or cancelled
 mandatory cycle, lost connection, changed binding or clock rollback clears all
@@ -130,9 +140,11 @@ load% × rated VA — never substitute one for the other. Optional entities are
 disabled by default. Support evidence capture can read MP/Q1/MD/F/RH/RB without
 changing command-support state.
 
-Live PV (AABB) admission and inverter controls remain separate work (T4 still
-omitted). Do not report full PR/device support based on these fields or a
-saved-wire replay alone. Family identity only — no retail-model catalog claim.
+Live PV values may already land in runtime state via optional `0200` aux reads,
+but schema/catalog entities and controls remain a later slice (no user-facing
+PV sensors until that admission). Do not report full PR/device support based on
+these fields or a saved-wire replay alone. Family identity only — no retail-model
+catalog claim.
 
 The preferred workflow is:
 

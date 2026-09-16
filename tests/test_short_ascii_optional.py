@@ -12,11 +12,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 
 from test_eybond_short_ascii import _Transport, _responses
+from test_short_ascii_mppt import runtime_frame
 from custom_components.eybond_local.drivers.command_support import (
     clear_unsupported_commands, seed_unsupported_commands, unsupported_commands,
 )
 from custom_components.eybond_local.drivers.eybond_short_ascii import EybondShortAsciiDriver
 from custom_components.eybond_local.drivers.read_result import DriverReadMode
+from custom_components.eybond_local.drivers.short_ascii_mppt_optional import RUNTIME_QUERY_0200
 from custom_components.eybond_local.drivers.short_ascii_optional import OptionalReads, OptionalSample, STATE_KEY
 from custom_components.eybond_local.models import ProbeTarget
 from custom_components.eybond_local.payload.short_ascii import ShortAsciiError, parse_f, parse_rb, parse_rh
@@ -147,15 +149,25 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
         responses = _responses() | {
             "RB": _rb(), "F": b"#115.0 105 48.00 60.0\r", "RH": _rh(accuracy=1),
         }
-        self.transport = _Transport(responses)
+        self.transport = _Transport(
+            responses, aux_responses={RUNTIME_QUERY_0200: runtime_frame().wire},
+        )
         self.inverter = await self.driver.async_probe(self.transport, ProbeTarget(767, 255, 1))
         self.state = {}
         self.transport.requests.clear()
+        self.transport.aux_requests.clear()
 
     async def read(self, now):
         return await self.driver.async_read_values(
             self.transport, self.inverter, runtime_state=self.state, now_monotonic=now,
         )
+
+    async def _prime_rb_f_rh(self):
+        """RB→F→RH with MPPT suppressed so later RB refreshes stay on schedule."""
+        seed_unsupported_commands(self.state, ("short_ascii:MPPT",))
+        await self.read(0)
+        await self.read(1)
+        await self.read(2)
 
     async def test_one_optional_query_per_cycle_fair_scheduling_and_full_snapshot(self):
         first = await self.read(0)
@@ -174,6 +186,8 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("short_ascii_bms_current_display_accuracy", third.values)
         fourth = await self.read(3)
         self.assertEqual(fourth.values["battery_soc"], 80)
+        self.assertEqual(fourth.values["pv_voltage"], 120.0)
+        self.assertEqual(fourth.values["pv_power"], 370)
         self.assertEqual(
             self.transport.requests,
             [
@@ -183,11 +197,12 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
                 b"Q1\x01\r",
             ],
         )
+        self.assertEqual(self.transport.aux_requests, [RUNTIME_QUERY_0200])
         self.assertGreater(fourth.diagnostics["short_ascii_rb_age_seconds"], 2.9)
         self.assertLess(fourth.diagnostics["short_ascii_rb_age_seconds"], 3.1)
 
     async def test_rb_timeout_invalidates_immediately_but_retains_current_q1_and_f(self):
-        await self.read(0); await self.read(1); await self.read(2)
+        await self._prime_rb_f_rh()
         self.transport.responses["RB"] = asyncio.TimeoutError()
         result = await self.read(31)
         self.assertNotIn("battery_soc", result.values)
@@ -195,12 +210,13 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("short_ascii_bms_data_available", result.values)
         self.assertEqual(result.values["grid_voltage"], 230)
         self.assertEqual(result.values["short_ascii_rated_voltage"], 115)
+        self.assertNotIn("pv_voltage", result.values)
         self.assertIn("RB=timeout", result.diagnostics["short_ascii_optional_status"])
         self.assertNotIn("short_ascii_rb_age_seconds", result.diagnostics)
         self.assertNotIn("battery_soc", (await self.read(32)).values)
 
     async def test_link_loss_holds_last_good_then_recovers_to_zero_soc(self):
-        await self.read(0); await self.read(1); await self.read(2)
+        await self._prime_rb_f_rh()
         self.transport.responses["RB"] = _rb(voltage=0, soc=0)
         held = await self.read(31)
         self.assertEqual(held.values["battery_soc"], 80)
@@ -214,6 +230,7 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(recovered.values["short_ascii_bms_data_available"])
 
     async def test_missing_rb_does_not_block_f_and_repeated_failures_use_existing_recheck(self):
+        seed_unsupported_commands(self.state, ("short_ascii:MPPT",))
         self.transport.responses["RB"] = b"NAK\r"
         for now in (0, 1, 31, 62, 93, 124):
             result = await self.read(now)
@@ -221,7 +238,8 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.transport.requests.count(b"RB\x01\r"), 4)
         self.assertEqual(self.transport.requests.count(b"F\x01\r"), 1)
         self.assertEqual(self.transport.requests.count(b"RH\x01\r"), 1)
-        self.assertEqual(unsupported_commands(self.state), ("short_ascii:RB",))
+        self.assertEqual(self.transport.aux_requests, [])
+        self.assertEqual(unsupported_commands(self.state), ("short_ascii:MPPT", "short_ascii:RB"))
         self.assertIn("short_ascii:RB", result.diagnostics["driver_unsupported_commands"])
         # One skipped cycle so outcome becomes unsupported; clear then re-enable.
         await self.read(125)
@@ -246,11 +264,11 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
     async def test_optional_cancellation_or_connection_loss_does_not_charge_an_unsupported_strike(self):
         for failure in (asyncio.CancelledError(), ConnectionError()):
             await self.asyncSetUp()
-            await self.read(0); await self.read(1); await self.read(2)
+            await self._prime_rb_f_rh()
             self.transport.responses["RB"] = failure
             with self.assertRaises(type(failure)):
                 await self.read(31)
-            self.assertEqual(unsupported_commands(self.state), ())
+            self.assertEqual(unsupported_commands(self.state), ("short_ascii:MPPT",))
             self.assertTrue(all(not sample.values for sample in self.state[STATE_KEY].samples))
 
     async def test_runtime_state_rebinding_and_clock_rollback_never_reuse_samples(self):
@@ -258,22 +276,30 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
             await self.asyncSetUp()
             await self.read(10); await self.read(11)
             if change == "transport":
-                self.transport = _Transport(_responses() | {"RB": b"NAK\r"})
+                self.transport = _Transport(
+                    _responses() | {"RB": b"NAK\r"},
+                    aux_responses={RUNTIME_QUERY_0200: runtime_frame().wire},
+                )
             elif change == "inverter":
                 self.inverter = replace(self.inverter)
             self.transport.responses["RB"] = b"NAK\r"
             result = await self.read(0 if change == "clock" else 12)
             self.assertNotIn("battery_soc", result.values)
             self.assertNotIn("short_ascii_rated_voltage", result.values)
+            self.assertNotIn("pv_voltage", result.values)
 
     async def test_persisted_unsupported_group_is_not_queried_or_projected(self):
-        seed_unsupported_commands(self.state, ("short_ascii:RB", "short_ascii:F", "short_ascii:RH"))
+        seed_unsupported_commands(self.state, (
+            "short_ascii:RB", "short_ascii:F", "short_ascii:RH", "short_ascii:MPPT",
+        ))
         result = await self.read(0)
         self.assertEqual(self.transport.requests, [b"Q1\x01\r"])
+        self.assertEqual(self.transport.aux_requests, [])
         self.assertNotIn("battery_soc", result.values)
+        self.assertNotIn("pv_voltage", result.values)
         self.assertEqual(
             result.diagnostics["short_ascii_optional_status"],
-            "RB=unsupported; F=unsupported; RH=unsupported",
+            "RB=unsupported; F=unsupported; RH=unsupported; MPPT=unsupported",
         )
 
     async def test_failed_optional_request_on_disconnected_transport_is_a_link_failure(self):
@@ -286,7 +312,7 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(not sample.values for sample in self.state[STATE_KEY].samples))
 
     async def test_corrupt_optional_response_removes_previous_sample_without_partial_values(self):
-        await self.read(0); await self.read(1); await self.read(2)
+        await self._prime_rb_f_rh()
         wire = bytearray(_rb()); wire[-2] ^= 1
         self.transport.responses["RB"] = bytes(wire)
         result = await self.read(31)
@@ -298,7 +324,7 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
     async def test_sample_can_expire_while_another_group_is_awaited(self):
         clock = [59.0]
         reads = OptionalReads(self.transport, self.inverter, 59)
-        rb, rated, _rh_sample = reads.samples
+        rb, rated, _rh_sample, _mppt = reads.samples
         rb.values, rb.sampled_at, rb.next_due = {"battery_soc": 80}, 0, 100
 
         class Session:
