@@ -263,8 +263,8 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Coverage: runtime read_only, cloud not_applicable, vendor map partial
   - Coverage notes:
     - Runtime support is family-only and read-only. Compatible devices appear as EyeBond Short-ASCII family; retail model and serial are not inferred.
-    - Optional RB/F/RH entities are disabled by default and expire on TTL or invalid replies.
-- Summary: EyeBond Short-ASCII is a capture-qualified read-only family for the fixed MP/Q1/MD dialect shared by some Anern and Maxinn sites. Optional F/RH/RB add rated values and BMS telemetry with TTL expiry, hard-reject/link-loss hold, and an RH+F gate for currents. Labelled AC-load estimate is separate from measured battery DC power. Live PV and retail-model identity remain out of scope.
+    - Optional RB/F/RH and aux-0200 MPPT/PV entities are disabled by default and expire on TTL or invalid replies.
+- Summary: EyeBond Short-ASCII is a capture-qualified read-only family for the fixed MP/Q1/MD dialect shared by some Anern and Maxinn sites. Optional F/RH/RB add rated values and BMS telemetry with TTL expiry, hard-reject/link-loss hold, and an RH+F gate for currents. Optional live PV/MPPT uses aux 0200 with opt-in entities and TTL; offline MPPT decode stays maintainer-only. Labelled AC-load estimate is separate from measured battery DC power. Retail-model identity remains out of scope; site live-qualification for the PV path is still pending.
 - Variants:
   - `urtu1920_checksum` — EyeBond Short-ASCII read-only family (URTU1920 checksum dialect)
     - Descriptors: eybond_short_ascii_family
@@ -272,12 +272,14 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `eybond_short_ascii_family` → surface `eybond_short_ascii_read_only` (driver eybond_short_ascii, variant urtu1920_checksum)
       - Protocol: eybond_short_ascii | Detection: anchors (protocol.protocol_id=EYBOND_SHORT_ASCII; protocol.wire_dialect=urtu1920_checksum; shape.q1_length=51; shape.mp_length=38; shape.md_length=24)
       - Tier: partial | Read-only: yes | Profile: — | Schema: eybond_short_ascii/base.json
-      - Capabilities: no model-specific profile | Telemetry: 34 measurements, 8 binary sensors
+      - Capabilities: no model-specific profile | Telemetry: 43 measurements, 8 binary sensors
 - Known limitations:
   - Family identity only: no retail commercial model (including no Anern SPI-12000W claim) and no inverter serial from MP/Q1/MD.
   - Read-only: no inverter controls; Full Control does not invent settings.
-  - Live PV power is absent; offline MPPT decode is maintainer-only and does not create HA entities.
-  - Quiet fault/diagnostic sensors beyond the existing Q1 flags (Q2) are deferred; mppt_error waits on any future live-PV admission.
+  - Optional live PV/MPPT uses the documented auxiliary 0200 runtime read only (not tip AABB harvest, not settings 0202). Matching schema sensors stay disabled by default; mppt_error_code is diagnostic and quiet. Samples use 30 s solicit / 60 s TTL; at most one optional read per Q1 cycle, with FC4 RB/F/RH preferred when both are due.
+  - Offline decode_short_ascii_mppt is a maintainer capture inspector only; it is not the live optional admission path and does not create entities by itself.
+  - Live PV/MPPT admission is code-complete but not yet live-qualified on site HA (family cutover / Support Archive RECEIPT still pending).
+  - Quiet fault/diagnostic sensors beyond Q1 flags and the quiet mppt_error_code (Q2 extras) remain deferred.
   - estimated_ac_load_power is load% × rated VA from F — an estimate, not measured active power; load_percent stays separate. Output frequency is not grid frequency.
   - Optional BMS currents and battery_power publish only when RH reports BMS current display accuracy=1 (decimals) and F ratings are available for I/P hard-reject bounds; RH=0, unread, expired or failed RH omits those keys. RH=1 is the discriminator (no retail-model gate).
   - Impossible RB V/SoC/I/P values are hard-rejected. Link-loss (V=0 ∧ SoC=0) may hold last-good BMS for up to 180 s without refreshing sample age; normal RB TTL remains 60 s.

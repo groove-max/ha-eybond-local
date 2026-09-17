@@ -10,16 +10,17 @@ the GitHub release body should be rendered from the matching version section her
 ### Added
 
 - Added an offline MPPT-frame inspector for maintainers, with strict runtime
-  decoding and explicit warnings about overlapping wire formats. This does not
-  enable live PV polling or create additional Home Assistant entities.
+  decoding and explicit warnings about overlapping wire formats. That tool does
+  not poll devices or create Home Assistant entities; live optional PV is a
+  separate admission path below.
 
 - Added a generic read-only **EyeBond Short-ASCII family** profile for the
   captured MP/Q1/MD dialect seen on some Anern and Maxinn devices (#45).
   It provides grid/output voltage, load percentage, output frequency,
   temperature and status diagnostics. Battery Reference Voltage is shown
   separately from full-pack voltage. Identity is family-only: no retail model
-  (including no Anern SPI-12000W claim), serial number, live PV power or
-  inverter controls are inferred. Offline MPPT decode remains maintainer-only.
+  (including no Anern SPI-12000W claim), serial number or inverter controls are
+  inferred.
 
 - Short-ASCII also publishes labelled **Estimated AC Load Power**
   (`estimated_ac_load_power` = load% × rated VA from F). It is an estimate, not
@@ -39,10 +40,24 @@ the GitHub release body should be rendered from the matching version section her
   I/P bounds; RH `0`, unread, expired or failed RH omits those keys. RH=1 is the
   discriminator (no retail-model gate). One live family member has SmartValue
   correlation for that path; other members (e.g. Maxinn) are not separately
-  live-proven. Live PV remains absent; this is not full device or control
-  support (#45).
+  live-proven. This is not full device or control support (#45).
+
+- Optional short-ASCII **live PV/MPPT** uses the shared framed
+  `async_send_auxiliary_read` facade for the documented 21-byte `0200` runtime
+  query only (settings `0202` is not live telemetry; no tip AABB harvest or
+  EyeBond TID `0xAABB` as aux). Values follow the same OptionalSample pattern as
+  RB (30 s solicit / 60 s TTL), at most one optional read per successful Q1
+  cycle. Nine matching schema sensors (`pv_*`, `mppt_*`, `dc_load_current`) stay
+  **disabled by default**; `mppt_error_code` is diagnostic and quiet. Offline
+  `decode_short_ascii_mppt` remains a maintainer capture tool, not this live path.
+  Site live-qualification / Support Archive RECEIPT for the family cutover is
+  still pending (#45).
 
 ### Fixed
+
+- When both are due in one Q1 cycle, short-ASCII optional reads prefer FC4
+  RB/F/RH over the aux MPPT solicit so a virgin MPPT due time cannot starve BMS
+  or rated refreshes (#45).
 
 - Support archives preserve numeric-looking hex sequences in explicitly typed
   wire-evidence fields instead of replacing their bytes with identifier masks.

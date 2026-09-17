@@ -121,16 +121,23 @@ then expire. That hold does not prove the physical battery is disconnected.
 Diagnostic counters can show how often link-loss and hard rejects occurred;
 they reset when Home Assistant reloads the entry.
 
+Some devices can also answer an optional auxiliary **PV / MPPT** read
+(documented `0200` runtime query). Matching entities such as PV voltage/power
+and MPPT diagnostics stay disabled by default — enable them only if you need
+them. Those samples refresh on a similar ~30 s cadence with a ~60 s expiry, and
+share the one-extra-request-per-poll budget with BMS/rated reads (BMS and rated
+queries take priority when both are due). This is not the offline maintainer
+MPPT frame inspector, and it is not a retail Anern model claim.
+
 After four failed optional requests while basic telemetry still responds,
 that request is skipped. Use **Re-check supported commands** to try it again,
 for example after connecting a BMS. Missing optional data does not prevent
 basic inverter monitoring.
 
-This profile does not provide live PV power, grid frequency or inverter
-controls. Selecting **Full Control** does not add undocumented settings. If
-readings are missing or implausible, create a Support Archive for review; it
-can include the optional raw replies. Do not select a similar retail model by
-guesswork.
+This profile does not provide grid frequency or inverter controls. Selecting
+**Full Control** does not add undocumented settings. If readings are missing or
+implausible, create a Support Archive for review; it can include the optional
+raw replies. Do not select a similar retail model by guesswork.
 
 ## Control mode
 

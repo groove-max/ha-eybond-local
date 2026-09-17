@@ -26,9 +26,9 @@ Integrity or boundary failures close the session. In particular, a valid
 EyeBond frame with transaction ID `0xAABB` can overlap the auxiliary grammar:
 neither a valid checksum nor an absent waiter resolves that ambiguity. The
 current foundation refuses such a frame; it does **not** guarantee auxiliary
-availability for every possible payload. Catalog `known_limitations` / retail
-model claims remain separate work (see documentation pass after admission).
-Live-qualify with Support Archive evidence before treating PV as device-proven.
+availability for every possible payload. Catalog `known_limitations` record the
+opt-in aux-0200 PV path and still forbid retail-model claims. Live-qualify with
+Support Archive evidence before treating PV as device-proven.
 Normal connections keep their existing grammar until an explicit auxiliary read
 is requested.
 
@@ -116,15 +116,16 @@ RH=1.
 `short_ascii_optional` owns per-runtime samples, scoped to the transport and
 inverter binding. The hub discards this state on recovery; samples are never
 persisted as identity. Each successful Q1 cycle performs at most one optional
-request (4-second bound), oldest due group first: RB every 30 seconds with a
-60-second TTL, F and RH every 900 seconds with a 900-second TTL, and optional
-MPPT (`0200` aux) every 30 seconds with a 60-second TTL. Freshness is
-checked after the await. Invalid/timeout replies clear that group immediately,
-and FULL-result omission removes it from the hub. A failed or cancelled
-mandatory cycle, lost connection, changed binding or clock rollback clears all
-samples. Only optional failures alongside a successful Q1 count towards the
-shared four-strike command cache; the existing re-check action re-enables
-requests.
+request (4-second bound): RB every 30 seconds with a 60-second TTL, F and RH
+every 900 seconds with a 900-second TTL, and optional MPPT (`0200` aux) every
+30 seconds with a 60-second TTL. When both FC4 (RB/F/RH) and MPPT are due,
+prefer FC4 (oldest due within that set); MPPT runs only when it is the sole due
+sample. Freshness is checked after the await. Invalid/timeout replies clear
+that group immediately, and FULL-result omission removes it from the hub. A
+failed or cancelled mandatory cycle, lost connection, changed binding or clock
+rollback clears all samples. Only optional failures alongside a successful Q1
+count towards the shared four-strike command cache; the existing re-check
+action re-enables requests.
 
 An RB reply with zero voltage and zero SOC explicitly withdraws **all** BMS
 measurements/path flags, including nonzero trailing fields seen in the capture.
