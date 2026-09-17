@@ -108,7 +108,7 @@ class ShortAsciiPayloadTests(unittest.TestCase):
 
     def test_all_status_bits_have_independent_documented_meanings(self):
         for position, key, true_byte in (
-            (1, "inverter_fault", 49), (2, "grid_available", 48),
+            (1, "ups_fault", 49), (2, "grid_available", 48),
             (3, "short_ascii_mains_input_connected", 48), (4, "battery_low", 49),
             (5, "pv_controller_present", 49),
         ):
@@ -116,6 +116,20 @@ class ShortAsciiPayloadTests(unittest.TestCase):
                 body = bytearray(_q1()[1:-3])
                 body[37 + position] = bit
                 self.assertIs(parse_q1(_q1(bytes(body)))[key], bit == true_byte)
+
+    def test_q1_error_code_and_label_from_trailer_byte(self):
+        values = parse_q1(_q1())
+        self.assertEqual(values["q1_error_code"], 0)
+        self.assertEqual(values["q1_error"], "normal")
+        self.assertNotIn("short_ascii_fault_code", values)
+        self.assertNotIn("inverter_fault", values)
+        body = bytearray(_q1()[1:-3])
+        body[44] = 8
+        hot = parse_q1(_q1(bytes(body)))
+        self.assertEqual(hot["q1_error_code"], 8)
+        self.assertEqual(hot["q1_error"], "excess temperature")
+        body[44] = 99
+        self.assertEqual(parse_q1(_q1(bytes(body)))["q1_error"], "unknown(99)")
 
     def test_every_single_byte_corruption_is_rejected(self):
         frame = _q1()
