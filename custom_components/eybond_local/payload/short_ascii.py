@@ -152,6 +152,29 @@ def _decimal(field: bytes, pattern: bytes) -> float:
     return float(field.decode("ascii"))
 
 
+# 19B4 segment-1 Q1 trailer errcode labels (vendor wording preserved).
+Q1_ERROR_LABELS = {
+    0: "normal",
+    1: "Battery low",
+    2: "High battery voltage",
+    3: "Low battery voltage",
+    4: "power amplifier is reversed",
+    5: "Inverter startup fault",
+    6: "Output load short circuit",
+    7: "output voltage is too low or overloaded",
+    8: "excess temperature",
+    9: "Output low voltage",
+    11: "temperature is too low or the temperature control fails",
+    14: "Open fan circuit",
+    15: "mains input relay is faulty",
+    16: "mains input is too high",
+}
+
+
+def q1_error_label(code: int) -> str:
+    return Q1_ERROR_LABELS.get(code, f"unknown({code})")
+
+
 def parse_q1(frame: bytes) -> dict[str, object]:
     _envelope(frame, length=51, status=True)
     # Sum of unsigned body bytes, excluding status, checksum and final CR.
@@ -168,6 +191,7 @@ def parse_q1(frame: bytes) -> dict[str, object]:
     flags = body[37:44]
     if re.fullmatch(rb"[01]{7}", flags) is None:
         raise ShortAsciiError("short_ascii_q1_flags")
+    error_code = body[44]
     return {
         "short_ascii_q1_length": len(frame),
         "grid_voltage": _decimal(body[0:5], rb"[0-9]{3}\.[0-9]"),
@@ -177,8 +201,10 @@ def parse_q1(frame: bytes) -> dict[str, object]:
         "battery_reference_voltage": _decimal(body[27:31], rb"[0-9]{2}\.[0-9]"),
         "temperature": _decimal(body[32:36], rb"(?:[0-9]{2}|-[0-9])\.[0-9]"),
         "short_ascii_status_flags": flags.decode("ascii"),
-        "short_ascii_fault_code": body[44],
-        "inverter_fault": flags[1] == 49,
+        "q1_error_code": error_code,
+        "q1_error": q1_error_label(error_code),
+        # Q11: flags[1]=='1' is the UPS/inverter fault bit (19B4).
+        "ups_fault": flags[1] == 49,
         "grid_available": flags[2] == 48,
         "short_ascii_mains_input_connected": flags[3] == 48,
         "battery_low": flags[4] == 49,

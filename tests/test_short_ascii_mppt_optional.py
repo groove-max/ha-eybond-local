@@ -84,11 +84,15 @@ class MpptSchemaAdmissionTests(unittest.TestCase):
 
     def test_mppt_keys_present_and_opt_in(self):
         keys = {item.key for item in self.schema.measurement_descriptions}
+        quiet_faults = {"mppt_error_code", "mppt_error"}
         for key in MPPT_SCHEMA_KEYS:
             with self.subTest(key=key):
                 self.assertIn(key, keys)
                 description = self.schema.measurement_description(key)
-                self.assertFalse(description.enabled_default)
+                if key in quiet_faults:
+                    self.assertTrue(description.enabled_default)
+                else:
+                    self.assertFalse(description.enabled_default)
 
     def test_mppt_units_device_classes_and_quiet_error(self):
         expected = {
@@ -100,8 +104,8 @@ class MpptSchemaAdmissionTests(unittest.TestCase):
             "mppt_work_mode_code": (None, None, None, True, False),
             "mppt_daily_energy": ("kWh", "energy", "total_increasing", False, False),
             "mppt_total_energy": ("kWh", "energy", "total_increasing", False, False),
-            "mppt_error_code": (None, None, None, True, False),
-            "mppt_error": (None, None, None, True, False),
+            "mppt_error_code": (None, None, None, True, True),
+            "mppt_error": (None, None, None, True, True),
         }
         for key, (unit, device_class, state_class, diagnostic, enabled) in expected.items():
             with self.subTest(key=key):

@@ -32,7 +32,6 @@ class MpptFault(IntEnum):
     DC_LOAD_OVERCURRENT = 7
 
 
-
 # 19B4 segment-4 MPPT errcode labels (vendor wording preserved).
 MPPT_ERROR_LABELS = {
     0: "normal",

@@ -116,7 +116,8 @@ class EybondShortAsciiDriver(InverterDriver):
         optional = optional_reads_for(state, transport, inverter, now)
         session = self._session(transport, inverter.probe_target)
         try:
-            values = parse_q1(await session.request("Q1"))
+            q1_frame = await session.request("Q1")
+            values = parse_q1(q1_frame)
             values.pop("short_ascii_q1_length")
             extra, diagnostics = await optional.refresh_one(session, state, clock)
         except BaseException:
