@@ -270,11 +270,7 @@ def _ensure_can_write(path: Path, root: Path, *, overwrite: bool) -> None:
 
 
 def _is_within_root(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root.resolve())
-    except ValueError:
-        return False
-    return True
+    return path.resolve().is_relative_to(root.resolve())
 
 
 def _local_override_details(
@@ -303,7 +299,11 @@ def _local_override_details(
     return {
         "exists": False,
         "path": str(path),
-        "status": f"No active local override. Create {path.relative_to(root.parent)} to override the built-in {kind}.",
+        "status": (
+            "No active local override. Create "
+            f"{path.resolve().relative_to(root.parent.resolve())} "
+            f"to override the built-in {kind}."
+        ),
     }
 
 

@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.metadata.local_metadata import (
+    _is_within_root as local_metadata_is_within_root,
     clear_local_metadata_loader_caches,
     create_local_profile_draft,
     create_local_schema_draft,
@@ -23,6 +24,12 @@ from custom_components.eybond_local.metadata.local_metadata import (
     local_register_schema_override_details,
     resolve_local_metadata_rollback_paths,
     rollback_local_metadata_overrides,
+)
+from custom_components.eybond_local.metadata.profile_loader import (
+    _is_within_root as profile_loader_is_within_root,
+)
+from custom_components.eybond_local.metadata.register_schema_loader import (
+    _is_within_root as register_schema_loader_is_within_root,
 )
 from custom_components.eybond_local.metadata.smartess_draft import (
     create_smartess_known_family_draft,
@@ -153,6 +160,38 @@ def _find_item(raw_items: list[dict[str, object]], key: str) -> dict[str, object
 
 
 class LocalMetadataTests(unittest.TestCase):
+    def test_is_within_root_accepts_symlink_alias_forms(self) -> None:
+        """Containment must survive mixed symlink forms (e.g. /var vs /private/var)."""
+        helpers = (
+            local_metadata_is_within_root,
+            profile_loader_is_within_root,
+            register_schema_loader_is_within_root,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            real_root = base / "real"
+            real_root.mkdir()
+            alias_root = base / "alias"
+            alias_root.symlink_to(real_root.resolve())
+            child = real_root / "nested" / "item.json"
+            child.parent.mkdir(parents=True)
+            child.write_text("{}", encoding="utf-8")
+            alias_child = alias_root / "nested" / "item.json"
+            outside = base / "outside.json"
+            outside.write_text("{}", encoding="utf-8")
+
+            for helper in helpers:
+                with self.subTest(helper=helper.__module__):
+                    self.assertTrue(helper(child, real_root))
+                    self.assertTrue(helper(child, alias_root))
+                    self.assertTrue(helper(alias_child, real_root))
+                    self.assertTrue(helper(alias_child, alias_root))
+                    # Mixed: unresolved alias path vs resolved real root (and reverse).
+                    self.assertTrue(helper(alias_child, real_root.resolve()))
+                    self.assertTrue(helper(child.resolve(), alias_root))
+                    self.assertFalse(helper(outside, real_root))
+                    self.assertFalse(helper(outside, alias_root))
+
     def test_detects_when_one_draft_name_overrides_builtin_metadata(self) -> None:
         self.assertTrue(draft_activates_automatically("smg_modbus.json", None))
         self.assertTrue(draft_activates_automatically("smg_modbus.json", "smg_modbus.json"))

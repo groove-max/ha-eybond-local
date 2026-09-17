@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "documentation_vendor_19b4_urtu1920_short_ascii",
+  "kind": "documentation",
+  "title": "Vendor 19B4 / DevDataUrtu1920 Short-ASCII layout",
+  "reference": "private:vendor-19b4-urtu1920-short-ascii",
+  "captured_at": "2026-09-14",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Vendor 19B4.xml / DevDataUrtu1920 documents fixed MP/Q1/MD widths, Q1 columns, a 20-byte firmware field without inverter serial, optional F/RH/RB layouts, and segment-7 charge/discharge multiply=0.1. It qualifies the EyeBond Short-ASCII family dialect, not a retail commercial model.",
+  "assertions": [
+    "runtime_compatibility",
+    "telemetry_validation",
+    "register_map"
+  ]
+}

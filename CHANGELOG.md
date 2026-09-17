@@ -10,23 +10,54 @@ the GitHub release body should be rendered from the matching version section her
 ### Added
 
 - Added an offline MPPT-frame inspector for maintainers, with strict runtime
-  decoding and explicit warnings about overlapping wire formats. This does not
-  enable live PV polling or create additional Home Assistant entities.
+  decoding and explicit warnings about overlapping wire formats. That tool does
+  not poll devices or create Home Assistant entities; live optional PV is a
+  separate admission path below.
 
 - Added a generic read-only **EyeBond Short-ASCII family** profile for the
   captured MP/Q1/MD dialect seen on some Anern and Maxinn devices (#45).
   It provides grid/output voltage, load percentage, output frequency,
   temperature and status diagnostics. Battery Reference Voltage is shown
-  separately from full-pack voltage. No retail model, serial number, PV power
-  or inverter controls are inferred.
+  separately from full-pack voltage. Identity is family-only: no retail model
+  (including no Anern SPI-12000W claim), serial number or inverter controls are
+  inferred.
+
+- Short-ASCII also publishes labelled **Estimated AC Load Power**
+  (`estimated_ac_load_power` = load% × rated VA from F). It is an estimate, not
+  measured active power; wire `load_percent` stays separate. Output frequency is
+  not aliased as grid frequency (#45).
 
 - Short-ASCII devices can also expose documented BMS and rated readings through
-  optional read-only RB/F queries. These entities are disabled by default.
+  optional read-only RB/F/RH queries. These entities are disabled by default.
   Missing, invalid or expired BMS samples remove their old values without
-  interrupting basic telemetry. BMS current scaling and PV remain unqualified;
-  this is not full device or control support (#45).
+  interrupting basic telemetry. Impossible V/SoC/I/P fields are hard-rejected;
+  the known RB link-loss signature (V=0 ∧ SoC=0) may hold last-good BMS values
+  for up to 180 s without refreshing sample age. Diagnostic counters track
+  link-loss transitions and hard rejects; confirmation-hold pending stays unused
+  in this release. Charge/discharge currents and measured `battery_power`
+  publish at 19B4 segment-7 `multiply=0.1` only while optional RH reports BMS
+  current display accuracy `1` (with decimals) and F ratings are present for
+  I/P bounds; RH `0`, unread, expired or failed RH omits those keys. RH=1 is the
+  discriminator (no retail-model gate). One live family member has SmartValue
+  correlation for that path; other members (e.g. Maxinn) are not separately
+  live-proven. This is not full device or control support (#45).
+
+- Optional short-ASCII **live PV/MPPT** uses the shared framed
+  `async_send_auxiliary_read` facade for the documented 21-byte `0200` runtime
+  query only (settings `0202` is not live telemetry; no tip AABB harvest or
+  EyeBond TID `0xAABB` as aux). Values follow the same OptionalSample pattern as
+  RB (30 s solicit / 60 s TTL), at most one optional read per successful Q1
+  cycle. Nine matching schema sensors (`pv_*`, `mppt_*`, `dc_load_current`) stay
+  **disabled by default**; `mppt_error_code` is diagnostic and quiet. Offline
+  `decode_short_ascii_mppt` remains a maintainer capture tool, not this live path.
+  Site live-qualification / Support Archive RECEIPT for the family cutover is
+  still pending (#45).
 
 ### Fixed
+
+- When both are due in one Q1 cycle, short-ASCII optional reads prefer FC4
+  RB/F/RH over the aux MPPT solicit so a virgin MPPT due time cannot starve BMS
+  or rated refreshes (#45).
 
 - Support archives preserve numeric-looking hex sequences in explicitly typed
   wire-evidence fields instead of replacing their bytes with identifier masks.

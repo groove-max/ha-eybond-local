@@ -105,8 +105,10 @@ If your inverter is not listed, it may still work. Add it, create a Support Arch
 
 The unreleased test code also includes a limited **EyeBond Short-ASCII family**
 profile for a protocol observed on some Anern and Maxinn units. It includes
-basic telemetry and optional BMS/rated readings where the device answers them.
-This identifies the protocol, not the commercial model. See its
+basic telemetry, a labelled AC-load estimate, optional BMS/rated readings, and
+opt-in PV/MPPT entities (disabled by default) where the device answers them.
+Inverter controls are absent. This identifies the protocol family, not a retail
+commercial model. See its
 [available readings and limits](docs/user/RUNTIME_AND_INVERTER.md#eyebond-short-ascii-family).
 
 ### No factory collector?

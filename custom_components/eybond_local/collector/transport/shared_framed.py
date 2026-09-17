@@ -424,6 +424,26 @@ class SharedEybondTransport:
             request_timeout=self._request_timeout,
         )
 
+    async def async_send_auxiliary_read(
+        self,
+        payload: bytes,
+        *,
+        request_timeout: float,
+    ) -> bytes:
+        """Delegate the internal read-only side channel; never infer from magic.
+
+        Ownership, documented-query gating, and framing stay on the socket
+        connection. This facade only resolves the active connection so callers
+        need not touch ``connections.py``. Driver/catalog admission for live PV
+        remains separate work.
+        """
+
+        connection = await self._active_connection_for_send()
+        return await connection.async_send_auxiliary_read(
+            payload,
+            request_timeout=request_timeout,
+        )
+
     async def async_send_payload(
         self,
         payload: bytes,

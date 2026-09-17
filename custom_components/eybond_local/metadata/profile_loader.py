@@ -536,11 +536,7 @@ def _optional_str(value: Any) -> str | None:
 
 
 def _is_within_root(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root.resolve())
-    except ValueError:
-        return False
-    return True
+    return path.resolve().is_relative_to(root.resolve())
 
 
 def _merge_raw_profile(

@@ -41,9 +41,11 @@ class _Transport:
     connected = True
     collector_info = CollectorInfo(collector_pn="I30000200000000001")
 
-    def __init__(self, responses=None):
+    def __init__(self, responses=None, *, aux_responses=None):
         self.responses = _responses() if responses is None else responses
         self.requests = []
+        self.aux_requests = []
+        self.aux_responses = {} if aux_responses is None else aux_responses
 
     async def async_send_payload(self, payload, *, route, request_timeout=None):
         assert type(route) is EybondLinkRoute
@@ -55,17 +57,24 @@ class _Transport:
             raise result
         return result
 
+    async def async_send_auxiliary_read(self, payload, *, request_timeout):
+        self.aux_requests.append(payload)
+        result = self.aux_responses.get(payload, self.aux_responses.get(None, b""))
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
     def select_payload_route(self, *args, **kwargs):
         raise AssertionError("A qualified FC4 command must not fall back to raw UART")
 
 
 class ShortAsciiPayloadTests(unittest.TestCase):
     def test_only_documented_read_queries_and_exact_address(self):
-        for command in ("MP", "Q1", "MD", "F", "RB"):
+        for command in ("MP", "Q1", "MD", "F", "RH", "RB"):
             for address in (0, 1, 255):
                 self.assertEqual(build_short_ascii_request(command, address),
                                  command.encode() + bytes([address]) + b"\r")
-        for command in ("", "QPI", "RH", "SON", "SOFF", "W", "Q1\r", "Q1\x01", None):
+        for command in ("", "QPI", "SON", "SOFF", "W", "Q1\r", "Q1\x01", None):
             with self.assertRaises(ShortAsciiError):
                 build_short_ascii_request(command, 1)
         for address in (-1, 256, "1", 1.0, True, None):
@@ -278,7 +287,7 @@ class ShortAsciiDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(capture["responses_hex"]["MP"], _responses()["MP"].hex())
         self.assertEqual(capture["responses_hex"]["Q1"], _q1().hex())
         self.assertEqual(capture["failures"], {})
-        self.assertEqual(self.transport.requests, [b"MP\x01\r", b"Q1\x01\r", b"MD\x01\r", b"F\x01\r", b"RB\x01\r"])
+        self.assertEqual(self.transport.requests, [b"MP\x01\r", b"Q1\x01\r", b"MD\x01\r", b"F\x01\r", b"RH\x01\r", b"RB\x01\r"])
         # Generic support sweeps select raw routes on some AT devices; this
         # driver deliberately doesn't advertise a query through that API.
         self.assertEqual(self.driver.support_probe_plan(), ())
@@ -300,7 +309,7 @@ class ShortAsciiDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.transport.requests, [])
         session = ShortAsciiSession(self.transport, self.target.link_route, 1)
         with self.assertRaises(ShortAsciiError):
-            await session.request("RH")
+            await session.request("SON")
         self.assertEqual(self.transport.requests, [])
 
     def test_registration_preserves_existing_driver_order(self):

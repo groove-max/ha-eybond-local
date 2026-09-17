@@ -16,9 +16,12 @@ from ..link_transport import PayloadLinkTransport, async_send_payload
 
 
 BASE_READ_COMMANDS = ("MP", "Q1", "MD")
-READ_COMMANDS = (*BASE_READ_COMMANDS, "F", "RB")
+READ_COMMANDS = (*BASE_READ_COMMANDS, "F", "RH", "RB")
 PROTOCOL_ID = "EYBOND_SHORT_ASCII"
 WIRE_DIALECT = "urtu1920_checksum"
+# RB charge/discharge keys published only when optional RH reports decimals (RH=1).
+RB_CURRENT_KEYS = ("bms_charging_current", "bms_discharging_current")
+RB_CURRENT_POWER_KEYS = (*RB_CURRENT_KEYS, "battery_power")
 
 
 class ShortAsciiError(ValueError):
@@ -76,12 +79,33 @@ def parse_f(frame: bytes) -> dict[str, object]:
     }
 
 
+def parse_rh(frame: bytes) -> dict[str, object]:
+    """Qualified RH settings block: 27-byte body, sum8, trailing CR.
+
+    Live proxy captures match vendor 19B4 segment-5 length/checksum. Only the
+    BMS current-display-accuracy enum (``rh_crtu_39``) is decoded: ``0`` =
+    without decimals, ``1`` = with decimals. Other RH fields stay unpublished.
+    """
+    _envelope(frame, length=30, status=True)
+    body = frame[1:-2]
+    if sum(body) & 0xFF != frame[-2]:
+        raise ShortAsciiError("short_ascii_rh_checksum")
+    accuracy = body[8]
+    if accuracy not in (0, 1):
+        raise ShortAsciiError("short_ascii_rh_field")
+    return {"short_ascii_bms_current_display_accuracy": accuracy}
+
+
 def parse_rb(frame: bytes) -> dict[str, object]:
     """Qualified RB dialect: 25 documented bytes, 12 zero padding bytes, sum8.
 
     This checksum differs from Q1. Only this exact captured layout is accepted;
     the XML describes the first 25 bytes, not arbitrary future extensions.
-    Currents remain raw evidence: RH's precision setting has separate authority.
+
+    Charge/discharge raw words use 19B4 segment-7 ``multiply=0.1`` (``/10``).
+    Optional runtime code publishes those keys only when RH reports decimals
+    (accuracy ``1``) and F ratings are available for I/P hard-reject bounds.
+    Battery DC watts are derived outside this parser (MX2).
     """
     _envelope(frame, length=40, status=True)
     body = frame[1:-2]
@@ -107,6 +131,8 @@ def parse_rb(frame: bytes) -> dict[str, object]:
         "short_ascii_bms_discharge_path_enabled": body[24] == 1,
     }
     for key, offset, divisor in (
+        ("bms_charging_current", 3, 10),
+        ("bms_discharging_current", 5, 10),
         ("bms_cell_temperature", 7, 10),
         ("bms_cycle_count", 9, 1),
         ("bms_internal_temperature", 11, 10),

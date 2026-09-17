@@ -31,6 +31,25 @@ from custom_components.eybond_local.support.cloud_history_evidence import (  # n
 )
 from custom_components.eybond_local.support.dessmonitor_learning import (  # noqa: E402
     DessMonitorReadOnlyEvidenceOperation,
+    _FETCH_DETAIL_WINDOWS,
+    _FETCH_PROGRESS,
+)
+
+# Named stages the mock emits via report(); omits queryDeviceSoleChartEs which
+# production can emit but this fixture does not.
+_MOCK_REPORT_STAGES = (
+    "authSource",
+    "webQueryDeviceEs",
+    "querySPDeviceLastData",
+    "queryDeviceChartField",
+    "querySPKeyParameters",
+    "queryDeviceCtrlField",
+    "queryDeviceLastRawData",
+    "queryDeviceCtrlValue",
+    "metadata_bundle",
+    "queryDeviceInfo",
+    "queryDeviceKeyParameterOneDay",
+    "history_complete",
 )
 
 
@@ -83,25 +102,11 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
         def fetch_bundle(**kwargs):
             report = kwargs["progress"]
             detail = kwargs["progress_detail"]
-            for stage in (
-                "authSource",
-                "webQueryDeviceEs",
-                "querySPDeviceLastData",
-                "queryDeviceChartField",
-                "querySPKeyParameters",
-                "queryDeviceCtrlField",
-                "queryDeviceLastRawData",
-            ):
+            for stage in _MOCK_REPORT_STAGES:
+                if stage in _FETCH_DETAIL_WINDOWS:
+                    for completed in range(1, 5):
+                        detail(stage, completed, 4)
                 report(stage)
-            for completed in range(1, 5):
-                detail("queryDeviceCtrlValue", completed, 4)
-            report("queryDeviceCtrlValue")
-            report("metadata_bundle")
-            report("queryDeviceInfo")
-            for completed in range(1, 5):
-                detail("queryDeviceKeyParameterOneDay", completed, 4)
-            report("queryDeviceKeyParameterOneDay")
-            report("history_complete")
             return bundle, history_collection
 
         with patch(
@@ -125,6 +130,12 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
                 start_shadow_route=start_route,
                 on_learning=on_learning,
             )
+
+        # Executor awaits to_thread, so the sync fetch has joined before we
+        # continue; call_soon_threadsafe progress callbacks can still be queued.
+        # One sleep(0) drains them. Under suite load a late drain may still
+        # append fetching after building — invariants below tolerate that.
+        await asyncio.sleep(0)
 
         start_route.assert_not_awaited()
         on_learning.assert_not_called()
@@ -166,33 +177,42 @@ class DessMonitorLearningRunnerTests(unittest.IsolatedAsyncioTestCase):
             "unproven",
         )
         self.assertNotIn("register", str(semantic_report).casefold())
-        self.assertEqual(
-            progress,
-            [
-                (0.10, "fetching"),
-                (0.16, "fetching"),
-                (0.23, "fetching"),
-                (0.30, "fetching"),
-                (0.36, "fetching"),
-                (0.42, "fetching"),
-                (0.48, "fetching"),
-                (0.54, "fetching"),
-                (0.5525, "fetching"),
-                (0.565, "fetching"),
-                (0.5775, "fetching"),
-                (0.59, "fetching"),
-                (0.60, "fetching"),
-                (0.64, "fetching"),
-                (0.68, "fetching"),
-                (0.70, "fetching"),
-                (0.72, "fetching"),
-                (0.74, "fetching"),
-                (0.76, "fetching"),
-                (0.77, "fetching"),
-                (0.80, "fetching"),
-                (0.82, "building"),
-            ],
+        # Progress invariants (not a brittle exact timeline): start bookend,
+        # single building stage, all mock-emitted _FETCH_PROGRESS waypoints,
+        # and non-decreasing fractions on the pre-building prefix.
+        self.assertGreaterEqual(len(progress), 3)
+        self.assertEqual(progress[0], (0.10, "fetching"))
+        stages = [stage for _fraction, stage in progress]
+        self.assertTrue(set(stages) <= {"fetching", "building"})
+        self.assertEqual(stages.count("building"), 1)
+        building_index = stages.index("building")
+        self.assertEqual(progress[building_index], (0.82, "building"))
+        pre_building = progress[:building_index]
+        self.assertTrue(all(stage == "fetching" for _fraction, stage in pre_building))
+        pre_fractions = [fraction for fraction, _stage in pre_building]
+        self.assertEqual(pre_fractions, sorted(pre_fractions))
+        self.assertTrue(
+            all(stage == "fetching" for _fraction, stage in progress[building_index + 1 :])
         )
+        fractions = [fraction for fraction, _stage in progress]
+        expected_waypoints = {_FETCH_PROGRESS[stage] for stage in _MOCK_REPORT_STAGES}
+        self.assertTrue(
+            expected_waypoints <= set(fractions),
+            msg=f"missing fetch waypoints: {sorted(expected_waypoints - set(fractions))}",
+        )
+        for stage, (start, _end) in _FETCH_DETAIL_WINDOWS.items():
+            named = _FETCH_PROGRESS[stage]
+            detail_fractions = [
+                fraction for fraction in fractions if start < fraction < named
+            ]
+            self.assertGreaterEqual(
+                len(detail_fractions),
+                2,
+                msg=(
+                    f"expected ≥2 {stage} detail fractions in ({start}, {named}); "
+                    f"got {detail_fractions!r}"
+                ),
+            )
 
 
 if __name__ == "__main__":

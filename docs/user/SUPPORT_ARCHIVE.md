@@ -66,12 +66,14 @@ Depending on what is available for this entry, one archive can include:
 - device-learning or cloud evidence that already belongs to this entry.
 
 For the **EyeBond Short-ASCII family** in the test code, creating an archive
-also requests the basic `MP/Q1/MD` replies and optional `F/RB` replies. It keeps
-the returned bytes, including malformed responses, and records failed requests.
-It does not enable PV polling or inverter controls. This is a new diagnostic
-snapshot, not a continuous recording: if a reading jumps, also report when it
-happened and which sensor was affected. A later archive may no longer contain
-the response that caused that jump.
+also requests the basic `MP/Q1/MD` replies and optional `F/RH/RB` replies. It
+keeps the returned bytes, including malformed responses, and records failed
+requests. Archive creation does not solicit the optional auxiliary PV/MPPT
+(`0200`) read, force-enable opt-in PV entities, or enable inverter controls —
+those remain a separate runtime path. This is a new diagnostic snapshot, not a
+continuous recording: if a reading jumps, also report when it happened and
+which sensor was affected. A later archive may no longer contain the response
+that caused that jump.
 
 The archive helps answer questions such as:
 
