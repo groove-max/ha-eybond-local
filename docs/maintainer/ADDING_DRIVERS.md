@@ -200,6 +200,10 @@ not a proved availability or sentinel policy. The sample has no timestamp or
 freshness claim. See the [offline inspector](../../tools/README.md#inspect-a-short-ascii-mppt-frame-offline)
 for capture analysis; enabling live PV still requires the admission contract
 and per-session optional-sample expiry/invalidation described above.
+Quiet fault diagnostics `mppt_error_code` / `mppt_error` and Q1
+`q1_error_code` / `q1_error` / `ups_fault` are default-on diagnostic sensors
+(entity state only — no per-poll WARNING spam). Do not force-enable live
+PV/MPPT measurements from catalog overlays.
 
 ### Qualified 09C1 baseline
 
