@@ -1,0 +1,1678 @@
+diff --git a/README.md b/README.md
+index a320850..d6d254b 100644
+--- a/README.md
++++ b/README.md
+@@ -366,6 +366,7 @@ You do not need to delete the integration or reset the collector to report this.
+ - [Setup and discovery](docs/user/SETUP_AND_DISCOVERY.md)
+ - [Runtime detection and entities](docs/user/RUNTIME_AND_INVERTER.md)
+ - [Kevolt / Deye-compatible advanced controls](docs/user/KEVOLT_DEYE_CONTROLS.md) — experimental opt-in settings for the documented 80 kW register map
++- [SRNE / EASUN SMX-II monitoring and controls](docs/user/SRNE_EASUN_SMX_II_CONTROLS.md) — expanded telemetry, conditional writes, and two-stage read-back confirmation
+ - [Collector management](docs/user/COLLECTOR_MANAGEMENT.md)
+ - [Device learning](docs/user/DEVICE_LEARNING.md)
+ - [Diagnostic commands](docs/user/DIAGNOSTIC_COMMANDS.md) — advanced, developer-directed scenarios
+diff --git a/catalog/inverter_models/models/srne_modbus_family.json b/catalog/inverter_models/models/srne_modbus_family.json
+index 8cc0fad..831a695 100644
+--- a/catalog/inverter_models/models/srne_modbus_family.json
++++ b/catalog/inverter_models/models/srne_modbus_family.json
+@@ -5,13 +5,14 @@
+   "model": "Modbus family",
+   "aliases": [
+     "Anenji SRNE",
+-    "SRNE Modbus"
++    "SRNE Modbus",
++    "EASUN iSolar SMX II 3.6KW"
+   ],
+   "lifecycle": "experimental",
+   "variants": [
+     {
+       "variant_key": "srne_family",
+-      "label": "SRNE-compatible Modbus read-only family",
++      "label": "SRNE / EASUN SMX-II Modbus family",
+       "device_descriptor_keys": [
+         "srne_modbus_family"
+       ],
+@@ -21,24 +22,25 @@
+   "validation": {
+     "hardware": "none",
+     "telemetry": "partial",
+-    "controls": "none"
++    "controls": "partial"
+   },
+   "coverage": {
+-    "runtime_control_surface": "read_only",
++    "runtime_control_surface": "available",
+     "smartess_control_surface": "not_applicable",
+     "vendor_register_map": "partial",
+     "notes": [
+-      "Runtime support is read-only and based on a private third-party SRNE-compatible Modbus map."
++      "Telemetry and conditional controls are based on two independent open-source SMX-II implementations; writes require exact-register read-back."
+     ]
+   },
+   "known_limitations": [
+-    "Read-only first implementation; no write controls are exposed.",
+     "Requires collector serial settings compatible with Modbus RTU 9600 8N1 and inverter slave address 1.",
+-    "Telemetry map is based on a third-party SRNE-compatible Modbus register map and still needs owner confirmation through a fresh support archive after integration update.",
++    "Only output priority and charger-source priority have explicit example-level hardware evidence; other controls remain conditional until broader hardware confirmation.",
+     "Detection relies on the product-info register block containing an SRNE-like marker; commercial model names may need follow-up catalog entries."
+   ],
+-  "knowledge_summary": "SRNE-compatible Modbus support is based on a private third-party register map. The runtime adds a read-only surface using slave address 1, product-info detection at registers 53-72, and telemetry ranges for controller, fault, inverter, and optional phase data.",
++  "knowledge_summary": "SRNE/EASUN SMX-II Modbus support uses slave address 1, product-info detection at registers 53-72, split telemetry reads around unsupported holes, and a conditional writable profile with mandatory exact-register read-back.",
+   "source_keys": [
+-    "private_srne_modbus_register_map"
++    "private_srne_modbus_register_map",
++    "jsayol_easun_modbus",
++    "vladyspavlov_smx_ii_esphome"
+   ]
+ }
+diff --git a/catalog/inverter_models/sources/jsayol_easun_modbus.json b/catalog/inverter_models/sources/jsayol_easun_modbus.json
+new file mode 100644
+index 0000000..778d651
+--- /dev/null
++++ b/catalog/inverter_models/sources/jsayol_easun_modbus.json
+@@ -0,0 +1,15 @@
++{
++  "schema_version": 1,
++  "source_key": "jsayol_easun_modbus",
++  "kind": "register_map",
++  "title": "easun-modbus SMX-II 3.6 kW implementation",
++  "reference": "https://github.com/jsayol/easun-modbus",
++  "captured_at": "2026-09-22",
++  "visibility": "public",
++  "summary": "Open-source Modbus implementation tested by its author with an EASUN iSolar SMX II 3.6 kW over USB. It documents runtime, energy and configuration registers and uses FC06 for configuration writes.",
++  "assertions": [
++    "register_map",
++    "runtime_compatibility",
++    "write_validation"
++  ]
++}
+diff --git a/catalog/inverter_models/sources/vladyspavlov_smx_ii_esphome.json b/catalog/inverter_models/sources/vladyspavlov_smx_ii_esphome.json
+new file mode 100644
+index 0000000..2029414
+--- /dev/null
++++ b/catalog/inverter_models/sources/vladyspavlov_smx_ii_esphome.json
+@@ -0,0 +1,15 @@
++{
++  "schema_version": 1,
++  "source_key": "vladyspavlov_smx_ii_esphome",
++  "kind": "register_map",
++  "title": "SRNE/EASUN SMX-II ESPHome configuration",
++  "reference": "https://gist.github.com/vladyspavlov/d7819b255a81ea45659e63a1a92a66b2",
++  "captured_at": "2026-09-22",
++  "visibility": "public",
++  "summary": "Community ESPHome configuration independently corroborating the SMX-II 9600-8N1 slave-1 runtime and high-address configuration map.",
++  "assertions": [
++    "register_map",
++    "runtime_compatibility",
++    "write_validation"
++  ]
++}
+diff --git a/custom_components/eybond_local/drivers/srne.py b/custom_components/eybond_local/drivers/srne.py
+index 52aab7a..99b8727 100644
+--- a/custom_components/eybond_local/drivers/srne.py
++++ b/custom_components/eybond_local/drivers/srne.py
+@@ -1,4 +1,4 @@
+-"""SRNE-compatible Modbus RTU read-only driver."""
++"""SRNE/EASUN SMX-II compatible Modbus RTU driver."""
+ 
+ from __future__ import annotations
+ 
+@@ -8,26 +8,36 @@ from ..poll_policy import PollPolicy
+ from typing import Any
+ 
+ from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
++from ..metadata.profile_loader import load_driver_profile
+ from ..metadata.register_schema_loader import load_register_schema
+ from ..models import DetectedInverter, ProbeTarget
+-from ..payload.modbus import ModbusSession
++from ..payload.modbus import ModbusError, ModbusSession
+ from ..payload.register_decode import decode_ascii_low_bytes, read_spec_set_values
+ from .base import InverterDriver
++from .capability_codec import (
++    CapabilityPreWriteReadError,
++    decode_capability_value,
++    encode_capability_words,
++    find_capability,
++    merge_capability_register_word,
++)
+ from .local_register_evidence import (
+     LocalRegisterReadPlan,
+     LocalRegisterSnapshot,
+     async_capture_modbus_snapshot,
+ )
+ from .read_result import DriverReadMode, DriverReadResult
++from .modbus_write_error import ModbusWriteErrorMixin
++from .write_confirmation import (
++    load_write_confirmation,
++    start_write_confirmation,
++    store_write_confirmation,
++    write_confirmation_diagnostics,
++)
+ 
+ 
+-class SrneModbusDriver(InverterDriver):
+-    """Read-only driver for SRNE-compatible Modbus devices.
+-
+-    This driver never issues capability writes (``async_write_capability`` always
+-    raises ``unsupported_capability``), so it must NOT opt into Modbus write-error
+-    classification -- it keeps the neutral base (empty) classification.
+-    """
++class SrneModbusDriver(ModbusWriteErrorMixin, InverterDriver):
++    """Driver for the SRNE-compatible map used by EASUN SMX-II inverters."""
+ 
+     key = "srne_modbus"
+     poll_policy = PollPolicy(min_auto_interval=5.0, max_auto_interval=90.0)
+@@ -53,11 +63,25 @@ class SrneModbusDriver(InverterDriver):
+     def register_schema_name(self) -> str:
+         return _srne_default_schema_name()
+ 
++    @property
++    def profile_name(self) -> str:
++        return _srne_default_surface().profile_name
++
+     @property
+     def measurements(self):
+         schema = self.register_schema_metadata
+         return schema.measurement_descriptions if schema is not None else ()
+ 
++    @property
++    def capability_groups(self):
++        profile = self.profile_metadata
++        return profile.groups if profile is not None else ()
++
++    @property
++    def write_capabilities(self):
++        profile = self.profile_metadata
++        return profile.capabilities if profile is not None else ()
++
+     async def async_probe(self, transport, target: ProbeTarget) -> DetectedInverter | None:
+         schema_name = self.register_schema_name
+         schema = load_register_schema(schema_name)
+@@ -75,7 +99,8 @@ class SrneModbusDriver(InverterDriver):
+         if not _looks_like_srne_product_info(product_info):
+             return None
+ 
+-        surface = load_compiled_detection_catalog().surfaces["srne_modbus_read_only"]
++        surface = _srne_default_surface()
++        profile = load_driver_profile(surface.profile_name) if surface.profile_name else None
+         details = {
+             "product_info": product_info,
+             "protocol_id": "SRNE_MODBUS",
+@@ -98,6 +123,9 @@ class SrneModbusDriver(InverterDriver):
+             details=details,
+             profile_name=surface.profile_name,
+             register_schema_name=surface.register_schema_name,
++            capability_groups=tuple(profile.groups) if profile is not None else (),
++            capabilities=tuple(profile.capabilities) if profile is not None else (),
++            capability_presets=tuple(profile.presets) if profile is not None else (),
+         )
+ 
+     async def async_read_values(
+@@ -114,7 +142,16 @@ class SrneModbusDriver(InverterDriver):
+         )
+         session = self._session(transport, inverter.probe_target)
+         values = await read_spec_set_values(session, schema, ascii_style="printable")
+-        return DriverReadResult(values=values, mode=DriverReadMode.FULL)
++        diagnostics = _observe_capability_write_full_poll(
++            runtime_state,
++            inverter.capabilities,
++            values,
++        )
++        return DriverReadResult(
++            values=values,
++            mode=DriverReadMode.FULL,
++            diagnostics=diagnostics,
++        )
+ 
+     async def async_write_capability(
+         self,
+@@ -125,7 +162,71 @@ class SrneModbusDriver(InverterDriver):
+         *,
+         runtime_state: dict[str, Any] | None = None,
+     ) -> Any:
+-        raise ValueError(f"unsupported_capability:{self.key}:{capability_key}")
++        capability = find_capability(
++            capability_key,
++            inverter.capabilities or self.write_capabilities,
++        )
++        raw_words = encode_capability_words(capability, value)
++        native_value = decode_capability_value(capability, raw_words)
++        session = self._session(transport, inverter.probe_target)
++
++        if capability.bitmask:
++            try:
++                current = await session.read_holding(capability.register, 1)
++            except ModbusError as exc:
++                raise CapabilityPreWriteReadError(
++                    f"bitmask_pre_write_read_failed:{capability.key}:{exc}"
++                ) from exc
++            if not current:
++                raise CapabilityPreWriteReadError(
++                    f"bitmask_pre_write_read_empty:{capability.key}"
++                )
++            wire_words = [
++                merge_capability_register_word(
++                    capability,
++                    current_word=int(current[0]),
++                    encoded_word=int(raw_words[0]),
++                )
++            ]
++        else:
++            wire_words = [int(word) for word in raw_words]
++
++        if capability.write_function == 6:
++            for offset, word in enumerate(wire_words):
++                await session.write_single_holding(capability.register + offset, word)
++        else:
++            await session.write_holding(capability.register, wire_words)
++
++        trace = start_write_confirmation(
++            runtime_state,
++            capability_key=capability.key,
++            value_key=capability.value_key,
++            requested_value=value,
++            expected_value=native_value,
++            requested_words=tuple(int(word) for word in raw_words),
++        )
++        try:
++            observed_wire_words = tuple(
++                int(word)
++                for word in await session.read_holding(
++                    capability.register,
++                    capability.word_count,
++                )
++            )
++            observed_words = _comparable_capability_words(
++                capability,
++                observed_wire_words,
++            )
++            observed_value = decode_capability_value(capability, list(observed_words))
++            trace = trace.with_immediate_observation(
++                value=observed_value,
++                words=observed_words,
++                matched=(observed_words == trace.requested_words),
++            )
++        except Exception as exc:  # the mandatory coordinator refresh may still confirm
++            trace = trace.with_immediate_unavailable(error=exc)
++        store_write_confirmation(runtime_state, trace)
++        return native_value
+ 
+     async def async_capture_support_evidence(
+         self,
+@@ -163,7 +264,8 @@ class SrneModbusDriver(InverterDriver):
+             "model_name": inverter.model_name,
+             "serial_number": inverter.serial_number,
+             "capture_notes": [
+-                "SRNE-compatible support is read-only and expects Modbus RTU at 9600 8N1, slave address 1."
++                "SRNE/EASUN SMX-II support expects Modbus RTU at 9600 8N1, slave address 1.",
++                "Writes use the profile-declared Modbus function and are followed by an exact-register read-back."
+             ],
+             "planned_ranges": [
+                 {"start": block.start, "count": block.count}
+@@ -217,10 +319,46 @@ class SrneModbusDriver(InverterDriver):
+ 
+ 
+ def _srne_default_schema_name() -> str:
++    return _srne_default_surface().register_schema_name
++
++
++def _srne_default_surface():
+     for surface in load_compiled_detection_catalog().surfaces.values():
+         if surface.driver_key == SrneModbusDriver.key and surface.default_for_driver:
+-            return surface.register_schema_name
+-    return "srne_modbus/base.json"
++            return surface
++    raise LookupError("srne_default_surface_not_found")
++
++
++def _comparable_capability_words(capability, words: tuple[int, ...]) -> tuple[int, ...]:
++    if not capability.bitmask:
++        return words
++    if len(words) != 1:
++        raise ValueError(f"unexpected_word_length:{capability.key}:{len(words)}")
++    return ((int(words[0]) & capability.bitmask) >> capability.bitmask_shift,)
++
++
++def _observe_capability_write_full_poll(
++    runtime_state: dict[str, Any] | None,
++    capabilities,
++    values: dict[str, Any],
++) -> dict[str, Any]:
++    trace = load_write_confirmation(runtime_state)
++    if trace is None:
++        return {}
++    capability = next(
++        (item for item in capabilities if item.key == trace.capability_key),
++        None,
++    )
++    if capability is None or trace.value_key not in values:
++        trace = trace.with_poll_observation(value=None, matched=None)
++    else:
++        observed_value = values[trace.value_key]
++        trace = trace.with_poll_observation(
++            value=observed_value,
++            matched=(observed_value == trace.expected_value),
++        )
++    store_write_confirmation(runtime_state, trace)
++    return write_confirmation_diagnostics(runtime_state)
+ 
+ 
+ def _looks_like_srne_product_info(product_info: str) -> bool:
+diff --git a/custom_components/eybond_local/payload/register_decode.py b/custom_components/eybond_local/payload/register_decode.py
+index 46f4416..95c9742 100644
+--- a/custom_components/eybond_local/payload/register_decode.py
++++ b/custom_components/eybond_local/payload/register_decode.py
+@@ -13,6 +13,7 @@ kept here as an explicit ``ascii_style`` argument:
+ 
+ from __future__ import annotations
+ 
++from datetime import datetime
+ from typing import Any, Literal
+ 
+ from ..models import RegisterValueSpec, decimals_for_divisor
+@@ -70,6 +71,20 @@ def decode_raw_value(
+                 decode_ascii_word(registers.get(spec.register + offset, 0), style=ascii_style)
+             )
+         return "".join(chars).strip()
++    if spec.combine == "srne_datetime":
++        words = [
++            registers.get(spec.register + offset, 0)
++            for offset in range(spec.word_count)
++        ]
++        if len(words) != 3:
++            raise ValueError(f"srne_datetime_word_count:{spec.key}:{len(words)}")
++        octets = [byte for word in words for byte in ((word >> 8) & 0xFF, word & 0xFF)]
++        year, month_zero_based, day, hour, minute, second = octets
++        try:
++            parsed = datetime(1970 + year, month_zero_based + 1, day, hour, minute, second)
++        except ValueError:
++            return "Unknown (" + "".join(f"{word:04X}" for word in words) + ")"
++        return parsed.isoformat(sep=" ")
+     if spec.word_count >= 2:
+         high = registers.get(spec.register, 0)
+         low = registers.get(spec.register + 1, 0)
+diff --git a/custom_components/eybond_local/protocol_catalogs/inverter_catalog.json b/custom_components/eybond_local/protocol_catalogs/inverter_catalog.json
+index 1577101..9886790 100644
+--- a/custom_components/eybond_local/protocol_catalogs/inverter_catalog.json
++++ b/custom_components/eybond_local/protocol_catalogs/inverter_catalog.json
+@@ -964,29 +964,129 @@
+   },
+   "srne_modbus": {
+    "ranges": [
++    [
++     20,
++     2
++    ],
++    [
++     33,
++     20
++    ],
+     [
+      53,
+      20
+     ],
+     [
+      256,
+-     18
++     3
++    ],
++    [
++     260,
++     3
++    ],
++    [
++     263,
++     3
++    ],
++    [
++     267,
++     1
++    ],
++    [
++     270,
++     4
+     ],
+     [
+      516,
+      4
+     ],
++    [
++     524,
++     3
++    ],
+     [
+      528,
+-     18
++     19
+     ],
+     [
+      554,
+      14
++    ],
++    [
++     57101,
++     1
++    ],
++    [
++     57345,
++     2
++    ],
++    [
++     57348,
++     1
++    ],
++    [
++     57349,
++     10
++    ],
++    [
++     57360,
++     5
++    ],
++    [
++     57371,
++     1
++    ],
++    [
++     57378,
++     2
++    ],
++    [
++     57624,
++     1
++    ],
++    [
++     57631,
++     2
++    ],
++    [
++     57856,
++     2
++    ],
++    [
++     57860,
++     3
++    ],
++    [
++     57864,
++     11
++    ],
++    [
++     57876,
++     2
++    ],
++    [
++     57883,
++     1
++    ],
++    [
++     61485,
++     4
++    ],
++    [
++     61492,
++     8
++    ],
++    [
++     61500,
++     2
++    ],
++    [
++     61514,
++     2
+     ]
+    ],
+    "notes": [
+-    "SRNE-compatible support is read-only. Devices are expected to use Modbus RTU 9600 8N1 and slave address 1."
++    "SRNE/EASUN SMX-II devices use Modbus RTU 9600 8N1 and slave address 1. Runtime ranges are split around unsupported register holes; profile writes require exact-register read-back."
+    ]
+   },
+   "must_pv_ph18": {
+@@ -1573,14 +1673,14 @@
+    "support_capture_policy": "pi_ascii"
+   },
+   {
+-   "key": "srne_modbus_read_only",
++   "key": "srne_modbus_smx_ii",
+    "protocol_key": "srne_modbus",
+    "driver_key": "srne_modbus",
+    "variant_key": "srne_family",
+-   "profile_name": "",
++   "profile_name": "srne_modbus/smx_ii.json",
+    "register_schema_name": "srne_modbus/base.json",
+-   "tier": "partial",
+-   "read_only": true,
++   "tier": "full",
++   "read_only": false,
+    "default_for_driver": true,
+    "support_capture_policy": "srne_modbus"
+   },
+@@ -2736,7 +2836,7 @@
+   },
+   {
+    "entry_key": "srne_modbus_family",
+-   "surface_key": "srne_modbus_read_only",
++   "surface_key": "srne_modbus_smx_ii",
+    "model_name": "SRNE-compatible Modbus family",
+    "priority": 120,
+    "family_fallback": true,
+@@ -2756,7 +2856,7 @@
+     "sources": [
+      "private register map: SRNE-compatible Modbus product-info and telemetry ranges"
+     ],
+-    "confidence": "third-party-map-unconfirmed"
++    "confidence": "two-independent-open-source-implementations"
+    }
+   },
+   {
+diff --git a/custom_components/eybond_local/protocol_catalogs/profiles/srne_modbus/smx_ii.json b/custom_components/eybond_local/protocol_catalogs/profiles/srne_modbus/smx_ii.json
+new file mode 100644
+index 0000000..9988d72
+--- /dev/null
++++ b/custom_components/eybond_local/protocol_catalogs/profiles/srne_modbus/smx_ii.json
+@@ -0,0 +1,252 @@
++{
++  "profile_key": "srne_modbus/smx_ii.json",
++  "title": "SRNE / EASUN SMX-II",
++  "driver_key": "srne_modbus",
++  "protocol_family": "srne_modbus",
++  "groups": [
++    {"key": "output", "title": "Output", "order": 100, "icon": "mdi:transmission-tower-export"},
++    {"key": "charging", "title": "Charging", "order": 200, "icon": "mdi:battery-charging"},
++    {"key": "battery", "title": "Battery", "order": 300, "icon": "mdi:battery-cog"},
++    {"key": "protection", "title": "Protection", "order": 400, "icon": "mdi:shield-cog"},
++    {"key": "advanced", "title": "Advanced", "order": 900, "icon": "mdi:cog", "advanced": true}
++  ],
++  "capability_defaults": {
++    "write_function": 6,
++    "provenance": "doc_backed",
++    "support_tier": "conditional",
++    "requires_confirm": true,
++    "enabled_default": false,
++    "poll_readback": true,
++    "support_notes": "Register semantics are corroborated by the EASUN SMX-II 3.6 kW easun-modbus implementation and the community SRNE/EASUN SMX-II ESPHome map. The 24 V model stores battery-voltage thresholds in 0.2 V wire increments. A write is accepted only after an exact-register read-back."
++  },
++  "capabilities": [
++    {
++      "key": "output_priority", "title": "Output Priority", "register": 57860,
++      "value_kind": "enum", "group": "output", "tested": true, "enabled_default": true,
++      "change_summary": "Chooses the preferred source for the inverter output.",
++      "choices": [
++        {"value": 0, "label": "PV First", "order": 0},
++        {"value": 1, "label": "Utility First", "order": 1},
++        {"value": 2, "label": "Battery First", "order": 2}
++      ]
++    },
++    {
++      "key": "charger_source_priority", "title": "Charger Source Priority", "register": 57871,
++      "value_kind": "enum", "group": "charging", "tested": true, "enabled_default": true,
++      "change_summary": "Chooses which source charges the battery.",
++      "choices": [
++        {"value": 0, "label": "PV First", "order": 0},
++        {"value": 1, "label": "Utility First", "order": 1},
++        {"value": 2, "label": "PV and Utility", "order": 2},
++        {"value": 3, "label": "PV Only", "order": 3}
++      ]
++    },
++    {
++      "key": "output_frequency_setting", "title": "Output Frequency", "register": 57865,
++      "value_kind": "enum", "group": "output", "change_summary": "Sets the nominal AC output frequency.",
++      "choices": [
++        {"value": 5000, "label": "50 Hz", "order": 0},
++        {"value": 6000, "label": "60 Hz", "order": 1}
++      ]
++    },
++    {
++      "key": "ac_input_voltage_range", "title": "AC Input Voltage Range", "register": 57867,
++      "value_kind": "enum", "group": "output", "change_summary": "Chooses appliance or UPS AC input limits.",
++      "choices": [
++        {"value": 0, "label": "Appliance", "order": 0},
++        {"value": 1, "label": "UPS", "order": 1}
++      ]
++    },
++    {
++      "key": "output_voltage_setting", "title": "Output Voltage", "register": 57864,
++      "value_kind": "scaled_u16", "divisor": 10, "minimum": 0, "maximum": 3000,
++      "step": 0.1, "unit": "V", "device_class": "voltage", "group": "output",
++      "change_summary": "Sets the nominal AC output voltage."
++    },
++    {
++      "key": "max_charge_current", "title": "Maximum Charge Current", "register": 57866,
++      "value_kind": "scaled_u16", "divisor": 10, "minimum": 0, "maximum": 2000,
++      "step": 0.1, "unit": "A", "device_class": "current", "group": "charging",
++      "change_summary": "Limits the combined battery charge current."
++    },
++    {
++      "key": "max_ac_charge_current", "title": "Maximum Utility Charge Current", "register": 57861,
++      "value_kind": "scaled_u16", "divisor": 10, "minimum": 0, "maximum": 2000,
++      "step": 0.1, "unit": "A", "device_class": "current", "group": "charging",
++      "change_summary": "Limits battery charging current drawn from utility."
++    },
++    {
++      "key": "max_pv_charge_current", "title": "Maximum PV Charge Current", "register": 57345,
++      "value_kind": "scaled_u16", "divisor": 10, "minimum": 0, "maximum": 2000,
++      "step": 0.1, "unit": "A", "device_class": "current", "group": "charging",
++      "change_summary": "Limits battery charging current drawn from PV."
++    },
++    {
++      "key": "battery_type", "title": "Battery Type", "register": 57348,
++      "value_kind": "enum", "group": "battery", "change_summary": "Selects the battery charging profile.",
++      "choices": [
++        {"value": 0, "label": "User Defined", "order": 0},
++        {"value": 1, "label": "Sealed Lead Acid", "order": 1},
++        {"value": 2, "label": "Flooded Lead Acid", "order": 2},
++        {"value": 3, "label": "GEL", "order": 3},
++        {"value": 4, "label": "Lithium LF14", "order": 4},
++        {"value": 5, "label": "Lithium LF15", "order": 5},
++        {"value": 6, "label": "Lithium LF16", "order": 6},
++        {"value": 7, "label": "Lithium LF7", "order": 7},
++        {"value": 8, "label": "Lithium LF8", "order": 8},
++        {"value": 9, "label": "Lithium LF9", "order": 9},
++        {"value": 10, "label": "NCA7", "order": 10},
++        {"value": 11, "label": "NCA8", "order": 11},
++        {"value": 12, "label": "NCA13", "order": 12},
++        {"value": 13, "label": "NCA14", "order": 13}
++      ]
++    },
++    {
++      "key": "battery_capacity", "title": "Battery Capacity", "register": 57346,
++      "value_kind": "u16", "minimum": 1, "maximum": 2000, "step": 1, "unit": "Ah",
++      "group": "battery", "provenance": "inferred", "experimental": true,
++      "change_summary": "Sets nominal battery capacity used by the inverter SOC estimate."
++    },
++    {
++      "key": "battery_overcharge_voltage", "title": "Battery Overcharge Voltage", "register": 57349,
++      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
++      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
++      "provenance": "inferred", "experimental": true,
++      "change_summary": "Sets the battery overcharge protection threshold."
++    },
++    {
++      "key": "battery_charge_voltage_limit", "title": "Battery Charge Voltage Limit", "register": 57350,
++      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
++      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
++      "provenance": "inferred", "experimental": true,
++      "change_summary": "Sets the upper battery charging voltage limit."
++    },
++    {
++      "key": "battery_equalization_voltage", "title": "Battery Equalization Voltage", "register": 57351,
++      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
++      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
++      "change_summary": "Sets the battery equalization voltage."
++    },
++    {
++      "key": "battery_boost_voltage", "title": "Battery Boost Voltage", "register": 57352,
++      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
++      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
++      "change_summary": "Sets the battery boost/absorption voltage."
++    },
++    {
++      "key": "battery_float_voltage", "title": "Battery Float Voltage", "register": 57353,
++      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
++      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
++      "change_summary": "Sets the battery float voltage."
++    },
++    {
++      "key": "battery_charge_recovery_voltage", "title": "Battery Charge Recovery Voltage", "register": 57354,
++      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
++      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
++      "change_summary": "Sets the boost-charge recovery voltage."
++    },
++    {
++      "key": "battery_undervoltage_recovery", "title": "Battery Undervoltage Recovery", "register": 57355,
++      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
++      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
++      "change_summary": "Sets the voltage at which battery undervoltage clears."
++    },
++    {
++      "key": "battery_undervoltage_alarm", "title": "Battery Undervoltage Alarm", "register": 57356,
++      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
++      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "protection",
++      "change_summary": "Sets the low-battery warning voltage."
++    },
++    {
++      "key": "battery_overdischarge_voltage", "title": "Battery Overdischarge Voltage", "register": 57357,
++      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
++      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "protection",
++      "change_summary": "Sets the battery overdischarge threshold."
++    },
++    {
++      "key": "battery_discharge_limit_voltage", "title": "Battery Discharge Limit Voltage", "register": 57358,
++      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
++      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "protection",
++      "change_summary": "Sets the battery discharge cut-off voltage."
++    },
++    {
++      "key": "battery_overdischarge_delay", "title": "Battery Overdischarge Delay", "register": 57360,
++      "value_kind": "u16", "minimum": 0, "maximum": 120, "step": 1, "unit": "s",
++      "group": "protection", "change_summary": "Sets the overdischarge protection delay."
++    },
++    {
++      "key": "battery_equalization_time", "title": "Battery Equalization Time", "register": 57361,
++      "value_kind": "u16", "minimum": 0, "maximum": 600, "step": 1, "unit": "min",
++      "group": "battery", "change_summary": "Sets battery equalization duration."
++    },
++    {
++      "key": "battery_boost_time", "title": "Battery Boost Time", "register": 57362,
++      "value_kind": "u16", "minimum": 0, "maximum": 600, "step": 1, "unit": "min",
++      "group": "battery", "change_summary": "Sets battery boost/absorption duration."
++    },
++    {
++      "key": "battery_equalization_interval", "title": "Battery Equalization Interval", "register": 57363,
++      "value_kind": "u16", "minimum": 0, "maximum": 255, "step": 1, "unit": "d",
++      "group": "battery", "change_summary": "Sets the interval between battery equalization cycles."
++    },
++    {
++      "key": "battery_equalization_timeout", "title": "Battery Equalization Timeout", "register": 57379,
++      "value_kind": "u16", "minimum": 0, "maximum": 600, "step": 1, "unit": "min",
++      "group": "battery", "change_summary": "Sets the maximum equalization duration."
++    },
++    {
++      "key": "turn_to_utility_voltage", "title": "Switch to Utility Voltage", "register": 57371,
++      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
++      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "output",
++      "change_summary": "Sets the battery voltage that transfers the load to utility."
++    },
++    {
++      "key": "turn_to_inverter_voltage", "title": "Return to Inverter Voltage", "register": 57378,
++      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
++      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "output",
++      "change_summary": "Sets the battery voltage that returns the load to inverter."
++    },
++    {
++      "key": "battery_equalization_enable", "title": "Battery Equalization", "register": 57862,
++      "value_kind": "bool", "group": "battery", "change_summary": "Enables periodic battery equalization."
++    },
++    {
++      "key": "power_saving_mode", "title": "Power Saving Mode", "register": 57868,
++      "value_kind": "bool", "group": "output", "change_summary": "Enables low-load search mode."
++    },
++    {
++      "key": "restart_on_overload", "title": "Restart on Overload", "register": 57869,
++      "value_kind": "bool", "group": "protection", "change_summary": "Automatically restarts after overload protection."
++    },
++    {
++      "key": "restart_on_overtemperature", "title": "Restart on Overtemperature", "register": 57870,
++      "value_kind": "bool", "group": "protection", "change_summary": "Automatically restarts after overtemperature protection."
++    },
++    {
++      "key": "alarm_enable", "title": "Alarm Buzzer", "register": 57872,
++      "value_kind": "bool", "group": "advanced", "advanced": true,
++      "change_summary": "Enables the inverter alarm buzzer."
++    },
++    {
++      "key": "input_change_alarm", "title": "Input Source Change Alarm", "register": 57873,
++      "value_kind": "bool", "group": "advanced", "advanced": true,
++      "change_summary": "Enables the buzzer when the input source changes."
++    },
++    {
++      "key": "bypass_on_overload", "title": "Bypass on Overload", "register": 57874,
++      "value_kind": "bool", "group": "protection", "advanced": true,
++      "change_summary": "Transfers to bypass when inverter output is overloaded."
++    },
++    {
++      "key": "battery_equalize_now", "title": "Equalize Battery Now", "register": 57101,
++      "value_kind": "bool", "group": "battery", "advanced": true,
++      "change_summary": "Starts or stops an immediate equalization cycle."
++    },
++    {
++      "key": "inverter_power", "title": "Inverter Power", "register": 57088,
++      "value_kind": "bool", "write_function": 16, "bitmask": 1, "group": "advanced",
++      "advanced": true, "unsafe_while_running": true, "provenance": "inferred", "experimental": true,
++      "change_summary": "Turns inverter operation on or off through the community-documented control register."
++    }
++  ]
++}
+diff --git a/custom_components/eybond_local/protocol_catalogs/register_schemas/srne_modbus/base.json b/custom_components/eybond_local/protocol_catalogs/register_schemas/srne_modbus/base.json
+index 7833b4f..0d75467 100644
+--- a/custom_components/eybond_local/protocol_catalogs/register_schemas/srne_modbus/base.json
++++ b/custom_components/eybond_local/protocol_catalogs/register_schemas/srne_modbus/base.json
+@@ -4,46 +4,91 @@
+   "driver_key": "srne_modbus",
+   "protocol_family": "srne_modbus",
+   "blocks": [
++    {"key": "version", "start": 20, "count": 2},
++    {"key": "compile", "start": 33, "count": 20},
+     {"key": "serial", "start": 53, "count": 20},
+-    {"key": "config", "start": 256, "count": 18},
++    {"key": "config", "start": 256, "count": 3},
++    {"key": "controller_dc", "start": 260, "count": 3},
++    {"key": "pv1", "start": 263, "count": 3},
++    {"key": "charge_state", "start": 267, "count": 1},
++    {"key": "charge_summary", "start": 270, "count": 4},
+     {"key": "status", "start": 516, "count": 4},
+-    {"key": "live", "start": 528, "count": 18},
+-    {"key": "phase", "start": 554, "count": 14}
++    {"key": "clock", "start": 524, "count": 3},
++    {"key": "live", "start": 528, "count": 19},
++    {"key": "phase", "start": 554, "count": 14},
++    {"key": "equalize_now", "start": 57101, "count": 1},
++    {"key": "battery_current_limit", "start": 57345, "count": 2},
++    {"key": "battery_type", "start": 57348, "count": 1},
++    {"key": "battery_voltage_config", "start": 57349, "count": 10},
++    {"key": "battery_timing_config", "start": 57360, "count": 5},
++    {"key": "transfer_to_utility", "start": 57371, "count": 1},
++    {"key": "transfer_to_inverter", "start": 57378, "count": 2},
++    {"key": "rated_power", "start": 57624, "count": 1},
++    {"key": "pv_ratings", "start": 57631, "count": 2},
++    {"key": "inverter_identity_config", "start": 57856, "count": 2},
++    {"key": "inverter_config_a", "start": 57860, "count": 3},
++    {"key": "inverter_config_b", "start": 57864, "count": 11},
++    {"key": "inverter_config_c", "start": 57876, "count": 2},
++    {"key": "bms_protocol", "start": 57883, "count": 1},
++    {"key": "energy_today", "start": 61485, "count": 4},
++    {"key": "energy_totals", "start": 61492, "count": 8},
++    {"key": "energy_utility_today", "start": 61500, "count": 2},
++    {"key": "runtime_totals", "start": 61514, "count": 2}
+   ],
+   "enum_tables": {
+     "inverter_operation_mode": {
+       "0": "Power-up delay",
+-      "1": "Waiting",
++      "1": "Standby",
+       "2": "Initialization",
+       "3": "Soft start",
+-      "4": "Mains",
+-      "5": "Inverter",
++      "4": "Running on utility",
++      "5": "Running on inverter",
+       "6": "Inverter to mains",
+       "7": "Mains to inverter",
+-      "8": "Battery activate",
+-      "9": "Shutdown",
+-      "10": "Fault"
++      "8": "Reserved 8",
++      "9": "Reserved 9",
++      "10": "Shutdown",
++      "11": "Fault"
++    },
++    "battery_charge_state": {
++      "0": "Not started",
++      "1": "Constant current",
++      "2": "Constant voltage",
++      "3": "Reserved 3",
++      "4": "Float charge",
++      "5": "Reserved 5",
++      "6": "Active charge",
++      "7": "Active charge"
+     }
+   },
+   "spec_sets": {
+     "runtime": [
+       {"key": "product_info", "register": 53, "word_count": 20, "combine": "ascii_low_byte"},
++      {"key": "app_version", "register": 20, "divisor": 100, "decimals": 2},
++      {"key": "bootloader_version", "register": 21, "divisor": 100, "decimals": 2},
++      {"key": "compile_time", "register": 33, "word_count": 20, "combine": "ascii_low_byte"},
+       {"key": "battery_percent", "register": 256},
+       {"key": "battery_voltage", "register": 257, "signed": true, "divisor": 10, "decimals": 1},
+       {"key": "battery_current", "register": 258, "signed": true, "divisor": 10, "decimals": 1},
++      {"key": "controller_output_voltage", "register": 260, "divisor": 10, "decimals": 1},
++      {"key": "controller_output_current", "register": 261, "divisor": 100, "decimals": 2},
++      {"key": "controller_output_power", "register": 262},
+       {"key": "pv1_input_voltage", "register": 263, "signed": true, "divisor": 10, "decimals": 1},
+       {"key": "pv1_input_current", "register": 264, "signed": true, "divisor": 10, "decimals": 1},
+       {"key": "pv1_input_power", "register": 265, "signed": true},
+-      {"key": "inverter_charge_state", "register": 267},
++      {"key": "inverter_charge_state", "register": 267, "enum_table": "battery_charge_state"},
+       {"key": "charge_power", "register": 270, "signed": true},
+       {"key": "pv2_input_voltage", "register": 271, "signed": true, "divisor": 10, "decimals": 1},
+       {"key": "pv2_input_current", "register": 272, "signed": true, "divisor": 10, "decimals": 1},
+       {"key": "pv2_input_power", "register": 273, "signed": true},
+       {"key": "fault_code", "register": 516},
++      {"key": "system_datetime", "register": 524, "word_count": 3, "combine": "srne_datetime"},
+       {"key": "inverter_operation_mode", "register": 528, "enum_table": "inverter_operation_mode"},
+       {"key": "grid_voltage", "register": 531, "signed": true, "divisor": 10, "decimals": 1},
++      {"key": "grid_current", "register": 532, "signed": true, "divisor": 10, "decimals": 1},
+       {"key": "grid_frequency", "register": 533, "signed": true, "divisor": 100, "decimals": 2},
+       {"key": "output_voltage", "register": 534, "signed": true, "divisor": 10, "decimals": 1},
++      {"key": "inverter_current", "register": 535, "signed": true, "divisor": 10, "decimals": 1},
+       {"key": "output_frequency", "register": 536, "signed": true, "divisor": 100, "decimals": 2},
+       {"key": "output_current", "register": 537, "signed": true, "divisor": 10, "decimals": 1},
+       {"key": "output_power", "register": 539, "signed": true},
+@@ -52,6 +97,7 @@
+       {"key": "load_percent", "register": 543},
+       {"key": "dcdc_temperature", "register": 544, "signed": true, "divisor": 10, "decimals": 1},
+       {"key": "inverter_temperature", "register": 545, "signed": true, "divisor": 10, "decimals": 1},
++      {"key": "transformer_temperature", "register": 546, "signed": true, "divisor": 10, "decimals": 1},
+       {"key": "grid_voltage_l2", "register": 554, "signed": true, "divisor": 10, "decimals": 1},
+       {"key": "grid_voltage_l3", "register": 555, "signed": true, "divisor": 10, "decimals": 1},
+       {"key": "output_voltage_l2", "register": 556, "signed": true, "divisor": 10, "decimals": 1},
+@@ -63,15 +109,77 @@
+       {"key": "output_va_l2", "register": 564},
+       {"key": "output_va_l3", "register": 565},
+       {"key": "load_percent_l2", "register": 566},
+-      {"key": "load_percent_l3", "register": 567}
++      {"key": "load_percent_l3", "register": 567},
++      {"key": "battery_equalize_now", "register": 57101, "enum_map": {"0": "Off", "1": "On"}},
++      {"key": "max_pv_charge_current", "register": 57345, "divisor": 10, "decimals": 1},
++      {"key": "battery_capacity", "register": 57346},
++      {"key": "battery_type", "register": 57348, "enum_map": {"0": "User Defined", "1": "Sealed Lead Acid", "2": "Flooded Lead Acid", "3": "GEL", "4": "Lithium LF14", "5": "Lithium LF15", "6": "Lithium LF16", "7": "Lithium LF7", "8": "Lithium LF8", "9": "Lithium LF9", "10": "NCA7", "11": "NCA8", "12": "NCA13", "13": "NCA14"}},
++      {"key": "battery_overcharge_voltage", "register": 57349, "multiplier": 0.2, "decimals": 1},
++      {"key": "battery_charge_voltage_limit", "register": 57350, "multiplier": 0.2, "decimals": 1},
++      {"key": "battery_equalization_voltage", "register": 57351, "multiplier": 0.2, "decimals": 1},
++      {"key": "battery_boost_voltage", "register": 57352, "multiplier": 0.2, "decimals": 1},
++      {"key": "battery_float_voltage", "register": 57353, "multiplier": 0.2, "decimals": 1},
++      {"key": "battery_charge_recovery_voltage", "register": 57354, "multiplier": 0.2, "decimals": 1},
++      {"key": "battery_undervoltage_recovery", "register": 57355, "multiplier": 0.2, "decimals": 1},
++      {"key": "battery_undervoltage_alarm", "register": 57356, "multiplier": 0.2, "decimals": 1},
++      {"key": "battery_overdischarge_voltage", "register": 57357, "multiplier": 0.2, "decimals": 1},
++      {"key": "battery_discharge_limit_voltage", "register": 57358, "multiplier": 0.2, "decimals": 1},
++      {"key": "battery_overdischarge_delay", "register": 57360},
++      {"key": "battery_equalization_time", "register": 57361},
++      {"key": "battery_boost_time", "register": 57362},
++      {"key": "battery_equalization_interval", "register": 57363},
++      {"key": "temperature_compensation", "register": 57364, "signed": true, "multiplier": -1, "decimals": 0},
++      {"key": "turn_to_utility_voltage", "register": 57371, "multiplier": 0.2, "decimals": 1},
++      {"key": "turn_to_inverter_voltage", "register": 57378, "multiplier": 0.2, "decimals": 1},
++      {"key": "battery_equalization_timeout", "register": 57379},
++      {"key": "rated_power", "register": 57624, "divisor": 10, "decimals": 1},
++      {"key": "rated_pv_voltage", "register": 57631},
++      {"key": "rated_pv_charge_current", "register": 57632, "divisor": 10, "decimals": 1},
++      {"key": "rs485_address", "register": 57856},
++      {"key": "parallel_mode", "register": 57857},
++      {"key": "output_priority", "register": 57860, "enum_map": {"0": "PV First", "1": "Utility First", "2": "Battery First"}},
++      {"key": "max_ac_charge_current", "register": 57861, "divisor": 10, "decimals": 1},
++      {"key": "battery_equalization_enable", "register": 57862, "enum_map": {"0": "Off", "1": "On"}},
++      {"key": "output_voltage_setting", "register": 57864, "divisor": 10, "decimals": 1},
++      {"key": "output_frequency_setting", "register": 57865, "enum_map": {"5000": "50 Hz", "6000": "60 Hz"}},
++      {"key": "max_charge_current", "register": 57866, "divisor": 10, "decimals": 1},
++      {"key": "ac_input_voltage_range", "register": 57867, "enum_map": {"0": "Appliance", "1": "UPS"}},
++      {"key": "power_saving_mode", "register": 57868, "enum_map": {"0": "Off", "1": "On"}},
++      {"key": "restart_on_overload", "register": 57869, "enum_map": {"0": "Off", "1": "On"}},
++      {"key": "restart_on_overtemperature", "register": 57870, "enum_map": {"0": "Off", "1": "On"}},
++      {"key": "charger_source_priority", "register": 57871, "enum_map": {"0": "PV First", "1": "Utility First", "2": "PV and Utility", "3": "PV Only"}},
++      {"key": "alarm_enable", "register": 57872, "enum_map": {"0": "Off", "1": "On"}},
++      {"key": "input_change_alarm", "register": 57873, "enum_map": {"0": "Off", "1": "On"}},
++      {"key": "bypass_on_overload", "register": 57874, "enum_map": {"0": "Off", "1": "On"}},
++      {"key": "split_phase", "register": 57876},
++      {"key": "bms_enable", "register": 57877},
++      {"key": "bms_protocol", "register": 57883},
++      {"key": "battery_charge_today", "register": 61485},
++      {"key": "battery_discharge_today", "register": 61486},
++      {"key": "pv_energy_today", "register": 61487, "divisor": 10, "decimals": 1},
++      {"key": "load_energy_today", "register": 61488, "divisor": 10, "decimals": 1},
++      {"key": "battery_charge_total", "register": 61492, "word_count": 2, "combine": "u32_low_first"},
++      {"key": "battery_discharge_total", "register": 61494, "word_count": 2, "combine": "u32_low_first"},
++      {"key": "pv_energy_total", "register": 61496, "word_count": 2, "combine": "u32_low_first", "divisor": 10, "decimals": 1},
++      {"key": "load_energy_total", "register": 61498, "word_count": 2, "combine": "u32_low_first", "divisor": 10, "decimals": 1},
++      {"key": "utility_charge_today", "register": 61500},
++      {"key": "utility_load_energy_today", "register": 61501, "divisor": 10, "decimals": 1},
++      {"key": "inverter_runtime_total", "register": 61514},
++      {"key": "utility_runtime_total", "register": 61515}
+     ]
+   },
+   "measurement_descriptions": [
+     {"key": "product_info", "name": "Product Info", "icon": "mdi:identifier", "diagnostic": true, "enabled_default": true},
++    {"key": "app_version", "name": "Application Version", "diagnostic": true},
++    {"key": "bootloader_version", "name": "Bootloader Version", "diagnostic": true},
++    {"key": "compile_time", "name": "Firmware Compile Time", "diagnostic": true},
+     {"key": "battery_percent", "name": "Battery Percent", "unit": "%", "device_class": "battery", "state_class": "measurement"},
+     {"key": "battery_voltage", "name": "Battery Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+     {"key": "battery_current", "name": "Battery Current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+     {"key": "battery_charge_current", "name": "Battery Charge Current", "unit": "A", "device_class": "current", "state_class": "measurement"},
++    {"key": "controller_output_voltage", "name": "Controller Output Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
++    {"key": "controller_output_current", "name": "Controller Output Current", "unit": "A", "device_class": "current", "state_class": "measurement"},
++    {"key": "controller_output_power", "name": "Controller Output Power", "unit": "W", "device_class": "power", "state_class": "measurement"},
+     {"key": "pv1_input_voltage", "name": "PV1 Input Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+     {"key": "pv1_input_current", "name": "PV1 Input Current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+     {"key": "pv1_input_power", "name": "PV1 Input Power", "unit": "W", "device_class": "power", "state_class": "measurement"},
+@@ -81,10 +189,13 @@
+     {"key": "charge_power", "name": "Charge Power", "unit": "W", "device_class": "power", "state_class": "measurement"},
+     {"key": "inverter_charge_state", "name": "Inverter Charge State", "diagnostic": true},
+     {"key": "fault_code", "name": "Fault Code", "diagnostic": true, "enabled_default": false},
++    {"key": "system_datetime", "name": "System Date and Time", "icon": "mdi:calendar-clock", "diagnostic": true, "enabled_default": false, "live": false},
+     {"key": "inverter_operation_mode", "name": "Inverter Operation Mode", "diagnostic": true},
+     {"key": "grid_voltage", "name": "Grid Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
++    {"key": "grid_current", "name": "Grid Current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+     {"key": "grid_frequency", "name": "Grid Frequency", "unit": "Hz", "device_class": "frequency", "state_class": "measurement"},
+     {"key": "output_voltage", "name": "Output Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
++    {"key": "inverter_current", "name": "Inverter Current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+     {"key": "output_frequency", "name": "Output Frequency", "unit": "Hz", "device_class": "frequency", "state_class": "measurement"},
+     {"key": "output_current", "name": "Output Current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+     {"key": "output_power", "name": "Output Power", "unit": "W", "device_class": "power", "state_class": "measurement"},
+@@ -92,6 +203,63 @@
+     {"key": "load_percent", "name": "Load Percent", "unit": "%", "state_class": "measurement"},
+     {"key": "dcdc_temperature", "name": "DCDC Temperature", "unit": "°C", "device_class": "temperature", "state_class": "measurement"},
+     {"key": "inverter_temperature", "name": "Inverter Temperature", "unit": "°C", "device_class": "temperature", "state_class": "measurement"},
++    {"key": "transformer_temperature", "name": "Transformer Temperature", "unit": "°C", "device_class": "temperature", "state_class": "measurement"},
++    {"key": "rated_power", "name": "Rated Power", "unit": "kW", "device_class": "power", "diagnostic": true},
++    {"key": "rated_pv_voltage", "name": "Rated PV Voltage", "unit": "V", "device_class": "voltage", "diagnostic": true},
++    {"key": "rated_pv_charge_current", "name": "Rated PV Charge Current", "unit": "A", "device_class": "current", "diagnostic": true},
++    {"key": "temperature_compensation", "name": "Temperature Compensation", "unit": "mV/°C/2V", "diagnostic": true, "enabled_default": false},
++    {"key": "rs485_address", "name": "RS485 Address", "diagnostic": true, "enabled_default": false},
++    {"key": "parallel_mode", "name": "Parallel Mode", "diagnostic": true, "enabled_default": false},
++    {"key": "battery_equalize_now", "name": "Equalize Battery Now", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "max_pv_charge_current", "name": "Maximum PV Charge Current", "unit": "A", "device_class": "current", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_capacity", "name": "Battery Capacity", "unit": "Ah", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_type", "name": "Battery Type", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_overcharge_voltage", "name": "Battery Overcharge Voltage", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_charge_voltage_limit", "name": "Battery Charge Voltage Limit", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_equalization_voltage", "name": "Battery Equalization Voltage", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_boost_voltage", "name": "Battery Boost Voltage", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_float_voltage", "name": "Battery Float Voltage", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_charge_recovery_voltage", "name": "Battery Charge Recovery Voltage", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_undervoltage_recovery", "name": "Battery Undervoltage Recovery", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_undervoltage_alarm", "name": "Battery Undervoltage Alarm", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_overdischarge_voltage", "name": "Battery Overdischarge Voltage", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_discharge_limit_voltage", "name": "Battery Discharge Limit Voltage", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_overdischarge_delay", "name": "Battery Overdischarge Delay", "unit": "s", "device_class": "duration", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_equalization_time", "name": "Battery Equalization Time", "unit": "min", "device_class": "duration", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_boost_time", "name": "Battery Boost Time", "unit": "min", "device_class": "duration", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_equalization_interval", "name": "Battery Equalization Interval", "unit": "d", "device_class": "duration", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "turn_to_utility_voltage", "name": "Switch to Utility Voltage", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "turn_to_inverter_voltage", "name": "Return to Inverter Voltage", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_equalization_timeout", "name": "Battery Equalization Timeout", "unit": "min", "device_class": "duration", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "output_priority", "name": "Output Priority", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "max_ac_charge_current", "name": "Maximum Utility Charge Current", "unit": "A", "device_class": "current", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "battery_equalization_enable", "name": "Battery Equalization", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "output_voltage_setting", "name": "Output Voltage Setting", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "output_frequency_setting", "name": "Output Frequency Setting", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "max_charge_current", "name": "Maximum Charge Current", "unit": "A", "device_class": "current", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "ac_input_voltage_range", "name": "AC Input Voltage Range", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "power_saving_mode", "name": "Power Saving Mode", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "restart_on_overload", "name": "Restart on Overload", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "restart_on_overtemperature", "name": "Restart on Overtemperature", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "charger_source_priority", "name": "Charger Source Priority", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "alarm_enable", "name": "Alarm Buzzer", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "input_change_alarm", "name": "Input Source Change Alarm", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "bypass_on_overload", "name": "Bypass on Overload", "diagnostic": true, "enabled_default": false, "live": false},
++    {"key": "split_phase", "name": "Split Phase", "diagnostic": true, "enabled_default": false},
++    {"key": "bms_enable", "name": "BMS Interface", "diagnostic": true, "enabled_default": false},
++    {"key": "bms_protocol", "name": "BMS Protocol", "diagnostic": true, "enabled_default": false},
++    {"key": "battery_charge_today", "name": "Battery Charge Today", "unit": "Ah", "state_class": "total_increasing"},
++    {"key": "battery_discharge_today", "name": "Battery Discharge Today", "unit": "Ah", "state_class": "total_increasing"},
++    {"key": "pv_energy_today", "name": "PV Energy Today", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
++    {"key": "load_energy_today", "name": "Load Energy Today", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
++    {"key": "battery_charge_total", "name": "Battery Charge Total", "unit": "Ah", "state_class": "total_increasing"},
++    {"key": "battery_discharge_total", "name": "Battery Discharge Total", "unit": "Ah", "state_class": "total_increasing"},
++    {"key": "pv_energy_total", "name": "PV Energy Total", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
++    {"key": "load_energy_total", "name": "Load Energy Total", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
++    {"key": "utility_charge_today", "name": "Utility Charge Today", "unit": "Ah", "state_class": "total_increasing"},
++    {"key": "utility_load_energy_today", "name": "Utility Load Energy Today", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
++    {"key": "inverter_runtime_total", "name": "Inverter Runtime Total", "unit": "h", "device_class": "duration", "state_class": "total_increasing"},
++    {"key": "utility_runtime_total", "name": "Utility Runtime Total", "unit": "h", "device_class": "duration", "state_class": "total_increasing"},
+     {"key": "grid_voltage_l2", "name": "Grid Voltage L2", "unit": "V", "device_class": "voltage", "state_class": "measurement", "enabled_default": false},
+     {"key": "grid_voltage_l3", "name": "Grid Voltage L3", "unit": "V", "device_class": "voltage", "state_class": "measurement", "enabled_default": false},
+     {"key": "output_voltage_l2", "name": "Output Voltage L2", "unit": "V", "device_class": "voltage", "state_class": "measurement", "enabled_default": false},
+diff --git a/docs/README.md b/docs/README.md
+index e26f6fd..1a71235 100644
+--- a/docs/README.md
++++ b/docs/README.md
+@@ -13,6 +13,7 @@ release work; they are not required to use the integration.
+ - [Setup and Discovery](user/SETUP_AND_DISCOVERY.md) — collector-first setup, scan results, address confirmation, background discovery, and manual setup
+ - [Runtime Detection and Entities](user/RUNTIME_AND_INVERTER.md) — driver detection, Fast and Full protocol checks, polling, controls, and entity availability
+ - [Kevolt / Deye-Compatible Advanced Controls](user/KEVOLT_DEYE_CONTROLS.md) — opt-in testing, read-back behavior, and intentionally excluded operations for the experimental 8 kW control surface
++- [SRNE / EASUN SMX-II Monitoring and Controls](user/SRNE_EASUN_SMX_II_CONTROLS.md) — register coverage, conditional controls, exact-register read-back, and deliberate safety exclusions
+ - [Collector Management](user/COLLECTOR_MANAGEMENT.md) — cloud connection profiles, Wi-Fi, restart, UART, virtual bridges, and proxy-capture basics
+ - [Device Learning](user/DEVICE_LEARNING.md) — read-only cloud evidence and active verification of extra sensors and controls
+ - [Diagnostic Commands](user/DIAGNOSTIC_COMMANDS.md) — advanced, developer-provided read/write scenarios and shareable results
+diff --git a/docs/generated/INVERTER_MODEL_CATALOG.generated.md b/docs/generated/INVERTER_MODEL_CATALOG.generated.md
+index 18224e4..3291070 100644
+--- a/docs/generated/INVERTER_MODEL_CATALOG.generated.md
++++ b/docs/generated/INVERTER_MODEL_CATALOG.generated.md
+@@ -42,7 +42,7 @@ This page describes what has been confirmed for a specific inverter model or mod
+ | LVYUAN | TY-SIC-3.6KBE-W1 | eybond_g_ascii | anchors | full | confirmed | partial | captured |
+ | MUST | PV18-3024 | must_pv_ph18 | anchors | full | partial | partial | captured |
+ | Sandisolar | SD 11KP48V WIFI | modbus_smg | fingerprint | full | partial | partial | captured |
+-| SRNE-compatible | Modbus family | srne_modbus | anchors | partial | partial | none | none |
++| SRNE-compatible | Modbus family | srne_modbus | anchors | full | partial | partial | none |
+ | Yingfa | YF6.2K-2K-LEL-IF | pi30 | anchors | full | confirmed | partial | captured |
+ | Yingfa | YF6.2K-LEL-1B | pi30 | anchors | full | confirmed | partial | captured |
+ 
+@@ -445,26 +445,25 @@ Runtime descriptors with no specific commercial model record. These are generic
+ ### SRNE-compatible — Modbus family (`srne_modbus_family`)
+ 
+ - Lifecycle: experimental
+-- Aliases: Anenji SRNE, SRNE Modbus
+-- Validation: hardware none, telemetry partial, controls none
+-- Coverage: runtime read_only, cloud not_applicable, vendor map partial
++- Aliases: Anenji SRNE, SRNE Modbus, EASUN iSolar SMX II 3.6KW
++- Validation: hardware none, telemetry partial, controls partial
++- Coverage: runtime available, cloud not_applicable, vendor map partial
+   - Coverage notes:
+-    - Runtime support is read-only and based on a private third-party SRNE-compatible Modbus map.
+-- Summary: SRNE-compatible Modbus support is based on a private third-party register map. The runtime adds a read-only surface using slave address 1, product-info detection at registers 53-72, and telemetry ranges for controller, fault, inverter, and optional phase data.
++    - Telemetry and conditional controls are based on two independent open-source SMX-II implementations; writes require exact-register read-back.
++- Summary: SRNE/EASUN SMX-II Modbus support uses slave address 1, product-info detection at registers 53-72, split telemetry reads around unsupported holes, and a conditional writable profile with mandatory exact-register read-back.
+ - Variants:
+-  - `srne_family` — SRNE-compatible Modbus read-only family
++  - `srne_family` — SRNE / EASUN SMX-II Modbus family
+     - Descriptors: srne_modbus_family
+     - Known firmware: —
+-    - `srne_modbus_family` → surface `srne_modbus_read_only` (driver srne_modbus, variant srne_family)
++    - `srne_modbus_family` → surface `srne_modbus_smx_ii` (driver srne_modbus, variant srne_family)
+       - Protocol: srne_modbus | Detection: anchors (protocol.protocol_id=SRNE_MODBUS; identity.product_info=)
+-      - Tier: partial | Read-only: yes | Profile: — | Schema: srne_modbus/base.json
+-      - Capabilities: no model-specific profile | Telemetry: 37 measurements, 0 binary sensors
++      - Tier: full | Read-only: no | Profile: srne_modbus/smx_ii.json | Schema: srne_modbus/base.json
++      - Capabilities: 36 (tested 2, untested 34); support tiers: conditional 36 | Telemetry: 103 measurements, 0 binary sensors
+ - Known limitations:
+-  - Read-only first implementation; no write controls are exposed.
+   - Requires collector serial settings compatible with Modbus RTU 9600 8N1 and inverter slave address 1.
+-  - Telemetry map is based on a third-party SRNE-compatible Modbus register map and still needs owner confirmation through a fresh support archive after integration update.
++  - Only output priority and charger-source priority have explicit example-level hardware evidence; other controls remain conditional until broader hardware confirmation.
+   - Detection relies on the product-info register block containing an SRNE-like marker; commercial model names may need follow-up catalog entries.
+-- Evidence: 1 source(s)
++- Evidence: 3 source(s)
+ 
+ ### Yingfa — YF6.2K-2K-LEL-IF (`yingfa_yf6_2k_2k_lel_if`)
+ 
+diff --git a/docs/user/SRNE_EASUN_SMX_II_CONTROLS.md b/docs/user/SRNE_EASUN_SMX_II_CONTROLS.md
+new file mode 100644
+index 0000000..0ee19da
+--- /dev/null
++++ b/docs/user/SRNE_EASUN_SMX_II_CONTROLS.md
+@@ -0,0 +1,66 @@
++# SRNE / EASUN SMX-II Monitoring and Controls
++
++The `srne_modbus` driver supports the Modbus map used by the EASUN iSolar
++SMX-II 3.6 kW family at 9600 baud, 8 data bits, no parity, one stop bit, and
++slave address 1.
++
++The schema reads the stable scalar values documented by two independent
++community implementations. This includes firmware identity, battery and PV
++telemetry, inverter and phase telemetry, temperatures, charging state,
++configuration values, daily and lifetime energy counters, and runtime totals.
++The register ranges are intentionally split around undocumented holes because
++some SMX-II firmware rejects one wide `256..273` request while answering the
++documented sub-ranges.
++
++Configuration values are also retained as disabled diagnostic sensors. They
++can therefore be inspected without enabling write access.
++
++The 24 V SMX-II stores battery-voltage thresholds in 0.2 V wire increments,
++unlike live battery voltage, which uses 0.1 V increments. The schema applies
++that distinction in both directions: for example, register value `142` is
++shown as `28.4 V`, and a requested `28.8 V` setting is written as `144`.
++
++## Control exposure
++
++Output priority and charger-source priority have direct example-level evidence
++and are enabled by default when the integration's normal control policy allows
++writes. The remaining settings are marked conditional and disabled by default
++until they receive broader hardware confirmation.
++
++To test a conditional setting:
++
++1. Open **Settings -> Devices & Services -> EyeBond Local -> Configure**.
++2. Set **Control mode** to **Full Control**.
++3. Open the inverter entity list and enable only the setting being tested.
++4. Record the current value and change it by the smallest safe amount.
++5. Confirm the result on the inverter display and create a Support Archive.
++
++Battery thresholds and charging currents must match the battery manufacturer's
++requirements. Enabling a control only makes it available; it does not make a
++particular value safe for the installation.
++
++## Write confirmation
++
++Normal settings use Modbus function 06. The community-documented inverter
++power bit uses function 16 and a read-modify-write operation so unrelated bits
++in the shared register are preserved.
++
++After every successful wire acknowledgement, the driver immediately reads the
++exact target register and records whether the raw value matches. The mandatory
++normal refresh then reads the setting again and records whether it converged.
++A write acknowledgement alone is never projected as the current value.
++
++## Deliberate exclusions
++
++The profile does not expose password registers, customer identifiers, reserved
++words, undocumented function-enable bitfields, RS485 addressing, parallel-mode
++addressing, or BMS protocol selection as writable controls. These fields are
++credentials, installation topology, or insufficiently documented and are not
++appropriate as ordinary Home Assistant controls.
++
++The primary register evidence is:
++
++- [jsayol/easun-modbus](https://github.com/jsayol/easun-modbus), tested by its
++  author with an EASUN iSolar SMX-II 3.6 kW over USB;
++- [vladyspavlov SMX-II ESPHome map](https://gist.github.com/vladyspavlov/d7819b255a81ea45659e63a1a92a66b2),
++  an independent SRNE/EASUN register configuration.
+diff --git a/tests/test_driver_ownership_boundaries.py b/tests/test_driver_ownership_boundaries.py
+index 8581d80..332100a 100644
+--- a/tests/test_driver_ownership_boundaries.py
++++ b/tests/test_driver_ownership_boundaries.py
+@@ -509,19 +509,21 @@ class TypedWorkflowBoundaryGuard(unittest.TestCase):
+         )
+ 
+ 
+-# --- Follow-up fix 3: read-only SRNE does not opt into write classification ----
++# --- SRNE owns Modbus write classification after writable SMX-II support ----
+ 
+ 
+-class SrneReadOnlyClassificationGuard(unittest.TestCase):
+-    def test_srne_does_not_inherit_modbus_write_error_mixin(self) -> None:
+-        self.assertNotIsInstance(SrneModbusDriver(), ModbusWriteErrorMixin)
+-        self.assertNotIn(ModbusWriteErrorMixin, SrneModbusDriver.__mro__)
++class SrneWriteClassificationGuard(unittest.TestCase):
++    def test_srne_inherits_modbus_write_error_mixin(self) -> None:
++        self.assertIsInstance(SrneModbusDriver(), ModbusWriteErrorMixin)
++        self.assertIn(ModbusWriteErrorMixin, SrneModbusDriver.__mro__)
+ 
+-    def test_srne_classification_is_empty_for_modbus_exception(self) -> None:
++    def test_srne_classifies_modbus_exception(self) -> None:
+         classification = SrneModbusDriver().classify_write_error(
+             _capability(), ModbusError("exception_code:1"), operating_mode="Off-Grid"
+         )
+-        self.assertTrue(classification.is_empty)
++        self.assertFalse(classification.is_empty)
++        assert classification.blocker is not None
++        self.assertEqual(classification.blocker.code, "illegal_function")
+ 
+     def test_write_capable_modbus_drivers_still_classify(self) -> None:
+         from custom_components.eybond_local.drivers.modbus_catalog import ModbusCatalogDriver
+diff --git a/tests/test_model_catalog.py b/tests/test_model_catalog.py
+index a830b42..9016e2c 100644
+--- a/tests/test_model_catalog.py
++++ b/tests/test_model_catalog.py
+@@ -150,10 +150,10 @@ class RealCatalogTests(unittest.TestCase):
+         self.assertEqual(pi.protocol, "pi30")
+         self.assertEqual(pi.detection, "anchors")
+ 
+-    def test_read_only_model_is_marked_read_only(self) -> None:
++    def test_srne_model_exposes_writable_surface(self) -> None:
+         resolved = resolve_descriptor("srne_modbus_family", RUNTIME)
+-        self.assertTrue(resolved.read_only)
+-        self.assertEqual(resolved.tier, "partial")
++        self.assertFalse(resolved.read_only)
++        self.assertEqual(resolved.tier, "full")
+ 
+     def test_no_research_models_in_supported_data(self) -> None:
+         # Research models must never be presented as supported.
+@@ -389,7 +389,7 @@ class CoverageCrossCheckTests(unittest.TestCase):
+             return validate_catalog(base, runtime_catalog=RUNTIME)
+ 
+     def test_available_coverage_on_read_only_surface_errors(self) -> None:
+-        model = _ok_model(descriptor="srne_modbus_family")  # read-only surface
++        model = _ok_model(descriptor="pi18_family")  # read-only surface
+         model["coverage"]["runtime_control_surface"] = "available"
+         report = self._validate(model)
+         self.assertTrue(
+@@ -431,7 +431,7 @@ class JournalGroupingTests(unittest.TestCase):
+             "schema_version": 1, "model_key": "ro", "manufacturer": "A", "model": "M",
+             "aliases": [], "lifecycle": "supported",
+             "variants": [{"variant_key": "v", "label": "V",
+-                          "device_descriptor_keys": ["srne_modbus_family"]}],
++                          "device_descriptor_keys": ["pi18_family"]}],
+             "validation": {"hardware": "confirmed", "telemetry": "confirmed", "controls": "confirmed"},
+             "coverage": {
+                 "runtime_control_surface": "read_only",
+diff --git a/tests/test_register_decode.py b/tests/test_register_decode.py
+index 3dde076..34374db 100644
+--- a/tests/test_register_decode.py
++++ b/tests/test_register_decode.py
+@@ -143,6 +143,13 @@ class DecodeBlockTests(unittest.TestCase):
+         self.assertEqual(decode_block(10, [830], specs), {"value": "08:30"})
+         self.assertEqual(decode_block(10, [1260], specs), {})
+ 
++    def test_srne_datetime_decodes_packed_register_bytes(self) -> None:
++        specs = (_spec(word_count=3, combine="srne_datetime"),)
++
++        decoded = decode_block(10, [0x3808, 0x160C, 0x2238], specs)
++
++        self.assertEqual(decoded["value"], "2026-09-22 12:34:56")
++
+     def test_ascii_styles_filter_differently(self) -> None:
+         # 0x2A is "*" — printable but outside the model charset.
+         self.assertEqual(decode_ascii_word(0x2A41, style="printable"), "*A")
+diff --git a/tests/test_srne_driver.py b/tests/test_srne_driver.py
+index c43c090..c7fb705 100644
+--- a/tests/test_srne_driver.py
++++ b/tests/test_srne_driver.py
+@@ -17,6 +17,13 @@ from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
+ )
+ from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
+ from custom_components.eybond_local.models import ProbeTarget  # noqa: E402
++from custom_components.eybond_local.metadata.register_schema_loader import (  # noqa: E402
++    load_register_schema,
++)
++from custom_components.eybond_local.drivers.write_confirmation import (  # noqa: E402
++    WRITE_CONFIRMATION_DIAGNOSTIC_KEY,
++    load_write_confirmation,
++)
+ 
+ 
+ def _full_values(result: DriverReadResult) -> dict[str, object]:
+@@ -32,11 +39,11 @@ def _low_byte_ascii_words(text: str, count: int) -> list[int]:
+ 
+ def _srne_registers(*, include_phase: bool = True) -> dict[int, int]:
+     registers: dict[int, int] = {}
+-    for start, count in ((53, 20), (256, 18), (516, 4), (528, 18), (554, 14)):
+-        if start == 554 and not include_phase:
++    for block in load_register_schema("srne_modbus/base.json").blocks:
++        if block.key == "phase" and not include_phase:
+             continue
+-        for offset in range(count):
+-            registers[start + offset] = 0
++        for offset in range(block.count):
++            registers[block.start + offset] = 0
+ 
+     for offset, word in enumerate(_low_byte_ascii_words("SR-EOV24", 20)):
+         registers[53 + offset] = word
+@@ -55,6 +62,9 @@ def _srne_registers(*, include_phase: bool = True) -> dict[int, int]:
+             272: 38,
+             273: 620,
+             516: 7,
++            524: 0x3808,
++            525: 0x160C,
++            526: 0x2238,
+             528: 5,
+             531: 2301,
+             533: 5002,
+@@ -67,6 +77,26 @@ def _srne_registers(*, include_phase: bool = True) -> dict[int, int]:
+             543: 64,
+             544: 425,
+             545: 392,
++            57345: 600,
++            57346: 280,
++            57348: 0,
++            57353: 142,
++            57371: 110,
++            57378: 144,
++            57624: 36000,
++            57860: 2,
++            57861: 200,
++            57865: 5000,
++            57866: 800,
++            57871: 3,
++            61487: 126,
++            61488: 94,
++            61496: 34464,
++            61497: 1,
++            61498: 9876,
++            61499: 0,
++            61514: 1234,
++            61515: 567,
+         }
+     )
+ 
+@@ -90,6 +120,30 @@ def _srne_registers(*, include_phase: bool = True) -> dict[int, int]:
+     return registers
+ 
+ 
++class _RecordingFixtureTransport(FixtureTransport):
++    def __init__(self, **kwargs) -> None:
++        super().__init__(**kwargs)
++        self.holding_reads: list[tuple[int, int]] = []
++        self.write_functions: list[int] = []
++
++    def _handle_read_holding(self, payload: bytes) -> bytes:
++        self.holding_reads.append(
++            (
++                int.from_bytes(payload[2:4], "big"),
++                int.from_bytes(payload[4:6], "big"),
++            )
++        )
++        return super()._handle_read_holding(payload)
++
++    def _handle_write_single(self, payload: bytes) -> bytes:
++        self.write_functions.append(6)
++        return super()._handle_write_single(payload)
++
++    def _handle_write_multiple(self, payload: bytes) -> bytes:
++        self.write_functions.append(16)
++        return super()._handle_write_multiple(payload)
++
++
+ class SrneModbusDriverTests(unittest.IsolatedAsyncioTestCase):
+     async def test_probe_detects_srne_product_info_on_slave_one(self) -> None:
+         driver = SrneModbusDriver()
+@@ -108,8 +162,9 @@ class SrneModbusDriverTests(unittest.IsolatedAsyncioTestCase):
+         self.assertEqual(inverter.protocol_family, "srne_modbus")
+         self.assertEqual(inverter.model_name, "SRNE SR-EOV24")
+         self.assertEqual(inverter.variant_key, "srne_family")
+-        self.assertEqual(inverter.profile_name, "")
++        self.assertEqual(inverter.profile_name, "srne_modbus/smx_ii.json")
+         self.assertEqual(inverter.register_schema_name, "srne_modbus/base.json")
++        self.assertGreater(len(inverter.capabilities), 20)
+         self.assertEqual(inverter.probe_target.device_addr, 1)
+         self.assertEqual(inverter.details["product_info"], "SR-EOV24")
+ 
+@@ -149,13 +204,14 @@ class SrneModbusDriverTests(unittest.IsolatedAsyncioTestCase):
+         self.assertEqual(values["pv1_input_voltage"], 356.1)
+         self.assertEqual(values["pv1_input_current"], 4.2)
+         self.assertEqual(values["pv1_input_power"], 680)
+-        self.assertEqual(values["inverter_charge_state"], 2)
++        self.assertEqual(values["inverter_charge_state"], "Constant voltage")
+         self.assertEqual(values["charge_power"], 900)
+         self.assertEqual(values["pv2_input_voltage"], 348.2)
+         self.assertEqual(values["pv2_input_current"], 3.8)
+         self.assertEqual(values["pv2_input_power"], 620)
+         self.assertEqual(values["fault_code"], 7)
+-        self.assertEqual(values["inverter_operation_mode"], "Inverter")
++        self.assertEqual(values["system_datetime"], "2026-09-22 12:34:56")
++        self.assertEqual(values["inverter_operation_mode"], "Running on inverter")
+         self.assertEqual(values["grid_voltage"], 230.1)
+         self.assertEqual(values["grid_frequency"], 50.02)
+         self.assertEqual(values["output_voltage"], 229.8)
+@@ -167,10 +223,167 @@ class SrneModbusDriverTests(unittest.IsolatedAsyncioTestCase):
+         self.assertEqual(values["load_percent"], 64)
+         self.assertEqual(values["dcdc_temperature"], 42.5)
+         self.assertEqual(values["inverter_temperature"], 39.2)
++        self.assertEqual(values["max_pv_charge_current"], 60.0)
++        self.assertEqual(values["battery_capacity"], 280)
++        self.assertEqual(values["battery_float_voltage"], 28.4)
++        self.assertEqual(values["turn_to_utility_voltage"], 22.0)
++        self.assertEqual(values["turn_to_inverter_voltage"], 28.8)
++        self.assertEqual(values["rated_power"], 3600.0)
++        self.assertEqual(values["output_priority"], "Battery First")
++        self.assertEqual(values["charger_source_priority"], "PV Only")
++        self.assertEqual(values["pv_energy_today"], 12.6)
++        self.assertEqual(values["load_energy_today"], 9.4)
++        self.assertEqual(values["pv_energy_total"], 10000.0)
++        self.assertEqual(values["load_energy_total"], 987.6)
++        self.assertEqual(values["inverter_runtime_total"], 1234)
+         self.assertEqual(values["grid_voltage_l2"], 231.0)
+         self.assertEqual(values["output_power_l3"], 520)
+         self.assertEqual(values["load_percent_l3"], 32)
+ 
++    async def test_runtime_avoids_wide_controller_read_with_unsupported_holes(self) -> None:
++        driver = SrneModbusDriver()
++        target = ProbeTarget(devcode=1, collector_addr=255, device_addr=1)
++        registers = _srne_registers()
++        # Real SMX-II firmware may reject 256..273 as one range even though the
++        # documented sub-ranges answer independently.
++        transport = _RecordingFixtureTransport(
++            registers=registers,
++            command_responses=None,
++            probe_target=target,
++        )
++        inverter = await driver.async_probe(transport, target)
++        assert inverter is not None
++
++        values = _full_values(await driver.async_read_values(transport, inverter))
++
++        self.assertEqual(values["battery_percent"], 85)
++        self.assertEqual(values["pv1_input_power"], 680)
++        self.assertNotIn((256, 18), transport.holding_reads)
++        self.assertIn((256, 3), transport.holding_reads)
++        self.assertIn((263, 3), transport.holding_reads)
++
++    async def test_write_uses_fc06_and_immediately_reads_back_exact_register(self) -> None:
++        driver = SrneModbusDriver()
++        target = ProbeTarget(devcode=1, collector_addr=255, device_addr=1)
++        registers = _srne_registers()
++        registers[0xE20A] = 300
++        transport = _RecordingFixtureTransport(
++            registers=registers,
++            command_responses=None,
++            probe_target=target,
++        )
++        inverter = await driver.async_probe(transport, target)
++        assert inverter is not None
++        runtime_state: dict[str, object] = {}
++
++        result = await driver.async_write_capability(
++            transport,
++            inverter,
++            "max_charge_current",
++            35.0,
++            runtime_state=runtime_state,
++        )
++
++        self.assertEqual(result, 35.0)
++        self.assertEqual(transport.write_functions, [6])
++        self.assertEqual(transport._registers[0xE20A], 350)
++        self.assertEqual(transport.holding_reads[-1], (0xE20A, 1))
++        trace = load_write_confirmation(runtime_state)
++        assert trace is not None
++        self.assertEqual(trace.immediate_status, "matched")
++        self.assertEqual(trace.immediate_words, (350,))
++
++        poll = await driver.async_read_values(
++            transport,
++            inverter,
++            runtime_state=runtime_state,
++        )
++        confirmation = poll.diagnostics[WRITE_CONFIRMATION_DIAGNOSTIC_KEY]
++        self.assertEqual(confirmation["latest_full_poll_status"], "matched")
++        self.assertEqual(confirmation["latest_full_poll_value"], 35.0)
++        self.assertEqual(confirmation["convergence"], "requested_value_observed")
++
++    async def test_smx_ii_24v_battery_thresholds_use_pack_voltage_scale(self) -> None:
++        """SMX-II stores 24 V thresholds in 0.2 V wire increments."""
++
++        driver = SrneModbusDriver()
++        target = ProbeTarget(devcode=1, collector_addr=255, device_addr=1)
++        registers = _srne_registers()
++        registers[57353] = 142  # 28.4 V float voltage on a 24 V unit
++        transport = _RecordingFixtureTransport(
++            registers=registers,
++            command_responses=None,
++            probe_target=target,
++        )
++        inverter = await driver.async_probe(transport, target)
++        assert inverter is not None
++
++        values = _full_values(await driver.async_read_values(transport, inverter))
++        self.assertEqual(values["battery_float_voltage"], 28.4)
++
++        result = await driver.async_write_capability(
++            transport,
++            inverter,
++            "battery_float_voltage",
++            28.8,
++            runtime_state={},
++        )
++
++        self.assertEqual(result, 28.8)
++        self.assertEqual(transport._registers[57353], 144)
++        self.assertEqual(transport.write_functions, [6])
++        self.assertEqual(transport.holding_reads[-1], (57353, 1))
++
++    async def test_fc16_bitmask_write_preserves_unrelated_bits(self) -> None:
++        driver = SrneModbusDriver()
++        target = ProbeTarget(devcode=1, collector_addr=255, device_addr=1)
++        registers = _srne_registers()
++        registers[0xDF00] = 0xA5A4
++        transport = _RecordingFixtureTransport(
++            registers=registers,
++            command_responses=None,
++            probe_target=target,
++        )
++        inverter = await driver.async_probe(transport, target)
++        assert inverter is not None
++
++        result = await driver.async_write_capability(
++            transport,
++            inverter,
++            "inverter_power",
++            True,
++            runtime_state={},
++        )
++
++        self.assertIs(result, True)
++        self.assertEqual(transport.write_functions, [16])
++        self.assertEqual(transport._registers[0xDF00], 0xA5A5)
++        self.assertEqual(transport.holding_reads[-1], (0xDF00, 1))
++
++    def test_every_runtime_spec_is_covered_by_a_read_block(self) -> None:
++        schema = load_register_schema("srne_modbus/base.json")
++
++        uncovered = [
++            spec.key
++            for spec in schema.spec_set("runtime")
++            if not any(
++                block.start <= spec.register
++                and spec.register + spec.word_count <= block.start + block.count
++                for block in schema.blocks
++            )
++        ]
++
++        self.assertEqual(uncovered, [])
++
++    def test_every_runtime_value_has_an_entity_description(self) -> None:
++        schema = load_register_schema("srne_modbus/base.json")
++        described = {item.key for item in schema.measurement_descriptions}
++
++        self.assertEqual(
++            [spec.key for spec in schema.spec_set("runtime") if spec.key not in described],
++            [],
++        )
++
+     async def test_read_values_tolerates_missing_optional_phase_block(self) -> None:
+         driver = SrneModbusDriver()
+         target = ProbeTarget(devcode=1, collector_addr=255, device_addr=1)
+@@ -188,6 +401,29 @@ class SrneModbusDriverTests(unittest.IsolatedAsyncioTestCase):
+         self.assertEqual(values["output_power"], 1200)
+         self.assertNotIn("grid_voltage_l2", values)
+ 
++    async def test_read_values_keeps_core_telemetry_when_high_blocks_are_unsupported(self) -> None:
++        driver = SrneModbusDriver()
++        target = ProbeTarget(devcode=1, collector_addr=255, device_addr=1)
++        registers = {
++            address: value
++            for address, value in _srne_registers().items()
++            if address < 57000
++        }
++        transport = FixtureTransport(
++            registers=registers,
++            command_responses=None,
++            probe_target=target,
++        )
++        inverter = await driver.async_probe(transport, target)
++        assert inverter is not None
++
++        values = _full_values(await driver.async_read_values(transport, inverter))
++
++        self.assertEqual(values["battery_voltage"], 51.2)
++        self.assertEqual(values["output_power"], 1200)
++        self.assertNotIn("max_charge_current", values)
++        self.assertNotIn("pv_energy_total", values)
++
+     async def test_support_evidence_captures_planned_ranges(self) -> None:
+         driver = SrneModbusDriver()
+         target = ProbeTarget(devcode=1, collector_addr=255, device_addr=1)
+@@ -205,7 +441,7 @@ class SrneModbusDriverTests(unittest.IsolatedAsyncioTestCase):
+         self.assertEqual(evidence["range_failures"], [])
+         planned = [(item["start"], item["count"]) for item in evidence["planned_ranges"]]
+         self.assertIn((53, 20), planned)
+-        self.assertIn((528, 18), planned)
++        self.assertIn((528, 19), planned)
+         self.assertIn((554, 14), planned)
+         self.assertEqual(len(evidence["fixture_ranges"]), len(planned))
+ 
+diff --git a/tools/check_public_docs.py b/tools/check_public_docs.py
+index 001e842..ad20a21 100644
+--- a/tools/check_public_docs.py
++++ b/tools/check_public_docs.py
+@@ -33,6 +33,7 @@ USER_GUIDE_MARKDOWN = (
+     REPO_ROOT / "docs" / "user" / "REMOTE_SETUP.md",
+     REPO_ROOT / "docs" / "user" / "RUNTIME_AND_INVERTER.md",
+     REPO_ROOT / "docs" / "user" / "SETUP_AND_DISCOVERY.md",
++    REPO_ROOT / "docs" / "user" / "SRNE_EASUN_SMX_II_CONTROLS.md",
+     REPO_ROOT / "docs" / "user" / "SUPPORT_ARCHIVE.md",
+     REPO_ROOT / "docs" / "generated" / "INVERTER_MODEL_CATALOG.generated.md",
+ )
+@@ -95,6 +96,11 @@ _REQUIRED_USER_GUIDE_MARKERS = {
+         "What write confirmation means",
+         "Intentionally unavailable operations",
+     ),
++    REPO_ROOT / "docs" / "user" / "SRNE_EASUN_SMX_II_CONTROLS.md": (
++        "Control exposure",
++        "Write confirmation",
++        "Deliberate exclusions",
++    ),
+     REPO_ROOT / "docs" / "user" / "SUPPORT_ARCHIVE.md": (
+         "Use saved cloud evidence",
+         "Fetch or refresh cloud evidence now",
