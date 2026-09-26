@@ -9,6 +9,7 @@ from typing import Any
 
 from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
 from ..metadata.device_catalog_loader import resolve_support_capture_policy
+from ..metadata.detection_decision_tree import evaluate_detection_decision_tree_static
 from ..metadata.register_schema_loader import load_register_schema
 from ..models import DetectedInverter, ProbeTarget
 from ..payload.modbus import ModbusError, ModbusSession
@@ -87,17 +88,31 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
         if not model_name.startswith(_MODEL_PREFIXES):
             return None
 
-        surface = load_compiled_detection_catalog().surfaces["must_pv_ph18_full"]
+        catalog = load_compiled_detection_catalog()
+        evidence = {
+            "identity.model_number": model_name,
+            "protocol.protocol_id": "MUST_PV_PH18",
+        }
+        evaluation = evaluate_detection_decision_tree_static(catalog.decision_trees[self.key], evidence)
+        resolution = catalog.resolution_for_candidates(
+            protocol_key=self.key,
+            candidate_keys=evaluation.candidate_keys if evaluation.status == "resolved" else (),
+            evidence=evidence,
+        )
+        # Unrecognized PV/PH/EP models keep the common map. A documented model
+        # override must be selected from identity, never guessed from live watts.
+        surface = catalog.surfaces[resolution.surface_key or "must_pv_ph18_full"]
         details = {
             "model_number": model_name,
             "protocol_id": "MUST_PV_PH18",
             "catalog_detection": {
-                "resolution": "exact",
+                "resolution": resolution.resolution if resolution.surface_key else "family",
                 "surface_key": surface.key,
-                "evidence": {
-                    "identity.model_number": model_name,
-                    "protocol.protocol_id": "MUST_PV_PH18",
-                },
+                "evidence": evidence,
+                "candidate_keys": list(resolution.candidate_keys),
+                "catalog_version": resolution.catalog_version,
+                "descriptor_revisions": list(resolution.descriptor_revisions),
+                "evidence_fingerprint": resolution.evidence_fingerprint,
             },
         }
         # Entity setup reads capabilities from the DetectedInverter; carry

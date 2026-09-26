@@ -107,6 +107,43 @@ include the Load Power and Estimated Load Energy Today history around that time
 with a fresh Support Archive. Do not change scaling or delete the integration
 just to clear the old total.
 
+### PV3300 direction and load percentage
+
+For a device identified as **MUST PV3300**, the test build also corrects **Load
+Percent** and the signs used for battery/grid energy flows. Positive **Battery
+Power** and **Battery Current** mean charging; negative means discharging.
+Positive **Grid Power** means import; negative means export. The manufacturer's
+app may use the opposite convention. Native **Inverter Power** is a separate
+measurement and keeps its original sign.
+
+Already added, confirmed PV3300 devices receive the corrected map after updating
+and restarting HA; do not remove and re-add them. Existing entity IDs and
+history are kept. Earlier battery charge/discharge estimates are not repaired
+retroactively. Other MUST models keep their existing interpretation.
+
+Custom or learned maps are not rewritten. A learned map tied to the older
+generic MUST schema may stop applying after the base map changes; it needs to
+be regenerated for PV3300 rather than having its compatibility check bypassed.
+
+## Hopewind / Bluesun read-only profile
+
+The test build adds **Hopewind String (Protocol 0237)** telemetry, checked against
+local register readings from a Bluesun BSM15K-B. Keep detection on **Auto**.
+The integration shows a protocol-family name because these replies do not prove
+an exact retail model.
+
+Readings include PV voltage and power, AC generation, line-to-line grid
+voltages, phase currents, frequency, temperature, and daily/total PV energy.
+**Inverter AC Active Power** is generation from this inverter, not household
+consumption or net import/export at your electricity meter. No battery or home
+load measurements are inferred.
+
+Additional MPPT/string channels and raw fault diagnostics are disabled by
+default. Only enable channels actually present on your inverter; the family
+map includes more channels than some models have. Inverter controls are not
+included, even in **Full Control** mode. Cloud analysis remains a separate
+feature and is not required for local telemetry.
+
 ## EyeBond Short-ASCII family
 
 This read-only profile is included in the unreleased test code. It supports

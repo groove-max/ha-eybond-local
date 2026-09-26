@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "model_key": "bluesun_bsm15k_b",
+  "manufacturer": "Bluesun",
+  "model": "BSM15K-B",
+  "aliases": [
+    "Bluesun BSM15K-B"
+  ],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "hopewind_0237",
+      "label": "Hopewind protocol 0237 read-only family",
+      "device_descriptor_keys": [
+        "hopewind_0237_family"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "partial",
+    "controls": "none"
+  },
+  "coverage": {
+    "runtime_control_surface": "read_only",
+    "smartess_control_surface": "cloud_catalog",
+    "vendor_register_map": "partial",
+    "notes": [
+      "Local telemetry uses the manufacturer's Hopewind protocol 0237 through the generic Modbus catalog driver.",
+      "Runtime identifies a protocol family, not an exact retail model. AC generation is not household load or a site grid-import/export measurement."
+    ]
+  },
+  "known_limitations": [
+    "No built-in inverter controls, including in Full Control mode.",
+    "Serial number, packed firmware versions and boot/shutdown timestamps are not decoded in this first read-only profile; raw support evidence retains their registers.",
+    "Additional MPPT/string and fault-word sensors are disabled by default; raw fault words are not decoded alarm descriptions.",
+    "Cloud analysis is independent; no further cloud credentials are needed for local polling."
+  ],
+  "knowledge_summary": "Successful FC03 block reads match protocol 567/0237. The read-only family provides PV channels, AC generation, line-to-line grid voltages, phase currents, frequency, temperature, energy counters and diagnostics.",
+  "source_keys": [
+    "documentation_hopewind_0237",
+    "github_issue_23_bluesun"
+  ]
+}

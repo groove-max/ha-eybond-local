@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "model_key": "must_pv3300",
+  "manufacturer": "MUST-compatible",
+  "model": "PV3300",
+  "aliases": [
+    "MUST PV3300",
+    "DGK DGKINV02-24 6kW"
+  ],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "pv3300",
+      "label": "PV3300 field-confirmed telemetry interpretation",
+      "device_descriptor_keys": [
+        "must_pv3300"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "partial",
+    "controls": "partial"
+  },
+  "coverage": {
+    "runtime_control_surface": "available",
+    "smartess_control_surface": "cloud_catalog",
+    "vendor_register_map": "partial",
+    "notes": [
+      "Inherits the existing MUST control profile unchanged.",
+      "Whole-percent load and battery/grid direction normalization are qualified by the PV3300 local marker, not by the retail label or live power magnitude."
+    ]
+  },
+  "known_limitations": [
+    "Learned maps tied to the older generic MUST schema are not automatically rebased; existing compatibility checks remain in force.",
+    "Output Current and Inverter Load Current can remain zero on the reported unit; their meaning is still under investigation.",
+    "Other PV/PH/EP models retain the common register interpretation because published MUST documents disagree on load-percentage units.",
+    "Previously accumulated energy/history is not rewritten; daily estimated totals reset with the first valid sample of the next local day."
+  ],
+  "knowledge_summary": "PV3300 keeps the common MUST map and controls, with a scoped telemetry override: whole-percent load, charge-positive battery current/power and import-positive grid power. Native AC converter power retains its vendor sign.",
+  "source_keys": [
+    "private_must_pv_ph18_modbus_map",
+    "github_issue_46_pv3300"
+  ]
+}

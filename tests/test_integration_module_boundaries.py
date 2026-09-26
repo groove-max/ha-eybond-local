@@ -64,6 +64,11 @@ class IntegrationModuleBoundaryTests(unittest.TestCase):
 
     def test_original_definition_multiset_is_preserved_exactly_once(self) -> None:
         definitions = [item for path in _FAMILY for item in _definitions(path)]
+        # One post-refactor startup cache repair was intentionally added. Keep
+        # the original multiset guard intact and require the new owner once.
+        cache_repair = ("AsyncFunctionDef", "_async_self_heal_must_pv3300_metadata")
+        self.assertEqual(definitions.count(cache_repair), 1)
+        definitions.remove(cache_repair)
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()
@@ -76,6 +81,7 @@ class IntegrationModuleBoundaryTests(unittest.TestCase):
             "_register_entry_callback_session_claim": "integration_registration.py",
             "_register_entry_network_reconcile": "integration_registration.py",
             "_async_self_heal_collector_cloud_family": "integration_metadata.py",
+            "_async_self_heal_must_pv3300_metadata": "integration_metadata.py",
             "_async_initial_refresh_for_setup": "integration_metadata.py",
             "_start_background_refresh_for_setup": "integration_metadata.py",
             "_async_cleanup_obsolete_entities": "integration_entities.py",

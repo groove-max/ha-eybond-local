@@ -48,6 +48,17 @@ class AffectedValidationSelectionTests(unittest.TestCase):
             for path in affected_test_files((Path(production_path),))
         }
 
+    def test_must_and_hopewind_metadata_select_their_driver_regressions(self) -> None:
+        for path, expected in (
+            ("protocol_catalogs/register_schemas/must_pv_ph18/pv3300.json", "test_must_driver.py"),
+            ("protocol_catalogs/register_schemas/hopewind_0237/base.json", "test_hopewind_driver.py"),
+            ("drivers/modbus_catalog.py", "test_hopewind_driver.py"),
+            ("protocol_catalogs/inverter_catalog.json", "test_hopewind_driver.py"),
+            ("protocol_catalogs/inverter_catalog.json", "test_must_driver.py"),
+        ):
+            with self.subTest(path=path):
+                self.assertIn(expected, self._selected(f"custom_components/eybond_local/{path}"))
+
     def test_optional_short_ascii_changes_select_freshness_regressions(self) -> None:
         for path in (
             "payload/short_ascii.py", "drivers/eybond_short_ascii.py",

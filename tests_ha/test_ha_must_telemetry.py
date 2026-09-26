@@ -49,17 +49,25 @@ async def test_must_power_and_energy_setup_upgrade_reload(hass, fake_runtime, mo
     inverter = await driver.async_probe(transport, ProbeTarget(1, 255, 4))
     assert inverter is not None
 
+    def seed_binding(self, driver, binding):
+        assert binding.register_schema_name == "must_pv_ph18/pv3300.json"
+        self.initial_binding = binding
+
     async def refresh(self, *, poll_interval=None):
-        read = await driver.async_read_values(transport, inverter)
+        # Use the actual persisted startup binding when present, not a fresh
+        # test probe that would hide a stale pre-upgrade schema in entry.options.
+        binding = getattr(self, "initial_binding", inverter)
+        read = await driver.async_read_values(transport, binding)
         frame = project_canonical_telemetry(fold_driver_telemetry(
             TypedTelemetryFrame.empty(), driver_key=driver.key, values=read.values, replace=True,
         ))
         return RuntimeSnapshot(
-            connected=True, inverter=inverter, telemetry=frame,
+            connected=True, inverter=binding, telemetry=frame,
             collector=CollectorInfo(remote_ip=SYNTHETIC_COLLECTOR_IP, collector_pn=SYNTHETIC_COLLECTOR_PN),
         )
 
     monkeypatch.setattr(FakeRuntimeManager, "async_refresh", refresh)
+    monkeypatch.setattr(FakeRuntimeManager, "set_initial_inverter_binding", seed_binding, raising=False)
     entry = MockConfigEntry(
         domain=DOMAIN, title=inverter.model_name, version=5,
         unique_id=f"collector:{SYNTHETIC_COLLECTOR_PN}",
@@ -72,7 +80,13 @@ async def test_must_power_and_energy_setup_upgrade_reload(hass, fake_runtime, mo
             "proxy_enabled": False, "detected_driver": driver.key, "detected_model": inverter.model_name,
             "detected_serial": "", "detection_confidence": "high",
         },
-        options={"poll_interval": 30, "poll_mode": "auto"},
+        options={"poll_interval": 30, "poll_mode": "auto"} | ({
+            "effective_metadata_snapshot": {
+                "effective_owner_key": driver.key, "confidence": "high",
+                "variant_key": "pv_ph18", "profile_name": "must_pv_ph18/base.json",
+                "register_schema_name": "must_pv_ph18/base.json",
+            },
+        } if upgrade else {}),
     )
     entry.add_to_hass(hass)
     registry = er.async_get(hass)
@@ -170,5 +184,54 @@ async def test_must_power_and_energy_setup_upgrade_reload(hass, fake_runtime, mo
     await entry.runtime_data.async_refresh()
     await hass.async_block_till_done()
     assert float(hass.states.get(daily_id).state) == 1
+    # PV3300 uses whole percent and a discharge/export-positive wire convention.
+    # Test the real derived-energy entities, not only decoded register values.
+    assert inverter.register_schema_name == "must_pv_ph18/pv3300.json"
+    for raw_current, raw_battery, raw_grid, load, grid_voltage, expected_charge, expected_discharge in (
+        (16, 844, 0, 750, 0, 0, 0.844),
+        (-30, -1613, -1753, 0, 2050, 1.613, 0),
+    ):
+        now += timedelta(days=1)
+        transport._registers.update({25205: 527, 25207: grid_voltage, 25215: load,
+            25216: 14, 25273: raw_battery & 0xFFFF, 25274: raw_current & 0xFFFF,
+            25214: raw_grid & 0xFFFF})
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        for key, value in {"battery_current": -raw_current, "battery_power": -raw_battery,
+                           "grid_power": -raw_grid, "load_percent": 14,
+                           "battery_to_home_power": load if raw_battery > 0 else 0}.items():
+            assert float(hass.states.get(sensor_id(key)).state) == value, key
+        now += timedelta(hours=1)
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        assert float(hass.states.get(sensor_id("estimated_battery_charge_energy_daily")).state) == expected_charge
+        assert float(hass.states.get(sensor_id("estimated_battery_discharge_energy_daily")).state) == expected_discharge
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
+
+
+@pytest.mark.parametrize(("section", "key", "value"), [
+    ("data", "detected_model", "MUST PV1800"),
+    ("data", "detected_driver", "modbus_smg"),
+    ("data", "detection_confidence", "medium"),
+    ("options", "driver_hint", "pi30"),
+    ("snapshot", "effective_owner_key", "modbus_smg"),
+    ("snapshot", "variant_key", "pv3300"),
+    ("snapshot", "profile_name", "learned/must_controls.json"),
+    ("snapshot", "register_schema_name", "learned/must_reads.json"),
+    ("snapshot", "register_schema_name", "must_pv_ph18/pv3300.json"),
+])
+async def test_pv3300_cache_repair_preserves_other_bindings(hass, section, key, value):
+    from custom_components.eybond_local.integration_metadata import _async_self_heal_must_pv3300_metadata
+
+    snapshot = {"effective_owner_key": "must_pv_ph18", "variant_key": "pv_ph18",
+                "profile_name": "must_pv_ph18/base.json", "register_schema_name": "must_pv_ph18/base.json"}
+    data = {"detected_model": "MUST PV3300", "detected_driver": "must_pv_ph18",
+            "detection_confidence": "high", "driver_hint": "auto"}
+    options = {"effective_metadata_snapshot": snapshot, "poll_interval": 30}
+    {"data": data, "options": options, "snapshot": snapshot}[section][key] = value
+    entry = MockConfigEntry(domain=DOMAIN, version=5, data=data, options=options)
+    entry.add_to_hass(hass)
+    await _async_self_heal_must_pv3300_metadata(hass, entry)
+    assert dict(entry.data) == data
+    assert dict(entry.options) == options

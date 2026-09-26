@@ -67,6 +67,71 @@ def _must_registers() -> dict[int, int]:
 
 
 class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pv3300_identity_selects_override_without_changing_other_must_models(self) -> None:
+        for prefix, suffix, schema, percent in (
+            ("PV", 3300, "pv3300", 14),
+            ("PV", 18, "base", 0.14),
+            ("PV", 1800, "base", 0.14),
+            ("PH", 3300, "base", 0.14),
+            ("PV", 3301, "base", 0.14),
+        ):
+            with self.subTest(prefix=prefix, suffix=suffix):
+                driver = MustPvPh18Driver()
+                target = ProbeTarget(1, 255, 4)
+                transport = FixtureTransport(registers=_must_registers() | {
+                    20000: int.from_bytes(prefix.encode(), "big"), 20001: suffix, 25216: 14,
+                }, command_responses=None, probe_target=target)
+                inverter = await driver.async_probe(transport, target)
+                self.assertEqual(inverter.register_schema_name, f"must_pv_ph18/{schema}.json")
+                values = _full_values(await driver.async_read_values(transport, inverter))
+                self.assertEqual(values["load_percent"], percent)
+                self.assertEqual(inverter.capabilities, driver.write_capabilities)
+
+    async def test_pv3300_charge_discharge_grid_and_flow_directions(self) -> None:
+        from custom_components.eybond_local.canonical_telemetry import project_canonical_telemetry
+        from custom_components.eybond_local.telemetry import TypedTelemetryFrame, fold_driver_telemetry
+
+        # Synthetic two-state replay of #46. AC converter power keeps its native
+        # sign; battery/grid powers use the integration's charge/import convention.
+        for current, battery, grid, load, voltage, converter in (
+            (16, 844, 0, 750, 0, 844),
+            (-30, -1613, -1753, 0, 2050, -1559),
+            (0, 0, 0, 0, 0, 0),
+            (0, 0, 500, 0, 2300, 500),
+        ):
+            with self.subTest(battery=battery, grid=grid):
+                driver = MustPvPh18Driver()
+                target = ProbeTarget(1, 255, 4)
+                registers = _must_registers() | {
+                    20001: 3300, 15208: 0, 25207: voltage, 25213: converter & 0xFFFF,
+                    25214: grid & 0xFFFF, 25215: load, 25216: 14,
+                    25273: battery & 0xFFFF, 25274: current & 0xFFFF,
+                }
+                transport = FixtureTransport(registers=registers, command_responses=None, probe_target=target)
+                inverter = await driver.async_probe(transport, target)
+                values = _full_values(await driver.async_read_values(transport, inverter))
+                self.assertEqual(values["battery_current"], -current)
+                self.assertEqual(values["battery_power"], -battery)
+                self.assertEqual(values["grid_power"], -grid)
+                self.assertEqual(values["inverter_power"], converter)
+                self.assertEqual(values["load_percent"], 14)
+                frame = project_canonical_telemetry(fold_driver_telemetry(
+                    TypedTelemetryFrame.empty(), driver_key=driver.key, values=values, replace=True,
+                )).values()
+                self.assertEqual(frame["battery_to_home_power"], load if battery > 0 else 0)
+                self.assertEqual(frame["grid_to_battery_power"], -battery if battery < 0 else 0)
+
+    async def test_missing_pv3300_battery_block_remains_missing(self) -> None:
+        driver = MustPvPh18Driver()
+        target = ProbeTarget(1, 255, 4)
+        registers = _must_registers() | {20001: 3300}
+        del registers[25273]
+        transport = FixtureTransport(registers=registers, command_responses=None, probe_target=target)
+        inverter = await driver.async_probe(transport, target)
+        values = _full_values(await driver.async_read_values(transport, inverter))
+        self.assertNotIn("battery_power", values)
+        self.assertNotIn("battery_current", values)
+
     async def test_converter_power_and_load_are_distinct_signed_words(self) -> None:
         from custom_components.eybond_local.canonical_telemetry import project_canonical_telemetry
         from custom_components.eybond_local.telemetry import TypedTelemetryFrame, fold_driver_telemetry

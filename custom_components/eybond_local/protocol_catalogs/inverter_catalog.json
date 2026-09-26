@@ -824,6 +824,32 @@
        "words": 1
       }
      ]
+    },
+    {
+     "key": "modbus_catalog.hopewind_ratings",
+     "kind": "modbus_read",
+     "register": 40646,
+     "count": 2,
+     "function": 3,
+     "cost": 2,
+     "optional": true,
+     "evidence_fields": [
+      {"key": "identity.hopewind_rated_kw", "source_key": "hopewind_rated_kw", "register": 40646},
+      {"key": "identity.hopewind_rated_voltage", "source_key": "hopewind_rated_voltage", "register": 40647}
+     ]
+    },
+    {
+     "key": "modbus_catalog.hopewind_state",
+     "kind": "modbus_read",
+     "register": 40546,
+     "count": 2,
+     "function": 3,
+     "cost": 2,
+     "optional": true,
+     "evidence_fields": [
+      {"key": "identity.hopewind_switch", "source_key": "hopewind_switch", "register": 40546},
+      {"key": "identity.hopewind_state", "source_key": "hopewind_state", "register": 40547}
+     ]
     }
    ],
    "layouts": [],
@@ -835,6 +861,10 @@
   }
  ],
  "support_capture_policies": {
+  "hopewind_0237": {
+   "ranges": [[40500, 71], [40571, 29], [40600, 51]],
+   "notes": ["Manufacturer Hopewind protocol 567 / 0237: read-only FC03 evidence; identity block can contain a serial number."]
+  },
   "smg_protocol_1": {
    "ranges": [
     [
@@ -1597,6 +1627,17 @@
    "support_capture_policy": "must_pv_ph18"
   },
   {
+   "key": "must_pv3300_full",
+   "protocol_key": "must_pv_ph18",
+   "driver_key": "must_pv_ph18",
+   "variant_key": "pv3300",
+   "profile_name": "must_pv_ph18/base.json",
+   "register_schema_name": "must_pv_ph18/pv3300.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "must_pv_ph18"
+  },
+  {
    "key": "eybond_g_ascii_gootu_gt_h2436m14p5",
    "protocol_key": "eybond_g_ascii",
    "driver_key": "eybond_g_ascii",
@@ -1641,6 +1682,17 @@
    "read_only": true,
    "default_for_driver": true,
    "support_capture_policy": "eybond_g_ascii"
+  },
+  {
+   "key": "hopewind_0237_read_only",
+   "protocol_key": "modbus_catalog",
+   "driver_key": "modbus_catalog",
+   "variant_key": "hopewind_0237",
+   "profile_name": "",
+   "register_schema_name": "hopewind_0237/base.json",
+   "tier": "partial",
+   "read_only": true,
+   "support_capture_policy": "hopewind_0237"
   },
   {
    "key": "aohai_fsa_read_only",
@@ -2735,6 +2787,23 @@
    }
   },
   {
+   "entry_key": "must_pv3300",
+   "surface_key": "must_pv3300_full",
+   "model_name": "MUST PV3300",
+   "priority": 220,
+   "anchors": [
+    {"key": "protocol.protocol_id", "equals": "MUST_PV_PH18"},
+    {"key": "identity.model_number", "equals": "PV3300"}
+   ],
+   "provenance": {
+    "sources": [
+     "manufacturer protocol 6422 / 1916",
+     "github:issue#46 LCD and cloud comparisons during battery charge and discharge"
+    ],
+    "confidence": "documented-with-field-telemetry"
+   }
+  },
+  {
    "entry_key": "srne_modbus_family",
    "surface_key": "srne_modbus_read_only",
    "model_name": "SRNE-compatible Modbus family",
@@ -2904,6 +2973,23 @@
      "external JsdSolar SmartESS G-command discussion: confirms the same GPDAT0/GPV/GBAT/GMOD command family exists outside this capture"
     ],
     "confidence": "documented-read-only"
+   }
+  },
+  {
+   "entry_key": "hopewind_0237_family",
+   "surface_key": "hopewind_0237_read_only",
+   "model_name": "Hopewind String (Protocol 0237)",
+   "priority": 110,
+   "family_fallback": true,
+   "anchors": [
+    {"key": "identity.hopewind_rated_kw", "min": 3, "max": 80, "cost": 2},
+    {"key": "identity.hopewind_rated_voltage", "min": 100, "max": 800, "cost": 2},
+    {"key": "identity.hopewind_switch", "one_of": [0, 1], "cost": 2},
+    {"key": "identity.hopewind_state", "one_of": [1, 2, 4, 8, 16, 32, 64, 128, 256], "cost": 2}
+   ],
+   "provenance": {
+    "sources": ["manufacturer Hopewind protocol 567 / 0237 V100B002D000", "github:issue#23 three successful local FC03 blocks"],
+    "confidence": "documented-with-register-capture"
    }
   },
   {

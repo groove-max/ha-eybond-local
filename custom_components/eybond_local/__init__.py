@@ -45,6 +45,7 @@ from .integration_metadata import (
     _async_remove_obsolete_pending_entries,
     _async_self_heal_collector_cloud_family,
     _async_self_heal_entry_title,
+    _async_self_heal_must_pv3300_metadata,
     _async_self_heal_server_ip,
     _async_self_heal_valuecloud_driver_hint,
     _cloud_family_from_entry_endpoint_shape,
@@ -164,6 +165,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await _async_self_heal_server_ip(hass, entry)
         await _async_self_heal_collector_cloud_family(hass, entry)
         await _async_self_heal_valuecloud_driver_hint(hass, entry)
+        await _async_self_heal_must_pv3300_metadata(hass, entry)
         await _async_self_heal_entry_title(hass, entry)
         # Establish permanent registry ownership (complete the config-flow handoff
         # or claim the durable PN) BEFORE the coordinator starts, so the runtime

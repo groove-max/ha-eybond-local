@@ -9,6 +9,13 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Added a read-only **Hopewind String (Protocol 0237)** profile, based on the
+  manufacturer's map and successful local reads from a Bluesun BSM15K-B (#23).
+  It exposes PV and AC generation, electrical readings, energy counters and
+  diagnostics. Detection identifies the protocol family, not the retail model.
+  AC generation is not household load or site grid import/export. No inverter
+  controls are enabled, including in Full Control mode.
+
 - SRNE support archives can check five smaller, documented battery/PV register
   groups after the inverter explicitly rejects the combined DC block (#44).
   These read-only diagnostics share a 15-second limit and stop on communication
@@ -32,6 +39,16 @@ the GitHub release body should be rendered from the matching version section her
   this is not full device or control support (#45).
 
 ### Fixed
+
+- MUST PV3300 reports whole load percent and normalizes battery/grid directions
+  for HA energy flows (#46): positive battery power/current means charging;
+  positive grid power means importing. These corrections are model-scoped;
+  other MUST maps and native inverter-converter power are unchanged. Existing
+  confirmed PV3300 entries leave the older generic cached map automatically,
+  without deleting entities or rewriting historical energy statistics.
+
+- Generic Modbus catalog detection retains the evidence identifiers needed to
+  restore a read-only device profile after a Home Assistant reload.
 
 - Framed collector replies must match both the request's transaction ID and
   function code. An unrelated heartbeat or response can no longer complete a

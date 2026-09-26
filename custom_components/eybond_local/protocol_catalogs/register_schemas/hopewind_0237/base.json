@@ -1,0 +1,1239 @@
+{
+  "schema_key": "hopewind_0237",
+  "title": "Hopewind String Inverter Protocol 0237",
+  "driver_key": "modbus_catalog",
+  "protocol_family": "hopewind_0237",
+  "blocks": [
+    {
+      "key": "runtime",
+      "start": 40500,
+      "count": 71
+    },
+    {
+      "key": "status",
+      "start": 40571,
+      "count": 29
+    },
+    {
+      "key": "identity",
+      "start": 40600,
+      "count": 51
+    }
+  ],
+  "enum_tables": {
+    "switch_status": {
+      "0": "Stopped",
+      "1": "On-grid"
+    },
+    "operating_mode": {
+      "1": "Standby",
+      "2": "Self Test",
+      "4": "Connecting",
+      "8": "On-grid",
+      "16": "Alarm Running",
+      "32": "Power Limited",
+      "64": "Scheduled",
+      "128": "Stopped",
+      "256": "Command Shutdown"
+    },
+    "pid_status": {
+      "0": "Stopped",
+      "1": "Running"
+    },
+    "connection_method": {
+      "1": "Three-phase three-wire",
+      "2": "Three-phase four-wire",
+      "3": "Single-phase"
+    }
+  },
+  "spec_sets": {
+    "runtime": [
+      {
+        "key": "pv1_input_voltage",
+        "register": 40500,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv1_input_power",
+        "register": 40524,
+        "multiplier": 10
+      },
+      {
+        "key": "pv2_input_voltage",
+        "register": 40501,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv2_input_power",
+        "register": 40525,
+        "multiplier": 10
+      },
+      {
+        "key": "pv3_input_voltage",
+        "register": 40502,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv3_input_power",
+        "register": 40526,
+        "multiplier": 10
+      },
+      {
+        "key": "pv4_input_voltage",
+        "register": 40503,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv4_input_power",
+        "register": 40527,
+        "multiplier": 10
+      },
+      {
+        "key": "pv5_input_voltage",
+        "register": 40504,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv5_input_power",
+        "register": 40528,
+        "multiplier": 10
+      },
+      {
+        "key": "pv6_input_voltage",
+        "register": 40505,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv6_input_power",
+        "register": 40529,
+        "multiplier": 10
+      },
+      {
+        "key": "pv7_input_voltage",
+        "register": 40506,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv7_input_power",
+        "register": 40530,
+        "multiplier": 10
+      },
+      {
+        "key": "pv8_input_voltage",
+        "register": 40507,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "pv8_input_power",
+        "register": 40531,
+        "multiplier": 10
+      },
+      {
+        "key": "pv_string_1_current",
+        "register": 40508,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_2_current",
+        "register": 40509,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_3_current",
+        "register": 40510,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_4_current",
+        "register": 40511,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_5_current",
+        "register": 40512,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_6_current",
+        "register": 40513,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_7_current",
+        "register": 40514,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_8_current",
+        "register": 40515,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_9_current",
+        "register": 40516,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_10_current",
+        "register": 40517,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_11_current",
+        "register": 40518,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_12_current",
+        "register": 40519,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_13_current",
+        "register": 40520,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_14_current",
+        "register": 40521,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_15_current",
+        "register": 40522,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_16_current",
+        "register": 40523,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_17_current",
+        "register": 40588,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_18_current",
+        "register": 40589,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_19_current",
+        "register": 40590,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_string_20_current",
+        "register": 40591,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "grid_voltage_ab",
+        "register": 40532,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_voltage_bc",
+        "register": 40533,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_voltage_ca",
+        "register": 40534,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_current_a",
+        "register": 40535,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_current_b",
+        "register": 40536,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_current_c",
+        "register": 40537,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "grid_frequency",
+        "register": 40538,
+        "signed": true,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "inverter_ac_power",
+        "register": 40539,
+        "signed": true,
+        "multiplier": 10
+      },
+      {
+        "key": "ac_reactive_power",
+        "register": 40540,
+        "signed": true,
+        "multiplier": 10
+      },
+      {
+        "key": "pv_power",
+        "register": 40541,
+        "signed": true,
+        "multiplier": 10
+      },
+      {
+        "key": "inverter_efficiency",
+        "register": 40542,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "power_factor",
+        "register": 40543,
+        "signed": true,
+        "divisor": 1000,
+        "decimals": 3
+      },
+      {
+        "key": "inverter_temperature",
+        "register": 40544,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "insulation_resistance",
+        "register": 40545,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "inverter_switch_status",
+        "register": 40546,
+        "enum_table": "switch_status"
+      },
+      {
+        "key": "inverter_operation_mode",
+        "register": 40547,
+        "enum_table": "operating_mode"
+      },
+      {
+        "key": "pv_energy_today",
+        "register": 40548,
+        "word_count": 2,
+        "combine": "u32_low_first",
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "pv_energy_total",
+        "register": 40550,
+        "word_count": 2,
+        "combine": "u32_low_first",
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "co2_reduction",
+        "register": 40552,
+        "word_count": 2,
+        "combine": "u32_low_first",
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "running_time_today",
+        "register": 40554,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "running_time_total",
+        "register": 40555,
+        "word_count": 2,
+        "combine": "u32_low_first",
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "fault_word_1",
+        "register": 40561
+      },
+      {
+        "key": "fault_word_2",
+        "register": 40562
+      },
+      {
+        "key": "fault_word_3",
+        "register": 40563
+      },
+      {
+        "key": "fault_word_4",
+        "register": 40564
+      },
+      {
+        "key": "fault_word_5",
+        "register": 40565
+      },
+      {
+        "key": "fault_word_6",
+        "register": 40566
+      },
+      {
+        "key": "fault_word_7",
+        "register": 40567
+      },
+      {
+        "key": "fault_word_8",
+        "register": 40568
+      },
+      {
+        "key": "alarm_word_1",
+        "register": 40569
+      },
+      {
+        "key": "alarm_word_2",
+        "register": 40570
+      },
+      {
+        "key": "alarm_word_3",
+        "register": 40571
+      },
+      {
+        "key": "alarm_word_4",
+        "register": 40572
+      },
+      {
+        "key": "alarm_word_5",
+        "register": 40573
+      },
+      {
+        "key": "alarm_word_6",
+        "register": 40574
+      },
+      {
+        "key": "alarm_word_7",
+        "register": 40575
+      },
+      {
+        "key": "alarm_word_8",
+        "register": 40576
+      },
+      {
+        "key": "pid_status",
+        "register": 40577,
+        "enum_table": "pid_status"
+      },
+      {
+        "key": "operation_status_1",
+        "register": 40578
+      },
+      {
+        "key": "operation_status_2",
+        "register": 40579
+      },
+      {
+        "key": "operation_status_3",
+        "register": 40580
+      },
+      {
+        "key": "operation_status_4",
+        "register": 40581
+      },
+      {
+        "key": "operation_status_5",
+        "register": 40582
+      },
+      {
+        "key": "operation_status_6",
+        "register": 40583
+      },
+      {
+        "key": "operation_status_7",
+        "register": 40584
+      },
+      {
+        "key": "operation_status_8",
+        "register": 40585
+      },
+      {
+        "key": "inverter_bus_voltage",
+        "register": 40586,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "positive_bus_voltage",
+        "register": 40587,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "fault_code",
+        "register": 40592
+      },
+      {
+        "key": "alarm_code",
+        "register": 40593
+      },
+      {
+        "key": "ac_apparent_power",
+        "register": 40594,
+        "signed": true,
+        "multiplier": 10
+      },
+      {
+        "key": "output_connection_method",
+        "register": 40645,
+        "enum_table": "connection_method"
+      },
+      {
+        "key": "rated_power",
+        "register": 40646,
+        "multiplier": 1000
+      },
+      {
+        "key": "rated_voltage",
+        "register": 40647
+      }
+    ]
+  },
+  "measurement_descriptions": [
+    {
+      "key": "pv1_input_voltage",
+      "name": "MPPT1 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv1_input_power",
+      "name": "MPPT1 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv2_input_voltage",
+      "name": "MPPT2 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv2_input_power",
+      "name": "MPPT2 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv3_input_voltage",
+      "name": "MPPT3 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv3_input_power",
+      "name": "MPPT3 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv4_input_voltage",
+      "name": "MPPT4 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv4_input_power",
+      "name": "MPPT4 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv5_input_voltage",
+      "name": "MPPT5 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv5_input_power",
+      "name": "MPPT5 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv6_input_voltage",
+      "name": "MPPT6 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv6_input_power",
+      "name": "MPPT6 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv7_input_voltage",
+      "name": "MPPT7 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv7_input_power",
+      "name": "MPPT7 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv8_input_voltage",
+      "name": "MPPT8 Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv8_input_power",
+      "name": "MPPT8 Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_1_current",
+      "name": "PV String 1 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_2_current",
+      "name": "PV String 2 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_3_current",
+      "name": "PV String 3 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_4_current",
+      "name": "PV String 4 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_5_current",
+      "name": "PV String 5 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_6_current",
+      "name": "PV String 6 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_7_current",
+      "name": "PV String 7 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_8_current",
+      "name": "PV String 8 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_9_current",
+      "name": "PV String 9 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_10_current",
+      "name": "PV String 10 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_11_current",
+      "name": "PV String 11 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_12_current",
+      "name": "PV String 12 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_13_current",
+      "name": "PV String 13 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_14_current",
+      "name": "PV String 14 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_15_current",
+      "name": "PV String 15 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_16_current",
+      "name": "PV String 16 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_17_current",
+      "name": "PV String 17 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_18_current",
+      "name": "PV String 18 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_19_current",
+      "name": "PV String 19 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_string_20_current",
+      "name": "PV String 20 Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "grid_voltage_ab",
+      "name": "Grid AB Line Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_voltage_bc",
+      "name": "Grid BC Line Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_voltage_ca",
+      "name": "Grid CA Line Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_current_a",
+      "name": "Grid Phase A Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_current_b",
+      "name": "Grid Phase B Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_current_c",
+      "name": "Grid Phase C Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_frequency",
+      "name": "Grid Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement"
+    },
+    {
+      "key": "inverter_ac_power",
+      "name": "Inverter AC Active Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "ac_reactive_power",
+      "name": "AC Reactive Power",
+      "unit": "var",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "pv_power",
+      "name": "PV Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "inverter_efficiency",
+      "name": "Inverter Efficiency",
+      "unit": "%",
+      "state_class": "measurement"
+    },
+    {
+      "key": "power_factor",
+      "name": "Power Factor",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "inverter_temperature",
+      "name": "Inverter Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement"
+    },
+    {
+      "key": "insulation_resistance",
+      "name": "Insulation Resistance",
+      "unit": "kΩ",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "inverter_switch_status",
+      "name": "Inverter Switch Status",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "inverter_operation_mode",
+      "name": "Operating Mode"
+    },
+    {
+      "key": "pv_energy_today",
+      "name": "PV Energy Today",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total"
+    },
+    {
+      "key": "pv_energy_total",
+      "name": "PV Energy Total",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing"
+    },
+    {
+      "key": "co2_reduction",
+      "name": "CO2 Reduction",
+      "unit": "kg",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "running_time_today",
+      "name": "Running Time Today",
+      "unit": "h",
+      "device_class": "duration",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "running_time_total",
+      "name": "Running Time Total",
+      "unit": "h",
+      "device_class": "duration",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "fault_word_1",
+      "name": "Fault Word 1",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "fault_word_2",
+      "name": "Fault Word 2",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "fault_word_3",
+      "name": "Fault Word 3",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "fault_word_4",
+      "name": "Fault Word 4",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "fault_word_5",
+      "name": "Fault Word 5",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "fault_word_6",
+      "name": "Fault Word 6",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "fault_word_7",
+      "name": "Fault Word 7",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "fault_word_8",
+      "name": "Fault Word 8",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "alarm_word_1",
+      "name": "Alarm Word 1",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "alarm_word_2",
+      "name": "Alarm Word 2",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "alarm_word_3",
+      "name": "Alarm Word 3",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "alarm_word_4",
+      "name": "Alarm Word 4",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "alarm_word_5",
+      "name": "Alarm Word 5",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "alarm_word_6",
+      "name": "Alarm Word 6",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "alarm_word_7",
+      "name": "Alarm Word 7",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "alarm_word_8",
+      "name": "Alarm Word 8",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "pid_status",
+      "name": "PID Status",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "operation_status_1",
+      "name": "Operation Status 1",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "operation_status_2",
+      "name": "Operation Status 2",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "operation_status_3",
+      "name": "Operation Status 3",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "operation_status_4",
+      "name": "Operation Status 4",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "operation_status_5",
+      "name": "Operation Status 5",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "operation_status_6",
+      "name": "Operation Status 6",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "operation_status_7",
+      "name": "Operation Status 7",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "operation_status_8",
+      "name": "Operation Status 8",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "inverter_bus_voltage",
+      "name": "Bus Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "positive_bus_voltage",
+      "name": "Positive Bus Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "fault_code",
+      "name": "Fault Code",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "alarm_code",
+      "name": "Alarm Code",
+      "state_class": "measurement",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "ac_apparent_power",
+      "name": "AC Apparent Power",
+      "unit": "VA",
+      "state_class": "measurement",
+      "enabled_default": false
+    },
+    {
+      "key": "output_connection_method",
+      "name": "Output Connection Method",
+      "enabled_default": false,
+      "diagnostic": true
+    },
+    {
+      "key": "rated_power",
+      "name": "Rated Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement",
+      "diagnostic": true
+    },
+    {
+      "key": "rated_voltage",
+      "name": "Rated Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement",
+      "diagnostic": true
+    }
+  ]
+}

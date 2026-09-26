@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source_key": "documentation_hopewind_0237",
+  "kind": "documentation",
+  "title": "Hopewind string-inverter protocol 567 / 0237 V100B002D000",
+  "reference": "https://api.valueclouds.com/ppe/api/auth/web/downloadAgreement?devcode=567",
+  "captured_at": "2026-09-24",
+  "visibility": "public",
+  "summary": "Manufacturer protocol for 3–80 kW string inverters: FC03 blocks 40500–40570, 40571–40599 and 40600–40650. Only the read surface is implemented.",
+  "assertions": [
+    "register_map"
+  ]
+}

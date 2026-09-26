@@ -20,6 +20,14 @@ HA_TEST_ROOT = REPO_ROOT / "tests_ha"
 
 _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
+        "custom_components/eybond_local/protocol_catalogs/register_schemas/hopewind_0237/",
+        ("test_hopewind_driver.py", "test_modbus_catalog_driver.py"),
+    ),
+    (
+        "custom_components/eybond_local/protocol_catalogs/register_schemas/must_pv_ph18/",
+        ("test_must_driver.py", "test_canonical_telemetry.py", "test_derived_energy.py"),
+    ),
+    (
         "custom_components/eybond_local/protocol_catalogs/register_schemas/eybond_short_ascii/",
         ("test_eybond_short_ascii.py", "test_short_ascii_optional.py", "test_effective_metadata_snapshot.py"),
     ),
@@ -166,6 +174,9 @@ _EXACT_TESTS: dict[str, tuple[str, ...]] = {
         "test_effective_metadata.py", "test_coordinator_device_hierarchy.py",
     ),
     "custom_components/eybond_local/protocol_catalogs/inverter_catalog.json": (
+        "test_must_driver.py",
+        "test_hopewind_driver.py",
+        "test_modbus_catalog_driver.py",
         "test_eybond_short_ascii.py",
         "test_effective_metadata_snapshot.py",
         "test_catalog_identity.py",
@@ -274,6 +285,7 @@ _EXACT_TESTS: dict[str, tuple[str, ...]] = {
     ),
     "custom_components/eybond_local/drivers/modbus_catalog.py": (
         "test_modbus_catalog_driver.py",
+        "test_hopewind_driver.py",
         "test_driver_local_register_evidence.py",
     ),
     "custom_components/eybond_local/drivers/smartess_local.py": (

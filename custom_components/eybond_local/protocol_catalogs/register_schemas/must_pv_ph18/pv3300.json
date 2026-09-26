@@ -1,0 +1,13 @@
+{
+  "extends": "must_pv_ph18/base.json",
+  "schema_key": "must_pv3300",
+  "title": "MUST PV3300 telemetry (6422 field-confirmed variant)",
+  "spec_sets": {
+    "runtime": [
+      {"key": "load_percent", "divisor": 1, "decimals": 0},
+      {"key": "battery_current", "multiplier": -1},
+      {"key": "battery_power", "multiplier": -1},
+      {"key": "grid_power", "multiplier": -1}
+    ]
+  }
+}

@@ -428,6 +428,39 @@ async def _async_self_heal_valuecloud_driver_hint(
     hass.config_entries.async_update_entry(entry, data=data, options=options)
 
 
+async def _async_self_heal_must_pv3300_metadata(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Retire only the pre-PV3300 generic cache, preserving the proven identity.
+
+    The normal startup catalog lookup then rebuilds this exact model's binding.
+    Do not invalidate another MUST model, an explicit different driver, learned
+    schemas, or low-confidence identities. This changes no device settings and
+    leaves control settings, entity IDs, overlay files and accumulated energy
+    untouched. Learned overlays still pass their existing base-schema guard.
+    """
+
+    from collections.abc import Mapping
+
+    data, options = entry.data, entry.options
+    snapshot = options.get("effective_metadata_snapshot")
+    if not isinstance(snapshot, Mapping):
+        return
+    if (
+        data.get("detected_driver") != "must_pv_ph18"
+        or data.get("detection_confidence") != "high"
+        or str(data.get(CONF_DETECTED_MODEL, "")).strip().casefold() != "must pv3300"
+        or options.get(CONF_DRIVER_HINT, data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO))
+        not in {DRIVER_HINT_AUTO, "must_pv_ph18"}
+        or snapshot.get("effective_owner_key") != "must_pv_ph18"
+        or snapshot.get("profile_name") != "must_pv_ph18/base.json"
+        or snapshot.get("register_schema_name") != "must_pv_ph18/base.json"
+        or snapshot.get("variant_key") != "pv_ph18"
+    ):
+        return
+    updated = dict(options)
+    updated.pop("effective_metadata_snapshot")
+    hass.config_entries.async_update_entry(entry, options=updated)
+
+
 def _entity_unique_id(entry_id: str, domain: str, key: str) -> str:
     """Return the unique_id format used by one HA entity platform."""
 
