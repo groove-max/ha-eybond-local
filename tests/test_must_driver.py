@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import AsyncMock, patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,8 @@ from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
 )
 from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
 from custom_components.eybond_local.models import ProbeTarget  # noqa: E402
+from custom_components.eybond_local.metadata.register_schema_loader import load_register_schema
+from custom_components.eybond_local.payload.modbus import ModbusError
 
 
 def _full_values(result: DriverReadResult) -> dict[str, object]:
@@ -465,6 +468,54 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn((20101, 32), ranges)
         self.assertIn((20213, 2), ranges)
         self.assertIn((25201, 74), ranges)
+
+    def test_current_labels_match_documented_nodes_without_rekeying_entities(self):
+        for name in ("base", "pv3300"):
+            schema = load_register_schema(f"must_pv_ph18/{name}.json")
+            for key, label, address in (
+                ("output_current", "Inverter Current", 25210),
+                ("ac_output_current", "Grid Current", 25211),
+                ("inverter_load_current", "Load Current", 25212),
+            ):
+                self.assertEqual(schema.measurement_description(key).name, label)
+                spec = next(s for specs in schema.spec_sets.values() for s in specs if s.key == key)
+                self.assertEqual(spec.register, address)
+                self.assertEqual(spec.divisor, 10)
+
+    async def test_pv3300_zero_current_comparison_is_support_only(self):
+        for suffix, bulk, missing, expected in (
+            (3300, 0, False, True), (3300, 12, False, False),
+            (3300, 0, True, False), (18, 0, False, False),
+        ):
+            with self.subTest(suffix=suffix, bulk=bulk, missing=missing):
+                driver = MustPvPh18Driver()
+                target = ProbeTarget(1, 255, 4)
+                link = FixtureTransport(registers=_must_registers() | {20001: suffix},
+                                        command_responses=None, probe_target=target)
+                inverter = await driver.async_probe(link, target)
+
+                async def read(start, count):
+                    if (start, count) == (25201, 74):
+                        if missing:
+                            raise ModbusError("exception_code:2")
+                        return [bulk if address in (25210, 25211, 25212) else 0
+                                for address in range(start, start + count)]
+                    if count == 1 and start in (25210, 25211, 25212):
+                        return [13]
+                    return [0] * count
+
+                session = type("Session", (), {"read_holding": AsyncMock(side_effect=read)})()
+                with patch.object(driver, "_session", return_value=session):
+                    evidence = await driver.async_capture_support_evidence(link, inverter)
+                self.assertEqual("current_read_diagnostics" in evidence, expected)
+                if expected:
+                    extra = evidence["current_read_diagnostics"]
+                    self.assertEqual(extra["status"], "completed")
+                    self.assertEqual([block["words"] for block in extra["captured_ranges"]], [[13]] * 3)
+                    original = next(b for b in evidence["fixture_ranges"] if b["start"] == 25201)
+                    self.assertEqual(original["values"][9:12], [0, 0, 0])
+                singles = [call for call in session.read_holding.await_args_list if call.args[1] == 1]
+                self.assertEqual(len(singles), 3 if expected else 0)
 
 
 if __name__ == "__main__":

@@ -85,6 +85,14 @@ This adds at most 15 seconds of read-only diagnostics and stops early if
 communication fails. The archive keeps both the original failure and the extra
 results. It does not change normal polling or automatically add missing sensors.
 
+For **Hopewind String (Protocol 0237)**, the test build also checks whether two
+documented power-control setting groups can be read. For **MUST PV3300**, if all
+three AC current registers in the combined block are zero, it reads them
+individually for comparison. Each check has a six-second total limit and stops
+on communication errors. Neither check changes inverter settings or enables
+controls. The archive retains the original readings and the extra observations
+separately, so a later response does not overwrite the evidence from the first.
+
 The archive helps answer questions such as:
 
 - Which collector and inverter path was detected?

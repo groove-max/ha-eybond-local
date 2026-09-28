@@ -15,6 +15,7 @@ from ..models import DetectedInverter, ProbeTarget
 from ..payload.modbus import ModbusError, ModbusSession
 from ..payload.register_decode import decode_ascii_word, read_spec_set_values
 from .base import InverterDriver
+from .support_diagnostics import capture_support_reads
 from .local_register_evidence import (
     LocalRegisterReadPlan,
     LocalRegisterSnapshot,
@@ -217,7 +218,7 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
                     "words": list(values),
                 }
             )
-        return {
+        evidence = {
             "capture_kind": "must_pv_ph18_modbus_register_dump",
             "driver_key": self.key,
             "model_name": inverter.model_name,
@@ -238,6 +239,22 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
                 for item in captured_ranges
             ],
         }
+        if inverter.register_schema_name == "must_pv_ph18/pv3300.json":
+            raw = {
+                block["start"] + offset: word
+                for block in captured_ranges
+                for offset, word in enumerate(block["words"])
+            }
+            if all(raw.get(address) == 0 for address in (25210, 25211, 25212)):
+                evidence["current_read_diagnostics"] = await capture_support_reads(
+                    session,
+                    ((25210, 1, "inverter_current"), (25211, 1, "grid_current"),
+                     (25212, 1, "load_current")),
+                    timeout_seconds=6.0,
+                    source="PH/PV Modbus 1.4.3 and protocol 1916 current registers",
+                    purpose="support_only_zero_bulk_current_single_read_comparison",
+                )
+        return evidence
 
     def local_register_read_plans(
         self, inverter: DetectedInverter

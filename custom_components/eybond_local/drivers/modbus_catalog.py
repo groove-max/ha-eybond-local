@@ -51,6 +51,7 @@ from .capability_codec import (
     merge_capability_register_word,
 )
 from .catalog_probe import async_walk_detection_dag
+from .support_diagnostics import capture_support_reads
 
 logger = logging.getLogger(__name__)
 
@@ -356,13 +357,13 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
                     "words": list(values),
                 }
             )
-        return {
+        evidence = {
             "capture_kind": "modbus_catalog_register_dump",
             "driver_key": self.key,
             "model_name": inverter.model_name,
             "serial_number": inverter.serial_number,
             "capture_notes": [
-                "Support capture only reads catalog blocks; it never invokes"
+                "Support capture only reads catalog blocks and optional support reads; it never invokes"
                 " the driver's optional write capabilities. Blocks list their"
                 " function codes (3 = holding, 4 = input).",
             ],
@@ -382,6 +383,16 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
                 for item in captured_ranges
             ],
         }
+        plan = schema.support_read_plan
+        if plan is not None:
+            evidence["support_read_diagnostics"] = await capture_support_reads(
+                session,
+                tuple((block.start, block.count, block.key) for block in plan.blocks),
+                timeout_seconds=plan.timeout_seconds,
+                source=plan.source,
+                purpose=plan.purpose,
+            )
+        return evidence
 
     def local_register_read_plans(
         self, inverter: DetectedInverter

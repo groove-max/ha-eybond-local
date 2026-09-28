@@ -337,6 +337,15 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
         shadow_stop = _coordinator_method_source("async_stop_shadow_learning")
         proxy_start = _coordinator_method_source("async_start_proxy_capture")
         proxy_stop = _coordinator_method_source("async_stop_proxy_capture")
+        for kind, wrapper in (("shadow_learning", shadow_start), ("proxy_capture", proxy_start)):
+            # The public start must enter the shared exclusion boundary before
+            # delegating; the exclusive body retains all permission gates.
+            delegate = f"_async_start_{kind}_exclusive"
+            self.assertIn("async with self._async_cloud_tool_preparation():", wrapper)
+            self.assertEqual(wrapper.count(f"await self.{delegate}("), 1)
+            self.assertLess(wrapper.index("_async_cloud_tool_preparation"), wrapper.index(delegate))
+        shadow_start = _coordinator_method_source("_async_start_shadow_learning_exclusive")
+        proxy_start = _coordinator_method_source("_async_start_proxy_capture_exclusive")
         endpoint_context = _coordinator_method_source(
             "_async_prepare_cloud_tool_endpoint_context"
         )

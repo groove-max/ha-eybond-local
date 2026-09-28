@@ -37,7 +37,8 @@ async def test_must_power_and_energy_setup_upgrade_reload(hass, fake_runtime, mo
         for start, count in _support_capture_ranges("must_pv_ph18/base.json")
         for register in range(start, start + count)
     } | {20000: int.from_bytes(b"PV", "big"), 20001: 3300,
-         25213: 65049, 25215: 0, 15217: 0, 15218: 1, 15219: 39}
+         25213: 65049, 25215: 0, 15217: 0, 15218: 1, 15219: 39,
+         25210: 12, 25211: 13, 25212: 14}
 
     class ReadOnlyTransport(FixtureTransport):
         async def async_send_payload(self, payload, *, route):
@@ -92,7 +93,15 @@ async def test_must_power_and_energy_setup_upgrade_reload(hass, fake_runtime, mo
     registry = er.async_get(hass)
     legacy_ids = []
     old_load_id = None
+    old_current_ids = {}
     if upgrade:
+        for key in ("output_current", "ac_output_current", "inverter_load_current"):
+            existing = registry.async_get_or_create(
+                "sensor", DOMAIN, f"{entry.entry_id}_{key}", config_entry=entry,
+                suggested_object_id=f"my_existing_{key}",
+            )
+            old_current_ids[key] = existing.entity_id
+        registry.async_update_entity(old_current_ids["ac_output_current"], name="My grid current")
         daily = registry.async_get_or_create(
             "sensor", DOMAIN, f"{entry.entry_id}_estimated_load_energy_daily",
             config_entry=entry, suggested_object_id="my_daily_load_energy",
@@ -130,13 +139,22 @@ async def test_must_power_and_energy_setup_upgrade_reload(hass, fake_runtime, mo
     def sensor_id(key):
         return registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{key}")
 
-    expected = {"output_power": 0, "ac_output_power": 0, "inverter_power": -487, "pv_energy_total": 0.1}
+    expected = {"output_power": 0, "ac_output_power": 0, "inverter_power": -487, "pv_energy_total": 0.1,
+                "output_current": 1.2, "ac_output_current": 1.3, "inverter_load_current": 1.4}
     identities = {key: sensor_id(key) for key in expected}
     for key, value in expected.items():
         assert identities[key] is not None, key
         state = hass.states.get(identities[key])
         assert state is not None and float(state.state) == value, key
     energy = hass.states.get(identities["pv_energy_total"])
+    for key, label in (("output_current", "Inverter Current"),
+                       ("ac_output_current", "Grid Current"),
+                       ("inverter_load_current", "Load Current")):
+        assert registry.async_get(sensor_id(key)).original_name == label
+        if upgrade:
+            assert sensor_id(key) == old_current_ids[key]
+    if upgrade:
+        assert registry.async_get(sensor_id("ac_output_current")).name == "My grid current"
     assert energy.attributes["unit_of_measurement"] == "kWh"
     assert energy.attributes["state_class"] == "total_increasing"
     daily_id = sensor_id("estimated_load_energy_daily")

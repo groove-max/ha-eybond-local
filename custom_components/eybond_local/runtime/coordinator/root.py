@@ -304,6 +304,8 @@ class EybondLocalCoordinator(
             busy_error="support_package_export_in_progress"
         )
         self._runtime_operation_lock = asyncio.Lock()
+        self._cloud_tool_preparation_task: asyncio.Task | None = None
+        self._cloud_tool_preparation_done: asyncio.Future | None = None
         # Repeated local-register evidence outlives the options-flow dialog that
         # starts it, but never outlives this coordinator/runtime transport.  The
         # manager owns only the retained read task; cloud credentials, history,

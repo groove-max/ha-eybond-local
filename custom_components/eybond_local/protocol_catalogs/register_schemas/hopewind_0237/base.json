@@ -3,6 +3,15 @@
   "title": "Hopewind String Inverter Protocol 0237",
   "driver_key": "modbus_catalog",
   "protocol_family": "hopewind_0237",
+  "support_read_plan": {
+    "source": "Hopewind 3-80kW V100B002D000, cloud protocol 0237 / devcode 567",
+    "purpose": "support_only_control_readback_feasibility",
+    "timeout_seconds": 6,
+    "blocks": [
+      {"key": "reactive_power_settings", "start": 40002, "count": 4},
+      {"key": "active_power_settings", "start": 40011, "count": 3}
+    ]
+  },
   "blocks": [
     {
       "key": "runtime",

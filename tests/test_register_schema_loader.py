@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from custom_components.eybond_local.metadata.register_schema_loader import (
     _optional_bitmask,
+    _parse_support_read_plan,
     load_register_schema,
     set_external_register_schema_roots,
 )
@@ -25,6 +26,27 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
     def tearDown(self) -> None:
         set_external_register_schema_roots(())
         load_register_schema.cache_clear()
+
+    def test_support_read_plan_is_bounded_read_only_and_separate(self):
+        valid = {"source": "manufacturer map", "purpose": "readback check",
+                 "timeout_seconds": 6, "blocks": [{"key": "settings", "start": 40011, "count": 3}]}
+        self.assertIsNone(_parse_support_read_plan(None))
+        self.assertEqual(_parse_support_read_plan(valid).blocks[0].function, 3)
+        for delta in (
+            {"timeout_seconds": 0}, {"timeout_seconds": 16}, {"timeout_seconds": float("nan")},
+            {"source": ""}, {"blocks": []}, {"blocks": valid["blocks"] * 9},
+            {"blocks": [{"key": "x", "start": 40011, "count": 17}]},
+            {"blocks": [{"key": "x", "start": 65535, "count": 2}]},
+            {"blocks": [{"key": "x", "start": -1, "count": 1}]},
+            {"blocks": [{"key": "x", "start": 40011, "count": 1, "function": 16}]},
+            {"blocks": [{"key": "x", "start": 40011, "count": 1, "function": 4}]},
+        ):
+            with self.subTest(delta=delta), self.assertRaises(ValueError):
+                _parse_support_read_plan(valid | delta)
+        self.assertIsNone(load_register_schema("must_pv_ph18/base.json").support_read_plan)
+        schema = load_register_schema("hopewind_0237/base.json")
+        self.assertIsNotNone(schema.support_read_plan)
+        self.assertTrue(all(block.start >= 40500 for block in schema.blocks))
 
     def test_register_bitmask_requires_a_strict_contiguous_field(self) -> None:
         self.assertEqual(_optional_bitmask("0x0030", spec_key="x"), 0x0030)

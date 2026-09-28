@@ -9,6 +9,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Support archives include bounded, read-only checks of documented Hopewind
+  0237 control addresses (#23), and individual MUST PV3300 current registers
+  when the combined block reports all three as zero (#46). Results stay separate
+  from normal telemetry. These checks do not write settings or enable controls.
+
 - Added a read-only **Hopewind String (Protocol 0237)** profile, based on the
   manufacturer's map and successful local reads from a Bluesun BSM15K-B (#23).
   It exposes PV and AC generation, electrical readings, energy counters and
@@ -39,6 +44,23 @@ the GitHub release body should be rendered from the matching version section her
   this is not full device or control support (#45).
 
 ### Fixed
+
+- Proxy capture and active device learning now wait for an in-flight poll
+  before preparing the collector connection. New polls cannot interrupt the
+  preparation or its rollback; unloading waits for startup cleanup before
+  closing the link (#43). This fixes a reproduced overlap, not a confirmed
+  cause of every reported collector disconnect.
+
+- SRNE polling can recover battery and PV readings through five documented
+  short register groups after an explicit illegal-address rejection of the
+  combined DC block (#44). Timeouts and malformed responses do not trigger
+  this fallback. Missing groups remain unavailable instead of becoming zero.
+  The detected read-only family also retains the catalog proof required to
+  recreate its sensors after a Home Assistant reload.
+
+- MUST current labels now match the documented nodes: **Inverter Current**,
+  **Grid Current**, and **Load Current** (#46). Existing entity IDs and values
+  are unchanged; current is not estimated from power and voltage.
 
 - MUST PV3300 reports whole load percent and normalizes battery/grid directions
   for HA energy flows (#46): positive battery power/current means charging;

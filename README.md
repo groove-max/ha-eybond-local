@@ -131,7 +131,10 @@ It is a small ESP8266/ESP32-based bridge that connects directly to the inverter 
 ### Manual installation
 
 1. Download the archive from the [latest EyeBond Local release](https://github.com/groove-max/ha-eybond-local/releases/latest).
-2. Copy `custom_components/eybond_local/` into `config/custom_components/`.
+2. Extract the archive and copy only its `custom_components/eybond_local/`
+   folder into `config/custom_components/`. The final path must be
+   `config/custom_components/eybond_local/manifest.json`, without another
+   repository or `custom_components` folder nested inside it.
 3. Restart Home Assistant.
 4. Add **EyeBond Local** from **Settings → Devices & Services**.
 
@@ -148,9 +151,12 @@ yet. It does not update through HACS and may change before the next release.
 
 1. Back up your Home Assistant configuration.
 2. Download the current [`main` branch archive](https://github.com/groove-max/ha-eybond-local/archive/refs/heads/main.zip).
-3. Remove the existing `config/custom_components/eybond_local/` directory, then
-   copy the complete directory from the archive into `config/custom_components/`.
-   Do not mix files from two builds.
+3. Extract the archive. Inside `ha-eybond-local-main`, open `custom_components`.
+   Replace the existing `config/custom_components/eybond_local/` directory with
+   the complete **`eybond_local`** folder from there. Do not copy the outer
+   `ha-eybond-local-main` folder or mix files from two builds. Check that
+   `manifest.json` is directly inside `config/custom_components/eybond_local/`.
+   You do not need to remove the integration or its devices from Home Assistant.
 4. Restart Home Assistant and check the EyeBond Local entries.
 5. When reporting a result, include the Git commit shown on the repository page
    and attach a new Support Archive.

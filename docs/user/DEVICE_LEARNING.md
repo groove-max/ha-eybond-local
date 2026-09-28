@@ -111,6 +111,10 @@ Choosing an API never silently changes the task.
 
 For control verification:
 
+Connection preparation waits for an in-flight local poll to finish and prevents
+new polls from interrupting the checks, route change or startup recovery. This
+applies to active verification, not ordinary read-only cloud analysis.
+
 1. Home Assistant signs in to the selected cloud API with the credentials you entered.
 2. It verifies the exact device identity and asks which settings and fields the cloud knows for this
    device.

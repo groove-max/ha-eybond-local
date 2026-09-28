@@ -23,6 +23,16 @@ class RegisterBlockLayout:
 
 
 @dataclass(frozen=True, slots=True)
+class SupportReadPlan:
+    """Optional bounded FC03 evidence, separate from polling and controls."""
+
+    source: str
+    purpose: str
+    timeout_seconds: float
+    blocks: tuple[RegisterBlockLayout, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RegisterSchemaMetadata:
     """Declarative register schema loaded from JSON."""
 
@@ -40,6 +50,7 @@ class RegisterSchemaMetadata:
     scalar_registers: dict[str, int]
     measurement_descriptions: tuple[MeasurementDescription, ...]
     binary_sensor_descriptions: tuple[BinarySensorDescription, ...]
+    support_read_plan: SupportReadPlan | None = None
 
     def block(self, block_key: str) -> RegisterBlockLayout:
         """Return one named register block."""

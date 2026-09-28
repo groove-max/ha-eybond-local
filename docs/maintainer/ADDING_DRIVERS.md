@@ -265,6 +265,23 @@ The Python driver should remain the place for:
 - derived procedural runtime logic
 - actual write-command encoding
 
+### Bounded support-only register checks
+
+When a document gives setting addresses but their readback behavior is not yet
+confirmed, do not turn them into controls or poll them continuously. A register
+schema can instead declare an optional `support_read_plan` with `source`,
+`purpose`, `timeout_seconds`, and `blocks` (each with `key`, `start`, `count`).
+The generic Modbus catalog driver executes it only while creating a Support
+Archive. See `hopewind_0237/base.json` for a concrete example.
+
+This plan supports FC03 only, at most eight blocks, sixteen words per block,
+sixty-four words total and fifteen seconds for the whole plan. An explicit
+illegal-address reply permits the next declared block; other errors stop the
+extra reads, and cancellation propagates. There is no recursive address search.
+The result stays in `support_read_diagnostics`, separate from runtime values
+and the ordinary replay fixture. An inherited plan can be disabled with `null`.
+Successful reads prove readability, not write semantics or tested controls.
+
 ### Large register-mapped control surfaces
 
 For a catalog-driven Modbus family with many settings:

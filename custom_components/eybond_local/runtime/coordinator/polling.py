@@ -72,12 +72,19 @@ class CoordinatorPollingMixin:
             # A refresh queued before shutdown (debounced request, connection
             # watcher, write follow-up) must not drive the stopped link.
             return self.data
-        if self._diagnostic_active and self.data is not None:
+        if (
+            self._diagnostic_active
+            or getattr(self, "_cloud_tool_preparation_task", None) is not None
+        ) and self.data is not None:
             # A diagnostic command run holds the shared transport. Skip the live
             # poll so it does not contend on the bus; return the last snapshot.
             return self.data
         async with self._runtime_operation_lock:
-            if self._diagnostic_active and self.data is not None:
+            if (
+                self._diagnostic_active
+                or getattr(self, "_cloud_tool_preparation_task", None) is not None
+                or getattr(self, "_shutdown_complete", False)
+            ) and self.data is not None:
                 return self.data
             self._ensure_poll_scheduler()
             self._configure_poll_scheduler_from_options()

@@ -621,21 +621,21 @@
     },
     {
       "key": "output_current",
-      "name": "Output Current",
+      "name": "Inverter Current",
       "unit": "A",
       "device_class": "current",
       "state_class": "measurement"
     },
     {
       "key": "ac_output_current",
-      "name": "AC Output Current",
+      "name": "Grid Current",
       "unit": "A",
       "device_class": "current",
       "state_class": "measurement"
     },
     {
       "key": "inverter_load_current",
-      "name": "Inverter Load Current",
+      "name": "Load Current",
       "unit": "A",
       "device_class": "current",
       "state_class": "measurement"

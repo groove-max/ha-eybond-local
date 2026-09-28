@@ -14,7 +14,7 @@ from ..models import (
     RegisterValueSpec,
     decimals_for_divisor,
 )
-from .register_schema_models import RegisterBlockLayout, RegisterSchemaMetadata
+from .register_schema_models import RegisterBlockLayout, RegisterSchemaMetadata, SupportReadPlan
 from ..const import BUILTIN_SCHEMA_PREFIX
 
 PROTOCOL_CATALOGS_DIR = Path(__file__).resolve().parents[1] / "protocol_catalogs"
@@ -77,6 +77,7 @@ def load_register_schema(schema_name: str) -> RegisterSchemaMetadata:
             _parse_binary_sensor_description(item)
             for item in binary_sensor_description_items
         ),
+        support_read_plan=_parse_support_read_plan(raw.get("support_read_plan")),
     )
     _validate_schema(schema)
     return schema
@@ -274,6 +275,34 @@ def _parse_block(raw: Mapping[str, Any]) -> RegisterBlockLayout:
         count=int(raw["count"]),
         function=function,
     )
+
+
+def _parse_support_read_plan(raw: Mapping[str, Any] | None) -> SupportReadPlan | None:
+    """Never turn optional evidence addresses into runtime or writable fields."""
+
+    if raw is None:
+        return None
+    plan = SupportReadPlan(
+        source=str(raw["source"]).strip(),
+        purpose=str(raw["purpose"]).strip(),
+        timeout_seconds=float(raw["timeout_seconds"]),
+        blocks=tuple(_parse_block(item) for item in raw["blocks"]),
+    )
+    if (
+        not plan.source or not plan.purpose
+        or not 0 < plan.timeout_seconds <= 15
+        or not 1 <= len(plan.blocks) <= 8
+        or sum(block.count for block in plan.blocks) > 64
+        or any(
+            block.function != 3 or not block.key
+            or not 0 <= block.start <= 65535
+            or not 1 <= block.count <= 16
+            or block.start + block.count > 65536
+            for block in plan.blocks
+        )
+    ):
+        raise ValueError("invalid_support_read_plan")
+    return plan
 
 
 def _parse_spec(

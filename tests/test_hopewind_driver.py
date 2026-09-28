@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from custom_components.eybond_local.drivers.modbus_catalog import ModbusCatalogDriver
 from custom_components.eybond_local.fixtures.transport import FixtureTransport
 from custom_components.eybond_local.metadata.register_schema_loader import load_register_schema
 from custom_components.eybond_local.models import ProbeTarget
+from custom_components.eybond_local.payload.modbus import ModbusError
 
 
 def hopewind_registers():
@@ -79,6 +81,41 @@ class HopewindDriverTests(unittest.IsolatedAsyncioTestCase):
         for bank in banks:
             with self.subTest(bank_size=len(bank)):
                 self.assertIsNone(await ModbusCatalogDriver().async_probe(transport(bank), ProbeTarget(1, 255, 1)))
+
+    async def test_optional_settings_reads_are_evidence_not_controls_or_polling(self):
+        for rejected in (False, True):
+            with self.subTest(rejected=rejected):
+                driver, link = ModbusCatalogDriver(), transport()
+                inverter = await driver.async_probe(link, ProbeTarget(1, 255, 1))
+
+                async def read(start, count):
+                    if start == 40002:
+                        if rejected:
+                            raise ModbusError("exception_code:2")
+                        return [0, 10000, 0, 0]
+                    if start == 40011:
+                        return [1, 1500, 10000]
+                    return [hopewind_registers()[address] for address in range(start, start + count)]
+
+                session = type("Session", (), {"read_holding": AsyncMock(side_effect=read)})()
+                async def read_registers(start, count, **kwargs):
+                    return await read(start, count)
+                session.read_registers = AsyncMock(side_effect=read_registers)
+                with patch.object(driver, "_session", return_value=session):
+                    evidence = await driver.async_capture_support_evidence(link, inverter)
+                    diagnostics = evidence["support_read_diagnostics"]
+                    self.assertEqual(diagnostics["status"], "completed")
+                    self.assertEqual(len(diagnostics["captured_ranges"]), 1 if rejected else 2)
+                    self.assertEqual(len(diagnostics["range_failures"]), int(rejected))
+                    self.assertEqual([block["start"] for block in evidence["fixture_ranges"]],
+                                     [40500, 40571, 40600])
+                    session.read_holding.reset_mock()
+                    values = (await driver.async_read_values(link, inverter)).values
+                    session.read_holding.assert_not_awaited()
+                self.assertEqual(len(values), 90)
+                self.assertFalse(inverter.capabilities)
+                self.assertFalse(inverter.profile_name)
+                self.assertTrue(all(plan.start >= 40500 for plan in driver.local_register_read_plans(inverter)))
 
     async def test_standby_zero_telemetry_and_family_power_range_can_identify(self):
         for power in (3, 15, 80):

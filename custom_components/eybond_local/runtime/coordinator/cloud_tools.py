@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import ipaddress
 import logging
@@ -107,6 +108,50 @@ logger = logging.getLogger(__name__)
 class CoordinatorCloudToolsMixin:
     """Own the shared proxy/shadow endpoint transaction lifecycle."""
 
+    @asynccontextmanager
+    async def _async_cloud_tool_preparation(self):
+        """Drain polling before taking the bus through route handoff/cleanup.
+
+        Announce ownership BEFORE waiting for the runtime lock so queued polls
+        yield too. Refreshes inside startup/finalization return the last snapshot
+        instead of re-entering this lock. The persistent endpoint lease remains
+        a separate authority and may outlive this transient preparation guard.
+        """
+
+        if getattr(self, "_shutdown_complete", False):
+            raise RuntimeError("coordinator_stopped")
+        if getattr(self, "_cloud_tool_preparation_task", None) is not None:
+            raise RuntimeError("collector_endpoint_operation_busy")
+        task = asyncio.current_task()
+        done = asyncio.get_running_loop().create_future()
+        self._cloud_tool_preparation_task = task
+        self._cloud_tool_preparation_done = done
+        try:
+            async with self._runtime_operation_lock:
+                if getattr(self, "_shutdown_complete", False):
+                    raise RuntimeError("coordinator_stopped")
+                yield
+        finally:
+            self._cloud_tool_preparation_task = None
+            self._cloud_tool_preparation_done = None
+            done.set_result(None)
+
+    async def _async_cancel_cloud_tool_preparation(self) -> None:
+        """Wait for startup's shielded restore before tearing down the link."""
+
+        task = getattr(self, "_cloud_tool_preparation_task", None)
+        done = getattr(self, "_cloud_tool_preparation_done", None)
+        if task is None or task is asyncio.current_task() or done is None:
+            return
+        task.cancel()
+
+        async def wait_for_cleanup():
+            await asyncio.shield(done)
+
+        _result, cancelled = await self._run_finalization_shielded(wait_for_cleanup)
+        if cancelled is not None:
+            raise cancelled
+
     @property
     def support_acquisition_readiness(self) -> SupportAcquisitionReadiness:
         """Project support tools without requiring an identified inverter.
@@ -170,6 +215,22 @@ class CoordinatorCloudToolsMixin:
         duration_minutes: int | None = None,
     ) -> dict[str, object]:
         """Start one live collector proxy capture session."""
+
+        async with self._async_cloud_tool_preparation():
+            return await self._async_start_proxy_capture_exclusive(
+                anonymized=anonymized,
+                confirm_redirect=confirm_redirect,
+                duration_minutes=duration_minutes,
+            )
+
+    async def _async_start_proxy_capture_exclusive(
+        self,
+        *,
+        anonymized: bool,
+        confirm_redirect: bool,
+        duration_minutes: int | None,
+    ) -> dict[str, object]:
+        """Prepare and hand off with polling excluded by the caller."""
 
         endpoint_sync_lock_code = self.collector_endpoint_sync_lock_code()
         if endpoint_sync_lock_code is not None:
@@ -663,6 +724,22 @@ class CoordinatorCloudToolsMixin:
         allow_ack_writes: bool = False,
     ) -> dict[str, object]:
         """Start one fail-closed shadow-learning runtime session."""
+
+        async with self._async_cloud_tool_preparation():
+            return await self._async_start_shadow_learning_exclusive(
+                output_path=output_path,
+                raw_capture=raw_capture,
+                allow_ack_writes=allow_ack_writes,
+            )
+
+    async def _async_start_shadow_learning_exclusive(
+        self,
+        *,
+        output_path: Path | None,
+        raw_capture: dict[str, Any] | None,
+        allow_ack_writes: bool,
+    ) -> dict[str, object]:
+        """Include raw evidence acquisition in the exclusive preparation."""
 
         active_readiness = self.support_acquisition_readiness.active_control_learning
         if not active_readiness.can_start:

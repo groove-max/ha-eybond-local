@@ -6325,6 +6325,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
     def test_start_proxy_capture_fails_early_when_shadow_learning_owns_route(self) -> None:
         async def _run() -> None:
             coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator._runtime_operation_lock = asyncio.Lock()
             active_shadow_state = types.SimpleNamespace(status="ready")
             save_calls: list[bool] = []
             stop_shadow_calls: list[dict[str, object]] = []
@@ -6369,6 +6370,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
     def test_start_shadow_learning_fails_early_when_proxy_capture_owns_route(self) -> None:
         async def _run() -> None:
             coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator._runtime_operation_lock = asyncio.Lock()
             active_proxy_state = types.SimpleNamespace(status="running")
             save_calls: list[bool] = []
             start_shadow_calls: list[dict[str, object]] = []
@@ -6464,6 +6466,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator = object.__new__(
                 self.coordinator_module.EybondLocalCoordinator
             )
+            coordinator._runtime_operation_lock = asyncio.Lock()
             downstream_calls: list[bool] = []
 
             async def _async_active_proxy_capture_state(
@@ -6501,6 +6504,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
     def test_start_shadow_learning_fails_early_when_memory_is_low(self) -> None:
         async def _run() -> None:
             coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+            coordinator._runtime_operation_lock = asyncio.Lock()
             start_shadow_calls: list[dict[str, object]] = []
 
             async def _async_active_proxy_capture_state(*, require_process: bool = True):
@@ -7221,6 +7225,167 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
     # coordinator with controllable async seams (NOT a hand-rolled model of the
     # algorithm), so they prove the shielded finalization the methods actually run.
 
+    def test_cloud_tool_preparation_drains_poll_and_skips_queued_refresh(self) -> None:
+        async def run():
+            for kind in ("proxy", "shadow"):
+                with self.subTest(kind=kind):
+                    rec = self._fresh_rec()
+                    env = self._proxy_start_env if kind == "proxy" else self._shadow_start_env
+                    with env(rec) as coord:
+                        coord._diagnostic_active = False
+                        coord._async_prepare_cloud_tool_endpoint_context = (
+                            self.coordinator_cloud_tools_module.CoordinatorCloudToolsMixin
+                            ._async_prepare_cloud_tool_endpoint_context.__get__(coord)
+                        )
+                        reads = []
+
+                        async def read_endpoint():
+                            reads.append(coord._runtime_operation_lock.locked())
+                            raise TimeoutError("endpoint_timeout")
+
+                        coord._runtime.async_get_collector_server_endpoint_state = read_endpoint
+                        await coord._runtime_operation_lock.acquire()
+                        queued = asyncio.create_task(coord._async_update_data())
+                        await asyncio.sleep(0)  # enqueue BEFORE preparation announces ownership
+                        start = asyncio.create_task(
+                            coord.async_start_proxy_capture(confirm_redirect=True)
+                            if kind == "proxy" else coord.async_start_shadow_learning(
+                                output_path=Path("unused.jsonl"), raw_capture={}
+                            )
+                        )
+                        await asyncio.sleep(0)
+                        self.assertIs(coord._cloud_tool_preparation_task, start)
+                        self.assertEqual(reads, [])
+                        self.assertFalse(start.done())
+                        coord._runtime_operation_lock.release()
+                        self.assertIs(await asyncio.wait_for(queued, 1), coord.data)
+                        with self.assertRaisesRegex(RuntimeError, "cloud_tool_collector_not_connected"):
+                            await asyncio.wait_for(start, 1)
+                        self.assertEqual(reads, [True])
+                        self.assertIsNone(coord._cloud_tool_preparation_task)
+                        self.assertFalse(coord._runtime_operation_lock.locked())
+                        self.assertFalse(self._authority().is_held("entry-cancel"))
+                        self.assertEqual(rec["redirect"], [])
+        asyncio.run(run())
+
+    def test_cloud_tool_handoff_excludes_polling_and_refresh_is_reentrant(self) -> None:
+        async def run():
+            for kind in ("proxy", "shadow"):
+                with self.subTest(kind=kind):
+                    entered, release = asyncio.Event(), asyncio.Event()
+
+                    async def wait(**kwargs):
+                        entered.set()
+                        await release.wait()
+
+                    rec = self._fresh_rec()
+                    env = self._proxy_start_env if kind == "proxy" else self._shadow_start_env
+                    # Proxy readiness accepts its trace path positionally.
+                    async def proxy_wait(*args, **kwargs):
+                        await wait(**kwargs)
+
+                    with env(rec, wait=proxy_wait) as coord:
+                        coord._diagnostic_active = False
+                        coord.async_request_refresh = coord._async_update_data
+                        start = asyncio.create_task(
+                            coord.async_start_proxy_capture(confirm_redirect=True)
+                            if kind == "proxy" else coord.async_start_shadow_learning(
+                                output_path=Path("unused.jsonl"), raw_capture={}
+                            )
+                        )
+                        await asyncio.wait_for(entered.wait(), 1)
+                        self.assertTrue(coord._runtime_operation_lock.locked())
+                        self.assertIs(await asyncio.wait_for(coord._async_update_data(), 1), coord.data)
+                        release.set()
+                        result = await asyncio.wait_for(start, 1)
+                        self.assertIn(result["status"], ("running", "ready"))
+                        self.assertIsNone(coord._cloud_tool_preparation_task)
+                        self.assertFalse(coord._runtime_operation_lock.locked())
+                        self.assertTrue(self._authority().is_held("entry-cancel"))
+                        authority = self._authority()
+                        authority.release("entry-cancel", authority.adopt(
+                            "entry-cancel", authority.active_operation("entry-cancel"),
+                            rec["saved"][-1].route_owner_id,
+                        ))
+        asyncio.run(run())
+
+    def test_shadow_raw_capture_is_inside_poll_exclusion(self) -> None:
+        async def run():
+            rec = self._fresh_rec()
+            entered = asyncio.Event()
+            with self._shadow_start_env(rec) as coord:
+                coord._diagnostic_active = False
+                coord.data.connected = True
+
+                async def capture():
+                    self.assertTrue(coord._runtime_operation_lock.locked())
+                    entered.set()
+                    await asyncio.Future()
+
+                coord._runtime.async_capture_support_evidence = capture
+                start = asyncio.create_task(coord.async_start_shadow_learning())
+                await asyncio.wait_for(entered.wait(), 1)
+                self.assertIs(await coord._async_update_data(), coord.data)
+                await asyncio.wait_for(coord._async_cancel_cloud_tool_preparation(), 1)
+                with self.assertRaises(asyncio.CancelledError):
+                    await start
+                self.assertIsNone(coord._cloud_tool_preparation_task)
+                self.assertFalse(coord._runtime_operation_lock.locked())
+                self.assertEqual(rec["route"], [])
+                self.assertEqual(rec["redirect"], [])
+        asyncio.run(run())
+
+    def test_cloud_tool_unload_waits_for_restore_and_preserves_failed_restore_lease(self) -> None:
+        async def run():
+            for kind in ("proxy", "shadow"):
+                for restored in (True, False):
+                    with self.subTest(kind=kind, restored=restored):
+                        redirected, restoring, release = (asyncio.Event() for _ in range(3))
+                        rec = self._fresh_rec()
+
+                        async def redirect(endpoint, **kwargs):
+                            redirected.set()
+                            await asyncio.Future()
+
+                        async def restore(endpoint):
+                            restoring.set()
+                            await release.wait()
+                            return restored, "" if restored else "not_confirmed"
+
+                        env = self._proxy_start_env if kind == "proxy" else self._shadow_start_env
+                        with env(rec, redirect=redirect, restore=restore) as coord:
+                            coord._diagnostic_active = False
+                            coord.async_request_refresh = coord._async_update_data
+                            start = asyncio.create_task(
+                                coord.async_start_proxy_capture(confirm_redirect=True)
+                                if kind == "proxy" else coord.async_start_shadow_learning(
+                                    output_path=Path("unused.jsonl"), raw_capture={}
+                                )
+                            )
+                            await asyncio.wait_for(redirected.wait(), 1)
+                            shutdown = asyncio.create_task(coord._async_cancel_cloud_tool_preparation())
+                            await asyncio.wait_for(restoring.wait(), 1)
+                            self.assertFalse(shutdown.done())
+                            self.assertTrue(coord._runtime_operation_lock.locked())
+                            self.assertIs(await coord._async_update_data(), coord.data)
+                            start.cancel()  # repeated cancellation cannot open the poll window
+                            await asyncio.sleep(0)
+                            self.assertIsNotNone(coord._cloud_tool_preparation_task)
+                            release.set()
+                            await asyncio.wait_for(shutdown, 1)
+                            with self.assertRaises(asyncio.CancelledError):
+                                await start
+                            self.assertFalse(coord._runtime_operation_lock.locked())
+                            self.assertIsNone(coord._cloud_tool_preparation_task)
+                            self.assertEqual(self._authority().is_held("entry-cancel"), not restored)
+                            if not restored:
+                                authority = self._authority()
+                                authority.release("entry-cancel", authority.adopt(
+                                    "entry-cancel", authority.active_operation("entry-cancel"),
+                                    rec["saved"][-1].route_owner_id,
+                                ))
+        asyncio.run(run())
+
     @contextlib.contextmanager
     def _shadow_start_env(self, rec, **seams):
         """Bare-coordinator harness that drives the REAL async_start_shadow_learning.
@@ -7231,6 +7396,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         """
 
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator._runtime_operation_lock = asyncio.Lock()
 
         async def d_route(**kwargs):
             rec["route"].append(kwargs.get("owner_id"))
@@ -7861,6 +8027,8 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         """Bare-coordinator harness that drives the REAL async_start_proxy_capture."""
 
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator._runtime_operation_lock = asyncio.Lock()
+        coordinator.data = self.RuntimeSnapshot(connected=False, values={})
         tmp_dir = tempfile.mkdtemp(prefix="cp2c-proxy-")
 
         async def _executor(func, *args):

@@ -172,6 +172,12 @@ class CoordinatorLifecycleMixin:
             if self._shutdown_complete:
                 return
             self._shutdown_complete = True
+            # Do not let cancellation during a long endpoint restore leave the
+            # link/debouncer alive with _shutdown_complete already set. Finish
+            # the remaining teardown before propagating that cancellation.
+            _result, preparation_cancel = await self._run_finalization_shielded(
+                self._async_cancel_cloud_tool_preparation
+            )
             if self._entry_loaded_reload_unsub is not None:
                 self._entry_loaded_reload_unsub()
                 self._entry_loaded_reload_unsub = None
@@ -227,6 +233,8 @@ class CoordinatorLifecycleMixin:
         # run too, or a queued request_refresh can still drive a poll against
         # the stopped link.
         await super().async_shutdown()
+        if preparation_cancel is not None:
+            raise preparation_cancel
 
 
 

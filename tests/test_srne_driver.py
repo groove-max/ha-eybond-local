@@ -103,6 +103,34 @@ def _srne_registers(*, include_phase: bool = True) -> dict[int, int]:
 
 
 class SrneModbusDriverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_detected_read_only_family_has_restorable_catalog_proof(self):
+        from dataclasses import replace
+        from custom_components.eybond_local.metadata.effective_metadata_snapshot import (
+            build_effective_metadata_snapshot_from_runtime,
+            effective_metadata_snapshot_from_dict,
+        )
+
+        driver = SrneModbusDriver()
+        target = ProbeTarget(1, 255, 1)
+        link = FixtureTransport(registers=_srne_registers(), command_responses=None, probe_target=target)
+        inverter = await driver.async_probe(link, target)
+        proof = inverter.details["catalog_detection"]
+        self.assertEqual(proof["resolution"], "family")
+        self.assertEqual(proof["confidence"], "medium")
+        snapshot = build_effective_metadata_snapshot_from_runtime(
+            inverter=inverter, confidence=proof["confidence"],
+        )
+        self.assertTrue(snapshot.is_valid)
+        self.assertTrue(effective_metadata_snapshot_from_dict(snapshot.as_dict()).is_valid)
+        self.assertFalse(snapshot.profile_name)
+        self.assertFalse(inverter.capabilities)
+        for delta in (
+            {"catalog_version": ""}, {"catalog_version": "stale"},
+            {"candidate_keys": ()}, {"evidence_fingerprint": ""},
+            {"descriptor_revisions": ("srne_modbus_family:stale",)},
+        ):
+            self.assertFalse(replace(snapshot, **delta).is_valid, delta)
+
     async def test_probe_detects_srne_product_info_on_slave_one(self) -> None:
         driver = SrneModbusDriver()
         target = ProbeTarget(devcode=1, collector_addr=255, device_addr=1)
@@ -284,18 +312,104 @@ class SrneSupportDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(evidence["captured_ranges"]), 3)
         self.assertEqual(len(evidence["fixture_ranges"]), 8)
 
-        # Gathering support evidence must not silently change runtime polling.
+        # Runtime fallback is based on its own live rejection, not archive state.
         self.transport.requests.clear()
         values = _full_values(
             await self.driver.async_read_values(self.transport, self.inverter)
         )
-        self.assertEqual(self.transport.requests, normal)
+        self.assertEqual(self.transport.requests, normal[:2] + extra + normal[2:])
         self.assertEqual(values["output_power"], 1200)
-        self.assertNotIn("battery_voltage", values)
+        self.assertEqual(values["battery_voltage"], 51.2)
         self.assertEqual(
             [(plan.start, plan.count) for plan in self.driver.local_register_read_plans(self.inverter)],
-            normal,
+            normal[:1] + extra + normal[2:],
         )
+
+    async def test_runtime_fallback_exposes_battery_without_inventing_missing_pv2(self) -> None:
+        for register in (271, 272, 273):
+            del self.transport._registers[register]
+        self.transport._registers.update({256: 93, 257: 287, 258: 65430})
+        values = _full_values(await self.driver.async_read_values(self.transport, self.inverter))
+        self.assertEqual(values["battery_percent"], 93)
+        self.assertEqual(values["battery_voltage"], 28.7)
+        self.assertEqual(values["battery_current"], -10.6)
+        self.assertEqual(values["pv1_input_power"], 680)
+        self.assertNotIn("pv2_input_power", values)
+        self.assertNotIn("grid_voltage_l2", values)
+        snapshot = await self.driver.async_capture_local_register_snapshot(
+            self.transport, self.inverter, collector_pn="E50000200000000001"
+        )
+        battery = next(block for block in snapshot.blocks if block.plan.start == 256)
+        self.assertEqual(battery.values, (93, 287, 65430))
+        self.assertEqual(snapshot.failed_block_count, 2)  # PV2 and optional phases
+
+    async def test_runtime_does_not_split_timeouts_or_malformed_parent(self) -> None:
+        for error in (TimeoutError(), ModbusError("crc_error"),
+                      ModbusError("unexpected_slave_id:0"), ModbusError("exception_code:3")):
+            with self.subTest(error=str(error)):
+                session = self.driver._session(self.transport, self.inverter.probe_target)
+                original = session.read_registers
+                calls = []
+
+                async def read(start, count, *, function=3):
+                    calls.append((start, count))
+                    if (start, count) == (256, 18):
+                        raise error
+                    return await original(start, count, function=function)
+
+                session.read_registers = read
+                with patch.object(self.driver, "_session", return_value=session):
+                    values = _full_values(await self.driver.async_read_values(self.transport, self.inverter))
+                self.assertNotIn((256, 3), calls)
+                self.assertNotIn("battery_voltage", values)
+                self.assertEqual(values["output_power"], 1200)
+
+    async def test_runtime_subread_timeout_stops_fallback_without_stale_battery(self) -> None:
+        session = self.driver._session(self.transport, self.inverter.probe_target)
+        original = session.read_registers
+        calls = []
+
+        async def read(start, count, *, function=3):
+            calls.append((start, count))
+            if (start, count) == (256, 3):
+                raise TimeoutError()
+            return await original(start, count, function=function)
+
+        session.read_registers = read
+        with patch.object(self.driver, "_session", return_value=session):
+            values = _full_values(await self.driver.async_read_values(self.transport, self.inverter))
+        self.assertIn((256, 3), calls)
+        self.assertNotIn((263, 3), calls)
+        self.assertNotIn("battery_voltage", values)
+        self.assertEqual(values["output_power"], 1200)
+
+    async def test_supported_parent_stays_one_read_and_has_no_cross_device_state(self) -> None:
+        await self.driver.async_read_values(self.transport, self.inverter)
+        other = _ReadOnlySrneTransport(_srne_registers(), self.inverter.probe_target)
+        values = _full_values(await self.driver.async_read_values(other, self.inverter))
+        self.assertNotIn((256, 3), other.requests)
+        self.assertEqual(other.requests.count((256, 18)), 1)
+        self.assertEqual(values["pv2_input_power"], 620)
+
+    async def test_runtime_fallback_propagates_disconnect_and_cancellation(self) -> None:
+        for error in (ConnectionError("gone"), asyncio.CancelledError()):
+            with self.subTest(error=type(error).__name__):
+                session = self.driver._session(self.transport, self.inverter.probe_target)
+                original = session.read_registers
+                calls = []
+
+                async def read(start, count, *, function=3):
+                    calls.append((start, count))
+                    if (start, count) == (256, 3):
+                        raise error
+                    return await original(start, count, function=function)
+
+                session.read_registers = read
+                with patch.object(self.driver, "_session", return_value=session):
+                    with self.assertRaises(type(error)):
+                        await self.driver.async_read_values(self.transport, self.inverter)
+                self.assertNotIn((263, 3), calls)
+                self.assertNotIn((528, 18), calls)
 
     async def test_rejected_subrange_does_not_expand_the_probe(self) -> None:
         del self.transport._registers[257]

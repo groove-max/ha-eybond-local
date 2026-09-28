@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from ..models import RegisterValueSpec, decimals_for_divisor
-from .modbus import to_signed_16
+from .modbus import ModbusError, to_signed_16
 
 AsciiStyle = Literal["printable", "model"]
 
@@ -163,6 +163,9 @@ async def read_spec_set_values(
     *,
     spec_set: str = "runtime",
     ascii_style: AsciiStyle = "printable",
+    illegal_address_fallbacks: dict[
+        tuple[int, int, int], tuple[tuple[int, int], ...]
+    ] | None = None,
 ) -> dict[str, Any]:
     """Read every schema block and decode the specs it covers.
 
@@ -201,6 +204,33 @@ async def read_spec_set_values(
             raise
         except Exception as exc:  # pylint: disable=broad-except
             last_read_error = exc
+            # Only an explicit unsupported address authorizes a driver-declared
+            # split. Timeouts, malformed replies and other Modbus exceptions do
+            # not trigger more probing. No recursive or guessed register reads.
+            ranges = (illegal_address_fallbacks or {}).get(
+                (block_function, block.start, block.count), ()
+            ) if isinstance(exc, ModbusError) and str(exc) == "exception_code:2" else ()
+            for start, count in ranges:
+                if not (block.start <= start and 0 < count and start + count <= block.start + block.count):
+                    raise ValueError("register_fallback_outside_parent")
+                sub_specs = tuple(
+                    spec for spec in block_specs
+                    if start <= spec.register and spec.register + spec.word_count <= start + count
+                )
+                if not sub_specs:
+                    continue
+                try:
+                    words = await session.read_registers(start, count, function=block_function)
+                except ConnectionError:
+                    raise
+                except Exception as sub_exc:
+                    last_read_error = sub_exc
+                    if isinstance(sub_exc, ModbusError) and str(sub_exc) == "exception_code:2":
+                        continue
+                    # A transport/integrity failure stops this optional sequence.
+                    break
+                successful_reads += 1
+                values.update(decode_block(start, words, sub_specs, ascii_style=ascii_style))
             continue
         successful_reads += 1
         values.update(decode_block(block.start, words, block_specs, ascii_style=ascii_style))

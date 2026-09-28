@@ -125,6 +125,22 @@ Custom or learned maps are not rewritten. A learned map tied to the older
 generic MUST schema may stop applying after the base map changes; it needs to
 be regenerated for PV3300 rather than having its compatibility check bypassed.
 
+MUST AC current readings are named **Inverter Current**, **Grid Current**, and
+**Load Current**. The first two were previously called **Output Current** and
+**AC Output Current**; entity IDs and history are kept. Grid Current can be zero
+when the grid is disconnected. If the other currents stay at zero despite a
+load, create a Support Archive: for PV3300 it compares the combined response
+with individual reads. The integration does not replace a reported zero with
+an estimated current.
+
+## SRNE partial battery / PV readings
+
+Some SRNE firmware rejects a combined battery/PV request while answering smaller
+documented groups. The test build tries those groups only after an explicit
+unsupported-address reply, not after a timeout. Available readings continue
+updating; unsupported groups stay unavailable. No setup change is needed, and
+this does not add inverter controls.
+
 ## Hopewind / Bluesun read-only profile
 
 The test build adds **Hopewind String (Protocol 0237)** telemetry, checked against
@@ -143,6 +159,14 @@ default. Only enable channels actually present on your inverter; the family
 map includes more channels than some models have. Inverter controls are not
 included, even in **Full Control** mode. Cloud analysis remains a separate
 feature and is not required for local telemetry.
+
+Control support is being investigated separately. Creating a Support Archive
+also checks whether the inverter can **read** two small groups of documented
+power-control settings, with a shared six-second limit. It does not change those
+settings. These results help establish safe value display and command
+verification before controls can be offered. SmartClient currently supports
+read-only cloud analysis, not active control learning; selecting Full Control
+does not bypass that limitation.
 
 ## EyeBond Short-ASCII family
 

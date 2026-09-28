@@ -45,6 +45,12 @@ If you are not sure, stop and create a Support Archive instead.
 7. Reproduce the problem, or follow the developer's instructions.
 8. Stop the capture, or wait for the timer to finish.
 
+Startup waits for any current inverter poll to finish, then pauses new polls
+while it checks and redirects the connection. A failed start keeps polling
+paused through its immediate restoration attempt. This prevents the integration
+from sending a normal poll in the middle of preparation; it does not guarantee
+that an unstable collector will stay connected.
+
 If the last check found the collector disconnected but its route is known,
 the screen offers **Reconnect and start capture**. This first reconnects to
 the collector and reads its current server address, without needing to identify

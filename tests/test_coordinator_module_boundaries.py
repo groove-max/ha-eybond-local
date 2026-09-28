@@ -58,7 +58,7 @@ EXPECTED_MRO = [
 ]
 
 EXPECTED_METHOD_SET_SHA256 = (
-    "c3eea8b76ef2ce10554898e607467b5c7615354e1e4c59a4b79900f1bc00cbfb"
+    "274079242afeac68025d1270374fcfd5683a598f383d7102a5af9cb54e8e0f97"
 )
 
 
@@ -120,7 +120,12 @@ class CoordinatorCompositionBoundaryTests(unittest.TestCase):
         duplicates = {name: paths for name, paths in owners.items() if len(paths) != 1}
         self.assertEqual(duplicates, {})
         digest = hashlib.sha256("\n".join(sorted(owners)).encode()).hexdigest()
-        self.assertEqual(len(owners), 293)
+        self.assertEqual(len(owners), 297)
+        for method in (
+            "_async_cloud_tool_preparation", "_async_cancel_cloud_tool_preparation",
+            "_async_start_proxy_capture_exclusive", "_async_start_shadow_learning_exclusive",
+        ):
+            self.assertEqual(owners[method], ["cloud_tools.py"])
         self.assertEqual(owners["local_register_collection_availability"], ["support.py"])
         self.assertEqual(digest, EXPECTED_METHOD_SET_SHA256)
 

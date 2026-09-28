@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
@@ -18,10 +17,11 @@ from .local_register_evidence import (
     async_capture_modbus_snapshot,
 )
 from .read_result import DriverReadMode, DriverReadResult
+from .support_diagnostics import capture_support_reads
 
 
 # SRNE Modbus V2.07, P01 DC Data Area (addresses in that table are hexadecimal).
-# Support-only diagnosis of a rejected 0x0100/18 read; never a runtime read plan.
+# Documented short reads after an explicit rejection of the 0x0100/18 block.
 # In particular, do not cross the optional/new fields or reserved 0x010D again.
 _DC_DIAGNOSTIC_RANGES = (
     (0x0100, 3, "battery"),
@@ -87,17 +87,28 @@ class SrneModbusDriver(InverterDriver):
         if not _looks_like_srne_product_info(product_info):
             return None
 
-        surface = load_compiled_detection_catalog().surfaces["srne_modbus_read_only"]
+        catalog = load_compiled_detection_catalog()
+        evidence = {
+            "identity.product_info": product_info,
+            "protocol.protocol_id": "SRNE_MODBUS",
+        }
+        resolution = catalog.resolve_family(protocol_key=self.key, evidence=evidence)
+        if not resolution.surface_key:
+            return None
+        surface = catalog.surfaces[resolution.surface_key]
         details = {
             "product_info": product_info,
             "protocol_id": "SRNE_MODBUS",
             "catalog_detection": {
-                "resolution": "exact",
+                "resolution": resolution.resolution,
                 "surface_key": surface.key,
-                "evidence": {
-                    "identity.product_info": product_info,
-                    "protocol.protocol_id": "SRNE_MODBUS",
-                },
+                "confidence": resolution.confidence,
+                "candidate_keys": list(resolution.candidate_keys),
+                "catalog_version": resolution.catalog_version,
+                "descriptor_revisions": list(resolution.descriptor_revisions),
+                "evidence_fingerprint": resolution.evidence_fingerprint,
+                "evidence": evidence,
+                "decision_path": list(resolution.decision_path),
             },
         }
         return DetectedInverter(
@@ -125,7 +136,14 @@ class SrneModbusDriver(InverterDriver):
             inverter.register_schema_name or self.register_schema_name
         )
         session = self._session(transport, inverter.probe_target)
-        values = await read_spec_set_values(session, schema, ascii_style="printable")
+        values = await read_spec_set_values(
+            session,
+            schema,
+            ascii_style="printable",
+            illegal_address_fallbacks={
+                (3, 0x0100, 18): tuple((start, count) for start, count, _ in _DC_DIAGNOSTIC_RANGES)
+            },
+        )
         return DriverReadResult(values=values, mode=DriverReadMode.FULL)
 
     async def async_write_capability(
@@ -216,15 +234,23 @@ class SrneModbusDriver(InverterDriver):
         schema = load_register_schema(
             inverter.register_schema_name or self.register_schema_name
         )
-        return tuple(
-            LocalRegisterReadPlan.for_target(
-                inverter.probe_target,
-                function=3,
-                start=block.start,
-                count=block.count,
+        # Bounded background evidence uses the same documented DC groups, not
+        # the unsupported parent or zero-filled holes. Ordinary polling still
+        # prefers the compact parent when the device accepts it.
+        plans = []
+        for block in schema.blocks:
+            ranges = (
+                tuple((start, count) for start, count, _ in _DC_DIAGNOSTIC_RANGES)
+                if (block.start, block.count) == (0x0100, 18)
+                else ((block.start, block.count),)
             )
-            for block in schema.blocks
-        )
+            plans.extend(
+                LocalRegisterReadPlan.for_target(
+                    inverter.probe_target, function=3, start=start, count=count
+                )
+                for start, count in ranges
+            )
+        return tuple(plans)
 
     async def async_capture_local_register_snapshot(
         self, transport, inverter: DetectedInverter, *, collector_pn: str
@@ -257,45 +283,14 @@ async def _capture_dc_subranges(session: ModbusSession) -> dict[str, Any]:
     phase probing, capability writes or mutation of the runtime schema occurs.
     """
 
-    result: dict[str, Any] = {
-        "source": "SRNE Modbus V2.07, P01 DC Data Area",
-        "purpose": "support_only_rejected_dc_block",
-        "trigger_range": {"start": 0x0100, "count": 18},
-        "time_budget_seconds": _DC_DIAGNOSTIC_TIMEOUT,
-        "planned_ranges": [
-            {"start": start, "count": count, "group": group}
-            for start, count, group in _DC_DIAGNOSTIC_RANGES
-        ],
-        "status": "completed",
-        "captured_ranges": [],
-        "range_failures": [],
-    }
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + _DC_DIAGNOSTIC_TIMEOUT
-    for start, count, _group in _DC_DIAGNOSTIC_RANGES:
-        if loop.time() >= deadline:
-            result["status"] = "budget_exhausted"
-            break
-        timeout = asyncio.timeout_at(deadline)
-        try:
-            async with timeout:
-                words = await session.read_holding(start, count)
-        except Exception as exc:
-            expired = timeout.expired()
-            result["range_failures"].append(
-                {
-                    "start": start,
-                    "count": count,
-                    "error": "diagnostic_budget_exhausted" if expired else str(exc),
-                }
-            )
-            if _is_address_rejection(exc):
-                continue
-            result["status"] = "budget_exhausted" if expired else "stopped_on_error"
-            break
-        result["captured_ranges"].append(
-            {"start": start, "count": count, "words": list(words)}
-        )
+    result = await capture_support_reads(
+        session,
+        _DC_DIAGNOSTIC_RANGES,
+        timeout_seconds=_DC_DIAGNOSTIC_TIMEOUT,
+        source="SRNE Modbus V2.07, P01 DC Data Area",
+        purpose="support_only_rejected_dc_block",
+    )
+    result["trigger_range"] = {"start": 0x0100, "count": 18}
     return result
 
 
