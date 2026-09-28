@@ -131,7 +131,7 @@ class EybondShortAsciiDriver(InverterDriver):
         merged.update(battery_dc_power_values(merged))
         return DriverReadResult(values=merged, mode=DriverReadMode.FULL, diagnostics=diagnostics)
 
-    async def async_capture_support_evidence(self, transport, inverter):
+    async def async_capture_support_evidence(self, transport, inverter, runtime_state=None):
         session = self._session(transport, inverter.probe_target)
         responses, failures = {}, {}
         for command in READ_COMMANDS:
@@ -139,6 +139,13 @@ class EybondShortAsciiDriver(InverterDriver):
                 responses[command] = (await session.request(command)).hex()
             except (ShortAsciiError, ConnectionError, asyncio.TimeoutError) as exc:
                 failures[command] = type(exc).__name__
+        # Correlated aux 0200 only when the site admitted MPPT, same gate as poll.
+        try:
+            from .short_ascii_mppt_optional import capture_runtime_exchange, is_admitted
+            if is_admitted(runtime_state if isinstance(runtime_state, dict) else {}):
+                responses.update(await capture_runtime_exchange(transport))
+        except (TypeError, ValueError, ConnectionError, asyncio.TimeoutError) as exc:
+            failures["0200"] = type(exc).__name__
         return {
             "capture_kind": "short_ascii_read_only", "responses_hex": responses,
             "failures": failures,

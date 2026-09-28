@@ -48,10 +48,7 @@ class HubSupportMixin:
                 return await self._async_capture_generic_support_evidence(detect_error)
 
         try:
-            evidence = await self._driver.async_capture_support_evidence(
-                self._link_manager.transport,
-                self._inverter,
-            )
+            evidence = await self._capture_bound_driver_evidence()
         except Exception as exc:
             if _is_retryable_collector_error(exc):
                 logger.warning(
@@ -59,14 +56,28 @@ class HubSupportMixin:
                     exc,
                 )
                 await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
-                evidence = await self._driver.async_capture_support_evidence(
-                    self._link_manager.transport,
-                    self._inverter,
-                )
+                evidence = await self._capture_bound_driver_evidence()
             else:
                 raise
 
         return evidence
+
+    async def _capture_bound_driver_evidence(self) -> dict[str, object]:
+        """Capture driver evidence, passing MPPT admission when the driver accepts it."""
+
+        capture = self._driver.async_capture_support_evidence
+        transport = self._link_manager.transport
+        inverter = self._inverter
+        try:
+            return await capture(
+                transport,
+                inverter,
+                runtime_state=self._runtime_read_state,
+            )
+        except TypeError as exc:
+            if "runtime_state" not in str(exc):
+                raise
+            return await capture(transport, inverter)
 
     @property
     def local_register_collection_availability(

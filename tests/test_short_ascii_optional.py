@@ -271,7 +271,7 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("battery_soc", result.values)
         self.assertEqual(
             result.diagnostics["short_ascii_optional_status"],
-            "RB=unsupported; F=unsupported; RH=unsupported",
+            "RB=unsupported; F=unsupported; RH=unsupported; MPPT=not_admitted",
         )
 
     async def test_failed_optional_request_on_disconnected_transport_is_a_link_failure(self):
@@ -296,7 +296,7 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
     async def test_sample_can_expire_while_another_group_is_awaited(self):
         clock = [59.0]
         reads = OptionalReads(self.transport, self.inverter, 59)
-        rb, rated, _rh_sample = reads.samples
+        rb, rated, _rh_sample, _mppt = reads.samples
         rb.values, rb.sampled_at, rb.next_due = {"battery_soc": 80}, 0, 100
 
         class Session:

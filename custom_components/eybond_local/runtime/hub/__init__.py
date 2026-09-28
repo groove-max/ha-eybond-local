@@ -163,6 +163,7 @@ class EybondHub(
         self._runtime_measurement_fresh_count: int = 0
         self._runtime_measurement_reused_count: int = 0
         self._persistent_unsupported_commands: tuple[str, ...] = ()
+        self._admit_short_ascii_mppt = False
         # Collector-metadata TELEMETRY ownership lives entirely in the service:
         # the generic hub owns neither the wire, the cadence, the caches, nor the
         # dead-channel verdict. It reads the negotiated metadata routes from the

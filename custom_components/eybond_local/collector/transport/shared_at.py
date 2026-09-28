@@ -421,6 +421,25 @@ class SharedCollectorAtTransport:
             request_timeout=self._request_timeout,
         )
 
+    async def async_send_auxiliary_read(
+        self,
+        payload: bytes,
+        *,
+        request_timeout: float,
+    ) -> bytes:
+        """Delegate the internal read-only side channel; never infer from magic.
+
+        Ownership, documented-query gating, and framing stay on the socket
+        connection. This facade only resolves the active AT or framed
+        connection so callers need not touch ``connections.py``.
+        """
+
+        connection = await self._active_connection_for_auxiliary_send()
+        return await connection.async_send_auxiliary_read(
+            payload,
+            request_timeout=request_timeout,
+        )
+
     async def async_send_payload(
         self,
         payload: bytes,
@@ -587,6 +606,64 @@ class SharedCollectorAtTransport:
                 protocol=payload_family,
             )
         return route
+
+    async def _active_connection_for_auxiliary_send(
+        self,
+    ) -> _CollectorAtConnection | _CollectorConnection:
+        """Resolve the live AT or framed socket that owns the aux session."""
+
+        if not self._uses_at_text_session():
+            framed = self._framed_connection(create_placeholder=False)
+            if framed is not None and framed.connected:
+                return framed
+            if self._listener is None:
+                raise ConnectionError("collector_not_connected")
+            claimed_session_id = self._resolve_claimed_session_id()
+            if self._collector_ip or self._collector_pn or claimed_session_id:
+                pending = await self._listener.pop_pending_socket_for_route(
+                    collector_ip=self._collector_ip,
+                    collector_pn=self._collector_pn,
+                    session_protocol=self._collector_session_protocol,
+                    session_id=claimed_session_id,
+                )
+                if pending is not None:
+                    return await self._listener.activate_pending_connection(
+                        pending,
+                        collector_ip=self._collector_ip,
+                        collector_pn=self._collector_pn,
+                        heartbeat_interval=60.0,
+                        write_timeout=self._write_timeout,
+                    )
+            raise ConnectionError("collector_not_connected")
+
+        connection = self._at_connection(create_placeholder=bool(self._collector_ip))
+        if connection is not None and connection.connected:
+            return connection
+        if self._listener is None:
+            raise ConnectionError("collector_not_connected")
+        claimed_session_id = self._resolve_claimed_session_id()
+        if self._collector_ip or self._collector_pn or claimed_session_id:
+            pending = await self._listener.pop_pending_socket_for_route(
+                collector_ip=self._collector_ip,
+                collector_pn=self._collector_pn,
+                session_protocol=self._collector_session_protocol,
+                session_id=claimed_session_id,
+            )
+            if pending is not None:
+                return await self._listener.activate_pending_at_connection(
+                    pending,
+                    collector_ip=self._collector_ip,
+                    collector_pn=self._collector_pn,
+                    write_timeout=self._write_timeout,
+                    raw_passthrough_bootstrap=self._collector_raw_passthrough_bootstrap,
+                    raw_passthrough_frame_format=self._collector_raw_passthrough_frame_format,
+                    raw_passthrough_min_interval_ms=(
+                        self._collector_raw_passthrough_min_interval_ms
+                    ),
+                )
+        if connection is None or not connection.connected:
+            raise ConnectionError("collector_not_connected")
+        return connection
 
     @property
     def listener_key(self) -> str:

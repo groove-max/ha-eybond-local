@@ -37,6 +37,16 @@
     {"key": "bms_min_cell_voltage", "name": "BMS Minimum Cell Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement", "diagnostic": true, "enabled_default": false},
     {"key": "bms_low_protection_voltage", "name": "BMS Low Voltage Protection", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false},
     {"key": "bms_charge_cutoff_voltage", "name": "BMS Charge Cutoff Voltage", "unit": "V", "device_class": "voltage", "diagnostic": true, "enabled_default": false},
+    {"key": "pv_voltage", "name": "PV Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement", "enabled_default": false, "icon": "mdi:solar-power"},
+    {"key": "pv_power", "name": "PV Power", "unit": "W", "device_class": "power", "state_class": "measurement", "enabled_default": false, "icon": "mdi:solar-power"},
+    {"key": "mppt_battery_voltage", "name": "MPPT Battery Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement", "enabled_default": false},
+    {"key": "mppt_temperature", "name": "MPPT Temperature", "unit": "\u00b0C", "device_class": "temperature", "state_class": "measurement", "enabled_default": false},
+    {"key": "dc_load_current", "name": "MPPT DC Load Current", "unit": "A", "device_class": "current", "state_class": "measurement", "enabled_default": false, "icon": "mdi:current-dc"},
+    {"key": "mppt_work_mode_code", "name": "MPPT Work Mode Code", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_daily_energy", "name": "MPPT Daily Energy", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing", "enabled_default": false, "icon": "mdi:solar-power"},
+    {"key": "mppt_total_energy", "name": "MPPT Total Energy", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing", "enabled_default": false, "icon": "mdi:solar-power"},
+    {"key": "mppt_error_code", "name": "MPPT Error Code", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_error", "name": "MPPT Error", "diagnostic": true, "enabled_default": false},
     {"key": "short_ascii_optional_status", "name": "Optional Read Status", "diagnostic": true, "enabled_default": false},
     {"key": "short_ascii_rb_age_seconds", "name": "BMS Sample Age", "unit": "s", "diagnostic": true, "enabled_default": false},
     {"key": "short_ascii_f_age_seconds", "name": "Rated Values Sample Age", "unit": "s", "diagnostic": true, "enabled_default": false}
@@ -61,6 +71,6 @@
     "Currents and battery_power are also withheld until F ratings are available so I/P scaling bounds have evidence; ungated currents must not publish.",
     "battery_power is measured pack DC watts: BMS V \u00d7 (Icharge \u2212 Idischarge), positive while charging. It must not replace load_percent.",
     "RB zero voltage plus zero SOC withdraws all BMS measurements, including trailing retained fields.",
-    "Auxiliary AABB/PV fields and all controls remain absent. Ratings are not a source of measured power."
+    "Optional MPPT/PV entities come from the documented auxiliary 0200 runtime read only (not tip harvest, not settings 0202). Stock installs do not poll 0200 until config-entry option admit_short_ascii_mppt is true (enabled_default false only hides entities). Live PV/MPPT measurements stay disabled by default. Distinct owners: pv_* = PV array; mppt_battery_voltage \u2260 BMS/reference voltage; mppt_temperature \u2260 inverter/BMS temps; dc_load_current \u2260 AC load. Live-qualify with Support Archive before claiming device support; family identity only \u2014 no retail Anern model claim. Controls remain absent."
   ]
 }
