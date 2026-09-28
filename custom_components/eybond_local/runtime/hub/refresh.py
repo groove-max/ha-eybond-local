@@ -21,6 +21,8 @@ from .common import (
     seed_unsupported_commands,
 )
 
+from ...drivers.short_ascii_mppt_optional import ADMIT_OPTION_KEY
+
 
 def _sanitize_probe_routes(value: object) -> list[dict[str, object]]:
     """Keep only non-sensitive records minted from typed link routes."""
@@ -391,6 +393,10 @@ class HubRefreshMixin:
         async def _async_read_driver_values() -> dict[str, object]:
             loop = asyncio.get_running_loop()
             started = loop.time()
+            if getattr(self, "_admit_short_ascii_mppt", False):
+                self._runtime_read_state[ADMIT_OPTION_KEY] = True
+            else:
+                self._runtime_read_state.pop(ADMIT_OPTION_KEY, None)
             raw = await self._driver.async_read_values(
                 self._link_manager.transport,
                 self._inverter,
@@ -624,6 +630,8 @@ class HubRefreshMixin:
                 self._runtime_read_state,
                 self._persistent_unsupported_commands,
             )
+        if self._admit_short_ascii_mppt:
+            self._runtime_read_state[ADMIT_OPTION_KEY] = True
 
     def _record_inverter_detection_probe_log(
         self,
@@ -782,6 +790,19 @@ class HubRefreshMixin:
                 self._runtime_driver_diagnostics
             ),
         }
+
+    def set_admit_short_ascii_mppt(self, admitted: bool) -> None:
+        """Admit (or revoke) short-ASCII aux 0200 polls for this runtime.
+
+        Stock installs stay False. Sites opt in via config-entry option
+        ``admit_short_ascii_mppt``; entity ``enabled_default`` alone does not poll.
+        """
+
+        self._admit_short_ascii_mppt = bool(admitted)
+        if self._admit_short_ascii_mppt:
+            self._runtime_read_state[ADMIT_OPTION_KEY] = True
+        else:
+            self._runtime_read_state.pop(ADMIT_OPTION_KEY, None)
 
     def set_persistent_unsupported_commands(self, commands: tuple[str, ...]) -> None:
         """Install the persisted unsupported-command set for this device.

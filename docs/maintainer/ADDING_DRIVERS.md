@@ -262,14 +262,28 @@ RH=1.
 `short_ascii_optional` owns per-runtime samples, scoped to the transport and
 inverter binding. The hub discards this state on recovery; samples are never
 persisted as identity. Each successful Q1 cycle performs at most one optional
-request (4-second bound), oldest due group first: RB every 30 seconds with a
-60-second TTL, F and RH every 900 seconds with a 900-second TTL. Freshness is
-checked after the await. Invalid/timeout replies clear that group immediately,
-and FULL-result omission removes it from the hub. A failed or cancelled
-mandatory cycle, lost connection, changed binding or clock rollback clears all
-samples. Only optional failures alongside a successful Q1 count towards the
-shared four-strike command cache; the existing re-check action re-enables
-requests.
+request (4-second bound): RB every 30 seconds with a 60-second TTL, F and RH
+every 900 seconds with a 900-second TTL, and optional MPPT (`0200` aux) every
+30 seconds with a 60-second TTL **only when admitted**. Admission is the
+config-entry option `admit_short_ascii_mppt` (default absent/false), mirrored
+into runtime state by the hub; `enabled_default: false` alone only hides
+entities and must not poll. When both FC4 (RB/F/RH) and MPPT are due, prefer
+FC4 (oldest due within that set); MPPT runs only when it is the sole due
+sample, except that a due RB whose last sample is already TTL-stale yields
+once to MPPT so prefer-FC4 cannot starve admitted PV forever. MPPT
+soft-failures clear immediately with no 30 s penalty, one in-cycle 0200
+retry while connected for transient faults, never `record_command_failure`,
+and an MPPT fence must not abort the Q1 merge. A structural aux failure
+(`TypeError` / missing AT aux facade) backs off for a full TTL without that
+retry. Freshness is checked after the await. Invalid/timeout replies clear
+that group immediately, and FULL-result omission removes it from the hub. A
+failed or cancelled mandatory cycle, lost connection, changed binding or
+clock rollback clears all samples. Only optional FC4 failures alongside a
+successful Q1 count towards the shared four-strike command cache; the
+existing re-check action re-enables requests. Support Archive capture may
+include correlated `0200_request` / `0200` hex when a framed or AT aux
+facade is available (user-initiated evidence, not a stock poll). The
+short-ASCII capture sends 0200 only when `admit_short_ascii_mppt` is set.
 
 An RB reply with zero voltage and zero SOC explicitly withdraws **all** BMS
 measurements/path flags, including nonzero trailing fields seen in the capture.
@@ -298,8 +312,9 @@ gates before publish. Do **not** hold last-good BMS values for 180 s.
   refresh hub freshness with stale V/SoC/I. Checksum/length fail → drop.
   Optional RB TTL remains ~60 s for normal samples.
 
-AABB/PV admission and inverter controls remain separate work. Do not report
-full PR/device support based on these fields or a saved-wire replay alone.
+Live PV is request-gated by `admit_short_ascii_mppt` as above; inverter
+controls remain separate work. Do not report full PR/device support based on
+these fields or a saved-wire replay alone.
 
 The preferred workflow is:
 

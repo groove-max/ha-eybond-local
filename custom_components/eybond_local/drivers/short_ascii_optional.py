@@ -15,10 +15,18 @@ from .command_support import (
     record_command_success, unsupported_commands,
 )
 from .short_ascii_battery_dc import battery_dc_power_values
+from .short_ascii_mppt_optional import (
+    ADMIT_OPTION_KEY, COMMAND as MPPT_COMMAND, INTERVAL as MPPT_INTERVAL,
+    STRUCTURAL_BACKOFF, TTL as MPPT_TTL, is_admitted, is_structural_aux_error,
+    request_runtime_sample,
+)
 from .short_ascii_rb_filter import RbPublishFilter
 
 STATE_KEY = "short_ascii_optional_reads"
 _PREFIX = "short_ascii:"
+# Envelope/transport soft errors. MPPT soft-handles ConnectionError (fence);
+# FC4 re-raises disconnect so Q1 wipe stays correct.
+_SOFT_ERRORS = (ShortAsciiError, asyncio.TimeoutError, ConnectionError, ValueError, TypeError)
 
 
 @dataclass
@@ -55,6 +63,8 @@ class OptionalReads:
         OptionalSample("F", interval=900, ttl=900, parser=parse_f),
         # Settings block; same cadence as F. Gate for RB current ÷10 publish.
         OptionalSample("RH", interval=900, ttl=900, parser=parse_rh),
+        # Aux 0200 only when admitted; parser unused — request path special-cased.
+        OptionalSample(MPPT_COMMAND, interval=MPPT_INTERVAL, ttl=MPPT_TTL, parser=dict),
     ))
     rb_filter: RbPublishFilter = field(default_factory=RbPublishFilter)
 
@@ -121,6 +131,11 @@ class OptionalReads:
             out.pop(key, None)
         return out
 
+    async def _request_mppt(self) -> dict[str, object]:
+        """Solicit documented 0200 only via the shared facade; never 0202."""
+
+        return await request_runtime_sample(self.transport)
+
     def _apply_rb_parse(self, sample: OptionalSample, parsed: dict[str, object], now: float) -> None:
         rated_v, rated_a, rated_bat = self._f_ratings(now)
         candidate = self._strip_ungated_currents(dict(parsed), now)
@@ -145,7 +160,14 @@ class OptionalReads:
     ) -> tuple[dict[str, object], dict[str, object]]:
         """At most one extra query per successful Q1 cycle; no discovery budget."""
         now = clock()
+        mppt_admitted = is_admitted(runtime_state)
         for sample in self.samples:
+            if sample.command == MPPT_COMMAND and not mppt_admitted:
+                # G.P1: stock installs must not poll aux 0200.
+                sample.clear()
+                sample.outcome = "not_admitted"
+                sample.next_due = now + sample.interval
+                continue
             if command_skipped_as_unsupported(runtime_state, _PREFIX + sample.command):
                 sample.clear()
                 sample.outcome = "unsupported"
@@ -153,24 +175,73 @@ class OptionalReads:
                 # The existing explicit re-check action cleared negative facts.
                 sample.next_due = now
                 sample.outcome = "not_checked"
+            elif sample.outcome == "not_admitted" and mppt_admitted:
+                sample.next_due = now
+                sample.outcome = "not_checked"
         due = [sample for sample in self.samples
-               if sample.outcome != "unsupported" and now >= sample.next_due]
-        # Oldest scheduled group first; an unsupported RB cannot starve F/RH.
-        sample = min(due, key=lambda item: item.next_due) if due else None
+               if sample.outcome not in ("unsupported", "not_admitted")
+               and now >= sample.next_due]
+        # Oldest due first within the chosen set. Prefer FC4 (RB/F/RH) over aux
+        # MPPT when both are due so a virgin MPPT next_due=0 cannot starve an
+        # intentional RB refresh; MPPT still runs when it is the only due sample.
+        # While MPPT is stale, the first RB+MPPT collision takes MPPT so prefer-
+        # FC4 cannot starve 0200 across reconnect wipes. F/RH still prefer FC4;
+        # fresh MPPT keeps prefer-FC4.
+        fc4_due = [sample for sample in due if sample.command != MPPT_COMMAND]
+        prefer_fc4 = bool(fc4_due) and any(s.command == MPPT_COMMAND for s in due)
+        rb_contending = any(s.command == "RB" for s in fc4_due)
+        mppt_sample = next((s for s in due if s.command == MPPT_COMMAND), None)
+        mppt_stale = (
+            mppt_sample is None
+            or mppt_sample.sampled_at is None
+            or (now - mppt_sample.sampled_at) > MPPT_TTL
+        )
+        if prefer_fc4 and rb_contending and mppt_stale and mppt_sample is not None:
+            candidates = [mppt_sample]
+        else:
+            candidates = fc4_due or due
+        sample = min(candidates, key=lambda item: item.next_due) if candidates else None
         if sample is not None:
             key = _PREFIX + sample.command
             try:
-                parsed = sample.parser(await session.request(sample.command))
-            except (ShortAsciiError, asyncio.TimeoutError) as exc:
+                if sample.command == MPPT_COMMAND:
+                    try:
+                        parsed = await self._request_mppt()
+                    except _SOFT_ERRORS as first_exc:
+                        # Structural TypeError cannot recover mid-cycle; flaky
+                        # aux may. Disconnect skips the second send.
+                        if is_structural_aux_error(first_exc):
+                            raise
+                        if not session.transport.connected:
+                            raise
+                        parsed = await self._request_mppt()
+                else:
+                    frame = await session.request(sample.command)
+                    parsed = sample.parser(frame)
+            except _SOFT_ERRORS as exc:
                 # Envelope/transport failure: drop; do not invent a hold.
                 sample.clear()
                 if sample.command == "RB":
                     self.rb_filter.clear()
-                sample.outcome = "timeout" if isinstance(exc, asyncio.TimeoutError) else "invalid_response"
-                sample.next_due = clock() + 30
-                if not session.transport.connected:
-                    raise ConnectionError("short_ascii_optional_connection_lost") from None
-                record_command_failure(runtime_state, key)
+                sample.outcome = (
+                    "timeout"
+                    if isinstance(exc, (asyncio.TimeoutError, ConnectionError))
+                    else "invalid_response"
+                )
+                if sample.command == MPPT_COMMAND:
+                    if is_structural_aux_error(exc):
+                        # Missing facade: long backoff, never next_due=now storm.
+                        sample.next_due = clock() + STRUCTURAL_BACKOFF
+                    else:
+                        # No 30 s penalty: due again next poll. Aux 0200 is flaky
+                        # under contention and may fence the socket; never raise
+                        # that into Q1 wipe, and never feed the unsupported cache.
+                        sample.next_due = clock()
+                else:
+                    sample.next_due = clock() + 30
+                    if isinstance(exc, ConnectionError) or not session.transport.connected:
+                        raise ConnectionError("short_ascii_optional_connection_lost") from None
+                    record_command_failure(runtime_state, key)
             else:
                 if sample.command == "RB":
                     self._apply_rb_parse(sample, parsed, clock())
@@ -209,6 +280,8 @@ class OptionalReads:
             key for key in unsupported_commands(runtime_state) if key.startswith(_PREFIX)
         )
         diagnostics.update(self.rb_filter.diagnostic_counters())
+        if not mppt_admitted:
+            diagnostics["short_ascii_mppt_admission"] = ADMIT_OPTION_KEY
         return values, diagnostics
 
 
