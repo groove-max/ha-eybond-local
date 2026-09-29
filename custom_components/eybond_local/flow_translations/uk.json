@@ -120,7 +120,7 @@
       "proxy_capture_status_running": "Триває захоплення",
       "proxy_capture_status_stopping": "Зупиняється",
       "proxy_capture_status_restoring": "Відновлюється підключення колектора",
-      "proxy_capture_blocking_collector_control_disabled": "обраний режим керування зараз не дозволяє зміни колектора",
+      "proxy_capture_blocking_collector_control_disabled": "обраний режим керування забороняє зміни колектора. Для запитаного захоплення виберіть Auto у розділі «Опитування та виявлення інвертора»; Full Control не потрібен",
       "proxy_capture_blocking_collector_not_connected": "колектор не підключений",
       "proxy_capture_blocking_target_endpoint_unavailable": "адреса Home Assistant для захоплення поки недоступна",
       "proxy_capture_blocking_current_endpoint_unavailable": "ще не вдалося прочитати поточну адресу сервера, до якого підключається колектор",

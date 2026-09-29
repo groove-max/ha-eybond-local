@@ -1,0 +1,24 @@
+{
+  "extends": "./smg_6200.json",
+  "schema_key": "modbus_smg_anenji_anj_6200_48pl",
+  "title": "Anenji ANJ-6200-48PL Registers",
+  "driver_key": "modbus_smg",
+  "protocol_family": "modbus_smg",
+  "enum_tables": {
+    "anj_6200_48pl_output_source": {
+      "1": "Solar-Utility-Battery (SUB)",
+      "2": "Solar-Battery-Utility (SBU)",
+      "3": "Solar-Utility-Battery with Grid Export (SUF)",
+      "4": "Self-Consumption (ZEC)"
+    }
+  },
+  "spec_sets": {
+    "config": [
+      {
+        "key": "output_source_priority",
+        "register": 301,
+        "enum_table": "anj_6200_48pl_output_source"
+      }
+    ]
+  }
+}

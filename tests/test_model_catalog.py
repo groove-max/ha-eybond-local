@@ -369,7 +369,18 @@ class SurfaceConflictTests(unittest.TestCase):
         self.assertTrue(any("incompatible surfaces" in e for e in report.errors), report.errors)
 
     def test_same_surface_in_variant_allowed(self) -> None:
-        # smg_6200 and anenji_anj_6200_48pl share surface smg_6200_full.
+        # Distinct detection anchors can legitimately select the same surface.
+        model = _ok_model()
+        model["variants"] = [
+            {"variant_key": "v", "label": "V", "device_descriptor_keys": ["pi30_max_qpiri", "pi30_max_qflag"]}
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _write_catalog(Path(tmp), [model], [])
+            report = validate_catalog(base, runtime_catalog=RUNTIME)
+        self.assertFalse(any("incompatible surfaces" in e for e in report.errors), report.errors)
+
+    def test_different_6200_control_maps_cannot_share_a_variant(self) -> None:
+        # Same nominal power does not make ANJ's Protocol 2 enum a SMG enum.
         model = _ok_model()
         model["variants"] = [
             {"variant_key": "v", "label": "V", "device_descriptor_keys": ["smg_6200", "anenji_anj_6200_48pl"]}
@@ -377,7 +388,7 @@ class SurfaceConflictTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = _write_catalog(Path(tmp), [model], [])
             report = validate_catalog(base, runtime_catalog=RUNTIME)
-        self.assertFalse(any("incompatible surfaces" in e for e in report.errors), report.errors)
+        self.assertTrue(any("incompatible surfaces" in e for e in report.errors), report.errors)
 
 
 class CoverageCrossCheckTests(unittest.TestCase):

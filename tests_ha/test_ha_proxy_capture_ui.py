@@ -11,6 +11,34 @@ from custom_components.eybond_local.support.acquisition import (
 from test_ha_config_flow import collector_entry
 
 
+async def test_auto_allows_capture_but_not_unidentified_inverter_writes(
+    hass, collector_entry, fake_runtime,
+):
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = collector_entry.runtime_data
+    coordinator.data = replace(
+        coordinator.data, connected=True, inverter=None,
+        values={"runtime_driver_state": "driver_unbound"},
+    )
+    try:
+        for mode, allowed in (("read_only", False), ("auto", True)):
+            with patch.object(type(coordinator), "control_mode", new_callable=PropertyMock,
+                              return_value=mode):
+                assert not coordinator.controls_enabled
+                overview = build_proxy_capture_overview(
+                    control_mode=mode, collector_control_allowed=coordinator.collector_actions_enabled,
+                    collector_connected=True, cloud_tools_allowed=True,
+                    collector_cloud_family="valuecloud_at", collector_session_protocol="at_text",
+                    cloud_session_protocol="at_text", current_endpoint="cloud.example,18899,TCP",
+                    upstream_endpoint="cloud.example,18899,TCP", target_endpoint="192.0.2.10,18899,TCP",
+                )
+                assert overview.can_start is allowed
+                assert overview.blocking_reason == ("" if allowed else "collector_control_disabled")
+    finally:
+        await hass.config_entries.async_unload(collector_entry.entry_id)
+
+
 @pytest.mark.parametrize("connected", [False, True])
 async def test_capture_form_does_not_mix_cached_instructions_with_live_actions(
     hass, collector_entry, fake_runtime, connected,

@@ -120,7 +120,7 @@
       "proxy_capture_status_running": "Running",
       "proxy_capture_status_stopping": "Stopping",
       "proxy_capture_status_restoring": "Restoring collector connection",
-      "proxy_capture_blocking_collector_control_disabled": "collector changes are currently disabled by the selected control mode",
+      "proxy_capture_blocking_collector_control_disabled": "collector changes are disabled by the selected control mode. For a requested capture, select Auto under Polling and inverter detection; Full Control is not needed",
       "proxy_capture_blocking_collector_not_connected": "the collector is not connected",
       "proxy_capture_blocking_target_endpoint_unavailable": "Home Assistant capture address is not available yet",
       "proxy_capture_blocking_current_endpoint_unavailable": "the collector's current server address has not been read yet",

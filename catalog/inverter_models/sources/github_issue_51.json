@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_51",
+  "kind": "github_issue",
+  "title": "ANJ-6200-48PL output-priority mapping",
+  "reference": "https://github.com/groove-max/ha-eybond-local/issues/51",
+  "captured_at": "2026-09-29",
+  "visibility": "public",
+  "summary_publishable": true,
+  "summary": "Exact layout 2/model 0x2300 requires SUB/SBU/SUF/ZEC instead of the SMG 6200 enum. Owner confirmed SUB/SBU and supplied the F1-01 manual. SUF/ZEC local writes remain unverified; exception 03 is not treated as success.",
+  "assertions": ["runtime_compatibility"]
+}

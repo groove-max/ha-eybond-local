@@ -1359,6 +1359,17 @@
    "support_capture_policy": "smg_protocol_1"
   },
   {
+   "key": "anenji_anj_6200_48pl_full",
+   "protocol_key": "modbus_smg",
+   "driver_key": "modbus_smg",
+   "variant_key": "anenji_anj_6200_48pl",
+   "profile_name": "modbus_smg/models/anenji_anj_6200_48pl.json",
+   "register_schema_name": "modbus_smg/models/anenji_anj_6200_48pl.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "smg_protocol_1"
+  },
+  {
    "key": "anenji_4200_protocol_1_full",
    "protocol_key": "modbus_smg",
    "driver_key": "modbus_smg",
@@ -2498,7 +2509,7 @@
     "serial_ascii_plausible"
    ],
    "model_name": "Anenji ANJ-6200-48PL",
-   "surface_key": "smg_6200_full",
+   "surface_key": "anenji_anj_6200_48pl_full",
    "runtime_probe": {
     "validation": [
      {
@@ -2555,7 +2566,8 @@
      "github:issue#8 Anenji ANJ-6200-48PL",
      "corpus:donor …57E (capture, 2026-06-15)",
      "fingerprint layout=2 model_code=8960 rated_power=6200",
-     "support archive runtime bound successfully to SMG 6200 register schema/profile"
+     "github:issue#51 register 301 enum correction; ANJ-6200-48PL manual F1-01 and GM6200 Communication Protocol 2",
+     "SUB/SBU user-confirmed; SUF/ZEC writes unverified; remaining historical SMG 6200 surface unchanged"
     ],
     "confidence": "capture-derived"
    }

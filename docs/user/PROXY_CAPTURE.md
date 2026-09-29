@@ -34,6 +34,13 @@ during a critical monitoring or control window.
 
 If you are not sure, stop and create a Support Archive instead.
 
+**Read-only control mode also blocks collector changes**, including the temporary
+server-address change needed for capture. If a developer has asked for a capture,
+open **Configure → Polling and inverter detection** and select **Control mode →
+Auto**. Leave the connection profile at **Cloud + Home Assistant**. Full Control
+is not needed, and changing this setting does not itself send inverter commands.
+After capture and confirmed restoration you can return to Read-only.
+
 ## How to start
 
 1. **Settings → Devices & Services**
@@ -81,6 +88,11 @@ available until Home Assistant finishes restoring the collector route.
 Proxy capture is temporary.
 
 When the timer ends, Home Assistant stops the capture automatically and tries to restore the collector’s normal connection path.
+
+The open dialog does not refresh automatically. Choose **Refresh** or reopen it
+to see the final status and saved result. Refresh does not restart or extend the
+timer; **Reset proxy timer** is a separate action. Check that the vendor app
+resumes updating after restoration.
 
 You can:
 

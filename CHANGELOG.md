@@ -45,6 +45,16 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Anenji ANJ-6200-48PL (layout 2/model `0x2300`) now uses its own
+  SUB/SBU/SUF/ZEC output-priority table instead of the SMG 6200 enum (#51).
+  Readings and the selector agree; existing entity IDs are preserved. The
+  selector requires Full Control because SUF/ZEC writes remain unverified.
+  Device rejections are still reported, and updating sends no setting changes.
+
+- Capture guidance explains how Read-only mode blocks the temporary collector
+  redirect and that Auto is sufficient (#49). It also explains that Refresh
+  updates the capture dialog without extending the timer (#43).
+
 - Proxy capture and active device learning now wait for an in-flight poll
   before preparing the collector connection. New polls cannot interrupt the
   preparation or its rollback; unloading waits for startup cleanup before

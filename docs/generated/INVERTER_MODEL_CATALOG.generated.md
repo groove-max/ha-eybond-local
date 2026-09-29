@@ -168,19 +168,20 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Validation: hardware captured, telemetry confirmed, controls partial
 - Coverage: runtime available, cloud unknown, vendor map documented
   - Coverage notes:
-    - Runtime writes use the documented classic SMG RS232 V1 surface plus the SMG 6200 model overlay; write behavior is not independently confirmed on this commercial unit.
-- Summary: SMG layout 2 model that reuses the SMG 6200 runtime surface; reported via a GitHub issue and a support capture.
+    - Uses a model-specific output-priority enum at register 301. SUB/SBU were observed working; SUF/ZEC writes remain unverified and the selector requires Full Control. Other existing controls are unchanged.
+- Summary: Exact layout 2/model 0x2300 with a dedicated SUB/SBU/SUF/ZEC output-priority table; remaining historical telemetry and controls are preserved.
 - Variants:
   - `layout2_model8960` — Known SMG layout 2 variant
     - Descriptors: anenji_anj_6200_48pl
     - Known firmware: —
-    - `anenji_anj_6200_48pl` → surface `smg_6200_full` (driver modbus_smg, variant default)
+    - `anenji_anj_6200_48pl` → surface `anenji_anj_6200_48pl_full` (driver modbus_smg, variant anenji_anj_6200_48pl)
       - Protocol: modbus_smg | Detection: fingerprint (layout 2, model 8960, rated 6200)
-      - Tier: full | Read-only: no | Profile: modbus_smg/models/smg_6200.json | Schema: modbus_smg/models/smg_6200.json
-      - Capabilities: 38 (tested 30, untested 8); support tiers: blocked 2, conditional 27, standard 9 | Telemetry: 107 measurements, 18 binary sensors
+      - Tier: full | Read-only: no | Profile: modbus_smg/models/anenji_anj_6200_48pl.json | Schema: modbus_smg/models/anenji_anj_6200_48pl.json
+      - Capabilities: 38 (tested 29, untested 9); support tiers: blocked 2, conditional 27, standard 9 | Telemetry: 107 measurements, 18 binary sensors
 - Known limitations:
-  - Shares the SMG 6200 runtime surface; writes are not independently hardware-confirmed on this unit.
-- Evidence: 3 source(s)
+  - SUF permits grid export. ZEC requires external CT configuration. Correct mode names do not remove inverter-side write restrictions.
+  - The remaining historical SMG 6200 controls are not all independently hardware-confirmed on this unit.
+- Evidence: 5 source(s)
 
 ### Anenji — HHS-11kW-WIFI (without parallel) (`anenji_hhs_11kw_wifi_no_parallel`)
 

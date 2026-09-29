@@ -221,6 +221,15 @@ select a similar retail model by guesswork.
 
 ## Control mode
 
+For **Anenji ANJ-6200-48PL** (layout 2/model `0x2300`), Output Source Priority
+uses **SUB / SBU / SUF / ZEC**, not the SMG 6200 mode names. This selector requires
+**Full Control** because SUF/ZEC writes have not been confirmed on this model.
+SUB/SBU have been reported working. SUF permits grid export; ZEC requires the
+external CT configuration described in the inverter manual. A corrected label
+does not remove inverter-side restrictions: rejected writes are still reported.
+Updating does not change the selected inverter mode. Existing entries do not
+need to be removed and added again.
+
 The optional **Write Capabilities** and **Blocked Write Capabilities** diagnostic
 sensors show how many settings are listed. Open the entity's attributes to see
 the complete list under `capabilities`. This is a diagnostic inventory, not a

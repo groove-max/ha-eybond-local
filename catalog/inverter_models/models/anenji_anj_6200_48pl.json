@@ -25,16 +25,19 @@
     "smartess_control_surface": "unknown",
     "vendor_register_map": "documented",
     "notes": [
-      "Runtime writes use the documented classic SMG RS232 V1 surface plus the SMG 6200 model overlay; write behavior is not independently confirmed on this commercial unit."
+      "Uses a model-specific output-priority enum at register 301. SUB/SBU were observed working; SUF/ZEC writes remain unverified and the selector requires Full Control. Other existing controls are unchanged."
     ]
   },
   "known_limitations": [
-    "Shares the SMG 6200 runtime surface; writes are not independently hardware-confirmed on this unit."
+    "SUF permits grid export. ZEC requires external CT configuration. Correct mode names do not remove inverter-side write restrictions.",
+    "The remaining historical SMG 6200 controls are not all independently hardware-confirmed on this unit."
   ],
-  "knowledge_summary": "SMG layout 2 model that reuses the SMG 6200 runtime surface; reported via a GitHub issue and a support capture.",
+  "knowledge_summary": "Exact layout 2/model 0x2300 with a dedicated SUB/SBU/SUF/ZEC output-priority table; remaining historical telemetry and controls are preserved.",
   "source_keys": [
     "documentation_classic_smg_rs232_v1",
+    "documentation_gm6200_protocol_2",
     "github_issue_8",
+    "github_issue_51",
     "support_archive_anj6200_48pl"
   ]
 }

@@ -120,7 +120,7 @@
       "proxy_capture_status_running": "Идет захват",
       "proxy_capture_status_stopping": "Останавливается",
       "proxy_capture_status_restoring": "Восстанавливается подключение коллектора",
-      "proxy_capture_blocking_collector_control_disabled": "избранный режим управления сейчас не разрешает изменения коллектора",
+      "proxy_capture_blocking_collector_control_disabled": "выбранный режим управления запрещает изменения коллектора. Для запрошенного захвата выберите Auto в разделе «Опрос и обнаружение инвертора»; Full Control не требуется",
       "proxy_capture_blocking_collector_not_connected": "коллектор не подключен",
       "proxy_capture_blocking_target_endpoint_unavailable": "адрес Home Assistant для захвата пока недоступен",
       "proxy_capture_blocking_current_endpoint_unavailable": "ещё не удалось прочитать текущий адрес сервера, к которому подключается коллектор",
