@@ -890,20 +890,23 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         output = (
             "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n"
             "2: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\\       valid_lft forever preferred_lft forever\n"
-            "3: wlan0    inet 192.168.1.50/24 brd 192.168.1.255 scope global dynamic noprefixroute wlan0\\       valid_lft 42620sec preferred_lft 42620sec\n"
+            "3: eth0    inet 192.0.2.20/24 brd 192.0.2.255 scope global eth0\\       valid_lft forever preferred_lft forever\n"
             "4: hassio    inet 172.30.32.1/23 brd 172.30.33.255 scope global hassio\\       valid_lft forever preferred_lft forever\n"
         )
 
         with patch(
+            "custom_components.eybond_local.network_interfaces._ifaddr_interfaces",
+            return_value=[],
+        ), patch(
             "custom_components.eybond_local.network_interfaces.subprocess.check_output",
             side_effect=[subprocess.CalledProcessError(1, ["ip"]), output],
         ):
             interfaces = _get_ipv4_interfaces()
 
-        wlan0 = next(interface for interface in interfaces if interface["name"] == "wlan0")
-        self.assertEqual(wlan0["ip"], "192.168.1.50")
-        self.assertEqual(wlan0["network"], "192.168.1.0/24")
-        self.assertEqual(wlan0["broadcast"], "192.168.1.255")
+        eth0 = next(interface for interface in interfaces if interface["name"] == "eth0")
+        self.assertEqual(eth0["ip"], "192.0.2.20")
+        self.assertEqual(eth0["network"], "192.0.2.0/24")
+        self.assertEqual(eth0["broadcast"], "192.0.2.255")
         self.assertFalse(any(interface["name"] == "docker0" for interface in interfaces))
         self.assertFalse(any(interface["name"] == "hassio" for interface in interfaces))
 

@@ -24,6 +24,10 @@ _IP_ADDR_SHOW_ONELINE = re.compile(
 )
 
 
+def _is_usable_ipv4(ip: str) -> bool:
+    return bool(ip) and not ip.startswith(("127.", "169.254."))
+
+
 def _is_user_selectable_interface(ifname: str) -> bool:
     normalized = str(ifname or "").strip().lower()
     if not normalized:
@@ -91,7 +95,7 @@ def _parse_json_interfaces(raw: list[dict[str, Any]]) -> list[dict[str, str]]:
                 continue
             if addr.get("scope") not in {"global", "site"}:
                 continue
-            if ip.startswith("127."):
+            if not _is_usable_ipv4(ip):
                 continue
             try:
                 prefixlen = int(addr.get("prefixlen"))
@@ -118,7 +122,7 @@ def _parse_oneline_interfaces(output: str) -> list[dict[str, str]]:
         if match is None:
             continue
         ip = str(match.group("ip") or "").strip()
-        if not ip or ip.startswith("127."):
+        if not _is_usable_ipv4(ip):
             continue
         ifname = str(match.group("ifname") or "").strip()
         if ifname and not _is_user_selectable_interface(ifname):
@@ -140,8 +144,47 @@ def _parse_oneline_interfaces(output: str) -> list[dict[str, str]]:
     return _dedupe_interfaces(interfaces)
 
 
-def get_ipv4_interfaces() -> list[dict[str, str]]:
-    """Return active global IPv4 interfaces with human-friendly labels."""
+def _ifaddr_interfaces() -> list[dict[str, str]]:
+    """Read interfaces through getifaddrs(); needs no `ip` binary in the container."""
+
+    try:
+        import ifaddr
+    except ImportError:
+        return []
+
+    interfaces: list[dict[str, str]] = []
+    try:
+        adapters = ifaddr.get_adapters()
+    except Exception:  # noqa: BLE001 - any libc/ctypes failure means "unknown"
+        return []
+    for adapter in adapters:
+        ifname = str(getattr(adapter, "nice_name", "") or "").strip()
+        if ifname and not _is_user_selectable_interface(ifname):
+            continue
+        for address in getattr(adapter, "ips", ()):
+            ip = address.ip
+            if not isinstance(ip, str) or not _is_usable_ipv4(ip):
+                continue
+            interfaces.append(
+                _build_interface_entry(
+                    ifname=ifname,
+                    ip=ip,
+                    prefixlen=int(address.network_prefix),
+                )
+            )
+    return _dedupe_interfaces(interfaces)
+
+
+def list_ipv4_interfaces() -> list[dict[str, str]]:
+    """Return active global IPv4 interfaces, or [] when they cannot be enumerated.
+
+    An empty result means "unknown", not "no interfaces": callers must not treat
+    it as proof that a configured address has gone away.
+    """
+
+    interfaces = _ifaddr_interfaces()
+    if interfaces:
+        return interfaces
 
     try:
         output = subprocess.check_output(
@@ -155,17 +198,24 @@ def get_ipv4_interfaces() -> list[dict[str, str]]:
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
         pass
 
+    # BusyBox `ip` (Home Assistant OS / container) has no -j.
     try:
         output = subprocess.check_output(
             ["ip", "-o", "-4", "addr", "show", "up"],
             text=True,
             stderr=subprocess.DEVNULL,
         )
-        interfaces = _parse_oneline_interfaces(output)
-        if interfaces:
-            return interfaces
+        return _parse_oneline_interfaces(output)
     except (OSError, subprocess.SubprocessError):
-        pass
+        return []
+
+
+def get_ipv4_interfaces() -> list[dict[str, str]]:
+    """Return active global IPv4 interfaces with human-friendly labels."""
+
+    interfaces = list_ipv4_interfaces()
+    if interfaces:
+        return interfaces
 
     fallback_ip = get_local_ip()
     if not fallback_ip:
@@ -173,4 +223,4 @@ def get_ipv4_interfaces() -> list[dict[str, str]]:
     return [{"name": "default", "ip": fallback_ip, "label": fallback_ip}]
 
 
-__all__ = ["get_ipv4_interfaces", "get_local_ip"]
+__all__ = ["get_ipv4_interfaces", "get_local_ip", "list_ipv4_interfaces"]

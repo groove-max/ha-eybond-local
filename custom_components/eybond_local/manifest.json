@@ -13,7 +13,8 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/groove-max/ha-eybond-local/issues",
   "requirements": [
-    "bleak>=0.22.3"
+    "bleak>=0.22.3",
+    "ifaddr>=0.2.0"
   ],
   "version": "0.3.0-beta.5"
 }

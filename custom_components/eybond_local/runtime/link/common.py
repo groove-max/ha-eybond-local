@@ -5,10 +5,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, replace
 import ipaddress
-import json
 import logging
 import socket
-import subprocess
 from typing import Callable, Protocol
 
 from ...collector.cloud_family import (
@@ -21,6 +19,7 @@ from ...collector.metadata import (
     CollectorMetadataRouteSet,
     build_collector_metadata_routes,
 )
+from ... import network_interfaces
 from ...connection.confirmed_session_protocol import ConfirmedSessionProtocolEvidence
 from ...connection.session_handle import (
     ADAPTER_COLLECTOR_AT_COMMANDS,
@@ -172,67 +171,16 @@ def _default_local_ip() -> str:
         return ""
 
 
-def _active_ipv4_addresses() -> tuple[str, ...]:
-    """Return active global IPv4 addresses on this host."""
-
-    return tuple(ip for ip, _prefixlen in _active_ipv4_interfaces())
-
-
 def _active_ipv4_interfaces() -> tuple[tuple[str, int], ...]:
-    """Return active global IPv4 addresses with prefix lengths on this host."""
-
-    try:
-        output = subprocess.check_output(
-            ["ip", "-j", "-4", "addr", "show", "up"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        )
-        raw = json.loads(output)
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
-        raw = []
+    """Return active global IPv4 addresses with prefix lengths; () when unknown."""
 
     addresses: list[tuple[str, int]] = []
-    for item in raw:
-        for addr in item.get("addr_info", []):
-            ip = str(addr.get("local", "")).strip()
-            if not ip:
-                continue
-            if addr.get("family") != "inet":
-                continue
-            if addr.get("scope") not in {"global", "site"}:
-                continue
-            if ip.startswith("127."):
-                continue
-            try:
-                prefixlen = int(addr.get("prefixlen", 32) or 32)
-            except (TypeError, ValueError):
-                prefixlen = 32
-            addresses.append((ip, prefixlen))
-    if not addresses:
+    for interface in network_interfaces.list_ipv4_interfaces():
         try:
-            output = subprocess.check_output(
-                ["ip", "-o", "-4", "addr", "show", "up"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            )
-        except (OSError, subprocess.SubprocessError):
-            output = ""
-        for line in output.splitlines():
-            parts = line.split()
-            if "inet" not in parts:
-                continue
-            try:
-                cidr = parts[parts.index("inet") + 1]
-                interface = ipaddress.ip_interface(cidr)
-            except (ValueError, IndexError):
-                continue
-            ip = str(interface.ip)
-            if ip.startswith("127."):
-                continue
-            addresses.append((ip, interface.network.prefixlen))
-    if not addresses:
-        fallback = _default_local_ip()
-        return ((fallback, 32),) if fallback else ()
+            prefixlen = int(interface.get("prefixlen") or 32)
+        except (TypeError, ValueError):
+            prefixlen = 32
+        addresses.append((interface["ip"], prefixlen))
     return tuple(dict.fromkeys(addresses))
 
 
@@ -256,6 +204,10 @@ def resolve_server_ip(configured_ip: str, *, collector_ip: str = "") -> str:
     """Return a bindable server IP, preferring the collector-facing subnet when possible."""
 
     active_interfaces = _active_ipv4_interfaces()
+    if not active_interfaces:
+        # Enumeration failed, so staleness cannot be proven; replacing a configured
+        # secondary-NIC address with the default-route IP would misroute the collector.
+        return configured_ip or _default_local_ip()
     active_ips = tuple(ip for ip, _prefixlen in active_interfaces)
     if configured_ip and configured_ip in active_ips:
         return configured_ip

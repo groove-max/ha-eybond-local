@@ -76,6 +76,7 @@ from custom_components.eybond_local.collector.session_identity_negotiator import
 from custom_components.eybond_local.connection.session_registry import CallbackSessionRegistry
 from custom_components.eybond_local.models import CollectorInfo
 from custom_components.eybond_local.runtime.link import EybondRuntimeLinkManager, resolve_server_ip
+from custom_components.eybond_local.runtime.link import common
 
 
 class _FakeTransport:
@@ -206,57 +207,153 @@ class _FakeAnnouncer:
 
 
 class RuntimeLinkManagerTests(unittest.TestCase):
-    def test_resolve_server_ip_uses_busybox_ip_o_fallback(self) -> None:
-        side_effects = [
-            subprocess.CalledProcessError(1, ["ip", "-j", "-4", "addr", "show", "up"]),
-            "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n"
-            "2: end0    inet 192.168.1.104/24 brd 192.168.1.255 scope global dynamic noprefixroute end0\\       valid_lft 41807sec preferred_lft 41807sec\n"
-            "3: wlan0    inet 192.168.88.92/24 brd 192.168.88.255 scope global dynamic noprefixroute wlan0\\       valid_lft 5809sec preferred_lft 5809sec\n",
-        ]
+    # Addresses come from the RFC 5737 documentation ranges: 192.0.2.0/24 is the
+    # host's default-route LAN, 198.51.100.0/24 the collector's separate segment.
+    _BUSYBOX_IP_O_OUTPUT = (
+        "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n"
+        "2: eth0    inet 192.0.2.20/24 brd 192.0.2.255 scope global eth0\\       valid_lft forever preferred_lft forever\n"
+        "3: docker0    inet 172.30.232.1/23 brd 172.30.233.255 scope global docker0\\       valid_lft forever preferred_lft forever\n"
+        "4: hassio    inet 172.30.32.1/23 brd 172.30.33.255 scope global hassio\\       valid_lft forever preferred_lft forever\n"
+        "5: veth0    inet 169.254.7.1/16 brd 169.254.255.255 scope link veth0\\       valid_lft forever preferred_lft forever\n"
+        "6: eth1    inet 198.51.100.20/24 brd 198.51.100.255 scope global eth1\\       valid_lft forever preferred_lft forever\n"
+    )
 
+    def _patch_busybox_host(self, default_ip: str = "192.0.2.20"):
+        """Simulate the HA OS container: no ifaddr result, BusyBox `ip` without -j."""
+
+        return (
+            patch(
+                "custom_components.eybond_local.network_interfaces._ifaddr_interfaces",
+                return_value=[],
+            ),
+            patch(
+                "custom_components.eybond_local.network_interfaces.subprocess.check_output",
+                side_effect=[
+                    subprocess.CalledProcessError(1, ["ip", "-j", "-4", "addr", "show", "up"]),
+                    self._BUSYBOX_IP_O_OUTPUT,
+                ],
+            ),
+            patch(
+                "custom_components.eybond_local.runtime.link.common._default_local_ip",
+                return_value=default_ip,
+            ),
+        )
+
+    def test_resolve_server_ip_keeps_configured_secondary_nic_with_busybox_ip(self) -> None:
+        ifaddr_patch, ip_patch, default_patch = self._patch_busybox_host()
+        with ifaddr_patch, ip_patch, default_patch:
+            resolved = resolve_server_ip("198.51.100.20", collector_ip="198.51.100.40")
+
+        self.assertEqual(resolved, "198.51.100.20")
+
+    def test_resolve_server_ip_uses_busybox_ip_o_fallback_for_collector_subnet(self) -> None:
+        ifaddr_patch, ip_patch, default_patch = self._patch_busybox_host()
+        with ifaddr_patch, ip_patch, default_patch:
+            resolved = resolve_server_ip("198.51.100.21", collector_ip="198.51.100.40")
+
+        self.assertEqual(resolved, "198.51.100.20")
+
+    def test_active_ipv4_interfaces_skips_loopback_link_local_and_internal_bridges(self) -> None:
+        ifaddr_patch, ip_patch, default_patch = self._patch_busybox_host()
+        with ifaddr_patch, ip_patch, default_patch:
+            interfaces = common._active_ipv4_interfaces()
+
+        self.assertEqual(interfaces, (("192.0.2.20", 24), ("198.51.100.20", 24)))
+
+    def test_active_ipv4_interfaces_prefers_ifaddr_without_running_ip(self) -> None:
+        adapters = [
+            types.SimpleNamespace(
+                nice_name="lo",
+                ips=[types.SimpleNamespace(ip="127.0.0.1", network_prefix=8)],
+            ),
+            types.SimpleNamespace(
+                nice_name="eth0",
+                ips=[
+                    types.SimpleNamespace(ip="192.0.2.20", network_prefix=24),
+                    types.SimpleNamespace(ip=("2001:db8::20", 0, 0), network_prefix=64),
+                ],
+            ),
+            types.SimpleNamespace(
+                nice_name="hassio",
+                ips=[types.SimpleNamespace(ip="172.30.32.1", network_prefix=23)],
+            ),
+            types.SimpleNamespace(
+                nice_name="eth1",
+                ips=[types.SimpleNamespace(ip="198.51.100.20", network_prefix=24)],
+            ),
+        ]
+        fake_ifaddr = types.SimpleNamespace(get_adapters=lambda: adapters)
+
+        with patch.dict(sys.modules, {"ifaddr": fake_ifaddr}), patch(
+            "custom_components.eybond_local.network_interfaces.subprocess.check_output",
+        ) as check_output:
+            interfaces = common._active_ipv4_interfaces()
+
+        check_output.assert_not_called()
+        self.assertEqual(interfaces, (("192.0.2.20", 24), ("198.51.100.20", 24)))
+
+    def test_resolve_server_ip_keeps_configured_ip_when_interfaces_are_unknown(self) -> None:
         with patch(
-            "custom_components.eybond_local.runtime.link.common.subprocess.check_output",
-            side_effect=side_effects,
+            "custom_components.eybond_local.network_interfaces._ifaddr_interfaces",
+            return_value=[],
+        ), patch(
+            "custom_components.eybond_local.network_interfaces.subprocess.check_output",
+            side_effect=FileNotFoundError("ip"),
         ), patch(
             "custom_components.eybond_local.runtime.link.common._default_local_ip",
-            return_value="192.168.1.104",
+            return_value="192.0.2.20",
         ):
-            resolved = resolve_server_ip(
-                "192.168.88.91",
-                collector_ip="192.168.88.88",
-            )
+            resolved = resolve_server_ip("198.51.100.20", collector_ip="198.51.100.40")
 
-        self.assertEqual(resolved, "192.168.88.92")
+        self.assertEqual(resolved, "198.51.100.20")
+
+    def test_resolve_server_ip_uses_default_route_when_interfaces_unknown_and_unset(self) -> None:
+        with patch(
+            "custom_components.eybond_local.runtime.link.common._active_ipv4_interfaces",
+            return_value=(),
+        ), patch(
+            "custom_components.eybond_local.runtime.link.common._default_local_ip",
+            return_value="192.0.2.20",
+        ):
+            resolved = resolve_server_ip("", collector_ip="198.51.100.40")
+
+        self.assertEqual(resolved, "192.0.2.20")
+
+    def test_resolve_server_ip_heals_stale_ip_to_default_route(self) -> None:
+        with patch(
+            "custom_components.eybond_local.runtime.link.common._active_ipv4_interfaces",
+            return_value=(("192.0.2.20", 24), ("198.51.100.20", 24)),
+        ), patch(
+            "custom_components.eybond_local.runtime.link.common._default_local_ip",
+            return_value="192.0.2.20",
+        ):
+            resolved = resolve_server_ip("203.0.113.20")
+
+        self.assertEqual(resolved, "192.0.2.20")
 
     def test_resolve_server_ip_prefers_active_ip_on_collector_subnet(self) -> None:
         with patch(
             "custom_components.eybond_local.runtime.link.common._active_ipv4_interfaces",
-            return_value=(("192.168.1.104", 24), ("192.168.88.92", 24)),
+            return_value=(("192.0.2.20", 24), ("198.51.100.20", 24)),
         ), patch(
             "custom_components.eybond_local.runtime.link.common._default_local_ip",
-            return_value="192.168.1.104",
+            return_value="192.0.2.20",
         ):
-            resolved = resolve_server_ip(
-                "192.168.88.91",
-                collector_ip="192.168.88.88",
-            )
+            resolved = resolve_server_ip("198.51.100.21", collector_ip="198.51.100.40")
 
-        self.assertEqual(resolved, "192.168.88.92")
+        self.assertEqual(resolved, "198.51.100.20")
 
     def test_resolve_server_ip_keeps_same_subnet_config_for_ap_mode(self) -> None:
         with patch(
             "custom_components.eybond_local.runtime.link.common._active_ipv4_interfaces",
-            return_value=(("192.168.1.104", 24),),
+            return_value=(("192.0.2.20", 24),),
         ), patch(
             "custom_components.eybond_local.runtime.link.common._default_local_ip",
-            return_value="192.168.1.104",
+            return_value="192.0.2.20",
         ):
-            resolved = resolve_server_ip(
-                "192.168.88.92",
-                collector_ip="192.168.88.88",
-            )
+            resolved = resolve_server_ip("198.51.100.20", collector_ip="198.51.100.40")
 
-        self.assertEqual(resolved, "192.168.88.92")
+        self.assertEqual(resolved, "198.51.100.20")
 
     def test_resolve_server_ip_tolerates_blocked_socket_fallback(self) -> None:
         with patch(
@@ -266,12 +363,9 @@ class RuntimeLinkManagerTests(unittest.TestCase):
             "custom_components.eybond_local.runtime.link.common.socket.socket",
             side_effect=RuntimeError("socket probe blocked"),
         ):
-            resolved = resolve_server_ip(
-                "192.168.88.95",
-                collector_ip="192.168.88.89",
-            )
+            resolved = resolve_server_ip("198.51.100.20", collector_ip="198.51.100.40")
 
-        self.assertEqual(resolved, "192.168.88.95")
+        self.assertEqual(resolved, "198.51.100.20")
 
     def _build_manager(self, *, collector_ip: str = "192.168.1.14") -> EybondRuntimeLinkManager:
         with patch(
