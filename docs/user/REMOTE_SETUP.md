@@ -14,7 +14,32 @@ For a normal home network:
 
 The bounded local fallback probes one `/24`; it does not enumerate every host
 in a `/16`. Broadcast discovery can still cover a larger subnet when the
-network permits it. Otherwise enter a known collector address manually.
+network permits it. For another subnet, add known collector IPs to a scan or
+enter an address manually as described below.
+
+## Routed subnet: add known addresses to the normal search
+
+If both directions are already reachable through your router or VPN:
+
+1. Run a scan, then choose **Device not found? Advanced setup**.
+2. Choose **Add known collector IPs to scan**.
+3. Enter the collector IPv4 address (or up to eight addresses separated by commas).
+4. Submit and select the collector from the resulting list.
+
+This supplements local discovery with direct UDP requests to the entered
+addresses. It does not forward broadcast between subnets or change router
+settings. The list is retained only for this setup flow, including **Scan again**.
+No Python edit is required.
+
+A routed subnet and NAT are not the same thing. If the collector cannot use
+Home Assistant's selected local address/port for its return connection, use
+manual setup with **Advertised callback IP/TCP port** instead. The UDP target,
+Home Assistant's local listener, and the callback destination can all differ.
+
+An acknowledgement such as `rsp>server=1;` proves that the collector answered
+the UDP request, not that its TCP callback or inverter telemetry works. Setup
+still verifies collector identity and recovery separately. A router's observed
+source IP is not used as a replacement collector address or as its identity.
 
 ## When to use remote setup
 
@@ -93,12 +118,15 @@ port may be rejected even when the router forwards it correctly.
 
 1. Open **Settings → Devices & Services → EyeBond Local**.
 2. Try normal scan first if the collector is local.
-3. If the collector is remote, choose **Manual setup**.
+3. For a direct routed search, use **Add known collector IPs to scan** above.
+   For different callback addresses/ports or finer settings, choose **Enter address manually**.
 4. Enter **Local listener IP**.
 5. Enter **Collector IP** if you know it.
 6. Open **Advanced connection settings**.
 7. Fill **Advertised callback IP** and **Advertised callback TCP port** only for VPN/NAT/port-forwarding cases.
-8. For remote setup, set **Discovery target** to the exact collector IP.
+8. Choose **Ask the collector to connect when needed** to request a callback.
+   This uses **Collector IP** as the exact UDP target. **Collector connects to
+   Home Assistant on its own** only waits; it deliberately sends no request.
 9. Confirm the check and wait. Home Assistant accepts the route only after the
    expected collector identity reconnects through this attempt.
 10. If setup stays partial, create a Support Archive.

@@ -19,6 +19,7 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
+    TextSelector,
 )
 
 from ...collector.transport_profile import (
@@ -51,10 +52,12 @@ from ...models import (
     OnboardingResult,
 )
 from ...onboarding.factory import create_onboarding_manager
+from ...onboarding.discovery_addresses import parse_known_collector_ips
 
 logger = logging.getLogger(__name__)
 
 CONF_RESULT_KEY = "result_key"
+CONF_KNOWN_COLLECTOR_IPS = "known_collector_ips"
 
 _SCAN_RESULTS_ACTION_REFRESH = "action:refresh_scan"
 
@@ -527,12 +530,45 @@ class CollectorScanFlowMixin:
         menu_options: list[str] = []
         if len(self._interface_options) > 1:
             menu_options.append("change_scan_interface")
+        menu_options.append("scan_targets")
         menu_options.append("manual")
         menu_options.append("refresh_scan")
         return self.async_show_menu(
             step_id="advanced_setup",
             menu_options=menu_options,
             description_placeholders=self._scan_results_placeholders(),
+        )
+
+    @_with_translation_bundle
+    async def async_step_scan_targets(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Add explicit remote routes to this flow's ordinary bounded scan."""
+        await self._async_ensure_network_defaults()
+        errors: dict[str, str] = {}
+        value = ", ".join(self._scan_known_collector_ips)
+        if user_input is not None:
+            value = user_input.get(CONF_KNOWN_COLLECTOR_IPS, "")
+            excluded = tuple(
+                str(item.get(key) or "")
+                for item in self._interface_options
+                for key in ("ip", "broadcast")
+            ) + (self._local_ip, self._selected_interface_broadcast())
+            try:
+                addresses = parse_known_collector_ips(value, excluded=excluded)
+            except ValueError:
+                errors[CONF_KNOWN_COLLECTOR_IPS] = "invalid_collector_targets"
+            else:
+                self._scan_known_collector_ips = addresses
+                self._reset_scan_progress()
+                return await self.async_step_scanning()
+        return self.async_show_form(
+            step_id="scan_targets",
+            data_schema=vol.Schema({
+                vol.Optional(CONF_KNOWN_COLLECTOR_IPS, default=value if type(value) is str else ""): TextSelector(),
+            }),
+            errors=errors,
         )
 
     @_with_translation_bundle

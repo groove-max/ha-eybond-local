@@ -42,9 +42,9 @@
           "label": {"type": "string", "minLength": 1},
           "device_descriptor_keys": {
             "type": "array",
-            "minItems": 1,
+            "minItems": 0,
             "items": {"type": "string"},
-            "description": "Keys of devices[] entries in the runtime inverter catalog."
+            "description": "Keys of devices[] entries in the runtime inverter catalog. Empty only for an unresolved research variant; the catalog validator enforces this lifecycle boundary."
           },
           "validation": {
             "type": "object",

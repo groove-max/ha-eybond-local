@@ -291,6 +291,10 @@ class ConfigNetworkFlowMixin:
             DiscoveryTarget(ip=address, source="broadcast")
             for address in addresses
             if address
+        ) + tuple(
+            DiscoveryTarget(ip=address, source="known_ip")
+            for address in self._scan_known_collector_ips
+            if address not in addresses
         )
 
     def _auto_connection_defaults(self) -> dict[str, Any]:

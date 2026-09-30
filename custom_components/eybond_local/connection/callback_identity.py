@@ -289,6 +289,10 @@ class CallbackIdentityRequest:
     # explicit bootstrap protocol selection (see OnboardingWireProbeIntent).
     # ``None`` keeps today's passive-evidence-only behavior.
     bootstrap_probe: OnboardingWireProbeIntent | ObservedSessionWireProbeIntent | None = None
+    # Callback payload destination may differ from the local listener behind
+    # NAT. These are validated user settings, never inferred from the TCP peer.
+    advertised_server_ip: str = ""
+    advertised_tcp_port: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,8 +374,8 @@ class _ProductionTriggerSender:
 
         await async_send_callback_trigger(
             bind_ip=request.server_ip,
-            advertised_server_ip=request.server_ip,
-            advertised_server_port=int(request.tcp_port),
+            advertised_server_ip=request.advertised_server_ip or request.server_ip,
+            advertised_server_port=int(request.advertised_tcp_port or request.tcp_port),
             target_ip=request.target_ip,
             udp_port=int(request.udp_port),
             timeout=DEFAULT_ONBOARDING_TIMEOUT_POLICY.discovery_timeout,

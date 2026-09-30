@@ -200,6 +200,8 @@ class ManualCollectorFlowMixin:
                 old_session_id=identity_context.old_session_id,
                 owner_prefix="callback_verification",
                 bootstrap_probe=bootstrap_probe,
+                advertised_server_ip=str(settings.get(CONF_ADVERTISED_SERVER_IP) or "").strip(),
+                advertised_tcp_port=int(settings.get(CONF_ADVERTISED_TCP_PORT) or 0),
             ),
         )
         if not outcome.identity_certified:

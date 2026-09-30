@@ -87,6 +87,32 @@ def _ok_model(key: str = "mdl_a", descriptor: str = "smg_6200", **overrides) -> 
 
 
 class RealCatalogTests(unittest.TestCase):
+    def test_issue_6_correction_does_not_remove_independent_issue_27_evidence(self):
+        models = {m["model_key"]: m for m in load_models()}
+        unresolved = models["yingfa_yf6_2k_2k_lel_if"]
+        self.assertEqual(unresolved["lifecycle"], "research")
+        self.assertIsNone(_primary_resolution(unresolved, RUNTIME))
+        self.assertEqual(unresolved["validation"]["telemetry"], "unknown")
+        self.assertNotIn("support_archive_issue_6_20260622_proxy_capture", unresolved["source_keys"])
+        independent = models["yingfa_yf6_2k_lel_1b"]
+        self.assertEqual(independent["validation"]["telemetry"], "confirmed")
+        self.assertIn("support_archive_issue_27_yingfa_yf6_2k_lel_1b", independent["source_keys"])
+        self.assertEqual(_primary_resolution(independent, RUNTIME).protocol, "pi30")
+
+    def test_unresolved_variant_is_research_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = _ok_model(lifecycle="research", source_keys=["src_a"])
+            model["variants"][0]["device_descriptor_keys"] = []
+            model["coverage"]["runtime_control_surface"] = "none"
+            base = _write_catalog(Path(directory), [model], [_ok_source(reference="project-issue:123")])
+            self.assertTrue(validate_catalog(base, runtime_catalog=RUNTIME).ok)
+            for lifecycle in ("experimental", "supported", "deprecated"):
+                model["lifecycle"] = lifecycle
+                (base / "models/mdl_a.json").write_text(json.dumps(model))
+                report = validate_catalog(base, runtime_catalog=RUNTIME)
+                self.assertFalse(report.ok)
+                self.assertTrue(any("only research variants" in error for error in report.errors))
+
     def test_validate_has_no_errors(self) -> None:
         report = validate_catalog(runtime_catalog=RUNTIME)
         self.assertTrue(report.ok, msg=f"errors: {report.errors}")

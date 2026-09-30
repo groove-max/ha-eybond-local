@@ -2719,14 +2719,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             ["action:refresh_scan", "action:advanced_setup"],
         )
 
-    async def test_advanced_setup_submenu_exposes_manual_and_refresh_only(self) -> None:
+    async def test_advanced_setup_submenu_exposes_explicit_targets_manual_and_refresh(self) -> None:
         flow = self._make_flow()
 
         result = await flow.async_step_advanced_setup()
 
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "advanced_setup")
-        self.assertEqual(result["menu_options"], ["manual", "refresh_scan"])
+        self.assertEqual(result["menu_options"], ["scan_targets", "manual", "refresh_scan"])
 
     async def test_advanced_setup_offers_change_interface_with_multiple(self) -> None:
         flow = self._make_flow()
@@ -2938,6 +2938,30 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             targets,
             (DiscoveryTarget(ip="192.168.255.255", source="broadcast"),),
         )
+
+    async def test_explicit_scan_targets_supplement_broadcast_and_survive_refresh(self) -> None:
+        flow = self._make_flow()
+        with patch.object(flow, "async_step_scanning", new=AsyncMock(return_value={"type": "progress"})):
+            await flow.async_step_scan_targets({"known_collector_ips": "198.51.100.7, 203.0.113.9, 198.51.100.7"})
+            expected = (DiscoveryTarget(ip="192.168.255.255", source="broadcast"),
+                        DiscoveryTarget(ip="198.51.100.7", source="known_ip"),
+                        DiscoveryTarget(ip="203.0.113.9", source="known_ip"))
+            self.assertEqual(flow._scan_discovery_targets(), expected)
+            await flow.async_step_refresh_scan()
+            self.assertEqual(flow._scan_discovery_targets(), expected)
+            self.assertNotIn("known_collector_ips", flow._auto_config)
+            await flow.async_step_scan_targets({})
+            self.assertEqual(len(flow._scan_discovery_targets()), 1)
+
+    async def test_bad_explicit_target_does_not_scan_or_replace_previous_intent(self) -> None:
+        flow = self._make_flow()
+        flow._scan_known_collector_ips = ("198.51.100.7",)
+        with patch.object(flow, "async_step_scanning", new=AsyncMock()) as scan:
+            for raw in ("192.0.2.0/24", "192.168.1.50", "192.168.255.255"):
+                result = await flow.async_step_scan_targets({"known_collector_ips": raw})
+                self.assertEqual(result["errors"], {"known_collector_ips": "invalid_collector_targets"})
+            scan.assert_not_awaited()
+        self.assertEqual(flow._scan_known_collector_ips, ("198.51.100.7",))
 
     async def test_choose_step_shows_selector_form(self) -> None:
         flow = self._make_flow()
@@ -4705,6 +4729,22 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         # request cannot even carry one.
         self.assertEqual(request.target_ip, "192.168.1.14")
         self.assertFalse(hasattr(request, "discovery_target"))
+
+    async def test_manual_identity_uses_same_advertised_route_as_recovery(self) -> None:
+        flow = self._make_flow()
+        settings = self._manual_callback_input(
+            collector_ip="198.51.100.7", advertised_server_ip="203.0.113.10",
+            advertised_tcp_port=18899)
+        with _capture_identity_requests() as captured:
+            await flow.async_step_manual(settings)
+        (request,) = captured
+        route = flow._manual_callback_recovery_route(settings)
+        self.assertEqual(request.server_ip, route.bind_ip)
+        self.assertEqual(request.tcp_port, route.listener_port)
+        self.assertEqual(request.target_ip, route.trigger_target_ip)
+        self.assertEqual(request.advertised_server_ip, route.advertised_ha_host)
+        self.assertEqual(request.advertised_tcp_port, route.advertised_ha_port)
+        self.assertNotEqual(request.tcp_port, request.advertised_tcp_port)
 
     async def test_manual_callback_never_accepts_a_passive_candidate(self) -> None:
         # BLOCKER 1 regression, transaction edition: the listener inventory is

@@ -551,6 +551,8 @@ def validate_catalog(catalog_dir: Path = CATALOG_DIR, *, runtime_catalog=None) -
         model_has_writable_surface = False
         for vindex, variant in enumerate(model.get("variants", [])):
             vctx = f"{ctx}.variants[{vindex}]"
+            if not variant.get("device_descriptor_keys") and model.get("lifecycle") != "research":
+                _err(errors, vctx, "only research variants may omit a runtime descriptor")
             # Descriptors inside one variant are different immutable fingerprints
             # of the SAME runtime behavior, so they must resolve to one surface.
             variant_surfaces: set[str] = set()
@@ -827,7 +829,7 @@ def _render_model_detail(model: dict, catalog, sources_index: dict) -> list[str]
                 f"controls {variant_validation.get('controls', '?')}"
             )
         descriptors = variant.get("device_descriptor_keys", [])
-        lines.append(f"    - Descriptors: {', '.join(descriptors)}")
+        lines.append(f"    - Descriptors: {', '.join(descriptors) if descriptors else 'Unresolved; no runtime mapping claimed'}")
         firmware = variant.get("known_firmware", [])
         lines.append(f"    - Known firmware: {', '.join(firmware) if firmware else '—'}")
         for device_key in descriptors:

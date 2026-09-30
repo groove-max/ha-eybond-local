@@ -45,13 +45,14 @@ This page describes what has been confirmed for a specific inverter model or mod
 | MUST-compatible | PV3300 | must_pv_ph18 | anchors | full | partial | partial | captured |
 | Sandisolar | SD 11KP48V WIFI | modbus_smg | fingerprint | full | partial | partial | captured |
 | SRNE-compatible | Modbus family | srne_modbus | anchors | partial | partial | none | none |
-| Yingfa | YF6.2K-2K-LEL-IF | pi30 | anchors | full | confirmed | partial | captured |
 | Yingfa | YF6.2K-LEL-1B | pi30 | anchors | full | confirmed | partial | captured |
 | ZL Power | GSIII 12 kW | eybond_09c1 | anchors | partial | partial | none | captured |
 
 ## Research Queue
 
-No known commercial models without a safe built-in runtime path.
+| Manufacturer | Model | Protocol | Detection | Runtime Tier | Telemetry | Controls | Hardware |
+|---|---|---|---|---|---|---|---|
+| Yingfa | YF6.2K-2K-LEL-IF | ? | ? | ? | unknown | none | reported |
 
 ## Family-Level Runtime Coverage
 
@@ -523,25 +524,20 @@ Runtime descriptors with no specific commercial model record. These are generic 
 
 ### Yingfa — YF6.2K-2K-LEL-IF (`yingfa_yf6_2k_2k_lel_if`)
 
-- Lifecycle: supported
-- Aliases: YF6.2K, PI30 6200
-- Validation: hardware captured, telemetry confirmed, controls partial
-- Coverage: runtime available, cloud cloud_catalog, vendor map unknown
+- Lifecycle: research
+- Aliases: YF6.2K
+- Validation: hardware reported, telemetry unknown, controls none
+- Coverage: runtime none, cloud unknown, vendor map unknown
   - Coverage notes:
-    - The proxy capture proves PI30 ASCII telemetry and cloud-visible PI30 controls, but Home Assistant write behavior is not yet independently user-confirmed.
-    - This collector family uses raw PI30 ASCII payloads directly over the SmartESS DTU AT callback stream rather than the legacy EyeBond binary FC=4 forwarding tunnel.
-- Summary: Yingfa YF6.2K-2K-LEL-IF support is based on issue #6 and a private proxy capture. The inverter speaks PI30 ASCII through a SmartESS DTU AT collector; QPI reports PI30, QPIRI reports a 28-field 6200W/48V MAX-style rating, and QPIGS returns live telemetry. The integration should use the PI30 MAX runtime surface over raw AT-text payload transport for this collector family.
+    - The earlier PI30 capture was attributed to this model in error. The owner clarified that the captured devices were Sumry inverters, not this Yingfa.
+- Summary: The issue #6 owner reports a Yingfa YF6.2K-2K-LEL-IF, but its inverter protocol remains unresolved. Previously linked PI30 evidence belongs to Sumry devices and is not proof of support for this Yingfa. This correction does not remove generic PI30 support or evidence for other independently reported Yingfa models.
 - Variants:
-  - `pi30_max_qpiri` — PI30 MAX 6200W raw-ASCII runtime over SmartESS DTU AT collector
-    - Descriptors: pi30_max_qpiri
-    - Known firmware: VERFW:00074.11, VERFW2:00000.00
-    - `pi30_max_qpiri` → surface `pi30_max_full` (driver pi30, variant pi30_max)
-      - Protocol: pi30 | Detection: anchors (protocol.protocol_id=PI30; shape.qpiri_field_count=)
-      - Tier: full | Read-only: no | Profile: pi30_ascii/models/pi30_max.json | Schema: pi30_ascii/models/pi30_max.json
-      - Capabilities: 20 (tested 20); support tiers: standard 20 | Telemetry: 77 measurements, 16 binary sensors
+  - `unidentified` — Protocol and runtime mapping not yet confirmed
+    - Descriptors: Unresolved; no runtime mapping claimed
+    - Known firmware: —
 - Known limitations:
-  - The commercial model name is known from the user report, not from a local inverter identity command in the captured traffic.
-  - QMN/model-number evidence was not present in the cloud proxy capture, so runtime resolution is currently by PI30 protocol plus QPIRI 28-field MAX-family shape.
+  - No confirmed inverter protocol or runtime mapping is available for this particular model.
+  - Working collector discovery or a UDP callback acknowledgement does not establish inverter compatibility.
 - Evidence: 2 source(s)
 
 ### Yingfa — YF6.2K-LEL-1B (`yingfa_yf6_2k_lel_1b`)

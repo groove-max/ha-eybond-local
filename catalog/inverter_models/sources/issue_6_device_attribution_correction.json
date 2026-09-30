@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "source_key": "issue_6_device_attribution_correction",
+  "kind": "private_message",
+  "title": "Issue #6 device attribution correction",
+  "reference": "private:issue-6-device-attribution-correction-20260930",
+  "captured_at": "2026-09-30",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "The owner clarified that the PI30 evidence in this case concerns Sumry inverters, reporting 6.2 kW and 4.2 kW units, while the Yingfa device remains unresolved. Exact Sumry commercial model names and per-device capture attribution still require confirmation; successful operation of both units, model-specific mappings and write validation are not inferred from the power ratings.",
+  "assertions": ["commercial_identity"]
+}

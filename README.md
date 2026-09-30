@@ -191,6 +191,9 @@ combines broadcast replies, already connected collectors, and a local `/24`
 unicast fallback when broadcast discovery is not enough. On a larger network,
 use the correct subnet broadcast or enter a known collector address through
 advanced setup instead of expecting every address in a `/16` to be probed.
+For a routed subnet, **Add known collector IPs to scan** supplements local
+discovery with explicitly entered addresses. Use manual setup when the collector
+needs a different callback address or port behind NAT.
 
 <p align="center"><img src="docs/images/setup-02-scanning.png" alt="Scanning the local network" width="480"></p>
 

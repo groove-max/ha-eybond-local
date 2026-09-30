@@ -74,6 +74,9 @@ class ConfigFlowBaseMixin:
         self._default_broadcast = DEFAULT_DISCOVERY_TARGET
         self._interface_options: list[dict[str, str]] = []
         self._auto_config: dict[str, Any] = {}
+        # Explicit scan intent only; never inferred from TCP peers or stored as
+        # a second runtime route. Each selected collector still needs admission.
+        self._scan_known_collector_ips: tuple[str, ...] = ()
         self._manual_defaults: dict[str, Any] = {}
         self._manual_config: dict[str, Any] = {}
         self._manual_result: OnboardingResult | None = None

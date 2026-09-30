@@ -9,6 +9,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Advanced setup can include up to eight known collector IPs in the ordinary
+  scan, alongside local discovery. Routed/VPN collectors no longer require a
+  hardcoded scan target. The list is setup-flow scoped; identity and recovery
+  checks remain mandatory.
+
 - Added a separate read-only **EyeBond 09C1 family** profile, qualified against
   the manufacturer's map and ZL Power GSIII captures (#50). It reports input
   and output voltage/frequency separately, battery voltage, load percentage,
@@ -51,6 +56,13 @@ the GitHub release body should be rendered from the matching version section her
   this is not full device or control support (#45).
 
 ### Fixed
+
+- Manual callback identity checks now honor the configured advertised callback
+  IP and port, separately from Home Assistant's local listener. NAT overrides
+  no longer apply only to later recovery/runtime requests.
+- Corrected the issue #6 catalog attribution: PI30 captures from Sumry devices
+  do not confirm Yingfa YF6.2K-2K-LEL-IF support. That model is now unresolved;
+  generic PI30 support and the independently evidenced issue #27 model remain.
 
 - Keep the configured callback IP when local-interface enumeration fails (#52).
   The default-route address is no longer treated as a complete interface list;

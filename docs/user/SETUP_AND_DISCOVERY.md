@@ -62,6 +62,24 @@ EyeBond Local does not enumerate every address in a large `/16`. Use the correct
 subnet broadcast, scan from the matching Home Assistant interface, or enter a
 known collector address manually.
 
+### Include known addresses on another network
+
+Choose **Device not found? Advanced setup → Add known collector IPs to scan**.
+Enter up to eight collector IPv4 addresses separated by commas, then submit.
+The normal local scan remains enabled; these addresses are additional direct
+targets. **Scan again** keeps the list within this setup flow. Open the same
+form and clear it to return to local-only discovery.
+
+Use this when routing/VPN already lets the collector reach the selected
+Home Assistant listener. It does not discover routes through routers, scan an
+entire remote subnet, or forward local broadcast packets. If the collector
+needs a different callback address or port, use **Enter address manually**
+instead; see [Remote / NAT setup](REMOTE_SETUP.md).
+
+The list is not a background scanner or a second runtime configuration. It is
+discarded when this setup flow ends. After adding a collector, its verified
+connection settings belong to that collector's entry.
+
 ## Understanding scan results
 
 | Result | Meaning | What to do |

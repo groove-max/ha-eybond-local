@@ -220,10 +220,18 @@
           "manual_bootstrap_at": "Silent collector: query with AT command protocol"
         }
       },
+      "scan_targets": {
+        "title": "Known collector IPs",
+        "description": "Optional: enter up to 8 collector IPv4 addresses, separated by commas. They are checked in addition to the local network search; leave empty to clear the list. Home Assistant requests a callback from these addresses. Both directions must be reachable. For a different callback address or port behind NAT, use manual setup. The list applies only to this setup flow.",
+        "data": {
+          "known_collector_ips": "Known collector IPs (optional)"
+        }
+      },
       "advanced_setup": {
         "title": "Advanced setup",
         "description": "Use these options if the automatic scan did not find your device.",
         "menu_options": {
+          "scan_targets": "Add known collector IPs to scan",
           "change_scan_interface": "Change network interface",
           "manual": "Enter address manually",
           "refresh_scan": "Scan again"
@@ -324,6 +332,7 @@
       "manual_recovery_verify": "Verifying the recovery route for collector {collector_pn}: restarting it, waiting for its own reconnection, then (only if needed) sending one addressed callback request. This can take a couple of minutes."
     },
     "error": {
+      "invalid_collector_targets": "Enter up to 8 individual IPv4 addresses. Do not use network ranges, hostnames, ports, Home Assistant addresses or broadcast addresses.",
       "invalid_ip": "Invalid IPv4 address.",
       "invalid_port": "Invalid TCP port.",
       "local_register_collection_unavailable": "The local read-only observation could not be started. Check that the device is connected and try again.",
