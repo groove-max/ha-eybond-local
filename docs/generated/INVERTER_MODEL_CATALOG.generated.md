@@ -381,7 +381,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Coverage: runtime available, cloud cloud_catalog, vendor map partial
   - Coverage notes:
     - Runtime support uses the MUST PH RS485 map (v1.4.3 and v1.4.15 xlsx, cross-checked against the third-party implementation), with per-control read-back over gap-free register blocks.
-    - The control surface is cross-referenced from the SmartESS cloud device_settings field catalog and the vendor 1.4.15 register map: the 20 fields the cloud exposes ship tested (visible in the default control mode); datasheet-only settings absent from the cloud catalog (grid charging and the battery-equalization block) ship untested (full-control only).
+    - All 27 controls are document-backed but locally unverified, available only in Full Control. Presence in the SmartESS cloud settings catalog is not a local hardware write test; the former tested flags for 20 cloud-visible fields were withdrawn.
     - The register map is documentary; hardware write confirmation is still pending a tester report. The inverter validates its own writes, so a register that is absent or locked self-disables via the write-failure block.
 - Summary: MUST PV18-3024 support is based on issue #5 support archives and a MUST PV/PH18 Modbus register map (v1.4.3 and v1.4.15). The user archives showed Auto/PI30 probe timeouts, SmartESS protocol asset "02FF,0,0," and collector serial baudrate 19200-8-1-0. The runtime accepts both the PV18 marker and a numeric PV1800 marker at Modbus register 20001, and binds a full MUST PV/PH18 Modbus surface using slave address 4. It exposes a writable control surface cross-referenced from the SmartESS cloud device_settings catalog and the 1.4.15 register map (output voltage/frequency, energy use mode, grid protection standard, charge-source priority, battery type, charge/discharge current limits, and battery voltage windows) with per-control read-back; hardware write confirmation is pending.
 - Variants:
@@ -391,7 +391,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `must_pv18_3024` → surface `must_pv_ph18_full` (driver must_pv_ph18, variant pv_ph18)
       - Protocol: must_pv_ph18 | Detection: anchors (protocol.protocol_id=MUST_PV_PH18; identity.model_number=['PV18', 'PV1800'])
       - Tier: full | Read-only: no | Profile: must_pv_ph18/base.json | Schema: must_pv_ph18/base.json
-      - Capabilities: 27 (tested 20, untested 7); support tiers: standard 27 | Telemetry: 37 measurements, 0 binary sensors
+      - Capabilities: 27 (untested 27); support tiers: standard 27 | Telemetry: 37 measurements, 0 binary sensors
 - Known limitations:
   - Requires collector serial settings compatible with Modbus RTU 19200 8N1 and inverter slave address 4.
   - Control writes are derived from the SmartESS cloud settings catalog and the vendor register map, not yet independently confirmed on hardware; setpoint windows are left wide because the documented ranges are battery-voltage-grade dependent and the inverter validates its own writes.
@@ -405,7 +405,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Validation: hardware captured, telemetry partial, controls partial
 - Coverage: runtime available, cloud cloud_catalog, vendor map partial
   - Coverage notes:
-    - Inherits the existing MUST control profile unchanged.
+    - Inherits all 27 document-backed MUST controls as untested, available only in Full Control; cloud visibility does not prove local writes on this firmware.
     - Whole-percent load and battery/grid direction normalization are qualified by the PV3300 local marker, not by the retail label or live power magnitude.
 - Summary: PV3300 keeps the common MUST map and controls, with a scoped telemetry override: whole-percent load, charge-positive battery current/power and import-positive grid power. Native AC converter power retains its vendor sign.
 - Variants:
@@ -415,8 +415,9 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `must_pv3300` → surface `must_pv3300_full` (driver must_pv_ph18, variant pv3300)
       - Protocol: must_pv_ph18 | Detection: anchors (protocol.protocol_id=MUST_PV_PH18; identity.model_number=PV3300)
       - Tier: full | Read-only: no | Profile: must_pv_ph18/base.json | Schema: must_pv_ph18/pv3300.json
-      - Capabilities: 27 (tested 20, untested 7); support tiers: standard 27 | Telemetry: 37 measurements, 0 binary sensors
+      - Capabilities: 27 (untested 27); support tiers: standard 27 | Telemetry: 37 measurements, 0 binary sensors
 - Known limitations:
+  - SOC is not yet exposed. Support Archives can check the vendor-documented optional BMS register block, but its availability on this firmware is unconfirmed.
   - Learned maps tied to the older generic MUST schema are not automatically rebased; existing compatibility checks remain in force.
   - Output Current and Inverter Load Current can remain zero on the reported unit; their meaning is still under investigation.
   - Other PV/PH/EP models retain the common register interpretation because published MUST documents disagree on load-percentage units.

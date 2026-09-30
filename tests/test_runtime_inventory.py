@@ -53,7 +53,9 @@ class RuntimeInventoryTests(unittest.TestCase):
         self.assertEqual(summary["profiles"], len(inventory["profiles"]))
         self.assertEqual(summary["profiles"], 31)
         self.assertEqual(summary["capabilities"], 1182)
-        self.assertEqual(summary["validation_state_counts"], {"tested": 454, "untested": 728})
+        # Twenty MUST cloud-listed commands retain their control surface but
+        # no longer claim hardware-tested local writes.
+        self.assertEqual(summary["validation_state_counts"], {"tested": 434, "untested": 748})
         self.assertEqual(
             summary["support_tier_counts"],
             {"blocked": 31, "conditional": 799, "standard": 352},

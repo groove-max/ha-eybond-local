@@ -133,6 +133,32 @@ load, create a Support Archive: for PV3300 it compares the combined response
 with individual reads. The integration does not replace a reported zero with
 an estimated current.
 
+### MUST controls and battery percentage
+
+The MUST profile, including PV3300, contains 27 document-backed controls such as
+**Energy Use Mode**, **Charge Source Priority**, charging limits and **Off-Grid
+Output**. They are **untested** locally: a setting appearing in the cloud app is
+not proof that the local command works on every firmware.
+
+To opt in, open **Configure → Polling and inverter detection → Control mode → Full Control**.
+The controls belong to the inverter device's configuration section, not the
+collector. Selecting Full Control does not send a command or change inverter
+settings. **Off-Grid Output** is specifically the off-grid output enable; it is
+not a general inverter power switch or the separate cloud **Ongrid Switch**.
+
+**Upgrade note:** older builds incorrectly treated 20 cloud-listed controls as
+tested. They are no longer exposed in **Auto**. Use Full Control if you choose
+to test them; review automations that referenced the earlier controls. Telemetry
+and the selected control mode are not changed. No local hardware qualification
+is implied by the existing broad setpoint limits; use only settings appropriate
+to your exact model and battery.
+
+There is no verified PV3300 SOC sensor yet. Its manufacturer protocol describes
+an optional BMS block containing SOC. Creating a Support Archive now checks that
+block once, read-only, with a three-second limit. Unsupported registers or a
+timeout are recorded in the archive; they do not add a zero-percent sensor or
+change normal polling. Battery capacity in Ah is a setting, not remaining charge.
+
 ## SRNE partial battery / PV readings
 
 Some SRNE firmware rejects a combined battery/PV request while answering smaller
@@ -195,6 +221,18 @@ and output frequency are read separately; neither substitutes for the other.
 Rated values are diagnostics, disabled by default. **Rated Power** is not a
 measurement of actual output power. **AC Charger Enabled** describes the charger
 state, not a measured charging current or power.
+
+**Grid Fault Voltage** is a separate field named that way in the manufacturer's
+protocol, kept under diagnostics and disabled by default. Enabling it makes its
+reading available for dashboards too; the diagnostic category does not change
+the value. It is not automatically substituted for Grid Voltage based on one
+comparison with a meter.
+
+The current PV readings come from a single `PV?` reply. They are not verified as
+a sum of two MPPT inputs, and separate PV1/PV2 channels are not yet mapped. Raw
+replies to those commands can help establish a model-specific extension.
+Polling uses the normal adaptive scheduler; check **Current Poll Interval** on
+the collector for the current value rather than assuming a fixed refresh rate.
 
 If a PV, output-frequency or rated-values request fails, that group's old values
 become unavailable while basic readings can continue. If the main status request

@@ -28,11 +28,12 @@
     "smartess_control_surface": "cloud_catalog",
     "vendor_register_map": "partial",
     "notes": [
-      "Inherits the existing MUST control profile unchanged.",
+      "Inherits all 27 document-backed MUST controls as untested, available only in Full Control; cloud visibility does not prove local writes on this firmware.",
       "Whole-percent load and battery/grid direction normalization are qualified by the PV3300 local marker, not by the retail label or live power magnitude."
     ]
   },
   "known_limitations": [
+    "SOC is not yet exposed. Support Archives can check the vendor-documented optional BMS register block, but its availability on this firmware is unconfirmed.",
     "Learned maps tied to the older generic MUST schema are not automatically rebased; existing compatibility checks remain in force.",
     "Output Current and Inverter Load Current can remain zero on the reported unit; their meaning is still under investigation.",
     "Other PV/PH/EP models retain the common register interpretation because published MUST documents disagree on load-percentage units.",

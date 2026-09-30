@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import sys
 import unittest
@@ -361,13 +362,13 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, 45.0)
         self.assertEqual(transport._registers[20125], 450)
 
-    async def test_cloud_confirmed_controls_are_tested_and_exposed_in_auto(self) -> None:
+    async def test_cloud_catalog_controls_require_explicit_full_control(self) -> None:
         from custom_components.eybond_local.control_policy import can_expose_capability
-        from custom_components.eybond_local.const import CONTROL_MODE_AUTO
+        from custom_components.eybond_local.const import CONTROL_MODE_AUTO, CONTROL_MODE_FULL, CONTROL_MODE_READ_ONLY
 
-        # These map to SmartESS cloud device_settings fields, so they ship
-        # tested and are exposed in the default (auto) control mode.
-        expected_tested = {
+        # A cloud catalog proves a setting exists, not that our local write
+        # function/range/enum works on every inheriting MUST firmware.
+        cloud_catalog_keys = {
             "offgrid_output_enable",
             "power_save_mode",
             "charge_source_priority",
@@ -391,11 +392,12 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
         }
         driver = MustPvPh18Driver()
         by_key = {c.key: c for c in driver.write_capabilities}
-        self.assertTrue(expected_tested.issubset(by_key))
-        for key in expected_tested:
+        self.assertEqual(len(by_key), 27)
+        self.assertTrue(cloud_catalog_keys.issubset(by_key))
+        for key in cloud_catalog_keys:
             capability = by_key[key]
-            self.assertTrue(capability.tested, key)
-            self.assertTrue(
+            self.assertFalse(capability.tested, key)
+            self.assertFalse(
                 can_expose_capability(
                     capability,
                     control_mode=CONTROL_MODE_AUTO,
@@ -403,6 +405,8 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 key,
             )
+            self.assertFalse(can_expose_capability(capability, control_mode=CONTROL_MODE_READ_ONLY), key)
+            self.assertTrue(can_expose_capability(capability, control_mode=CONTROL_MODE_FULL), key)
 
     async def test_datasheet_only_controls_stay_untested_and_full_control_only(self) -> None:
         from custom_components.eybond_local.control_policy import can_expose_capability
@@ -516,6 +520,104 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(original["values"][9:12], [0, 0, 0])
                 singles = [call for call in session.read_holding.await_args_list if call.args[1] == 1]
                 self.assertEqual(len(singles), 3 if expected else 0)
+
+    async def test_pv3300_bms_evidence_is_raw_support_only_and_model_scoped(self):
+        for suffix in (3300, 1800):
+            driver = MustPvPh18Driver()
+            target = ProbeTarget(1, 255, 4)
+            link = FixtureTransport(registers=_must_registers() | {20001: suffix},
+                                    command_responses=None, probe_target=target)
+            inverter = await driver.async_probe(link, target)
+            # Keep zero, plausible and invalid SOC words as evidence, not as
+            # claimed sensor values. No guesses from voltage or Ah capacity.
+            for words in ([527, 0xFFF6, 25, 0, 72], [0] * 5, [527, 0, 25, 0, 65535]):
+                async def read(start, count, **kwargs):
+                    if (start, count) == (109, 5):
+                        return words
+                    return [12] * count
+                session = type("Session", (), {"read_holding": AsyncMock(side_effect=read),
+                                               "read_registers": AsyncMock(side_effect=read)})()
+                with patch.object(driver, "_session", return_value=session):
+                    values = _full_values(await driver.async_read_values(link, inverter))
+                    session.read_holding.assert_not_awaited()
+                    self.assertFalse(any(call.args[0] == 109 for call in session.read_registers.await_args_list))
+                    evidence = await driver.async_capture_support_evidence(link, inverter)
+                self.assertNotIn("battery_soc", values)
+                self.assertNotIn("battery_percent", values)
+                self.assertEqual("bms_read_diagnostics" in evidence, suffix == 3300)
+                if suffix == 3300:
+                    extra = evidence["bms_read_diagnostics"]
+                    self.assertEqual(extra["status"], "completed")
+                    self.assertEqual(extra["captured_ranges"], [{"start": 109, "count": 5, "words": words}])
+                    self.assertNotIn(109, [b["start"] for b in evidence["fixture_ranges"]])
+
+    async def test_bms_unsupported_or_timed_out_does_not_break_support_export(self):
+        driver = MustPvPh18Driver()
+        link = FixtureTransport(registers=_must_registers() | {20001: 3300},
+                                command_responses=None, probe_target=ProbeTarget(1, 255, 4))
+        inverter = await driver.async_probe(link, ProbeTarget(1, 255, 4))
+        for kind in ("unsupported", "disconnect", "timeout"):
+            async def read(start, count):
+                if start == 109:
+                    if kind == "timeout":
+                        await asyncio.Event().wait()
+                    if kind == "unsupported":
+                        raise ModbusError("exception_code:2")
+                    raise ConnectionError("disconnected")
+                return [12] * count
+            session = type("Session", (), {"read_holding": AsyncMock(side_effect=read)})()
+            with patch.object(driver, "_session", return_value=session), patch(
+                "custom_components.eybond_local.drivers.must._BMS_DIAGNOSTIC_TIMEOUT_SECONDS", 0.02
+            ):
+                evidence = await asyncio.wait_for(driver.async_capture_support_evidence(link, inverter), 1)
+            extra = evidence["bms_read_diagnostics"]
+            self.assertTrue(evidence["captured_ranges"])
+            self.assertEqual(len(extra["range_failures"]), 1)
+            self.assertEqual(extra["captured_ranges"], [])
+            self.assertEqual(extra["status"], {"unsupported": "completed", "disconnect": "stopped_on_error", "timeout": "budget_exhausted"}[kind])
+            self.assertEqual(session.read_holding.await_args_list[-1].args, (109, 5))
+
+    async def test_bms_probe_does_not_continue_after_current_transport_error(self):
+        driver = MustPvPh18Driver()
+        link = FixtureTransport(registers=_must_registers() | {20001: 3300},
+                                command_responses=None, probe_target=ProbeTarget(1, 255, 4))
+        inverter = await driver.async_probe(link, ProbeTarget(1, 255, 4))
+        async def read(start, count):
+            if count == 1:
+                raise ConnectionError("disconnected")
+            return [0] * count
+        session = type("Session", (), {"read_holding": AsyncMock(side_effect=read)})()
+        with patch.object(driver, "_session", return_value=session):
+            evidence = await driver.async_capture_support_evidence(link, inverter)
+        self.assertEqual(evidence["bms_read_diagnostics"]["status"], "skipped_after_current_read_failure")
+        self.assertNotIn(unittest.mock.call(109, 5), session.read_holding.await_args_list)
+
+    async def test_cancelled_bms_capture_does_not_swallow_cancellation(self):
+        driver = MustPvPh18Driver()
+        target = ProbeTarget(1, 255, 4)
+        link = FixtureTransport(registers=_must_registers() | {20001: 3300},
+                                command_responses=None, probe_target=target)
+        inverter = await driver.async_probe(link, target)
+        started = asyncio.Event()
+        async def read(start, count):
+            if start == 109:
+                started.set()
+                await asyncio.Event().wait()
+            return [12] * count
+        session = type("Session", (), {"read_holding": AsyncMock(side_effect=read)})()
+        with patch.object(driver, "_session", return_value=session):
+            task = asyncio.create_task(driver.async_capture_support_evidence(link, inverter))
+            try:
+                await asyncio.wait_for(started.wait(), 1)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            finally:
+                if not task.done():
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+        self.assertEqual(session.read_holding.await_args_list[-1].args, (109, 5))
 
 
 if __name__ == "__main__":

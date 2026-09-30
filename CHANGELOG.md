@@ -9,6 +9,10 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- MUST PV3300 Support Archives can collect the optional documented BMS/SOC
+  block with one bounded read. This is diagnostic evidence only; normal polling
+  and sensor exposure are unchanged until firmware support is confirmed.
+
 - Advanced setup can include up to eight known collector IPs in the ordinary
   scan, alongside local discovery. Routed/VPN collectors no longer require a
   hardcoded scan target. The list is setup-flow scoped; identity and recovery
@@ -56,6 +60,11 @@ the GitHub release body should be rendered from the matching version section her
   this is not full device or control support (#45).
 
 ### Fixed
+
+- MUST PV/PH18 controls no longer claim local write verification based only on
+  cloud-catalog presence. All 27 document-backed controls require Full Control;
+  the 20 previously shown in Auto are now correctly untested. No inverter
+  settings are changed automatically; review automations using those controls.
 
 - Manual callback identity checks now honor the configured advertised callback
   IP and port, separately from Home Assistant's local listener. NAT overrides

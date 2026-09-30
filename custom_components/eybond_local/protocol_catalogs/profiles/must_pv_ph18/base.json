@@ -46,7 +46,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "power_save_mode",
@@ -60,7 +60,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "grid_charge_enable",
@@ -107,7 +107,7 @@
         }
       ],
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "grid_max_charge_current",
@@ -126,7 +126,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "max_combined_charge_current",
@@ -145,7 +145,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH PV RS485 Modbus RTU 1.4.3 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "inverter_output_voltage",
@@ -164,7 +164,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "inverter_output_frequency",
@@ -192,7 +192,7 @@
         }
       ],
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "pv_max_charge_current",
@@ -211,7 +211,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "float_voltage",
@@ -230,7 +230,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "absorption_voltage",
@@ -249,7 +249,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "battery_type",
@@ -307,7 +307,7 @@
         }
       ],
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "battery_stop_charge_voltage",
@@ -326,7 +326,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "battery_stop_discharge_voltage",
@@ -345,7 +345,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "battery_low_voltage",
@@ -364,7 +364,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "battery_high_voltage",
@@ -383,7 +383,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "max_discharge_current",
@@ -402,7 +402,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "energy_use_mode",
@@ -442,7 +442,7 @@
         }
       ],
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "grid_protect_standard",
@@ -482,7 +482,7 @@
         }
       ],
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "solar_use_aim",
@@ -510,7 +510,7 @@
         }
       ],
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "discharge_to_grid_enable",
@@ -524,7 +524,7 @@
       "provenance": "doc_backed",
       "support_notes": "From PH1800/PV1800/EP1800/PV3500/EP3500 RS485 Modbus RTU 1.4.15 xlsx; the SmartESS cloud exposes this control in its device settings for this model, awaiting on-hardware write confirmation.",
       "enabled_default": true,
-      "tested": true
+      "tested": false
     },
     {
       "key": "battery_equalization_enable",

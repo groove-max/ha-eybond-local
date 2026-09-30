@@ -81,6 +81,15 @@ class PayloadTests(unittest.TestCase):
         self.assertEqual(values["temperature"], -5)
         self.assertEqual(parse_pv(b"(0000 000 0 000000\r")["pv_current"], 0)
 
+    def test_fault_voltage_stays_separate_from_live_input_and_output(self):
+        for fault in (b"000.0", b"241.0", b"248.0"):
+            raw = responses()["Q1"]
+            raw = raw[:7] + fault + raw[12:]
+            values = parse_q1(raw)
+            self.assertEqual(values["grid_voltage"], 232)
+            self.assertEqual(values["output_voltage"], 229)
+            self.assertEqual(values["urtu09c1_fault_voltage"], float(fault))
+
     def test_status_bits_follow_09c1_not_short_ascii(self):
         for position, key, true_bit in ((0, "grid_available", 48), (1, "battery_low", 49),
                                        (2, "urtu09c1_ac_charger_enabled", 49),

@@ -93,6 +93,12 @@ on communication errors. Neither check changes inverter settings or enables
 controls. The archive retains the original readings and the extra observations
 separately, so a later response does not overwrite the evidence from the first.
 
+For **MUST PV3300**, the archive also tries one read of the documented optional
+BMS block (registers 109–113), including the candidate SOC register. This adds
+at most three seconds and is skipped if the preceding current comparison lost
+communication. Raw words and read failures are retained separately; they do not
+create an SOC sensor, change normal polling or assume a BMS is connected.
+
 The archive helps answer questions such as:
 
 - Which collector and inverter path was detected?

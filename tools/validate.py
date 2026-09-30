@@ -146,6 +146,10 @@ _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # these entries prevent a cheap ``affected`` run from silently missing a typed
 # boundary or neutral wire contract.
 _EXACT_TESTS: dict[str, tuple[str, ...]] = {
+    "custom_components/eybond_local/protocol_catalogs/profiles/must_pv_ph18/base.json": (
+        "test_must_driver.py", "test_profile_loader.py", "test_write_exposure_policy.py",
+        "test_model_catalog.py", "test_runtime_inventory.py",
+    ),
     "custom_components/eybond_local/onboarding/discovery_addresses.py": (
         "test_discovery_addresses.py", "test_config_flow.py", "test_detection.py",
     ),

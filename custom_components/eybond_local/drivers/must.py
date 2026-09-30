@@ -1,4 +1,4 @@
-"""MUST PV/PH18 Modbus RTU read-only driver."""
+"""MUST PV/PH18 telemetry and document-backed, unverified local controls."""
 
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ from .capability_codec import (
 
 
 _MODEL_PREFIXES = ("PV", "PH", "EP")
+_BMS_DIAGNOSTIC_TIMEOUT_SECONDS = 3.0
 
 
 class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
@@ -254,6 +255,21 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
                     source="PH/PV Modbus 1.4.3 and protocol 1916 current registers",
                     purpose="support_only_zero_bulk_current_single_read_comparison",
                 )
+            # The vendor's 6422/1916 map describes a separate optional BMS
+            # window (voltage/current/temperature/reserved/SOC). Its presence
+            # on this firmware is not yet confirmed. Archive-only, one bounded
+            # read, no runtime schema/identity/fixture promotion or SOC guess.
+            current_status = evidence.get("current_read_diagnostics", {}).get("status", "completed")
+            if current_status == "completed":
+                evidence["bms_read_diagnostics"] = await capture_support_reads(
+                    session,
+                    ((109, 5, "bms_soc_candidate"),),
+                    timeout_seconds=_BMS_DIAGNOSTIC_TIMEOUT_SECONDS,
+                    source="Manufacturer protocol 6422 (1916), FC03 BMS registers 109-113",
+                    purpose="support_only_optional_bms_soc_availability",
+                )
+            else:
+                evidence["bms_read_diagnostics"] = {"status": "skipped_after_current_read_failure"}
         return evidence
 
     def local_register_read_plans(

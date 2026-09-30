@@ -30,7 +30,7 @@
     "vendor_register_map": "partial",
     "notes": [
       "Runtime support uses the MUST PH RS485 map (v1.4.3 and v1.4.15 xlsx, cross-checked against the third-party implementation), with per-control read-back over gap-free register blocks.",
-      "The control surface is cross-referenced from the SmartESS cloud device_settings field catalog and the vendor 1.4.15 register map: the 20 fields the cloud exposes ship tested (visible in the default control mode); datasheet-only settings absent from the cloud catalog (grid charging and the battery-equalization block) ship untested (full-control only).",
+      "All 27 controls are document-backed but locally unverified, available only in Full Control. Presence in the SmartESS cloud settings catalog is not a local hardware write test; the former tested flags for 20 cloud-visible fields were withdrawn.",
       "The register map is documentary; hardware write confirmation is still pending a tester report. The inverter validates its own writes, so a register that is absent or locked self-disables via the write-failure block."
     ]
   },
