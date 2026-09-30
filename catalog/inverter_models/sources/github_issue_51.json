@@ -7,6 +7,6 @@
   "captured_at": "2026-09-29",
   "visibility": "public",
   "summary_publishable": true,
-  "summary": "Exact layout 2/model 0x2300 requires SUB/SBU/SUF/ZEC instead of the SMG 6200 enum. Owner confirmed SUB/SBU and supplied the F1-01 manual. SUF/ZEC local writes remain unverified; exception 03 is not treated as success.",
+  "summary": "Exact layout 2/model 0x2300 requires SUB/SBU/SUF/ZEC instead of the SMG 6200 enum. Owner supplied the F1-01 manual and confirmed all four selections in HA and on the inverter display on 2026-09-29 (comment 5890080848). This does not validate grid-export/CT operation or other controls; exception 03 is not treated as success.",
   "assertions": ["runtime_compatibility"]
 }

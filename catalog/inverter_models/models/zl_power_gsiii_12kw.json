@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "model_key": "zl_power_gsiii_12kw",
+  "manufacturer": "ZL Power",
+  "model": "GSIII 12 kW",
+  "aliases": [
+    "ZL Power GSIII"
+  ],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "urtu09c1",
+      "label": "Read-only EyeBond 09C1 family",
+      "device_descriptor_keys": [
+        "eybond_09c1_family"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "partial",
+    "controls": "none"
+  },
+  "coverage": {
+    "runtime_control_surface": "read_only",
+    "smartess_control_surface": "unknown",
+    "vendor_register_map": "partial",
+    "notes": [
+      "The manufacturer 09C1 map matches twelve complete cloud read cycles. Local polling still needs owner confirmation.",
+      "Detection names the protocol family, not an exact retail model. No unique inverter serial is available."
+    ]
+  },
+  "known_limitations": [
+    "Read-only even in Full Control; no qualified write command map.",
+    "No inferred output/PV/battery power or SOC. PV energy and ambiguous status fields remain raw support evidence.",
+    "Cloud-server address and connection recovery are separate from inverter-map support."
+  ],
+  "knowledge_summary": "Q1/QF/PV?/F provide electrical readings, load, temperature, operating state and ratings. Plain ASCII+CR over FC4 is separate from the addressed Short-ASCII dialect.",
+  "source_keys": [
+    "documentation_eybond_09c1",
+    "github_issue_50_zl_power"
+  ]
+}

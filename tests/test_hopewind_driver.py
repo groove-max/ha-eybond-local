@@ -1,4 +1,4 @@
-"""Protocol 0237 read-only pack: synthetic register replay, no customer identity."""
+"""Protocol 0237 telemetry and opt-in controls; no customer identity or IO."""
 from __future__ import annotations
 
 import unittest
@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, patch
 from custom_components.eybond_local.drivers.modbus_catalog import ModbusCatalogDriver
 from custom_components.eybond_local.fixtures.transport import FixtureTransport
 from custom_components.eybond_local.metadata.register_schema_loader import load_register_schema
+from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
+from custom_components.eybond_local.schema import capability_write_exposure_allowed
 from custom_components.eybond_local.models import ProbeTarget
 from custom_components.eybond_local.payload.modbus import ModbusError
 
@@ -14,6 +16,8 @@ from custom_components.eybond_local.payload.modbus import ModbusError
 def hopewind_registers():
     # Preserve protocol-shaped measurements, not the customer's serial/firmware.
     return {r: 0 for r in range(40500, 40651)} | {
+        40002: 2, 40003: 10000, 40004: 0, 40005: 0,
+        40011: 1, 40012: 1650, 40013: 11000,
         40500: 4300, 40501: 5800, 40508: 16, 40509: 82,
         40524: 42, 40525: 36, 40532: 4130, 40533: 4145, 40534: 4158,
         40535: 13, 40536: 13, 40537: 13, 40538: 4999,
@@ -45,8 +49,9 @@ class HopewindDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.variant_key, "hopewind_0237")
         self.assertEqual(inverter.register_schema_name, "hopewind_0237/base.json")
         self.assertEqual(inverter.model_name, "Hopewind String (Protocol 0237)")
-        self.assertFalse(inverter.capabilities)
-        self.assertFalse(inverter.profile_name)
+        self.assertEqual(len(inverter.capabilities), 3)
+        self.assertTrue(all(not cap.tested for cap in inverter.capabilities))
+        self.assertEqual(inverter.profile_name, "modbus_catalog/hopewind_0237.json")
         values = (await driver.async_read_values(link, inverter)).values
         expected = {"pv1_input_voltage": 430, "pv2_input_voltage": 580,
             "pv_string_1_current": 0.16, "pv_string_17_current": 1.23,
@@ -67,7 +72,7 @@ class HopewindDriverTests(unittest.IsolatedAsyncioTestCase):
         capture = await driver.async_capture_support_evidence(link, inverter)
         self.assertEqual(capture["range_failures"], [])
         self.assertEqual([(x["start"], x["count"]) for x in capture["captured_ranges"]],
-                         [(40500, 71), (40571, 29), (40600, 51)])
+                         [(40002, 4), (40011, 3), (40500, 71), (40571, 29), (40600, 51)])
 
     async def test_rejects_missing_all_zero_and_contradictory_identity(self):
         banks = [{}, {r: 0 for r in range(40500, 40651)}]
@@ -82,7 +87,7 @@ class HopewindDriverTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(bank_size=len(bank)):
                 self.assertIsNone(await ModbusCatalogDriver().async_probe(transport(bank), ProbeTarget(1, 255, 1)))
 
-    async def test_optional_settings_reads_are_evidence_not_controls_or_polling(self):
+    async def test_rejected_settings_reads_do_not_break_telemetry(self):
         for rejected in (False, True):
             with self.subTest(rejected=rejected):
                 driver, link = ModbusCatalogDriver(), transport()
@@ -103,19 +108,86 @@ class HopewindDriverTests(unittest.IsolatedAsyncioTestCase):
                 session.read_registers = AsyncMock(side_effect=read_registers)
                 with patch.object(driver, "_session", return_value=session):
                     evidence = await driver.async_capture_support_evidence(link, inverter)
-                    diagnostics = evidence["support_read_diagnostics"]
-                    self.assertEqual(diagnostics["status"], "completed")
-                    self.assertEqual(len(diagnostics["captured_ranges"]), 1 if rejected else 2)
-                    self.assertEqual(len(diagnostics["range_failures"]), int(rejected))
+                    self.assertNotIn("support_read_diagnostics", evidence)
+                    self.assertEqual(len(evidence["range_failures"]), int(rejected))
                     self.assertEqual([block["start"] for block in evidence["fixture_ranges"]],
-                                     [40500, 40571, 40600])
+                                     ([40011] if rejected else [40002, 40011]) + [40500, 40571, 40600])
                     session.read_holding.reset_mock()
                     values = (await driver.async_read_values(link, inverter)).values
                     session.read_holding.assert_not_awaited()
-                self.assertEqual(len(values), 90)
-                self.assertFalse(inverter.capabilities)
-                self.assertFalse(inverter.profile_name)
-                self.assertTrue(all(plan.start >= 40500 for plan in driver.local_register_read_plans(inverter)))
+                self.assertEqual(values["rated_power"], 15000)
+                self.assertEqual(values["active_power_regulation_ratio"], 100)
+                self.assertEqual("reactive_power_regulation_mode" in values, not rejected)
+
+    async def test_untested_controls_gating_and_single_register_write_readback(self):
+        driver = ModbusCatalogDriver()
+        link = FixtureTransport(registers=hopewind_registers(), input_registers={},
+            command_responses=None, probe_target=ProbeTarget(1, 255, 1))
+        inverter = await driver.async_probe(link, ProbeTarget(1, 255, 1))
+        profile = load_driver_profile(inverter.profile_name)
+        for cap in profile.capabilities:
+            for mode in ("read_only", "auto", "full"):
+                self.assertEqual(capability_write_exposure_allowed(cap,
+                    control_mode=mode, detection_confidence="medium",
+                    variant_key=inverter.variant_key, profile_source_scope="builtin",
+                    schema_source_scope="builtin", profile_name=inverter.profile_name), mode == "full")
+            samples = [c.label for c in cap.choices] or [0, 12.34, 100]
+            for value in samples:
+                before = dict(link._registers)
+                with patch.object(link, "async_send_payload", wraps=link.async_send_payload) as wire:
+                    result = await driver.async_write_capability(link, inverter, cap.key, value)
+                self.assertEqual(result, value)
+                self.assertEqual([c.args[0][1] for c in wire.call_args_list], [6, 3])
+                self.assertEqual({r:v for r,v in link._registers.items() if r != cap.register},
+                                 {r:v for r,v in before.items() if r != cap.register})
+                self.assertEqual((await driver.async_read_values(link, inverter)).values[cap.key], value)
+        ratio = profile.get_capability("active_power_regulation_ratio")
+        self.assertEqual((ratio.native_minimum, ratio.native_maximum, ratio.native_step), (0, 100, 0.01))
+        for value in (-0.01, 100.01, 110):
+            with self.subTest(value=value), patch.object(link, "async_send_payload", new_callable=AsyncMock) as wire:
+                with self.assertRaises(ValueError):
+                    await driver.async_write_capability(link, inverter, ratio.key, value)
+                wire.assert_not_awaited()
+
+    async def test_settings_scaling_signed_read_and_no_clamping_existing_110_percent(self):
+        driver, link = ModbusCatalogDriver(), transport(hopewind_registers() | {40005: 0xFF9C})
+        inverter = await driver.async_probe(link, ProbeTarget(1, 255, 1))
+        values = (await driver.async_read_values(link, inverter)).values
+        self.assertEqual(values["active_power_regulation_ratio"], 110)
+        self.assertEqual(values["active_power_regulation_setpoint"], 16.5)
+        self.assertEqual(values["power_factor_regulation_setpoint"], 1)
+        self.assertEqual(values["reactive_power_regulation_ratio"], -1)
+
+    async def test_write_rejection_or_missing_readback_never_reports_success(self):
+        driver, link = ModbusCatalogDriver(), transport()
+        inverter = await driver.async_probe(link, ProbeTarget(1, 255, 1))
+        for error in (ModbusError("exception_code:3"), None):
+            session = type("Session", (), {
+                "write_single_holding": AsyncMock(side_effect=error),
+                "read_holding": AsyncMock(return_value=[0]),
+            })()
+            with patch.object(driver, "_session", return_value=session):
+                with self.assertRaises((ModbusError, RuntimeError)):
+                    await driver.async_write_capability(link, inverter,
+                        "active_power_regulation_ratio", 50)
+            session.write_single_holding.assert_awaited_once_with(40013, 5000)
+            if error:
+                session.read_holding.assert_not_awaited()
+            else:
+                session.read_holding.assert_awaited_once_with(40013, 1)
+
+    async def test_settings_poll_reads_one_bounded_group_per_cycle(self):
+        driver, link = ModbusCatalogDriver(), transport()
+        inverter = await driver.async_probe(link, ProbeTarget(1, 255, 1))
+        state = {}
+        for expected in (40002, 40011, 40002):
+            with patch.object(link, "async_send_payload", wraps=link.async_send_payload) as wire:
+                await driver.async_read_values(link, inverter, runtime_state=state)
+            requests = [c.args[0] for c in wire.call_args_list]
+            self.assertTrue(all(r[1] == 3 for r in requests))
+            settings = [int.from_bytes(r[2:4], "big") for r in requests
+                        if int.from_bytes(r[2:4], "big") < 40500]
+            self.assertEqual(settings, [expected])
 
     async def test_standby_zero_telemetry_and_family_power_range_can_identify(self):
         for power in (3, 15, 80):

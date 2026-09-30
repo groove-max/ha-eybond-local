@@ -305,10 +305,9 @@ class ShortAsciiDriverTests(unittest.IsolatedAsyncioTestCase):
 
     def test_registration_preserves_existing_driver_order(self):
         keys = [driver.key for driver in iter_drivers("auto")]
-        self.assertEqual(keys[-1], self.driver.key)
-        self.assertEqual(keys[:-1], [
+        self.assertEqual(keys[:9], [
             "modbus_smg", "srne_modbus", "must_pv_ph18", "modbus_catalog",
-            "pi30", "eybond_g_ascii", "smartess_local", "pi18",
+            "pi30", "eybond_g_ascii", "smartess_local", "pi18", self.driver.key,
         ])
         self.assertIsInstance(get_driver(self.driver.key), EybondShortAsciiDriver)
 

@@ -57,6 +57,31 @@ freshness claim. See the [offline inspector](../../tools/README.md#inspect-a-sho
 for capture analysis; enabling live PV still requires the admission contract
 and per-session optional-sample expiry/invalidation described above.
 
+### Qualified 09C1 baseline
+
+`eybond_09c1` is a separate FC4-only read-only driver, not a relaxed Short-ASCII
+parser. Manufacturer `09C1` / decimal devcode `2497` describes the map;
+the captured EyeBond routing uses **devcode 1, collector address 255**. Cloud
+protocol identity must not be mistaken for the routing devcode.
+
+Commands are plain `Q1`, `QF`, `PV?`, `F`, `G?` plus CR, without a binary address
+or PI30/URTU1920 checksum. Detection requires all four parsed response shapes
+(`Q1` 47, `QF` 6, `PV?` 19, `F` 22 bytes). The schema and family descriptor own
+the public surface; no collector PN or rating becomes a retail identity.
+
+Q1 owns input frequency; QF owns output frequency. Runtime returns FULL snapshots:
+Q1 failure propagates, while missing QF/PV?/F removes only its measurements.
+G? text, the ambiguous PV fault glyph, the no-output status bit and the custom
+PV energy encoding remain raw support evidence. Rated power is never live power;
+the family has no controls even in Full Control. Synthetic tests cover distinct
+frequency ownership, scaling, malformed/foreign replies and the real HA lifecycle.
+
+The public manufacturer's map is available as
+[09C1 protocol 2497](https://api.valueclouds.com/ppe/api/auth/web/downloadAgreement?devcode=2497).
+The qualified XML SHA256 is
+`3097e35a53b4f029549b8925a27d3069470b286bb5725d9f5a046aec702abbcd`.
+Customer captures remain private; tests use independent synthetic data.
+
 ### Qualified short-ASCII baseline
 
 `eybond_short_ascii` is a separate read-only FC4 payload driver. It does not call

@@ -141,7 +141,7 @@ unsupported-address reply, not after a timeout. Available readings continue
 updating; unsupported groups stay unavailable. No setup change is needed, and
 this does not add inverter controls.
 
-## Hopewind / Bluesun read-only profile
+## Hopewind / Bluesun profile
 
 The test build adds **Hopewind String (Protocol 0237)** telemetry, checked against
 local register readings from a Bluesun BSM15K-B. Keep detection on **Auto**.
@@ -156,17 +156,55 @@ load measurements are inferred.
 
 Additional MPPT/string channels and raw fault diagnostics are disabled by
 default. Only enable channels actually present on your inverter; the family
-map includes more channels than some models have. Inverter controls are not
-included, even in **Full Control** mode. Cloud analysis remains a separate
-feature and is not required for local telemetry.
+map includes more channels than some models have. Cloud analysis remains a
+separate feature and is not required for local telemetry.
 
-Control support is being investigated separately. Creating a Support Archive
-also checks whether the inverter can **read** two small groups of documented
-power-control settings, with a shared six-second limit. It does not change those
-settings. These results help establish safe value display and command
-verification before controls can be offered. SmartClient currently supports
+**Full Control** additionally exposes three **untested** settings: active-power
+regulation mode, active-power ratio (0–100%), and reactive-power regulation mode.
+The register addresses and current values were confirmed on a BSM15K-B, but
+local writes still need owner validation. Auto and Read-only do not expose these
+controls. Updating or selecting Full Control does not change any settings.
+
+Changing a regulation mode uses the inverter's existing setpoint; it does not
+set a new limit automatically. The existing kW, power-factor and reactive-ratio
+setpoints are available as diagnostics. Only use values appropriate to your
+installation. These are inverter-generation controls, not a site-wide
+zero-export configuration.
+
+The documented active-ratio write range stops at 100%. A firmware value such as
+110% is displayed as received, not silently changed or used to widen that range.
+Absolute-power and signed reactive/power-factor writes are not included yet;
+they need rated-power-dependent limits or additional numeric validation.
+
+Creating a Support Archive reads these settings too. It does not change those
+settings. SmartClient currently supports
 read-only cloud analysis, not active control learning; selecting Full Control
 does not bypass that limitation.
+
+## EyeBond 09C1 family
+
+The unreleased test code includes this read-only profile for the protocol
+captured on a ZL Power GSIII. Keep detection on **Auto**. A matching inverter
+appears as **EyeBond 09C1 family**: the replies identify the protocol, not a
+unique retail model or serial number. A similar brand/model name alone is not
+enough to establish compatibility.
+
+Readings include grid and output voltage/frequency, battery voltage, load
+percentage, temperature, PV voltage/current and operating status. Grid frequency
+and output frequency are read separately; neither substitutes for the other.
+Rated values are diagnostics, disabled by default. **Rated Power** is not a
+measurement of actual output power. **AC Charger Enabled** describes the charger
+state, not a measured charging current or power.
+
+If a PV, output-frequency or rated-values request fails, that group's old values
+become unavailable while basic readings can continue. If the main status request
+fails, normal connection recovery applies. No inverter serial, battery percentage,
+measured power or energy counters are guessed. **Full Control** does not add
+controls: a verified command map is not available for this profile yet.
+
+This is separate from the Short-ASCII profile below. Local inverter support also
+does not repair a collector's saved cloud-server address; those settings remain
+under **Collector connection and cloud**.
 
 ## EyeBond Short-ASCII family
 
@@ -222,10 +260,12 @@ select a similar retail model by guesswork.
 ## Control mode
 
 For **Anenji ANJ-6200-48PL** (layout 2/model `0x2300`), Output Source Priority
-uses **SUB / SBU / SUF / ZEC**, not the SMG 6200 mode names. This selector requires
-**Full Control** because SUF/ZEC writes have not been confirmed on this model.
-SUB/SBU have been reported working. SUF permits grid export; ZEC requires the
-external CT configuration described in the inverter manual. A corrected label
+uses **SUB / SBU / SUF / ZEC**, not the SMG 6200 mode names. The owner has confirmed
+all four selections in HA and on the inverter display, so this selector is
+available in **Auto** as well as Full Control; Read-only still blocks it.
+This confirms switching the setting, not the electrical operation of grid export
+or the CT installation. SUF permits grid export; ZEC requires the external CT
+configuration described in the inverter manual. A corrected label
 does not remove inverter-side restrictions: rejected writes are still reported.
 Updating does not change the selected inverter mode. Existing entries do not
 need to be removed and added again.

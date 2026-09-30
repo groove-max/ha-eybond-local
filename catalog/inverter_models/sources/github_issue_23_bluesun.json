@@ -4,9 +4,9 @@
   "kind": "github_issue",
   "title": "Bluesun BSM15K-B local Hopewind register evidence",
   "reference": "https://github.com/groove-max/ha-eybond-local/issues/23",
-  "captured_at": "2026-09-26",
+  "captured_at": "2026-09-30",
   "visibility": "public",
-  "summary": "Owner supplied successful local FC03 reads of all three protocol-0237 blocks. Confirms a 15 kW-rated device and local telemetry, not control writes or an exact retail-model fingerprint.",
+  "summary": "Owner supplied successful local FC03 reads of all three protocol-0237 telemetry blocks, followed by 40002/4 and 40011/3 settings reads on 2026-09-30. Confirms a 15 kW-rated device, local telemetry and settings readback, not control writes or an exact retail-model fingerprint.",
   "assertions": [
     "commercial_identity",
     "runtime_compatibility",

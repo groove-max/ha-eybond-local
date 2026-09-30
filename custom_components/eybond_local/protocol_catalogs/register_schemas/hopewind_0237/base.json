@@ -3,16 +3,9 @@
   "title": "Hopewind String Inverter Protocol 0237",
   "driver_key": "modbus_catalog",
   "protocol_family": "hopewind_0237",
-  "support_read_plan": {
-    "source": "Hopewind 3-80kW V100B002D000, cloud protocol 0237 / devcode 567",
-    "purpose": "support_only_control_readback_feasibility",
-    "timeout_seconds": 6,
-    "blocks": [
-      {"key": "reactive_power_settings", "start": 40002, "count": 4},
-      {"key": "active_power_settings", "start": 40011, "count": 3}
-    ]
-  },
   "blocks": [
+    {"key": "control_reactive_power", "start": 40002, "count": 4},
+    {"key": "control_active_power", "start": 40011, "count": 3},
     {
       "key": "runtime",
       "start": 40500,
@@ -30,6 +23,8 @@
     }
   ],
   "enum_tables": {
+    "active_power_regulation_mode": {"0": "No Regulation", "1": "Power Value", "2": "Power Ratio"},
+    "reactive_power_regulation_mode": {"0": "No Reactive Output", "1": "Power Factor", "2": "Reactive Power Value", "3": "Reactive Power Ratio"},
     "switch_status": {
       "0": "Stopped",
       "1": "On-grid"
@@ -56,6 +51,15 @@
     }
   },
   "spec_sets": {
+    "controls": [
+      {"key": "reactive_power_regulation_mode", "register": 40002, "enum_table": "reactive_power_regulation_mode"},
+      {"key": "power_factor_regulation_setpoint", "register": 40003, "signed": true, "divisor": 10000, "decimals": 4},
+      {"key": "reactive_power_regulation_setpoint", "register": 40004, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "reactive_power_regulation_ratio", "register": 40005, "signed": true, "divisor": 100, "decimals": 2},
+      {"key": "active_power_regulation_mode", "register": 40011, "enum_table": "active_power_regulation_mode"},
+      {"key": "active_power_regulation_setpoint", "register": 40012, "signed": true, "divisor": 100, "decimals": 2},
+      {"key": "active_power_regulation_ratio", "register": 40013, "signed": true, "divisor": 100, "decimals": 2}
+    ],
     "runtime": [
       {
         "key": "pv1_input_voltage",
@@ -578,6 +582,10 @@
     ]
   },
   "measurement_descriptions": [
+    {"key": "reactive_power_regulation_ratio", "name": "Reactive Power Regulation Ratio", "unit": "%", "diagnostic": true},
+    {"key": "power_factor_regulation_setpoint", "name": "Power Factor Regulation Setpoint", "diagnostic": true},
+    {"key": "reactive_power_regulation_setpoint", "name": "Reactive Power Regulation Setpoint", "unit": "kvar", "diagnostic": true},
+    {"key": "active_power_regulation_setpoint", "name": "Active Power Regulation Setpoint", "unit": "kW", "diagnostic": true},
     {
       "key": "pv1_input_voltage",
       "name": "MPPT1 Voltage",

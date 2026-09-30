@@ -147,9 +147,9 @@ class ProxyCaptureOptionsMixin:
                         "Capture stopped.",
                     )
                 else:
-                    refresh = getattr(coordinator, "async_request_refresh", None)
-                    if refresh is not None:
-                        await refresh()
+                    # The capture owner publishes its live state independently.
+                    # Refreshing this view must not wait for inverter detection
+                    # or schedule another device poll.
                     self._proxy_capture_action_result = self._tr(
                         "common.dynamic.proxy_capture_action_refreshed",
                         "Live log refreshed.",
@@ -186,9 +186,6 @@ class ProxyCaptureOptionsMixin:
         if str(exc or "").strip() != "proxy_capture_not_running":
             return False
 
-        refresh = getattr(coordinator, "async_request_refresh", None)
-        if refresh is not None:
-            await refresh()
         self._proxy_capture_action_result = self._tr(
             "common.dynamic.proxy_capture_action_already_stopped",
             "Capture was already stopped. Status refreshed.",

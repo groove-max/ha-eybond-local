@@ -25,7 +25,7 @@
     "smartess_control_surface": "unknown",
     "vendor_register_map": "documented",
     "notes": [
-      "Uses a model-specific output-priority enum at register 301. SUB/SBU were observed working; SUF/ZEC writes remain unverified and the selector requires Full Control. Other existing controls are unchanged."
+      "Uses a model-specific output-priority enum at register 301. The owner confirmed SUB/SBU/SUF/ZEC selection in HA and on the inverter display; this selector is verified and available in Auto. Grid-export and external CT operation are not validated. Other existing controls are unchanged."
     ]
   },
   "known_limitations": [

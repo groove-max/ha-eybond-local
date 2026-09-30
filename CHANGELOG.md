@@ -9,17 +9,24 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
-- Support archives include bounded, read-only checks of documented Hopewind
-  0237 control addresses (#23), and individual MUST PV3300 current registers
-  when the combined block reports all three as zero (#46). Results stay separate
-  from normal telemetry. These checks do not write settings or enable controls.
+- Added a separate read-only **EyeBond 09C1 family** profile, qualified against
+  the manufacturer's map and ZL Power GSIII captures (#50). It reports input
+  and output voltage/frequency separately, battery voltage, load percentage,
+  temperature, PV voltage/current, status and ratings. No retail identity,
+  measured power, energy counters or controls are inferred from these replies.
 
-- Added a read-only **Hopewind String (Protocol 0237)** profile, based on the
+- Support archives include individual MUST PV3300 current-register checks
+  when the combined block reports all three as zero (#46). These read-only
+  results stay separate from normal telemetry and do not enable controls.
+
+- Added a **Hopewind String (Protocol 0237)** profile, based on the
   manufacturer's map and successful local reads from a Bluesun BSM15K-B (#23).
   It exposes PV and AC generation, electrical readings, energy counters and
   diagnostics. Detection identifies the protocol family, not the retail model.
-  AC generation is not household load or site grid import/export. No inverter
-  controls are enabled, including in Full Control mode.
+  AC generation is not household load or site grid import/export. Full Control
+  can expose three document-backed, untested settings: active-power mode and
+  ratio, and reactive-power mode. Current settings are readable; selecting Full
+  Control sends no writes. Protection, reset and grid-code controls stay absent.
 
 - SRNE support archives can check five smaller, documented battery/PV register
   groups after the inverter explicitly rejects the combined DC block (#44).
@@ -45,10 +52,19 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Keep the configured callback IP when local-interface enumeration fails (#52).
+  The default-route address is no longer treated as a complete interface list;
+  existing BusyBox and collector-subnet discovery remain unchanged.
+
+- Refreshing the capture dialog no longer waits for an inverter poll or protocol
+  search (#49). Refreshing an already-stopped capture also stays local to the
+  dialog; neither action extends the capture timer.
+
 - Anenji ANJ-6200-48PL (layout 2/model `0x2300`) now uses its own
   SUB/SBU/SUF/ZEC output-priority table instead of the SMG 6200 enum (#51).
   Readings and the selector agree; existing entity IDs are preserved. The
-  selector requires Full Control because SUF/ZEC writes remain unverified.
+  owner confirmed all four selections in HA and on the inverter display, so this
+  selector is available in Auto. This does not validate grid-export/CT operation.
   Device rejections are still reported, and updating sends no setting changes.
 
 - Capture guidance explains how Read-only mode blocks the temporary collector

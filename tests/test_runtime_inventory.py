@@ -20,7 +20,8 @@ class RuntimeInventoryTests(unittest.TestCase):
     def test_profile_names_are_derived_from_compiled_runtime_surfaces(self) -> None:
         names = runtime_profile_names()
 
-        self.assertEqual(len(names), 30)
+        self.assertEqual(len(names), 31)
+        self.assertIn("modbus_catalog/hopewind_0237.json", names)
         self.assertIn("eybond_g_ascii/models/gootu_gt_h2436m14p5.json", names)
         self.assertIn("eybond_g_ascii/models/lvyuan_ty_sic_3_6kbe_w1.json", names)
         self.assertIn("modbus_smg/default.json", names)
@@ -50,15 +51,16 @@ class RuntimeInventoryTests(unittest.TestCase):
         summary = inventory["summary"]
 
         self.assertEqual(summary["profiles"], len(inventory["profiles"]))
-        self.assertEqual(summary["profiles"], 30)
-        self.assertEqual(summary["capabilities"], 1179)
-        self.assertEqual(summary["validation_state_counts"], {"tested": 453, "untested": 726})
+        self.assertEqual(summary["profiles"], 31)
+        self.assertEqual(summary["capabilities"], 1182)
+        self.assertEqual(summary["validation_state_counts"], {"tested": 454, "untested": 728})
         self.assertEqual(
             summary["support_tier_counts"],
-            {"blocked": 31, "conditional": 799, "standard": 349},
+            {"blocked": 31, "conditional": 799, "standard": 352},
         )
 
         profile_by_key = {item["profile_key"]: item for item in inventory["profiles"]}
+        self.assertEqual(profile_by_key["modbus_catalog/hopewind_0237.json"]["validation_state_counts"], {"untested": 3})
         self.assertIn("eybond_g_ascii_gootu_gt_h2436m14p5", profile_by_key)
         self.assertIn("eybond_g_ascii_lvyuan_ty_sic_3_6kbe_w1", profile_by_key)
         self.assertIn("smg_modbus", profile_by_key)
@@ -86,7 +88,7 @@ class RuntimeInventoryTests(unittest.TestCase):
         self.assertEqual(profile_by_key["modbus_smg_6200"]["capabilities"], 38)
         self.assertEqual(
             profile_by_key["modbus_smg_anenji_anj_6200_48pl"]["validation_state_counts"],
-            {"tested": 29, "untested": 9},
+            {"tested": 30, "untested": 8},
         )
         self.assertEqual(
             profile_by_key["modbus_smg_anenji_4200_protocol_1"]["capabilities"],

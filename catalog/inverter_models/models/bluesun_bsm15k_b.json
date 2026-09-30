@@ -10,7 +10,7 @@
   "variants": [
     {
       "variant_key": "hopewind_0237",
-      "label": "Hopewind protocol 0237 read-only family",
+      "label": "Hopewind protocol 0237 family with opt-in power controls",
       "device_descriptor_keys": [
         "hopewind_0237_family"
       ],
@@ -23,7 +23,7 @@
     "controls": "none"
   },
   "coverage": {
-    "runtime_control_surface": "read_only",
+    "runtime_control_surface": "available",
     "smartess_control_surface": "cloud_catalog",
     "vendor_register_map": "partial",
     "notes": [
@@ -32,12 +32,13 @@
     ]
   },
   "known_limitations": [
-    "No built-in inverter controls, including in Full Control mode.",
-    "Serial number, packed firmware versions and boot/shutdown timestamps are not decoded in this first read-only profile; raw support evidence retains their registers.",
+    "Three document-backed untested controls require Full Control: active-power mode and ratio, reactive-power mode. Readback is confirmed; local write application is not.",
+    "Absolute-power and signed reactive/power-factor writes are not included. Existing settings can be read; no protection, start/stop, reset or grid-code writes are exposed.",
+    "Serial number, packed firmware versions and boot/shutdown timestamps are not decoded; raw support evidence retains their registers.",
     "Additional MPPT/string and fault-word sensors are disabled by default; raw fault words are not decoded alarm descriptions.",
     "Cloud analysis is independent; no further cloud credentials are needed for local polling."
   ],
-  "knowledge_summary": "Successful FC03 block reads match protocol 567/0237. The read-only family provides PV channels, AC generation, line-to-line grid voltages, phase currents, frequency, temperature, energy counters and diagnostics.",
+  "knowledge_summary": "Successful FC03 reads match protocol 567/0237 telemetry and two power-settings blocks. PV, AC generation, frequency, temperature and energy are available; three documented power controls are opt-in and untested.",
   "source_keys": [
     "documentation_hopewind_0237",
     "github_issue_23_bluesun"

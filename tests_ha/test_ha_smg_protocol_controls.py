@@ -121,7 +121,7 @@ async def test_protocol_control_policy_survives_setup_and_reload(
     await hass.async_block_till_done()
 
 
-@pytest.mark.parametrize("mode", ["auto", "full"])
+@pytest.mark.parametrize("mode", ["read_only", "auto", "full"])
 @pytest.mark.parametrize("legacy_snapshot", [False, True])
 async def test_anj6200_upgrades_old_smg_selector_without_writes(hass, fake_runtime, monkeypatch, mode, legacy_snapshot):
     """Existing #51 entry keeps its identity, but not the stale SMG mode table."""
@@ -196,8 +196,10 @@ async def test_anj6200_upgrades_old_smg_selector_without_writes(hass, fake_runti
     await hass.async_block_till_done()
     select_id = registry.async_get_entity_id("select", DOMAIN, unique_id)
     assert entry.options["effective_metadata_snapshot"]["profile_name"] == name
-    if mode == "full":
-        assert select_id == previous_id
+    if mode != "read_only":
+        assert select_id is not None
+        if previous_id:
+            assert select_id == previous_id
         assert hass.states.get(select_id).attributes["options"] == [c.label for c in cap.choices]
         assert hass.states.get(select_id).state == cap.choices[1].label
     else:

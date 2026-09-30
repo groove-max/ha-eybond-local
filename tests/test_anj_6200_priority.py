@@ -110,7 +110,8 @@ class Anj6200PriorityTests(unittest.IsolatedAsyncioTestCase):
         previous_schema = load_register_schema(OLD)
         cap = profile.get_capability("output_source_priority")
         spec = next(s for s in schema.spec_set("config") if s.key == cap.key)
-        self.assertFalse(cap.tested)
+        self.assertTrue(cap.tested)
+        self.assertEqual(cap.provenance, "verified")
         self.assertEqual(spec.register, 301)
         for choice in cap.choices:
             self.assertEqual(_decode_block(301, [choice.value], (spec,))[cap.key], choice.label)
@@ -120,7 +121,7 @@ class Anj6200PriorityTests(unittest.IsolatedAsyncioTestCase):
             [c for c in previous.capabilities if c.key != cap.key],
         )
         self.assertEqual({c.value for c in previous.get_capability(cap.key).choices}, {0, 1, 2, 3})
-        for mode, expected in (("auto", False), ("read_only", False), ("full", True)):
+        for mode, expected in (("auto", True), ("read_only", False), ("full", True)):
             self.assertEqual(capability_write_exposure_allowed(
                 cap, control_mode=mode, detection_confidence="high",
                 variant_key="anenji_anj_6200_48pl", profile_source_scope="builtin",
@@ -133,3 +134,5 @@ class Anj6200PriorityTests(unittest.IsolatedAsyncioTestCase):
             inverter = await self.driver.async_probe(RecordingTransport(data), self.target)
             self.assertIsNotNone(inverter)
             self.assertEqual(inverter.profile_name, expected)
+            if protocol == 2:
+                self.assertFalse(load_driver_profile(expected).get_capability("output_source_priority").tested)

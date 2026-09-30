@@ -6,7 +6,7 @@
   "reference": "https://api.valueclouds.com/ppe/api/auth/web/downloadAgreement?devcode=567",
   "captured_at": "2026-09-24",
   "visibility": "public",
-  "summary": "Manufacturer protocol for 3–80 kW string inverters: FC03 blocks 40500–40570, 40571–40599 and 40600–40650. Only the read surface is implemented.",
+  "summary": "Manufacturer protocol for 3–80 kW string inverters: FC03 telemetry blocks 40500–40650 and FC06 power settings. Implemented untested writes are 40002 reactive mode, 40011 active mode, and 40013 active ratio (0–100%, 0.01% scaling). Other settings are not exposed as writes.",
   "assertions": [
     "register_map"
   ]

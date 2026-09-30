@@ -90,8 +90,9 @@ Proxy capture is temporary.
 When the timer ends, Home Assistant stops the capture automatically and tries to restore the collector’s normal connection path.
 
 The open dialog does not refresh automatically. Choose **Refresh** or reopen it
-to see the final status and saved result. Refresh does not restart or extend the
-timer; **Reset proxy timer** is a separate action. Check that the vendor app
+to see the final status and saved result. Refresh reads the capture's current
+status without requesting another inverter poll. It does not restart or extend
+the timer; **Reset proxy timer** is a separate action. Check that the vendor app
 resumes updating after restoration.
 
 You can:

@@ -561,6 +561,86 @@
    "layouts": []
   },
   {
+   "key": "eybond_09c1",
+   "transport_key": "eybond_09c1",
+   "probe_timeout": 16,
+   "signature_timeout": 4,
+   "probe_targets": [
+    {
+     "devcode": 1,
+     "collector_addr": 255,
+     "device_addr": 1
+    }
+   ],
+   "probe_actions": [
+    {
+     "key": "09c1.q1",
+     "kind": "ascii_command",
+     "command": "Q1",
+     "parser_key": "09c1.q1",
+     "cost": 1,
+     "optional": false,
+     "timeout": 4,
+     "evidence_fields": [
+      {
+       "key": "shape.q1_length",
+       "source_key": "urtu09c1_q1_length"
+      }
+     ]
+    },
+    {
+     "key": "09c1.pv",
+     "kind": "ascii_command",
+     "command": "PV?",
+     "parser_key": "09c1.pv",
+     "cost": 1,
+     "optional": false,
+     "timeout": 4,
+     "evidence_fields": [
+      {
+       "key": "shape.pv_length",
+       "source_key": "urtu09c1_pv_length"
+      }
+     ]
+    },
+    {
+     "key": "09c1.f",
+     "kind": "ascii_command",
+     "command": "F",
+     "parser_key": "09c1.f",
+     "cost": 1,
+     "optional": false,
+     "timeout": 4,
+     "evidence_fields": [
+      {
+       "key": "shape.f_length",
+       "source_key": "urtu09c1_f_length"
+      },
+      {
+       "key": "protocol.protocol_id",
+       "source_key": "protocol_id"
+      }
+     ]
+    },
+    {
+     "key": "09c1.qf",
+     "kind": "ascii_command",
+     "command": "QF",
+     "parser_key": "09c1.qf",
+     "cost": 1,
+     "optional": false,
+     "timeout": 4,
+     "evidence_fields": [
+      {
+       "key": "shape.qf_length",
+       "source_key": "urtu09c1_qf_length"
+      }
+     ]
+    }
+   ],
+   "layouts": []
+  },
+  {
    "key": "eybond_g_ascii",
    "transport_key": "eybond_g_ascii",
    "probe_timeout": 12.0,
@@ -1114,6 +1194,10 @@
   "eybond_short_ascii": {
    "ranges": [],
    "notes": ["Bounded read-only MP/Q1/MD/F/RB FC4 evidence only. F/RB are optional runtime reads, not detection prerequisites. No raw UART, auxiliary query or write command."]
+  },
+  "eybond_09c1": {
+   "ranges": [],
+   "notes": ["Bounded read-only Q1/QF/PV?/F/G? FC4 capture. G? and PV energy remain raw evidence; no writes or inferred retail identity."]
   },
   "eybond_g_ascii": {
    "ranges": [],
@@ -1671,6 +1755,18 @@
    "support_capture_policy": "eybond_g_ascii"
   },
   {
+   "key": "eybond_09c1_read_only",
+   "protocol_key": "eybond_09c1",
+   "driver_key": "eybond_09c1",
+   "variant_key": "urtu09c1",
+   "profile_name": "",
+   "register_schema_name": "eybond_09c1/base.json",
+   "tier": "partial",
+   "read_only": true,
+   "default_for_driver": true,
+   "support_capture_policy": "eybond_09c1"
+  },
+  {
    "key": "eybond_short_ascii_read_only",
    "protocol_key": "eybond_short_ascii",
    "driver_key": "eybond_short_ascii",
@@ -1695,14 +1791,14 @@
    "support_capture_policy": "eybond_g_ascii"
   },
   {
-   "key": "hopewind_0237_read_only",
+   "key": "hopewind_0237_untested_controls",
    "protocol_key": "modbus_catalog",
    "driver_key": "modbus_catalog",
    "variant_key": "hopewind_0237",
-   "profile_name": "",
+   "profile_name": "modbus_catalog/hopewind_0237.json",
    "register_schema_name": "hopewind_0237/base.json",
-   "tier": "partial",
-   "read_only": true,
+   "tier": "full",
+   "read_only": false,
    "support_capture_policy": "hopewind_0237"
   },
   {
@@ -2567,7 +2663,7 @@
      "corpus:donor …57E (capture, 2026-06-15)",
      "fingerprint layout=2 model_code=8960 rated_power=6200",
      "github:issue#51 register 301 enum correction; ANJ-6200-48PL manual F1-01 and GM6200 Communication Protocol 2",
-     "SUB/SBU user-confirmed; SUF/ZEC writes unverified; remaining historical SMG 6200 surface unchanged"
+     "SUB/SBU/SUF/ZEC selection user-confirmed in issue #51 on 2026-09-29; grid-export/CT operation not validated; remaining historical SMG 6200 surface unchanged"
     ],
     "confidence": "capture-derived"
    }
@@ -2921,6 +3017,42 @@
    }
   },
   {
+   "entry_key": "eybond_09c1_family",
+   "surface_key": "eybond_09c1_read_only",
+   "model_name": "EyeBond 09C1 family",
+   "priority": 40,
+   "family_fallback": true,
+   "anchors": [
+    {
+     "key": "protocol.protocol_id",
+     "equals": "EYBOND_09C1"
+    },
+    {
+     "key": "shape.q1_length",
+     "equals": 47
+    },
+    {
+     "key": "shape.pv_length",
+     "equals": 19
+    },
+    {
+     "key": "shape.f_length",
+     "equals": 22
+    },
+    {
+     "key": "shape.qf_length",
+     "equals": 6
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "Manufacturer 09C1 XML (devcode 2497) and DevUrtu09C1_01: QF/Q1/PV?/G?/F; FC4 payloads contain command + CR with no address byte or checksum.",
+     "Issue #50 ZL Power GSIII read-only capture: twelve complete command cycles, route devcode 1 / collector address 255. No retail-model or serial-number fingerprint."
+    ],
+    "confidence": "documented-and-capture-qualified-read-only"
+   }
+  },
+  {
    "entry_key": "eybond_short_ascii_family",
    "surface_key": "eybond_short_ascii_read_only",
    "model_name": "EyeBond Short-ASCII family",
@@ -2989,7 +3121,7 @@
   },
   {
    "entry_key": "hopewind_0237_family",
-   "surface_key": "hopewind_0237_read_only",
+   "surface_key": "hopewind_0237_untested_controls",
    "model_name": "Hopewind String (Protocol 0237)",
    "priority": 110,
    "family_fallback": true,

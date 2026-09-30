@@ -206,6 +206,32 @@ class _FakeAnnouncer:
 
 
 class RuntimeLinkManagerTests(unittest.TestCase):
+    def test_failed_interface_inventory_preserves_configured_ip_for_routed_collector(self):
+        # A default route is not an inventory of all local interfaces. In
+        # particular, a routed collector need not share the configured /24.
+        for failure in (FileNotFoundError("ip"), subprocess.CalledProcessError(1, "ip")):
+            with self.subTest(failure=type(failure).__name__), patch(
+                "custom_components.eybond_local.runtime.link.common.subprocess.check_output",
+                side_effect=failure,
+            ), patch(
+                "custom_components.eybond_local.runtime.link.common._default_local_ip",
+                return_value="192.0.2.20",
+            ) as default_ip:
+                self.assertEqual(resolve_server_ip(
+                    "198.51.100.20", collector_ip="203.0.113.40",
+                ), "198.51.100.20")
+                default_ip.assert_not_called()
+
+    def test_failed_inventory_without_configured_ip_can_use_default_route(self):
+        with patch(
+            "custom_components.eybond_local.runtime.link.common.subprocess.check_output",
+            side_effect=FileNotFoundError("ip"),
+        ), patch(
+            "custom_components.eybond_local.runtime.link.common._default_local_ip",
+            return_value="192.0.2.20",
+        ):
+            self.assertEqual(resolve_server_ip("", collector_ip="203.0.113.40"), "192.0.2.20")
+
     def test_resolve_server_ip_uses_busybox_ip_o_fallback(self) -> None:
         side_effects = [
             subprocess.CalledProcessError(1, ["ip", "-j", "-4", "addr", "show", "up"]),

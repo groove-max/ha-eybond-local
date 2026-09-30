@@ -14,6 +14,17 @@ from tools.validate import affected_test_files
 
 
 class AffectedValidationSelectionTests(unittest.TestCase):
+    def test_09c1_changes_select_wire_and_family_regressions(self) -> None:
+        for path in (
+            "payload/urtu09c1.py", "drivers/eybond_09c1.py", "drivers/registry.py",
+            "drivers/catalog_probe.py", "metadata/effective_metadata_snapshot.py",
+            "protocol_catalogs/register_schemas/eybond_09c1/base.json",
+            "protocol_catalogs/inverter_catalog.json",
+        ):
+            with self.subTest(path=path):
+                self.assertIn("test_eybond_09c1.py",
+                              self._selected(f"custom_components/eybond_local/{path}"))
+
     def test_support_masking_selects_archive_and_wire_export_regressions(self) -> None:
         selected = self._selected("custom_components/eybond_local/support/masking.py")
         self.assertTrue({

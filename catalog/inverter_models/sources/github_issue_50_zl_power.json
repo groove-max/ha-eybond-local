@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_50_zl_power",
+  "kind": "github_issue",
+  "title": "ZL Power GSIII protocol 09C1 capture",
+  "reference": "https://github.com/groove-max/ha-eybond-local/issues/50",
+  "captured_at": "2026-09-30",
+  "visibility": "public",
+  "summary": "Owner-supplied cloud protocol identity is 2497/09C1; twelve captured FC4 read cycles match the manufacturer's fixed shapes. The reported retail model is not inferred from those replies. Local driver operation remains to be confirmed.",
+  "assertions": [
+    "commercial_identity",
+    "runtime_compatibility"
+  ]
+}

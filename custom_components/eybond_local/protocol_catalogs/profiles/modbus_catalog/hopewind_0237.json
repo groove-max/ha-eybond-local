@@ -1,0 +1,48 @@
+{
+  "profile_key": "modbus_catalog/hopewind_0237.json",
+  "title": "Hopewind Protocol 0237 (untested power controls)",
+  "driver_key": "modbus_catalog",
+  "protocol_family": "hopewind_0237",
+  "groups": [
+    {"key": "power_regulation", "title": "Power Regulation", "order": 100,
+     "description": "Documented power settings; changing grid operation requires an appropriate installation.", "icon": "mdi:transmission-tower"}
+  ],
+  "capabilities": [
+    {
+      "key": "active_power_regulation_mode", "title": "Active Power Regulation Mode",
+      "register": 40011, "value_kind": "enum", "write_function": 6,
+      "group": "power_regulation", "tested": false, "provenance": "doc_backed", "enabled_default": true,
+      "support_notes": "Manufacturer 567/0237 V100B002D000. Readback confirmed in issue #23; writes untested.",
+      "change_summary": "Selects how the inverter limits active generation. Disabling regulation can remove an existing power limit.",
+      "note": "Selecting a mode does not set its limit. The existing kW or percentage setting is used; verify it before changing modes.",
+      "choices": [
+        {"value": 0, "label": "No Regulation"},
+        {"value": 1, "label": "Power Value"},
+        {"value": 2, "label": "Power Ratio"}
+      ]
+    },
+    {
+      "key": "active_power_regulation_ratio", "title": "Active Power Regulation Ratio",
+      "register": 40013, "value_kind": "scaled_u16", "divisor": 100, "write_function": 6,
+      "unit": "%", "minimum": 0, "maximum": 10000, "step": 0.01,
+      "group": "power_regulation", "tested": false, "provenance": "doc_backed", "enabled_default": true,
+      "support_notes": "Manufacturer 567/0237 documents 0-100% with 0.01% scaling. Existing firmware values above 100% are displayed without expanding the documented write range. Writes untested.",
+      "change_summary": "Sets the active-power percentage of rated inverter power.",
+      "note": "Only used in Power Ratio regulation mode. Does not change the mode or configure site-wide zero export."
+    },
+    {
+      "key": "reactive_power_regulation_mode", "title": "Reactive Power Regulation Mode",
+      "register": 40002, "value_kind": "enum", "write_function": 6,
+      "group": "power_regulation", "tested": false, "provenance": "doc_backed", "enabled_default": true,
+      "support_notes": "Manufacturer 567/0237 V100B002D000. Readback confirmed in issue #23; writes untested.",
+      "change_summary": "Selects reactive-power regulation. Use settings appropriate to the installation's grid requirements.",
+      "note": "Selecting a mode uses its existing setpoint; it does not change that setpoint.",
+      "choices": [
+        {"value": 0, "label": "No Reactive Output"},
+        {"value": 1, "label": "Power Factor"},
+        {"value": 2, "label": "Reactive Power Value"},
+        {"value": 3, "label": "Reactive Power Ratio"}
+      ]
+    }
+  ]
+}

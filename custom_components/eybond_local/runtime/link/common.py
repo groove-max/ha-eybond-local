@@ -230,9 +230,6 @@ def _active_ipv4_interfaces() -> tuple[tuple[str, int], ...]:
             if ip.startswith("127."):
                 continue
             addresses.append((ip, interface.network.prefixlen))
-    if not addresses:
-        fallback = _default_local_ip()
-        return ((fallback, 32),) if fallback else ()
     return tuple(dict.fromkeys(addresses))
 
 
@@ -256,6 +253,10 @@ def resolve_server_ip(configured_ip: str, *, collector_ip: str = "") -> str:
     """Return a bindable server IP, preferring the collector-facing subnet when possible."""
 
     active_interfaces = _active_ipv4_interfaces()
+    # Failed enumeration is not proof that the configured address disappeared.
+    # A default-route address cannot stand in for a complete interface inventory.
+    if not active_interfaces:
+        return configured_ip or _default_local_ip()
     active_ips = tuple(ip for ip, _prefixlen in active_interfaces)
     if configured_ip and configured_ip in active_ips:
         return configured_ip

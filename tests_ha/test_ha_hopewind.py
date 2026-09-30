@@ -1,4 +1,4 @@
-"""Real HA lifecycle for the read-only Hopewind string-inverter pack."""
+"""Real HA lifecycle and read-only-to-untested Hopewind profile upgrades."""
 from __future__ import annotations
 
 import pytest
@@ -9,12 +9,13 @@ from custom_components.eybond_local.const import DOMAIN
 from custom_components.eybond_local.drivers.modbus_catalog import ModbusCatalogDriver
 from custom_components.eybond_local.fixtures.transport import FixtureTransport
 from custom_components.eybond_local.models import CollectorInfo, ProbeTarget, RuntimeSnapshot
+from custom_components.eybond_local.metadata.effective_metadata_snapshot import effective_metadata_snapshot_from_dict
 from synthetic import SYNTHETIC_COLLECTOR_IP, SYNTHETIC_COLLECTOR_PN, SYNTHETIC_SERVER_IP
 
 
-@pytest.mark.parametrize("mode", ["auto", "full"])
+@pytest.mark.parametrize("mode", ["read_only", "auto", "full"])
 @pytest.mark.parametrize("already_detected", [False, True])
-async def test_hopewind_setup_reload_and_missing_block_remain_read_only(
+async def test_hopewind_setup_reload_and_missing_block_never_write_automatically(
         hass, fake_runtime, monkeypatch, mode, already_detected):
     from conftest import FakeRuntimeManager
 
@@ -24,6 +25,8 @@ async def test_hopewind_setup_reload_and_missing_block_remain_read_only(
             return await super().async_send_payload(payload, route=route)
 
     registers = {r: 0 for r in range(40500, 40651)} | {
+        40002: 2, 40003: 10000, 40004: 0, 40005: 0,
+        40011: 1, 40012: 1650, 40013: 11000,
         40646: 15, 40647: 400, 40546: 1, 40547: 8, 40500: 4300,
         40538: 4999, 40539: 73, 40541: 76, 40544: 372,
         40548: 1930, 40550: 1849, 40551: 62,
@@ -36,7 +39,8 @@ async def test_hopewind_setup_reload_and_missing_block_remain_read_only(
 
     def seed_binding(self, driver, binding):
         assert binding.register_schema_name == "hopewind_0237/base.json"
-        assert not binding.profile_name and not binding.capabilities
+        assert binding.profile_name == "modbus_catalog/hopewind_0237.json"
+        assert len(binding.capabilities) == 3
         self.initial_binding = binding
 
     async def refresh(self, *, poll_interval=None):
@@ -58,12 +62,20 @@ async def test_hopewind_setup_reload_and_missing_block_remain_read_only(
     entry = MockConfigEntry(domain=DOMAIN, version=5, data=data,
         unique_id=f"collector:{SYNTHETIC_COLLECTOR_PN}", options={"poll_interval": 30, "poll_mode": "auto"})
     entry.add_to_hass(hass)
+    if already_detected:
+        hass.config_entries.async_update_entry(entry, options=dict(entry.options,
+            effective_metadata_snapshot={
+                "effective_owner_key": "modbus_catalog", "variant_key": "hopewind_0237",
+                "surface_key": "hopewind_0237_read_only", "profile_name": "",
+                "register_schema_name": "hopewind_0237/base.json", "confidence": "medium",
+                "catalog_version": "before-power-controls", "candidate_keys": ["hopewind_0237_family"],
+            }))
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     await entry.runtime_data.async_refresh()
     await hass.async_block_till_done()
     registry = er.async_get(hass)
-    assert entry.options.get("effective_metadata_snapshot", {}).get("surface_key") == "hopewind_0237_read_only", (dict(entry.data), dict(entry.options), entry.runtime_data.data.inverter)
+    assert entry.options["effective_metadata_snapshot"]["profile_name"] == "modbus_catalog/hopewind_0237.json"
 
     def sensor_id(key):
         return registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{key}")
@@ -79,11 +91,28 @@ async def test_hopewind_setup_reload_and_missing_block_remain_read_only(
         assert sensor_id("output_power") is None
         assert sensor_id("battery_power") is None
         assert sensor_id("grid_power") is None
-        assert not entry.runtime_data.data.inverter.capabilities
+        assert len(entry.runtime_data.data.inverter.capabilities) == 3
+        assert all(not c.tested for c in entry.runtime_data.data.inverter.capabilities)
+        for domain, key in (("select", "active_power_regulation_mode"),
+                            ("select", "reactive_power_regulation_mode"),
+                            ("number", "active_power_regulation_ratio")):
+            entity_id = registry.async_get_entity_id(domain, DOMAIN, f"{entry.entry_id}_{domain}_{key}")
+            if mode == "full":
+                assert entity_id is not None
+                state = hass.states.get(entity_id)
+                assert state is not None
+                if domain == "number":
+                    assert float(state.state) == 110  # Show firmware value, never clamp/write it.
+                    assert state.attributes["max"] == 100
+            else:
+                assert entity_id is None
         metadata = entry.options["effective_metadata_snapshot"]
-        assert metadata["surface_key"] == "hopewind_0237_read_only"
+        # Full profiles can be restored from their validated profile binding;
+        # unlike schema-only profiles they need not retain a catalog proof.
+        assert metadata["surface_key"] != "hopewind_0237_read_only"
+        assert effective_metadata_snapshot_from_dict(metadata).is_valid
         assert metadata["register_schema_name"] == "hopewind_0237/base.json"
-        assert metadata["profile_name"] == ""
+        assert metadata["profile_name"] == "modbus_catalog/hopewind_0237.json"
         assert registry.async_get(sensor_id("pv8_input_voltage")).disabled_by is er.RegistryEntryDisabler.INTEGRATION
         assert hass.states.get(sensor_id("pv_energy_total")).attributes["unit_of_measurement"] == "kWh"
         assert await hass.config_entries.async_reload(entry.entry_id)

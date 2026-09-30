@@ -44,9 +44,17 @@ class RegisterSchemaLoaderTests(unittest.TestCase):
             with self.subTest(delta=delta), self.assertRaises(ValueError):
                 _parse_support_read_plan(valid | delta)
         self.assertIsNone(load_register_schema("must_pv_ph18/base.json").support_read_plan)
-        schema = load_register_schema("hopewind_0237/base.json")
-        self.assertIsNotNone(schema.support_read_plan)
-        self.assertTrue(all(block.start >= 40500 for block in schema.blocks))
+        # Exercise the loader with a synthetic support-only range; Hopewind's
+        # now-qualified settings have moved into its normal control read plan.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            raw = {"extends": "builtin:aohai_fsa/base.json",
+                   "schema_key": "support_plan_fixture", "support_read_plan": valid}
+            (Path(temp_dir) / "support_plan_fixture.json").write_text(json.dumps(raw), encoding="utf-8")
+            set_external_register_schema_roots((Path(temp_dir),))
+            schema = load_register_schema("support_plan_fixture.json")
+            self.assertIsNotNone(schema.support_read_plan)
+            self.assertFalse(any(block.start <= 40011 < block.start + block.count for block in schema.blocks))
+        self.assertIsNone(load_register_schema("hopewind_0237/base.json").support_read_plan)
 
     def test_register_bitmask_requires_a_strict_contiguous_field(self) -> None:
         self.assertEqual(_optional_bitmask("0x0030", spec_key="x"), 0x0030)

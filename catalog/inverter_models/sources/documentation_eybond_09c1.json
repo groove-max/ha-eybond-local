@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source_key": "documentation_eybond_09c1",
+  "kind": "documentation",
+  "title": "EyeBond 09C1 / Zhonglong LW inverter protocol",
+  "reference": "https://api.valueclouds.com/ppe/api/auth/web/downloadAgreement?devcode=2497",
+  "captured_at": "2026-09-30",
+  "visibility": "public",
+  "summary": "Manufacturer XML and DevUrtu09C1_01 define QF/Q1/PV?/G?/F shapes and fields. Input/output frequency have separate sources; F uses a custom rated-power field. No write map or unique inverter serial is supplied.",
+  "assertions": [
+    "register_map"
+  ]
+}

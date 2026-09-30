@@ -1,0 +1,184 @@
+{
+  "schema_key": "eybond_09c1",
+  "title": "EyeBond 09C1 / Read-only protocol family",
+  "driver_key": "eybond_09c1",
+  "protocol_family": "eybond_09c1",
+  "blocks": [
+    {
+      "key": "status",
+      "start": 0,
+      "count": 0
+    },
+    {
+      "key": "serial",
+      "start": 0,
+      "count": 0
+    },
+    {
+      "key": "live",
+      "start": 0,
+      "count": 0
+    },
+    {
+      "key": "config",
+      "start": 0,
+      "count": 0
+    }
+  ],
+  "measurement_descriptions": [
+    {
+      "key": "protocol_id",
+      "name": "Protocol ID",
+      "diagnostic": true,
+      "live": false
+    },
+    {
+      "key": "grid_voltage",
+      "name": "Grid Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "grid_frequency",
+      "name": "Grid Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement"
+    },
+    {
+      "key": "output_voltage",
+      "name": "Output Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "output_frequency",
+      "name": "Output Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement"
+    },
+    {
+      "key": "battery_voltage",
+      "name": "Battery Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv_voltage",
+      "name": "PV Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv_current",
+      "name": "PV Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "temperature",
+      "name": "Inverter Temperature",
+      "unit": "°C",
+      "device_class": "temperature",
+      "state_class": "measurement"
+    },
+    {
+      "key": "load_percent",
+      "name": "Load Percent",
+      "unit": "%",
+      "state_class": "measurement",
+      "icon": "mdi:gauge"
+    },
+    {
+      "key": "operating_mode",
+      "name": "Operating Mode"
+    },
+    {
+      "key": "urtu09c1_status_flags",
+      "name": "Inverter Status Flags",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "urtu09c1_fault_voltage",
+      "name": "Grid Fault Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "urtu09c1_rated_voltage",
+      "name": "Rated Output Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "urtu09c1_rated_power",
+      "name": "Rated Power",
+      "unit": "W",
+      "device_class": "power",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "urtu09c1_rated_battery_voltage",
+      "name": "Rated Battery Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "diagnostic": true,
+      "enabled_default": false
+    },
+    {
+      "key": "urtu09c1_rated_frequency",
+      "name": "Rated Output Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "diagnostic": true,
+      "enabled_default": false
+    }
+  ],
+  "binary_sensor_descriptions": [
+    {
+      "key": "grid_available",
+      "name": "Grid Available",
+      "device_class": "power"
+    },
+    {
+      "key": "battery_low",
+      "name": "Battery Low",
+      "device_class": "battery"
+    },
+    {
+      "key": "inverter_fault",
+      "name": "Inverter Fault",
+      "device_class": "problem",
+      "diagnostic": true
+    },
+    {
+      "key": "urtu09c1_ac_charger_enabled",
+      "name": "AC Charger Enabled",
+      "diagnostic": true
+    },
+    {
+      "key": "urtu09c1_buzzer_enabled",
+      "name": "Buzzer Enabled",
+      "diagnostic": true,
+      "enabled_default": false
+    }
+  ],
+  "notes": [
+    "09C1 XML and captured FC4 replies qualify this family, not the GSIII retail model or an inverter serial.",
+    "Q1 input frequency and QF output frequency have separate owners. Q1 is mandatory; unavailable QF/PV?/F groups remove old values.",
+    "F reports rated power, including 12K=12000W, never measured load power. No SOC, power, energy or controls are inferred.",
+    "PV energy and fault-code encoding, G? text and the no-AC-output flag remain raw support evidence pending independent qualification."
+  ]
+}
