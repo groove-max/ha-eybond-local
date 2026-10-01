@@ -87,6 +87,19 @@ def _ok_model(key: str = "mdl_a", descriptor: str = "smg_6200", **overrides) -> 
 
 
 class RealCatalogTests(unittest.TestCase):
+    def test_victor_6200_uses_shared_pi30_surface_with_partial_write_evidence(self):
+        models = {m["model_key"]: m for m in load_models()}
+        victor = models["victor_nm_pro_6_2kw"]
+        self.assertEqual(victor["validation"], {"hardware": "captured", "telemetry": "confirmed", "controls": "partial"})
+        self.assertEqual(_primary_resolution(victor, RUNTIME).surface_key, "pi30_vmii_full")
+        self.assertEqual(_primary_resolution(models["powmr_4_2kw"], RUNTIME).surface_key, "pi30_vmii_full")
+        self.assertEqual(victor["variants"][0]["device_descriptor_keys"], ["pi30_vmii_nxpw5kw"])
+        self.assertIn("support_archive_issue_54_victor_nm_pro_6_2kw", victor["source_keys"])
+        source = next(s for s in load_sources() if s["source_key"] == victor["source_keys"][0])
+        self.assertIn("write_validation", source["assertions"])
+        self.assertIn("0.1.53", source["summary"])
+        self.assertIn("Charge Source Priority", source["summary"])
+
     def test_issue_6_correction_does_not_remove_independent_issue_27_evidence(self):
         models = {m["model_key"]: m for m in load_models()}
         unresolved = models["yingfa_yf6_2k_2k_lel_if"]

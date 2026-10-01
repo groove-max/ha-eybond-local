@@ -286,7 +286,7 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, target)
 
         assert inverter is not None
-        self.assertEqual(inverter.model_name, "PowMr 4.2kW")
+        self.assertEqual(inverter.model_name, "PI30 VMII-NXPW5KW")
         self.assertEqual(inverter.details["model_number"], "VMII-NXPW5KW")
         self.assertEqual(inverter.profile_name, "pi30_ascii/models/vmii_nxpw5kw.json")
         self.assertEqual(inverter.register_schema_name, "pi30_ascii/models/vmii_nxpw5kw.json")
@@ -346,10 +346,41 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, target)
 
         assert inverter is not None
-        self.assertEqual(inverter.model_name, "PowMr 4.2kW")
+        self.assertEqual(inverter.model_name, "PI30 VMII-NXPW5KW")
         self.assertEqual(inverter.variant_key, "vmii_nxpw5kw")
         self.assertEqual(inverter.profile_name, "pi30_ascii/models/vmii_nxpw5kw.json")
         self.assertEqual(inverter.register_schema_name, "pi30_ascii/models/vmii_nxpw5kw.json")
+
+    async def test_victor_6200_vmii_rating_and_telemetry_do_not_infer_retail_brand(self) -> None:
+        """Issue54 response shape, with a synthetic serial and no live writes."""
+        from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
+
+        target = ProbeTarget(devcode=0x0994, collector_addr=1, device_addr=0)
+        replies = {
+            "QPI": "PI30", "QID": "99000000000054", "QMN": "VMII-NXPW5KW",
+            "QPIRI": "230.0 26.9 230.0 50.0 26.9 6200 6200 48.0 46.0 42.0 55.2 54.6 2 030 030 1 0 1 1 01 0 0 54.0 0 1",
+            "QFLAG": "EabkuxzDjvy", "QMOD": "L",
+            "QPIWS": "10000000000000000000000000000000",
+            "QVFW": "VERFW:00021.12", "QVFW2": "VERFW2:00000.00",
+            "QPIGS": "232.1 50.0 232.1 50.0 0440 0227 007 429 54.60 000 100 0043 00.0 000.0 00.00 00000 00010101 00 00 00000 110",
+            "Q1": "00 00 00 000 042 030 043 00 00 000 0030 0000 13",
+            "QVFW3": "NAK", "QET": "NAK", "QLT": "NAK", "QT": "NAK",
+        }
+        transport = _FakeTransport({(target.devcode, target.collector_addr, k): v for k, v in replies.items()})
+        driver = Pi30Driver()
+        inverter = await driver.async_probe(transport, target)
+        self.assertIsNotNone(inverter)
+        self.assertEqual(inverter.model_name, "PI30 VMII-NXPW5KW")
+        self.assertEqual(inverter.variant_key, "vmii_nxpw5kw")
+        self.assertEqual(inverter.details["output_rating_active_power"], 6200)
+        self.assertEqual(inverter.details["battery_rating_voltage"], 48)
+        profile = load_driver_profile("pi30_ascii/models/vmii_nxpw5kw.json")
+        self.assertEqual({c.key for c in inverter.capabilities}, {c.key for c in profile.capabilities})
+        values = await _read_values(driver, transport, inverter)
+        self.assertEqual(values["battery_voltage"], 54.6)
+        self.assertEqual(values["output_active_power"], 227)
+        self.assertEqual(values["operating_mode"], "Line")
+        self.assertTrue(all(command.startswith("Q") for command in transport.commands))
 
     async def test_probe_collects_variant_detection_facts(self) -> None:
         driver = Pi30Driver()

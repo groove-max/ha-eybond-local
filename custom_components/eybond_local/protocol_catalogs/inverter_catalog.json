@@ -2689,7 +2689,10 @@
   {
    "entry_key": "pi30_vmii_nxpw5kw",
    "surface_key": "pi30_vmii_full",
-   "model_name": "PowMr 4.2kW",
+   "model_name": "PI30 VMII-NXPW5KW",
+   "aliases": [
+    "PowMr 4.2kW"
+   ],
    "priority": 220,
    "anchors": [
     {
@@ -2703,7 +2706,8 @@
    ],
    "provenance": {
     "sources": [
-     "fixture:pi30-vmii-nxpw5kw-live-capture"
+     "fixture:pi30-vmii-nxpw5kw-live-capture",
+     "project-issue:54"
     ],
     "confidence": "capture-derived"
    }

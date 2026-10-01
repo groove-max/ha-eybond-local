@@ -9,6 +9,10 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Victor NM-PRO-6.2KW in the supported model catalog, backed by the owner's
+  PI30 archive and specifically reported working controls. It reuses the
+  existing VMII profile; no new device commands are introduced.
+
 - MUST PV3300 Support Archives can collect the optional documented BMS/SOC
   block with one bounded read. This is diagnostic evidence only; normal polling
   and sensor exposure are unchanged until firmware support is confirmed.
@@ -60,6 +64,10 @@ the GitHub release body should be rendered from the matching version section her
   this is not full device or control support (#45).
 
 ### Fixed
+
+- Shared PI30 `VMII-NXPW5KW` identification no longer labels every matching
+  inverter as PowMr 4.2kW. It displays a neutral firmware-family name while
+  preserving the old name as a compatibility alias, the profile and entity IDs.
 
 - MUST PV/PH18 controls no longer claim local write verification based only on
   cloud-catalog presence. All 27 document-backed controls require Full Control;

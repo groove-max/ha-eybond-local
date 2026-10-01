@@ -153,6 +153,21 @@ class CompiledDetectionCatalogTests(unittest.TestCase):
         self.assertEqual(legacy_descriptor.key, descriptor.key)
         self.assertEqual(legacy_surface.key, surface.key)
 
+    def test_vmii_neutral_name_preserves_legacy_surface_without_brand_inference(self) -> None:
+        old = resolve_unique_persisted_model_surface("PowMr 4.2kW")
+        new = resolve_unique_persisted_model_surface("PI30 VMII-NXPW5KW")
+        self.assertIsNotNone(old)
+        self.assertIsNotNone(new)
+        self.assertEqual(old[0].key, "pi30_vmii_nxpw5kw")
+        self.assertEqual(old, new)
+        self.assertEqual(new[1].variant_key, "vmii_nxpw5kw")
+        self.assertEqual(new[1].profile_name, "pi30_ascii/models/vmii_nxpw5kw.json")
+        self.assertTrue(model_names_share_catalog_identity("PowMr 4.2kW", "PI30 VMII-NXPW5KW"))
+        # A public retail catalog entry is not a runtime identity alias. The
+        # same QMN is shared by multiple brands and another (MAX) response shape.
+        self.assertIsNone(resolve_unique_persisted_model_surface("Victor NM-PRO-6.2KW"))
+        self.assertFalse(model_names_share_catalog_identity("PI30 VMII-NXPW5KW", "PI30 6200"))
+
     def test_persisted_model_resolution_fails_closed_when_alias_is_ambiguous(self) -> None:
         catalog = load_compiled_detection_catalog()
         ambiguous = replace(

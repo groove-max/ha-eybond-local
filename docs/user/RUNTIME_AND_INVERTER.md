@@ -17,6 +17,20 @@ The inverter may appear after the collector. A slow protocol or a Full scan can
 take more than one normal polling interval. **Poll Context** shows whether the
 integration is detecting an inverter, reading it, or only checking the collector.
 
+### PI30 names shared by several brands
+
+Some inverters report a firmware identifier instead of their retail model.
+For example, `VMII-NXPW5KW` appears on both PowMr and Victor units, including
+different power ratings. These devices appear as **PI30 VMII-NXPW5KW**; the
+name alone does not mean 5 kW, 4.2 kW, or a particular brand. Rated power is read
+separately from the inverter.
+
+Older builds labelled this shared profile **PowMr 4.2kW**. The corrected name
+keeps the same protocol, profile, controls and entity IDs. You do not need to
+delete and add the device again. A custom name set in Home Assistant is retained.
+The model catalog lists confirmed retail models separately; it does not turn a
+shared firmware identifier into a unique brand match.
+
 ## Polling and inverter detection
 
 Open **Settings → Devices & Services → EyeBond Local → Configure → Polling and

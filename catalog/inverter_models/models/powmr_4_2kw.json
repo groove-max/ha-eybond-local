@@ -39,7 +39,9 @@
       "The same inverter also responds to the local SmartESS 0925 Modbus map through the legacy EyeBond binary tunnel; the commercial model is PowMr 4.2kW, while the raw inverter model reports VMII-NXPW5KW."
     ]
   },
-  "known_limitations": [],
+  "known_limitations": [
+    "The PI30 QMN identity VMII-NXPW5KW is shared with other commercial models and powers. Automatic detection uses the neutral PI30 VMII-NXPW5KW label; it does not uniquely identify PowMr or a 4.2 kW rating."
+  ],
   "knowledge_summary": "PowMr 4.2KW with raw model number VMII-NXPW5KW. The inverter supports PI30 ASCII and the local SmartESS 0925 Modbus runtime through the legacy EyeBond binary tunnel.",
   "source_keys": [
     "fixture_pi30_vmii_nxpw5kw"

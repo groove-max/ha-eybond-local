@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source_key": "support_archive_issue_54_victor_nm_pro_6_2kw",
+  "kind": "support_archive",
+  "title": "Victor NM-PRO-6.2KW PI30 archive and owner control report",
+  "reference": "project-issue:54",
+  "captured_at": "2026-09-30",
+  "visibility": "public",
+  "summary_publishable": true,
+  "summary": "The owner identifies the unit as Victor NM-PRO-6.2KW and reports working telemetry on integration 0.1.53. The archive records QPI=PI30, shared QMN=VMII-NXPW5KW, a 25-field QPIRI response rated 6200 W / 48 V, live QPIGS, QFLAG, QMOD and firmware replies. The owner explicitly confirms Output Source Priority, Charge Source Priority and battery bulk, float, cut-off and recharge voltage changes. The read-only archive itself is not a write trace, and the report does not qualify every inherited control or uniquely identify the brand from QMN.",
+  "assertions": [
+    "commercial_identity",
+    "runtime_compatibility",
+    "telemetry_validation",
+    "hardware_test",
+    "write_validation"
+  ]
+}
