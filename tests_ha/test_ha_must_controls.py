@@ -1,4 +1,4 @@
-"""MUST control admission and optional BMS evidence through real HA lifecycle."""
+"""MUST control admission and BMS availability through real HA lifecycle."""
 from __future__ import annotations
 
 import json
@@ -14,12 +14,14 @@ from custom_components.eybond_local.drivers.must import MustPvPh18Driver, _suppo
 from custom_components.eybond_local.fixtures.transport import FixtureTransport
 from custom_components.eybond_local.models import CollectorInfo, ProbeTarget, RuntimeSnapshot
 from custom_components.eybond_local.schema import entity_kind_for_capability
+from custom_components.eybond_local.telemetry import TypedTelemetryFrame, fold_driver_telemetry
 from synthetic import SYNTHETIC_COLLECTOR_IP, SYNTHETIC_COLLECTOR_PN, SYNTHETIC_SERVER_IP
 
 
 @pytest.mark.parametrize("mode", ["read_only", "auto", "full"])
 @pytest.mark.parametrize("upgrade", [False, True])
-async def test_must_unverified_controls_and_support_only_bms(hass, fake_runtime, monkeypatch, mode, upgrade):
+@pytest.mark.parametrize("has_bms", [False, True])
+async def test_must_unverified_controls_and_bms(hass, fake_runtime, monkeypatch, mode, upgrade, has_bms):
     from conftest import FakeRuntimeManager
 
     registers = {reg: 0 for start, count in _support_capture_ranges("must_pv_ph18/base.json")
@@ -29,6 +31,10 @@ async def test_must_unverified_controls_and_support_only_bms(hass, fake_runtime,
         25210: 1, 25211: 1, 25212: 1,
         109: 512, 110: 65526, 111: 25, 112: 0, 113: 73,
     }
+    if not has_bms:
+        registers.update(dict.fromkeys(range(109, 114), 0))
+    clock = [100.0]
+    capture_read_counts = []
 
     class ReadOnlyTransport(FixtureTransport):
         requests = None
@@ -50,12 +56,20 @@ async def test_must_unverified_controls_and_support_only_bms(hass, fake_runtime,
 
     async def refresh(self, *, poll_interval=None):
         binding = getattr(self, "initial_binding", inverter)
-        read = await driver.async_read_values(transport, binding)
-        return RuntimeSnapshot(connected=True, inverter=binding, values=read.values,
+        if not hasattr(self, "bms_state"):
+            self.bms_state = {}
+        read = await driver.async_read_values(transport, binding, runtime_state=self.bms_state,
+                                              now_monotonic=clock[0])
+        return RuntimeSnapshot(connected=True, inverter=binding, values=read.diagnostics,
+            telemetry=fold_driver_telemetry(TypedTelemetryFrame.empty(), driver_key=driver.key,
+                                           values=read.values, replace=True),
             collector=CollectorInfo(remote_ip=SYNTHETIC_COLLECTOR_IP, collector_pn=SYNTHETIC_COLLECTOR_PN))
 
     async def capture(self):
-        return await driver.async_capture_support_evidence(transport, getattr(self, "initial_binding", inverter))
+        before = transport.requests.count((109, 5))
+        evidence = await driver.async_capture_support_evidence(transport, getattr(self, "initial_binding", inverter))
+        capture_read_counts.append(transport.requests.count((109, 5)) - before)
+        return evidence
 
     async def unexpected_write(*args, **kwargs):
         pytest.fail("Blocked controls or automatic setup must not reach the write transport")
@@ -106,10 +120,32 @@ async def test_must_unverified_controls_and_support_only_bms(hass, fake_runtime,
         if mode == "full" and upgrade:
             assert registry.async_get_entity_id("select", DOMAIN, f"{entry.entry_id}_select_energy_use_mode") == old_id
             assert registry.async_get(old_id).name == "My priority"
-        assert (109, 5) not in transport.requests
+        assert (109, 5) in transport.requests
+        for key, value in {"battery_soc": "73", "bms_battery_voltage": "51.2",
+                           "bms_battery_current": "-1.0", "bms_battery_temperature": "25"}.items():
+            entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{key}")
+            assert entity_id is not None
+            assert hass.states.get(entity_id).state == (value if has_bms else "unavailable")
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
 
+    soc_id = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_battery_soc")
+    registry.async_update_entity(soc_id, name="My BMS SOC")
+    # Losing BMS data must withdraw old readings without losing the inverter.
+    transport._registers.update(dict.fromkeys(range(109, 114), 0))
+    clock[0] += 61
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get(soc_id).state == "unavailable"
+    voltage_id = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_battery_voltage")
+    assert hass.states.get(voltage_id).state == "51.2"
+    # Valid zero percent is distinct from an absent BMS; recovery is automatic.
+    transport._registers.update({109: 512, 110: 65526, 111: 25, 112: 0, 113: 0})
+    clock[0] += 61
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get(soc_id).state == "0"
+    assert registry.async_get(soc_id).name == "My BMS SOC"
     archive_path = Path(await entry.runtime_data.async_export_support_package())
 
     def inspect():
@@ -118,8 +154,9 @@ async def test_must_unverified_controls_and_support_only_bms(hass, fake_runtime,
 
     evidence = await hass.async_add_executor_job(inspect)
     assert evidence["bms_read_diagnostics"]["captured_ranges"] == [
-        {"start": 109, "count": 5, "words": [512, 65526, 25, 0, 73]}]
-    assert transport.requests.count((109, 5)) == 1
-    for key in ("battery_soc", "battery_percent"):
-        assert registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{key}") is None
+        {"start": 109, "count": 5, "words": [512, 65526, 25, 0, 0]}]
+    # Export also refreshes runtime telemetry; the diagnostic capture itself
+    # must send exactly one BMS request, independently of that normal refresh.
+    assert capture_read_counts == [1]
+    assert registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_battery_percent") is None
     assert await hass.config_entries.async_unload(entry.entry_id)

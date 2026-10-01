@@ -94,10 +94,12 @@ controls. The archive retains the original readings and the extra observations
 separately, so a later response does not overwrite the evidence from the first.
 
 For **MUST PV3300**, the archive also tries one read of the documented optional
-BMS block (registers 109–113), including the candidate SOC register. This adds
+BMS block (registers 109–113), including SOC. This adds
 at most three seconds and is skipped if the preceding current comparison lost
-communication. Raw words and read failures are retained separately; they do not
-create an SOC sensor, change normal polling or assume a BMS is connected.
+communication. Raw words and read failures are retained separately. This check
+does not assume a BMS is connected or change the runtime retry state. Supported PV3300
+devices now also read this block during normal polling; missing or invalid
+runtime BMS readings stay unavailable.
 
 The archive helps answer questions such as:
 

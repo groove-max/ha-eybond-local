@@ -29,7 +29,7 @@ _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         "custom_components/eybond_local/protocol_catalogs/register_schemas/must_pv_ph18/",
-        ("test_must_driver.py", "test_canonical_telemetry.py", "test_derived_energy.py"),
+        ("test_must_driver.py", "test_must_bms.py", "test_canonical_telemetry.py", "test_derived_energy.py"),
     ),
     (
         "custom_components/eybond_local/protocol_catalogs/register_schemas/eybond_short_ascii/",
@@ -295,7 +295,11 @@ _EXACT_TESTS: dict[str, tuple[str, ...]] = {
     ),
     "custom_components/eybond_local/drivers/must.py": (
         "test_must_driver.py",
+        "test_must_bms.py",
         "test_driver_local_register_evidence.py",
+    ),
+    "custom_components/eybond_local/drivers/must_bms.py": (
+        "test_must_bms.py", "test_must_driver.py",
     ),
     "custom_components/eybond_local/drivers/srne.py": (
         "test_srne_driver.py",

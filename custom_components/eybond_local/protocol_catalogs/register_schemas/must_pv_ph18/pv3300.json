@@ -2,12 +2,27 @@
   "extends": "must_pv_ph18/base.json",
   "schema_key": "must_pv3300",
   "title": "MUST PV3300 telemetry (6422 field-confirmed variant)",
+  "blocks": [
+    {"key": "bms", "start": 109, "count": 5}
+  ],
   "spec_sets": {
+    "bms": [
+      {"key": "bms_battery_voltage", "register": 109, "divisor": 10},
+      {"key": "bms_battery_current", "register": 110, "signed": true, "divisor": 10},
+      {"key": "bms_battery_temperature", "register": 111},
+      {"key": "battery_soc", "register": 113, "signed": true}
+    ],
     "runtime": [
       {"key": "load_percent", "divisor": 1, "decimals": 0},
       {"key": "battery_current", "multiplier": -1},
       {"key": "battery_power", "multiplier": -1},
       {"key": "grid_power", "multiplier": -1}
     ]
-  }
+  },
+  "measurement_descriptions": [
+    {"key": "battery_soc", "name": "Battery State of Charge", "unit": "%", "device_class": "battery", "state_class": "measurement"},
+    {"key": "bms_battery_voltage", "name": "BMS Battery Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement", "diagnostic": true},
+    {"key": "bms_battery_current", "name": "BMS Battery Current", "unit": "A", "device_class": "current", "state_class": "measurement", "diagnostic": true},
+    {"key": "bms_battery_temperature", "name": "BMS Battery Temperature", "unit": "°C", "device_class": "temperature", "state_class": "measurement", "diagnostic": true}
+  ]
 }

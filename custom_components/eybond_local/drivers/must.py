@@ -6,6 +6,7 @@ from ..poll_policy import PollPolicy
 
 
 from typing import Any
+import time
 
 from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
 from ..metadata.device_catalog_loader import resolve_support_capture_policy
@@ -23,6 +24,7 @@ from .local_register_evidence import (
 )
 from .read_result import DriverReadMode, DriverReadResult
 from .modbus_write_error import ModbusWriteErrorMixin
+from .must_bms import async_read_bms
 from .capability_codec import (
     decode_capability_value,
     encode_capability_words,
@@ -144,6 +146,8 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
         poll_interval: float | None = None,
         now_monotonic: float | None = None,
     ) -> DriverReadResult:
+        started = time.monotonic()
+        now = started if now_monotonic is None else float(now_monotonic)
         schema = load_register_schema(
             inverter.register_schema_name or self.register_schema_name
         )
@@ -160,7 +164,15 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
             ) / 10
         if "model_prefix" in values and "model_suffix" in values:
             values["model_number"] = f"{values['model_prefix']}{values['model_suffix']}"
-        return DriverReadResult(values=values, mode=DriverReadMode.FULL)
+        diagnostics = {}
+        if schema.source_name == "must_pv_ph18/pv3300.json":
+            bms_values, diagnostics = await async_read_bms(
+                session, transport, inverter, schema,
+                runtime_state if runtime_state is not None else {},
+                lambda: now + max(0, time.monotonic() - started),
+            )
+            values.update(bms_values)
+        return DriverReadResult(values=values, mode=DriverReadMode.FULL, diagnostics=diagnostics)
 
     async def async_write_capability(
         self,
@@ -256,9 +268,8 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
                     purpose="support_only_zero_bulk_current_single_read_comparison",
                 )
             # The vendor's 6422/1916 map describes a separate optional BMS
-            # window (voltage/current/temperature/reserved/SOC). Its presence
-            # on this firmware is not yet confirmed. Archive-only, one bounded
-            # read, no runtime schema/identity/fixture promotion or SOC guess.
+            # window (voltage/current/temperature/reserved/SOC). Keep the raw
+            # diagnostic read independently bounded, even during runtime backoff.
             current_status = evidence.get("current_read_diagnostics", {}).get("status", "completed")
             if current_status == "completed":
                 evidence["bms_read_diagnostics"] = await capture_support_reads(
@@ -315,7 +326,9 @@ def _must_default_schema_name() -> str:
 
 def _support_capture_ranges(schema_name: str) -> tuple[tuple[int, int], ...]:
     schema = load_register_schema(schema_name)
-    planned = [(block.start, block.count) for block in schema.blocks]
+    # BMS evidence has its own deadline and failure record below; never merge
+    # it into the mandatory/core capture or read it twice during one export.
+    planned = [(block.start, block.count) for block in schema.blocks if block.key != "bms"]
     planned.extend(_support_capture_policy().ranges)
     return _merge_capture_ranges(planned)
 

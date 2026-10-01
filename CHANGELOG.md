@@ -13,9 +13,12 @@ the GitHub release body should be rendered from the matching version section her
   PI30 archive and specifically reported working controls. It reuses the
   existing VMII profile; no new device commands are introduced.
 
-- MUST PV3300 Support Archives can collect the optional documented BMS/SOC
-  block with one bounded read. This is diagnostic evidence only; normal polling
-  and sensor exposure are unchanged until firmware support is confirmed.
+- MUST PV3300 exposes documented BMS state of charge plus separate BMS voltage,
+  signed current and temperature, backed by a successful local capture (#46).
+  Missing/invalid BMS data is withdrawn without suppressing core telemetry;
+  bounded reads and retry delays protect devices without the optional block.
+  Support Archives retain a separate raw BMS read. No controls are promoted
+  to tested, and other MUST variants keep their existing map.
 
 - Advanced setup can include up to eight known collector IPs in the ordinary
   scan, alongside local discovery. Routed/VPN collectors no longer require a

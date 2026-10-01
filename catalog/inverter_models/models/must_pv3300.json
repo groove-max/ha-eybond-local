@@ -33,7 +33,7 @@
     ]
   },
   "known_limitations": [
-    "SOC is not yet exposed. Support Archives can check the vendor-documented optional BMS register block, but its availability on this firmware is unconfirmed.",
+    "SOC and separate BMS voltage/current/temperature require the optional BMS block confirmed in issue #46. Missing or invalid data stays unavailable; BMS current keeps the native signed convention.",
     "Learned maps tied to the older generic MUST schema are not automatically rebased; existing compatibility checks remain in force.",
     "Output Current and Inverter Load Current can remain zero on the reported unit; their meaning is still under investigation.",
     "Other PV/PH/EP models retain the common register interpretation because published MUST documents disagree on load-percentage units.",
@@ -42,6 +42,7 @@
   "knowledge_summary": "PV3300 keeps the common MUST map and controls, with a scoped telemetry override: whole-percent load, charge-positive battery current/power and import-positive grid power. Native AC converter power retains its vendor sign.",
   "source_keys": [
     "private_must_pv_ph18_modbus_map",
-    "github_issue_46_pv3300"
+    "github_issue_46_pv3300",
+    "github_issue_46_pv3300_bms"
   ]
 }

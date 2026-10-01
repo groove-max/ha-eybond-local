@@ -416,14 +416,14 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `must_pv3300` → surface `must_pv3300_full` (driver must_pv_ph18, variant pv3300)
       - Protocol: must_pv_ph18 | Detection: anchors (protocol.protocol_id=MUST_PV_PH18; identity.model_number=PV3300)
       - Tier: full | Read-only: no | Profile: must_pv_ph18/base.json | Schema: must_pv_ph18/pv3300.json
-      - Capabilities: 27 (untested 27); support tiers: standard 27 | Telemetry: 37 measurements, 0 binary sensors
+      - Capabilities: 27 (untested 27); support tiers: standard 27 | Telemetry: 41 measurements, 0 binary sensors
 - Known limitations:
-  - SOC is not yet exposed. Support Archives can check the vendor-documented optional BMS register block, but its availability on this firmware is unconfirmed.
+  - SOC and separate BMS voltage/current/temperature require the optional BMS block confirmed in issue #46. Missing or invalid data stays unavailable; BMS current keeps the native signed convention.
   - Learned maps tied to the older generic MUST schema are not automatically rebased; existing compatibility checks remain in force.
   - Output Current and Inverter Load Current can remain zero on the reported unit; their meaning is still under investigation.
   - Other PV/PH/EP models retain the common register interpretation because published MUST documents disagree on load-percentage units.
   - Previously accumulated energy/history is not rewritten; daily estimated totals reset with the first valid sample of the next local day.
-- Evidence: 2 source(s)
+- Evidence: 3 source(s)
 
 ### PowMr — 4.2KW (`powmr_4_2kw`)
 

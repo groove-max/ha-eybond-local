@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_46_pv3300_bms",
+  "kind": "github_comment",
+  "title": "PV3300 optional BMS block captured with BMS connected",
+  "reference": "https://github.com/groove-max/ha-eybond-local/issues/46#issuecomment-5933626381",
+  "captured_at": "2026-10-01",
+  "visibility": "public",
+  "summary": "Owner confirms BMS connection and LCD percentage. Local FC03 registers 109-113 return documented BMS voltage, current, temperature and SOC; SOC is 83% in the archive. No simultaneous exact LCD comparison or new control-write confirmation is claimed.",
+  "assertions": ["telemetry_validation"]
+}

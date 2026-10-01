@@ -521,7 +521,7 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
                 singles = [call for call in session.read_holding.await_args_list if call.args[1] == 1]
                 self.assertEqual(len(singles), 3 if expected else 0)
 
-    async def test_pv3300_bms_evidence_is_raw_support_only_and_model_scoped(self):
+    async def test_pv3300_bms_evidence_preserves_raw_invalid_values_and_model_scope(self):
         for suffix in (3300, 1800):
             driver = MustPvPh18Driver()
             target = ProbeTarget(1, 255, 4)
@@ -539,10 +539,10 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
                                                "read_registers": AsyncMock(side_effect=read)})()
                 with patch.object(driver, "_session", return_value=session):
                     values = _full_values(await driver.async_read_values(link, inverter))
-                    session.read_holding.assert_not_awaited()
+                    self.assertEqual(session.read_holding.await_count, int(suffix == 3300))
                     self.assertFalse(any(call.args[0] == 109 for call in session.read_registers.await_args_list))
                     evidence = await driver.async_capture_support_evidence(link, inverter)
-                self.assertNotIn("battery_soc", values)
+                self.assertEqual(values.get("battery_soc"), 72 if suffix == 3300 and words[-1] == 72 else None)
                 self.assertNotIn("battery_percent", values)
                 self.assertEqual("bms_read_diagnostics" in evidence, suffix == 3300)
                 if suffix == 3300:
