@@ -205,6 +205,7 @@ def generate_shadow_learning_overlay_drafts(
         "read_enum_bindings": read_enum_bindings,
         "learned_capabilities": list(learned_summary["generated"]),
         "skipped_duplicates": list(learned_summary["skipped"]),
+        "skipped_controls": list(learned_summary["rejected"]),
         # Read sensors materialized from unique value/enum correlations.
         "learned_read_sensors": list(learned_read["generated"]),
         "skipped_read_sensors": list(learned_read["skipped"]),
@@ -930,6 +931,7 @@ def _build_learned_capabilities(
     generated: list[dict[str, Any]] = []
     generated_summary: list[dict[str, Any]] = []
     skipped_summary: list[dict[str, Any]] = []
+    rejected_summary: list[dict[str, Any]] = []
 
     next_order = 9000
     for group in grouped:
@@ -976,6 +978,37 @@ def _build_learned_capabilities(
             )
             continue
 
+        write_contract = _observed_modbus_write_contract(group) if register >= 0 else None
+        if register >= 0 and write_contract is None:
+            rejected_summary.append(
+                {
+                    "field_id": field_id,
+                    "field_name": field_name,
+                    "register": register,
+                    "reason": "unproven_modbus_write_contract",
+                }
+            )
+            continue
+
+        classification = _classify_learned_control(group)
+        if write_contract is not None and (
+            write_contract[1] != 1
+            or classification["word_count"] != write_contract[1]
+        ):
+            # A multi-register cloud command must never become a truncated
+            # single-register switch/action merely because its labels look familiar.
+            # Numeric multiword captures also need a proven encoding before
+            # they can be represented by the runtime capability codec.
+            rejected_summary.append(
+                {
+                    "field_id": field_id,
+                    "field_name": field_name,
+                    "register": register,
+                    "reason": "unsupported_modbus_write_shape",
+                }
+            )
+            continue
+
         base_key = (
             _capability_key(field_id=field_id, field_name=field_name, register=register)
             if register >= 0
@@ -985,7 +1018,6 @@ def _build_learned_capabilities(
         existing_keys.add(capability_key)
 
         read_key = _g_ascii_read_key_for_group(group)
-        classification = _classify_learned_control(group)
         classification, command_map = _normalize_g_ascii_feature_flag_capability(
             group=group,
             classification=classification,
@@ -1024,6 +1056,8 @@ def _build_learned_capabilities(
             "order": next_order,
             "learned_provenance": provenance,
         }
+        if write_contract is not None:
+            capability["write_function"] = write_contract[0]
         next_order += 1
 
         minimum = classification.get("minimum")
@@ -1058,6 +1092,7 @@ def _build_learned_capabilities(
                 "field_id": field_id,
                 "field_name": field_name,
                 "register": register,
+                "write_function": capability.get("write_function"),
                 "command": command,
                 "command_map": capability.get("command_map", {}),
                 "read_key": read_key,
@@ -1068,7 +1103,40 @@ def _build_learned_capabilities(
             }
         )
 
-    return generated, {"generated": generated_summary, "skipped": skipped_summary}
+    return generated, {
+        "generated": generated_summary,
+        "skipped": skipped_summary,
+        "rejected": rejected_summary,
+    }
+
+
+def _observed_modbus_write_contract(group: dict[str, Any]) -> tuple[int, int] | None:
+    """Require one observed, representable function/width; never guess FC16.
+
+    Cloud metadata describes a setting, not the wire operation. Every correlated
+    sample must agree before the generated control is allowed to replay it.
+    Older/incomplete or conflicting evidence stays in the support artifacts.
+    """
+
+    contract: tuple[int, int] | None = None
+    for sample in group.get("samples") or []:
+        observation = sample["observation"]
+        function = observation.get("function_code")
+        values = observation.get("values")
+        if (
+            type(function) is not int
+            or function not in (6, 16)
+            or type(values) is not list
+            or len(values) not in (1, 2)
+            or any(type(value) is not int or not 0 <= value <= 0xFFFF for value in values)
+            or (function == 6 and len(values) != 1)
+        ):
+            return None
+        observed = (function, len(values))
+        if contract is not None and observed != contract:
+            return None
+        contract = observed
+    return contract
 
 
 def _group_matched_records(correlation: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1114,12 +1182,10 @@ def _group_matched_records(correlation: dict[str, Any]) -> list[dict[str, Any]]:
                 "requested_at": str(item.get("requested_at") or "").strip(),
                 "observation": {
                     "register": register,
-                    "function_code": _to_int(observation.get("function_code")) or 16,
-                    "values": [
-                        int(value)
-                        for value in list(observation.get("values") or [])
-                        if _to_int(value) is not None
-                    ],
+                    # Preserve malformed/missing fields for fail-closed contract
+                    # validation rather than defaulting or dropping bad words.
+                    "function_code": observation.get("function_code"),
+                    "values": observation.get("values"),
                     "devcode": _to_int(observation.get("devcode")),
                     "devaddr": _to_int(observation.get("devaddr")),
                     "unit": _to_int(observation.get("unit")),

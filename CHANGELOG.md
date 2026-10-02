@@ -81,6 +81,13 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Newly learned Modbus controls retain the captured FC06 or FC16 write command
+  through profile generation and runtime dispatch. Incomplete, conflicting or
+  unrepresentable write shapes remain support evidence instead of guessed
+  controls. The SMG driver also honors explicit FC06 declarations in existing
+  profiles; FC16 remains the default when no override is declared. Older learned
+  profiles need a new learning run to regenerate their command metadata.
+
 - Collector connection settings remain reachable before the inverter is
   identified (#49). Unknown collector capabilities no longer imply a local-only
   ESP collector or hide callback diagnostics. Endpoint changes still require

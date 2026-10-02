@@ -680,6 +680,9 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
                 encoded_word=int(raw_words[0]),
             )
             await session.write_holding(capability.register, [merged])
+        elif capability.write_function == 6:
+            for offset, word in enumerate(raw_words):
+                await session.write_single_holding(capability.register + offset, int(word))
         else:
             await session.write_holding(capability.register, raw_words)
 
