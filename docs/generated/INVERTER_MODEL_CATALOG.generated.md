@@ -34,6 +34,7 @@ This page describes what has been confirmed for a specific inverter model or mod
 | Anenji | ANJ-11KW-48V-WIFI / WIFI-P — Anenji ANJ-11KW-48V-WIFI (0x8401) | modbus_smg | fingerprint | full | confirmed | partial | captured |
 | Anenji | ANJ-4000W-24V | modbus_smg | fingerprint | full | confirmed | partial | captured |
 | Anenji | ANJ-6200-48PL | modbus_smg | fingerprint | full | confirmed | partial | captured |
+| Anenji | GES48120M250-500P | modbus_catalog | anchors | partial | partial | none | captured |
 | Anenji | HHS-11kW-WIFI (without parallel) | modbus_smg | fingerprint | full | partial | partial | captured |
 | Aninerel | 6200 (dual output) | modbus_smg | fingerprint | full | confirmed | partial | captured |
 | Aninerel | ANL-4200T-24L-W-PRO | modbus_smg | fingerprint | full | partial | partial | captured |
@@ -53,7 +54,6 @@ This page describes what has been confirmed for a specific inverter model or mod
 
 | Manufacturer | Model | Protocol | Detection | Runtime Tier | Telemetry | Controls | Hardware |
 |---|---|---|---|---|---|---|---|
-| Anenji | GES48120M250-500P | ? | ? | ? | partial | none | captured |
 | Yingfa | YF6.2K-2K-LEL-IF | ? | ? | ? | unknown | none | reported |
 
 ## Family-Level Runtime Coverage
@@ -189,24 +189,28 @@ Runtime descriptors with no specific commercial model record. These are generic 
 
 ### Anenji — GES48120M250-500P (`anenji_ges48120m250_500p`)
 
-- Lifecycle: research
+- Lifecycle: experimental
 - Aliases: Anenji white 12kW split-phase
 - Validation: hardware captured, telemetry partial, controls none
 - Coverage: runtime none, cloud unknown, vendor map partial
   - Coverage notes:
-    - CRC-valid owner FC03 replies corroborate battery and phase-A output/mains voltage, current and frequency locations in the community-hosted V2.6.3 PDF.
-    - A small read-only schema is retained for offline replay only; no runtime descriptor, detection action or model-selection bypass enables it.
-    - The owner's fork reports screen agreement, but voltage/SOC plausibility is not family identity. Model/class registers 0xC738/0xC739 have not been captured.
-- Summary: Issue #49 establishes an Anenji GES48120M250-500P answering the Sumry/GES-style 0x7530 holding-register map, not the low-address SMG map. Battery and phase-A telemetry have a source-backed offline decoder. The public fork is useful corroboration, not a safe automatic binding: immutable model/class values and split-phase semantics remain unresolved. This research record does not claim runtime support.
+    - Runtime binding requires three exact FC03 identity anchors on holding registers 0xC738-0xC739 and 0xC768: model code 45, product class 10, protocol version raw 220.
+    - The bound read-only surface exposes nine phase-A and battery measurements from 0x7530, 0x7548 and 0x756A only; no derived power totals or write profile.
+    - CRC-valid owner captures corroborate battery and phase-A output/mains voltage, current and frequency in the community-hosted V2.6.3 PDF.
+- Summary: Anenji GES48120M250-500P answers the Sumry/GES-style high-address holding map at 0x7530, not the low-address SMG map. Owner FC03 captures establish model 45, product class 10 and protocol 220 together with corroborated battery and phase-A telemetry. The integration exposes a small read-only runtime surface gated on all three identity anchors.
 - Variants:
-  - `sumry_ges_7530_unqualified_identity` — 0x7530 telemetry observed; automatic identity not qualified
-    - Descriptors: Unresolved; no runtime mapping claimed
-    - Known firmware: —
+  - `sumry_ges_7530` — Sumry/GES 0x7530 map, model 45 / class 10 / protocol 220
+    - Descriptors: anenji_ges48120m250_500p
+    - Known firmware: protocol raw 220 (0x00DC at 0xC768)
+    - `anenji_ges48120m250_500p` → surface `sumry_ges_7530_read_only` (driver modbus_catalog, variant sumry_ges_7530)
+      - Protocol: modbus_catalog | Detection: anchors (identity.sumry_ges_model_code=45; identity.sumry_ges_product_class=10; identity.sumry_ges_protocol_version=220)
+      - Tier: partial | Read-only: yes | Profile: — | Schema: sumry_ges_7530/base.json
+      - Capabilities: no model-specific profile | Telemetry: 9 measurements, 0 binary sensors
 - Known limitations:
-  - Automatic detection remains unsupported pending a qualified model/class fingerprint; the PDF gives no GES-specific model-code value.
-  - Split-phase second-leg, active-power direction, CT and temperature-location semantics are not qualified by the available raw evidence.
-  - No derived power totals, inferred watts from AC voltage/current, controls or write profiles are exposed.
+  - Split-phase second leg, PV, CT-only grid semantics, temperatures and active-power registers are not part of this read-only subset.
+  - Product class 10 is required for this entry; other PDF enum values must not select this descriptor.
   - The protocol PDF is community-hosted, not independently authenticated supplier documentation.
+  - No controls or write profiles are exposed.
 - Evidence: 3 source(s)
 
 ### Anenji — HHS-11kW-WIFI (without parallel) (`anenji_hhs_11kw_wifi_no_parallel`)
