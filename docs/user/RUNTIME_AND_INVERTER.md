@@ -149,20 +149,26 @@ an estimated current.
 
 ### MUST controls and battery percentage
 
-The MUST profile, including PV3300, contains 27 document-backed controls such as
-**Energy Use Mode**, **Charge Source Priority**, charging limits and **Off-Grid
-Output**. They are **untested** locally: a setting appearing in the cloud app is
-not proof that the local command works on every firmware.
+The MUST profile contains 27 document-backed controls. For a locally identified
+**PV3300**, four are marked tested: **Grid Max Charge Current**, **Max Combined
+Charge Current**, **Charge Source Priority**, and **Energy Use Mode**. They are
+available in **Auto** with high-confidence detection. The
+[issue #46 owner confirmation](https://github.com/groove-max/ha-eybond-local/issues/46#issuecomment-5939601570)
+reports successful local changes and HA readback, not independent validation of
+physical behavior or every supported value. The other 23 PV3300 controls and
+all controls on other MUST variants remain **untested** locally.
 
-To opt in, open **Configure → Polling and inverter detection → Control mode → Full Control**.
+To opt in to untested controls, open **Configure → Polling and inverter detection → Control mode → Full Control**.
 The controls belong to the inverter device's configuration section, not the
 collector. Selecting Full Control does not send a command or change inverter
 settings. **Off-Grid Output** is specifically the off-grid output enable; it is
 not a general inverter power switch or the separate cloud **Ongrid Switch**.
 
 **Upgrade note:** older builds incorrectly treated 20 cloud-listed controls as
-tested. They are no longer exposed in **Auto**. Use Full Control if you choose
-to test them; review automations that referenced the earlier controls. Telemetry
+tested. Only the four PV3300 controls above now qualify for **Auto**. Use Full
+Control if you choose to test the others; review automations that referenced the
+earlier controls. Updating and restarting HA refreshes confirmed PV3300 bindings
+without re-adding the device. **Read Only** still blocks all controls. Telemetry
 and the selected control mode are not changed. No local hardware qualification
 is implied by the existing broad setpoint limits; use only settings appropriate
 to your exact model and battery.
@@ -255,11 +261,25 @@ reading available for dashboards too; the diagnostic category does not change
 the value. It is not automatically substituted for Grid Voltage based on one
 comparison with a meter.
 
-The current PV readings come from a single `PV?` reply. They are not verified as
-a sum of two MPPT inputs, and separate PV1/PV2 channels are not yet mapped. Raw
-replies to those commands can help establish a model-specific extension.
-Polling uses the normal adaptive scheduler; check **Current Poll Interval** on
-the collector for the current value rather than assuming a fixed refresh rate.
+The legacy **PV Voltage/Current** readings still come from `PV?`, not a sum of
+two inputs. Optional `PV1` and `PV2` reads provide separate voltage/current
+channels after both commands have returned valid samples in the current runtime.
+Their numbers follow the **protocol commands**, not guaranteed physical socket
+labels: the issue #50 owner's unit has crossed labels. No global port swap,
+combined current/power, or guessed energy total is applied. The owner's raw
+captures were taken at different times, not as a simultaneous total.
+
+Allow at least two polling cycles for the separate readings to become available.
+The channels are checked in turn, less frequently than the main readings, to
+limit extra load on the collector. Missing or outdated values become unavailable;
+they are not replaced with the other channel's value. After repeated failures,
+use **Re-check supported commands** to retry. The old `PV?` readings continue
+independently. A Support Archive includes both responses and sample ages.
+
+For mains presence, use **Grid Available**. An absent grid during normal battery
+operation is not an inverter fault. A dashboard expecting cloud `Status` enum
+names needs an appropriate input/mapping; the cloud's `FAULT` label is not a
+local mains-presence signal and is not synthesized here.
 
 If a PV, output-frequency or rated-values request fails, that group's old values
 become unavailable while basic readings can continue. If the main status request

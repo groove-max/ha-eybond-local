@@ -42,6 +42,13 @@ endpoint and runs either callback-origin → inbound verification or a verified
 inbound → inbound endpoint relocation through this same transition authority.
 It never exposes a cloud rollback chooser.
 
+An **unknown** collector is not a positively identified local-only collector.
+Missing inverter identity therefore cannot require HA-only operation, hide the
+connection form, or prune callback diagnostics. Its factory cloud capabilities
+remain unconfirmed; opening connection setup grants no write permission. The
+existing consent, live management checks and same-PN recovery proof still own
+every physical transition.
+
 #### `entry.data` is the single canonical owner (schema v4)
 
 `connection_strategy` has **exactly one** owner: **`entry.data`**. Every authority

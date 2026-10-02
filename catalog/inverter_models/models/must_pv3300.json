@@ -28,7 +28,8 @@
     "smartess_control_surface": "cloud_catalog",
     "vendor_register_map": "partial",
     "notes": [
-      "Inherits all 27 document-backed MUST controls as untested, available only in Full Control; cloud visibility does not prove local writes on this firmware.",
+      "Four controls are tested for PV3300 only following issue #46 owner-reported local writes and HA readback: Grid Max Charge Current, Max Combined Charge Current, Charge Source Priority and Energy Use Mode. The other 23 document-backed controls remain untested and Full Control only.",
+      "Control qualification covers the reported firmware writes/readback, not independent physical-behavior validation or every documented range/enum value; other MUST models are not promoted.",
       "Whole-percent load and battery/grid direction normalization are qualified by the PV3300 local marker, not by the retail label or live power magnitude."
     ]
   },
@@ -39,10 +40,11 @@
     "Other PV/PH/EP models retain the common register interpretation because published MUST documents disagree on load-percentage units.",
     "Previously accumulated energy/history is not rewritten; daily estimated totals reset with the first valid sample of the next local day."
   ],
-  "knowledge_summary": "PV3300 keeps the common MUST map and controls, with a scoped telemetry override: whole-percent load, charge-positive battery current/power and import-positive grid power. Native AC converter power retains its vendor sign.",
+  "knowledge_summary": "PV3300 inherits the common MUST map with four owner-write/readback-confirmed controls and a scoped telemetry override: whole-percent load, charge-positive battery current/power and import-positive grid power. Native AC converter power retains its vendor sign; the other 23 controls remain untested.",
   "source_keys": [
     "private_must_pv_ph18_modbus_map",
     "github_issue_46_pv3300",
-    "github_issue_46_pv3300_bms"
+    "github_issue_46_pv3300_bms",
+    "github_issue_46_pv3300_controls"
   ]
 }

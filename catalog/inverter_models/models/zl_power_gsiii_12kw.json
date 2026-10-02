@@ -27,16 +27,18 @@
     "smartess_control_surface": "unknown",
     "vendor_register_map": "partial",
     "notes": [
-      "The manufacturer 09C1 map matches twelve complete cloud read cycles. Local polling still needs owner confirmation.",
-      "Detection names the protocol family, not an exact retail model. No unique inverter serial is available."
+      "The manufacturer 09C1 map matches twelve complete cloud read cycles; two Oct 1 owner support snapshots show connected local 09C1 polling with 22 fresh readings and no raw timeouts.",
+      "Detection names the protocol family, not an exact retail model. No unique inverter serial is available.",
+      "Separate owner PV1/PV2 captures qualify optional protocol-numbered voltage/current reads. The non-simultaneous snapshots are not a combined sample; this unit's physical port labels appear crossed."
     ]
   },
   "known_limitations": [
     "Read-only even in Full Control; no qualified write command map.",
     "No inferred output/PV/battery power or SOC. PV energy and ambiguous status fields remain raw support evidence.",
+    "PV? is a legacy single-command reading, not a verified total. Optional PV1/PV2 support is qualified empirically per runtime, without a family capability flag or universal physical-port mapping.",
     "Cloud-server address and connection recovery are separate from inverter-map support."
   ],
-  "knowledge_summary": "Q1/QF/PV?/F provide electrical readings, load, temperature, operating state and ratings. Plain ASCII+CR over FC4 is separate from the addressed Short-ASCII dialect.",
+  "knowledge_summary": "Q1/QF/PV?/F provide electrical readings, load, temperature, operating state and ratings. Bounded optional PV1/PV2 reads add separate protocol-numbered voltage/current channels after both reply shapes qualify; they do not replace PV? or supply a total. Plain ASCII+CR over FC4 is separate from the addressed Short-ASCII dialect.",
   "source_keys": [
     "documentation_eybond_09c1",
     "github_issue_50_zl_power"

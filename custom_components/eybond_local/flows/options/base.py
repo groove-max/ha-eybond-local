@@ -302,7 +302,7 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
     async def _async_cloud_tools_unavailable(self) -> ConfigFlowResult:
         """Route an unavailable deep link without proposing an impossible mode."""
 
-        if not self._collector_capabilities().cloud_connection_supported:
+        if self._collector_capabilities().ha_only_required:
             return await self.async_step_init()
         return await self.async_step_connection()
 

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "source_key": "community_ges_modbus_v263",
+  "kind": "register_map",
+  "title": "Community-hosted Off/ON-Grid Energy Storage Inverter MODBUS Protocol V2.6.3",
+  "reference": "sha256:db454c4e3483639d5922eacbe06f05105f2d931ccdd8afb843daf2b9d6e1835e",
+  "captured_at": "2026-10-02",
+  "visibility": "public",
+  "summary": "V2.6.3 dated 2025-08-08, supplied through the quky Anenji split-phase community repository; supplier authenticity is not independently established. Pages 7-8 document P00 telemetry, page 14 model code 0xC738 and class 0xC739, and page 15 protocol version 0xC768. Model codes are not enumerated and the translated class labels do not establish split-phase identity. The downloaded 18-page PDF matches the September 29 evidence hash. FC03 reads are limited to 32 registers; 32-bit fields are low-word-first.",
+  "assertions": ["register_map"]
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "source_key": "issue_49_txau_fork_a4125af",
+  "kind": "third_party_impl",
+  "title": "Issue #49 txau Sumry/GES fork, statically reviewed at a4125af",
+  "reference": "project-comment:5944903597; fork:txau/ha-eybond-local@a4125afde16db21ee252da96d32dc966536e285e",
+  "captured_at": "2026-10-02",
+  "visibility": "public",
+  "summary": "Owner reports sensor agreement with the inverter display. Static review of the pinned head confirms a read-only catalog map and active-power registers, not the earlier AC voltage-times-current calculation. Detection still relies only on battery voltage and SOC, and mains total falls back to one leg when another is missing. Neither automatic binding nor these aggregate semantics were adopted. No fork code or scripts were executed.",
+  "assertions": ["register_map", "telemetry_validation"]
+}

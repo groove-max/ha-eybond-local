@@ -24,12 +24,21 @@ _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("test_eybond_09c1.py", "test_effective_metadata_snapshot.py"),
     ),
     (
+        "custom_components/eybond_local/protocol_catalogs/register_schemas/sumry_ges_7530/",
+        ("test_sumry_ges_7530.py", "test_register_schema_loader.py", "test_model_catalog.py"),
+    ),
+    (
         "custom_components/eybond_local/protocol_catalogs/register_schemas/hopewind_0237/",
         ("test_hopewind_driver.py", "test_modbus_catalog_driver.py"),
     ),
     (
         "custom_components/eybond_local/protocol_catalogs/register_schemas/must_pv_ph18/",
         ("test_must_driver.py", "test_must_bms.py", "test_canonical_telemetry.py", "test_derived_energy.py"),
+    ),
+    (
+        "custom_components/eybond_local/protocol_catalogs/profiles/must_pv_ph18/",
+        ("test_must_driver.py", "test_profile_loader.py", "test_write_exposure_policy.py",
+         "test_model_catalog.py", "test_runtime_inventory.py"),
     ),
     (
         "custom_components/eybond_local/protocol_catalogs/register_schemas/eybond_short_ascii/",
@@ -159,6 +168,7 @@ _EXACT_TESTS: dict[str, tuple[str, ...]] = {
     ),
     "custom_components/eybond_local/payload/urtu09c1.py": ("test_eybond_09c1.py",),
     "custom_components/eybond_local/drivers/eybond_09c1.py": ("test_eybond_09c1.py",),
+    "custom_components/eybond_local/drivers/eybond_09c1_pv.py": ("test_eybond_09c1.py",),
     "custom_components/eybond_local/support/masking.py": (
         "test_support_masking.py", "test_support_package.py", "test_support_bundle.py",
         "test_proxy_trace.py", "test_diagnostic_export.py",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 import sys
 import unittest
@@ -21,7 +22,15 @@ from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
 from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
 from custom_components.eybond_local.models import ProbeTarget  # noqa: E402
 from custom_components.eybond_local.metadata.register_schema_loader import load_register_schema
+from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
 from custom_components.eybond_local.payload.modbus import ModbusError
+from custom_components.eybond_local.schema import capability_write_exposure_allowed
+
+
+_PV3300_TESTED_KEYS = {
+    "grid_max_charge_current", "max_combined_charge_current",
+    "charge_source_priority", "energy_use_mode",
+}
 
 
 def _full_values(result: DriverReadResult) -> dict[str, object]:
@@ -77,6 +86,8 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
             ("PV", 18, "base", 0.14),
             ("PV", 1800, "base", 0.14),
             ("PH", 3300, "base", 0.14),
+            ("EP", 3300, "base", 0.14),
+            ("PV", 3500, "base", 0.14),
             ("PV", 3301, "base", 0.14),
         ):
             with self.subTest(prefix=prefix, suffix=suffix):
@@ -87,9 +98,74 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
                 }, command_responses=None, probe_target=target)
                 inverter = await driver.async_probe(transport, target)
                 self.assertEqual(inverter.register_schema_name, f"must_pv_ph18/{schema}.json")
+                self.assertEqual(inverter.profile_name, f"must_pv_ph18/{schema}.json")
+                self.assertEqual(inverter.capabilities, load_driver_profile(inverter.profile_name).capabilities)
                 values = _full_values(await driver.async_read_values(transport, inverter))
                 self.assertEqual(values["load_percent"], percent)
-                self.assertEqual(inverter.capabilities, driver.write_capabilities)
+                self.assertEqual({c.key for c in inverter.capabilities if c.tested},
+                                 _PV3300_TESTED_KEYS if schema == "pv3300" else set())
+                self.assertTrue(all(not c.tested for c in driver.write_capabilities))
+
+    def test_pv3300_only_changes_four_qualifications_and_keeps_write_gates(self) -> None:
+        base = load_driver_profile("must_pv_ph18/base.json")
+        pv3300 = load_driver_profile("must_pv_ph18/pv3300.json")
+        self.assertEqual(len(pv3300.capabilities), 27)
+        self.assertEqual(pv3300.groups, base.groups)
+        self.assertEqual(pv3300.presets, base.presets)
+        self.assertEqual({c.key for c in pv3300.capabilities if c.tested}, _PV3300_TESTED_KEYS)
+        for capability in pv3300.capabilities:
+            common = base.get_capability(capability.key)
+            if capability.key in _PV3300_TESTED_KEYS:
+                self.assertEqual(capability.provenance, "verified")
+                self.assertIn("PV3300 only", capability.support_notes)
+                self.assertIn("issuecomment-5939601570", capability.support_notes)
+                self.assertEqual(replace(capability, tested=common.tested,
+                                         provenance=common.provenance,
+                                         support_notes=common.support_notes), common)
+            else:
+                self.assertEqual(capability, common)
+        for profile in (base, pv3300):
+            for capability in profile.capabilities:
+                for mode in ("read_only", "auto", "full"):
+                    for confidence in ("none", "low", "medium", "high"):
+                        with self.subTest(profile=profile.key, key=capability.key,
+                                          mode=mode, confidence=confidence):
+                            self.assertEqual(capability_write_exposure_allowed(
+                                capability, control_mode=mode, detection_confidence=confidence,
+                                profile_name=profile.source_name, profile_source_scope="builtin",
+                                schema_source_scope="builtin",
+                            ), mode == "full" or (mode == "auto" and confidence == "high" and capability.tested))
+
+    async def test_pv3300_confirmed_sequences_use_fc06_and_round_trip_native_values(self) -> None:
+        class RecordingTransport(FixtureTransport):
+            async def async_send_payload(self, payload, *, route):
+                if payload[1] != 3:
+                    writes.append((payload[1], int.from_bytes(payload[2:4], "big"),
+                                   int.from_bytes(payload[4:6], "big")))
+                return await super().async_send_payload(payload, route=route)
+
+        driver = MustPvPh18Driver()
+        target = ProbeTarget(1, 255, 4)
+        writes = []
+        registers = {reg: 0 for start, count in _support_capture_ranges("must_pv_ph18/base.json")
+                     for reg in range(start, start + count)} | _must_registers() | {20001: 3300}
+        transport = RecordingTransport(registers=registers, command_responses=None, probe_target=target)
+        inverter = await driver.async_probe(transport, target)
+        sequences = (
+            ("grid_max_charge_current", 20125, ((30, 300), (25, 250), (30, 300))),
+            ("max_combined_charge_current", 20132, ((80, 800), (70, 700), (80, 800))),
+            ("charge_source_priority", 20143,
+             (("Solar and Utility", 2), ("Solar First", 0), ("Solar and Utility", 2))),
+            ("energy_use_mode", 20109,
+             (("UTI (Utility First)", 3), ("SOL (Solar First)", 4), ("UTI (Utility First)", 3))),
+        )
+        for key, register, values in sequences:
+            for native, raw in values:
+                with self.subTest(key=key, native=native):
+                    writes.clear()
+                    self.assertEqual(await driver.async_write_capability(transport, inverter, key, native), native)
+                    self.assertEqual(writes, [(6, register, raw)])
+                    self.assertEqual(_full_values(await driver.async_read_values(transport, inverter))[key], native)
 
     async def test_pv3300_charge_discharge_grid_and_flow_directions(self) -> None:
         from custom_components.eybond_local.canonical_telemetry import project_canonical_telemetry

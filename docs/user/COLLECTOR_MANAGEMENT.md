@@ -75,6 +75,11 @@ is a verified endpoint transaction, not just a saved preference:
 4. If activation is interrupted after proof was saved, the options menu offers
    a recovery or load-only continuation instead of silently starting over.
 
+This screen is also available when the collector is known but its inverter has
+not been identified yet. Opening it does not change the connection or enable
+inverter controls. A confirmed local-only ESP collector instead offers its
+Home Assistant endpoint settings, without vendor-cloud modes.
+
 Advanced endpoint actions and services exist for recovery and developer use,
 but they are not a second operating-profile selector. Polling and inverter
 detection remain on their own screen.

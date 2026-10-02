@@ -39,6 +39,7 @@ If you are extending or maintaining the project, use [../CONTRIBUTING.md](../CON
 ## Architecture and design references
 
 - [SMG Protocol Maps](architecture/SMG_PROTOCOL_MAPS.md) — evidence, independent protocol branches, generic controls, and model-specific overrides.
+- [Sumry/GES 0x7530 Qualification](architecture/SUMRY_GES_7530.md) — offline read-only evidence subset, blocked automatic identity, and the specific missing diagnostic reads.
 - [Collector Connection Architecture](architecture/CONNECTION_ARCHITECTURE.md) — maintainer reference for the connection axes, session/PN ownership, `callback_on_demand`, endpoint ownership rules, and what must not be reintroduced.
 - [Cloud Learning Architecture](architecture/CLOUD_LEARNING_ARCHITECTURE.md) — provider-neutral learning methods, typed API sources, trust boundaries, and read-only metadata evidence.
 - [Typed Telemetry Migration](architecture/TYPED_TELEMETRY.md) — staged replacement of the broad runtime value mapping with a strict measurement contract.

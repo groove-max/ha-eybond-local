@@ -1,0 +1,31 @@
+{
+  "extends": "must_pv_ph18/base.json",
+  "profile_key": "must_pv_ph18/pv3300.json",
+  "title": "MUST PV3300",
+  "capabilities": [
+    {
+      "key": "grid_max_charge_current",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "PV3300 only: issue #46 owner reports successful local changes and HA readback from 30 to 25 to 30 A (https://github.com/groove-max/ha-eybond-local/issues/46#issuecomment-5939601570). Firmware write/readback evidence, not independent physical-behavior validation or validation of the full documented range."
+    },
+    {
+      "key": "max_combined_charge_current",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "PV3300 only: issue #46 owner reports successful local changes and HA readback from 80 to 70 to 80 A (https://github.com/groove-max/ha-eybond-local/issues/46#issuecomment-5939601570). Firmware write/readback evidence, not independent physical-behavior validation or validation of the full documented range."
+    },
+    {
+      "key": "charge_source_priority",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "PV3300 only: issue #46 owner reports successful local changes and HA readback from Solar and Utility to Solar First and back (https://github.com/groove-max/ha-eybond-local/issues/46#issuecomment-5939601570). Firmware write/readback evidence, not independent physical-behavior validation or validation of every enum option."
+    },
+    {
+      "key": "energy_use_mode",
+      "tested": true,
+      "provenance": "verified",
+      "support_notes": "PV3300 only: issue #46 owner reports successful local changes and HA readback from UTI to SOL to UTI (https://github.com/groove-max/ha-eybond-local/issues/46#issuecomment-5939601570). Firmware write/readback evidence, not independent physical-behavior validation or validation of every enum option."
+    }
+  ]
+}

@@ -63,9 +63,18 @@ class CollectorCapabilityProfile:
 
     @property
     def ha_only_required(self) -> bool:
-        """Return whether the collector has no supported vendor-cloud side."""
+        """Return a positive local-only restriction, not an unknown capability.
 
-        return not self.cloud_connection_supported
+        An unclassified collector has not earned cloud-operation capabilities,
+        but that is not evidence that its current route must be HA-only. Keep
+        connection setup reachable while inverter/collector identity is pending.
+        Physical operations still require their own live management preflight.
+        """
+
+        return (
+            self.collector_kind != COLLECTOR_KIND_UNKNOWN
+            and not self.cloud_connection_supported
+        )
 
 
 FACTORY_COLLECTOR_CAPABILITIES = CollectorCapabilityProfile(

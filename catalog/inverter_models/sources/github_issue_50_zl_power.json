@@ -2,11 +2,11 @@
   "schema_version": 1,
   "source_key": "github_issue_50_zl_power",
   "kind": "github_issue",
-  "title": "ZL Power GSIII protocol 09C1 capture",
-  "reference": "https://github.com/groove-max/ha-eybond-local/issues/50",
-  "captured_at": "2026-09-30",
+  "title": "ZL Power GSIII 09C1 local runtime and separate PV command captures",
+  "reference": "https://github.com/groove-max/ha-eybond-local/issues/50#issuecomment-5945338871",
+  "captured_at": "2026-10-01",
   "visibility": "public",
-  "summary": "Owner-supplied cloud protocol identity is 2497/09C1; twelve captured FC4 read cycles match the manufacturer's fixed shapes. The reported retail model is not inferred from those replies. Local driver operation remains to be confirmed.",
+  "summary": "Owner cloud protocol identity is 2497/09C1; twelve earlier FC4 cycles match the manufacturer's fixed shapes. Two subsequent local support snapshots show eybond_09c1 connected with 22 fresh readings and no raw timeouts. Separate PV1/PV2 command captures qualify voltage/current in the fixed PV reply shape; PV? covers one channel on this unit, not a combined total. Physical labels appear crossed relative to protocol command numbers, but captures are non-simultaneous and do not establish a global port mapping, universal command support, or measured total power. Retail identity remains owner-reported, not inferred from replies.",
   "assertions": [
     "commercial_identity",
     "runtime_compatibility"

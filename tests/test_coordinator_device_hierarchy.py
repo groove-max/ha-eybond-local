@@ -3304,6 +3304,30 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertEqual(coordinator.collector_operation_mode, "custom")
         self.assertTrue(coordinator.collector_uses_home_assistant_route)
 
+    def test_unknown_collector_keeps_callback_route_and_udp_diagnostics(self) -> None:
+        # Missing inverter identity cannot silently turn a callback collector
+        # into a cloudless ESP or erase its valid callback diagnostics (#49).
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(
+            data={
+                "connection_strategy": "callback_on_demand",
+                "endpoint_control_policy": "external",
+                "driver_hint": "auto",
+            },
+            options={},
+        )
+        coordinator.data = self.RuntimeSnapshot(values={}, collector=None)
+        snapshot = self.RuntimeSnapshot(values={
+            "collector_udp_reply": "rsp>server=1;",
+            "collector_udp_reply_from": "192.0.2.20:58899",
+        })
+
+        self.assertEqual(coordinator.collector_capabilities.collector_kind, "unknown")
+        self.assertFalse(coordinator.collector_uses_home_assistant_route)
+        self.assertFalse(coordinator.collector_capabilities.proxy_capture)
+        coordinator._prune_collector_values_for_connection(snapshot)
+        self.assertEqual(snapshot.values["collector_udp_reply"], "rsp>server=1;")
+
     def test_unproven_external_inbound_is_reported_custom(self) -> None:
         # Inbound alone cannot claim the complete HA-only product profile when
         # the integration neither owns the endpoint nor has an inbound proof.

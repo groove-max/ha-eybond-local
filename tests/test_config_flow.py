@@ -6970,6 +6970,21 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             {"Cloud + Home Assistant", "Home Assistant only", "Custom configuration"},
         )
 
+    async def test_unknown_collector_cloud_tools_fallback_shows_connection_form(self) -> None:
+        options = self._make_options_flow()
+        options._config_entry.data.pop("detected_model")
+        options._config_entry.data.pop("detected_serial")
+        options._config_entry.runtime_data = None
+
+        result = await options._async_cloud_tools_unavailable()
+
+        self.assertEqual(options._collector_capabilities().collector_kind, "unknown")
+        self.assertFalse(options._collector_capabilities().cloud_connection_supported)
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "connection")
+        self.assertEqual(options.hass.config_entries.updates, [])
+        self.assertIsNone(options._transition_task)
+
     async def test_options_runtime_step_forces_inbound_for_bridge_on_submit(self) -> None:
         # Phase 4: a bridge dials Home Assistant on its own -> inbound. The
         # strategy selector is hidden for it and inbound is persisted.

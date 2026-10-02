@@ -1,0 +1,35 @@
+{
+  "schema_key": "sumry_ges_7530_evidence_subset",
+  "title": "Sumry/GES 0x7530 evidence subset (not enabled for detection)",
+  "driver_key": "modbus_catalog",
+  "protocol_family": "sumry_ges_7530",
+  "blocks": [
+    {"key": "battery", "start": 30000, "count": 3, "function": 3},
+    {"key": "output_phase_a", "start": 30024, "count": 3, "function": 3},
+    {"key": "mains_phase_a", "start": 30058, "count": 3, "function": 3}
+  ],
+  "spec_sets": {
+    "runtime": [
+      {"key": "battery_voltage", "register": 30000, "divisor": 10, "decimals": 1},
+      {"key": "battery_current", "register": 30001, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "battery_percent", "register": 30002},
+      {"key": "output_voltage_phase_a", "register": 30024, "divisor": 10, "decimals": 1},
+      {"key": "output_current_phase_a", "register": 30025, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "output_frequency", "register": 30026, "divisor": 100, "decimals": 2},
+      {"key": "mains_voltage_phase_a", "register": 30058, "divisor": 10, "decimals": 1},
+      {"key": "mains_current_phase_a", "register": 30059, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "mains_frequency", "register": 30060, "divisor": 100, "decimals": 2}
+    ]
+  },
+  "measurement_descriptions": [
+    {"key": "battery_voltage", "name": "Battery Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "battery_current", "name": "Battery Current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+    {"key": "battery_percent", "name": "Battery State of Charge", "unit": "%", "device_class": "battery", "state_class": "measurement"},
+    {"key": "output_voltage_phase_a", "name": "Output Voltage Phase A", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "output_current_phase_a", "name": "Output Current Phase A", "unit": "A", "device_class": "current", "state_class": "measurement"},
+    {"key": "output_frequency", "name": "Output Frequency", "unit": "Hz", "device_class": "frequency", "state_class": "measurement"},
+    {"key": "mains_voltage_phase_a", "name": "Mains Voltage Phase A", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "mains_current_phase_a", "name": "Mains Current Phase A", "unit": "A", "device_class": "current", "state_class": "measurement"},
+    {"key": "mains_frequency", "name": "Mains Frequency", "unit": "Hz", "device_class": "frequency", "state_class": "measurement"}
+  ]
+}

@@ -13,7 +13,8 @@ import re
 from ..link_models import EybondLinkRoute
 from ..link_transport import PayloadLinkTransport, async_send_payload
 
-READ_COMMANDS = ("Q1", "QF", "PV?", "F", "G?")
+PV_CHANNEL_COMMANDS = ("PV1", "PV2")
+READ_COMMANDS = ("Q1", "QF", "PV?", "F", "G?", *PV_CHANNEL_COMMANDS)
 PROTOCOL_ID = "EYBOND_09C1"
 
 
@@ -95,6 +96,21 @@ def parse_pv(frame: bytes) -> dict[str, object]:
         "urtu09c1_pv_length": len(frame),
         "pv_voltage": _number(body[:4], rb"[0-9]{4}") / 10,
         "pv_current": _number(body[5:8], rb"[0-9]{3}") / 10,
+    }
+
+
+def parse_pv_channel(frame: bytes, *, command: str) -> dict[str, object]:
+    """Decode a qualified reply using protocol, not physical-port, numbering.
+
+    Owner captures qualify the same fixed shape as PV?, not a capability flag,
+    channel echo, combined reading, power measurement or energy counter.
+    """
+    if type(command) is not str or command not in PV_CHANNEL_COMMANDS:
+        raise Urtu09C1Error("09c1_pv_channel_unsupported")
+    values = parse_pv(frame)
+    return {
+        f"{command.lower()}_voltage": values["pv_voltage"],
+        f"{command.lower()}_current": values["pv_current"],
     }
 
 

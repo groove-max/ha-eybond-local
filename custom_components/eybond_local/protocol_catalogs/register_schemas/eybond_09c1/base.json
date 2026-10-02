@@ -82,6 +82,34 @@
       "state_class": "measurement"
     },
     {
+      "key": "pv1_voltage",
+      "name": "PV1 Voltage (Protocol)",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv1_current",
+      "name": "PV1 Current (Protocol)",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv2_voltage",
+      "name": "PV2 Voltage (Protocol)",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "pv2_current",
+      "name": "PV2 Current (Protocol)",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
       "key": "temperature",
       "name": "Inverter Temperature",
       "unit": "°C",
@@ -178,6 +206,7 @@
   "notes": [
     "09C1 XML and captured FC4 replies qualify this family, not the GSIII retail model or an inverter serial.",
     "Q1 input frequency and QF output frequency have separate owners. Q1 is mandatory; unavailable QF/PV?/F groups remove old values.",
+    "PV? remains a legacy reading, not a total. Optional PV1/PV2 values require both reply shapes to qualify per runtime, retain protocol numbering, and have independent bounded freshness; no physical-port swap or summed value is inferred.",
     "F reports rated power, including 12K=12000W, never measured load power. No SOC, power, energy or controls are inferred.",
     "PV energy and fault-code encoding, G? text and the no-AC-output flag remain raw support evidence pending independent qualification."
   ]

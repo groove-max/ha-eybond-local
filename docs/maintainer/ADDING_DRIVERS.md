@@ -65,7 +65,8 @@ the captured EyeBond routing uses **devcode 1, collector address 255**. Cloud
 protocol identity must not be mistaken for the routing devcode.
 
 Commands are plain `Q1`, `QF`, `PV?`, `F`, `G?` plus CR, without a binary address
-or PI30/URTU1920 checksum. Detection requires all four parsed response shapes
+or PI30/URTU1920 checksum; runtime/support reads also allow optional `PV1`/`PV2`.
+Detection still requires only the original four parsed response shapes
 (`Q1` 47, `QF` 6, `PV?` 19, `F` 22 bytes). The schema and family descriptor own
 the public surface; no collector PN or rating becomes a retail identity.
 
@@ -75,6 +76,40 @@ G? text, the ambiguous PV fault glyph, the no-output status bit and the custom
 PV energy encoding remain raw support evidence. Rated power is never live power;
 the family has no controls even in Full Control. Synthetic tests cover distinct
 frequency ownership, scaling, malformed/foreign replies and the real HA lifecycle.
+
+The [issue #50 follow-up](https://github.com/groove-max/ha-eybond-local/issues/50#issuecomment-5945338871)
+provides separate PV1/PV2 command captures and two connected local-runtime
+snapshots. They qualify the same strict 19-byte PV shape and tenths scaling,
+not a capability flag or a physical-port identity. The snapshots/commands are
+non-simultaneous; this unit's physical labels are crossed relative to commands.
+Neither the supplied LW/GS V1.01 document nor the existing family identity
+distinguishes PV1/PV2 support across all variants. Replies have no channel echo:
+even two valid replies cannot prove distinct hardware channels or detect a
+firmware alias to PV?. Equal/zero readings are valid, not an unsupported test.
+
+The extension therefore uses per-runtime empirical qualification: both commands
+must first have valid unexpired samples before either extension channel is
+published. Once qualified, failure/expiry removes only that channel. There is
+no PV?-to-channel fallback and no inferred total. `QF`/`PV?`/`F` retain their
+every-cycle, no-cache semantics. With runtime state, the extension makes at most
+one additional four-second-bounded request per successful Q1 cycle; each channel
+has a 30-second minimum retry interval. Four consecutive invalid replies/timeouts
+use the existing namespaced unsupported cache (`09c1:PV1`, `09c1:PV2`) and explicit
+re-check action. Connection loss does not count as unsupported. Stateless
+callers use only the legacy read plan, since they cannot retain the retry budget.
+
+Channel values have a TTL fixed at acquisition, `max(60, 3 * poll_interval)`
+seconds (60 without a poll interval). FULL snapshots omit failed/expired samples;
+`urtu09c1_pv_status` distinguishes `ok` from `cached`, with per-channel age
+diagnostics. Cancellation, mandatory failure, observed link loss, clock rollback,
+transport/inverter replacement and runtime-state reset clear samples and pair
+qualification. These are runtime-scoped samples, not proof of socket continuity;
+the payload transport contract has no session-generation identity. Samples are
+never re-dated when reused and samples/qualification are never persisted.
+Explicit support capture reads both
+new commands even when the runtime negative cache skips them and retains raw
+malformed/NAK replies for evidence. PV energy/fault semantics and all writes
+remain unqualified.
 
 The public manufacturer's map is available as
 [09C1 protocol 2497](https://api.valueclouds.com/ppe/api/auth/web/downloadAgreement?devcode=2497).

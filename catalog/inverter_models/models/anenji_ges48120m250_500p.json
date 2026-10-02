@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "model_key": "anenji_ges48120m250_500p",
+  "manufacturer": "Anenji",
+  "model": "GES48120M250-500P",
+  "aliases": ["Anenji white 12kW split-phase"],
+  "lifecycle": "research",
+  "variants": [
+    {
+      "variant_key": "sumry_ges_7530_unqualified_identity",
+      "label": "0x7530 telemetry observed; automatic identity not qualified",
+      "device_descriptor_keys": [],
+      "known_firmware": []
+    }
+  ],
+  "validation": {"hardware": "captured", "telemetry": "partial", "controls": "none"},
+  "coverage": {
+    "runtime_control_surface": "none",
+    "smartess_control_surface": "unknown",
+    "vendor_register_map": "partial",
+    "notes": [
+      "CRC-valid owner FC03 replies corroborate battery and phase-A output/mains voltage, current and frequency locations in the community-hosted V2.6.3 PDF.",
+      "A small read-only schema is retained for offline replay only; no runtime descriptor, detection action or model-selection bypass enables it.",
+      "The owner's fork reports screen agreement, but voltage/SOC plausibility is not family identity. Model/class registers 0xC738/0xC739 have not been captured."
+    ]
+  },
+  "known_limitations": [
+    "Automatic detection remains unsupported pending a qualified model/class fingerprint; the PDF gives no GES-specific model-code value.",
+    "Split-phase second-leg, active-power direction, CT and temperature-location semantics are not qualified by the available raw evidence.",
+    "No derived power totals, inferred watts from AC voltage/current, controls or write profiles are exposed.",
+    "The protocol PDF is community-hosted, not independently authenticated supplier documentation."
+  ],
+  "knowledge_summary": "Issue #49 establishes an Anenji GES48120M250-500P answering the Sumry/GES-style 0x7530 holding-register map, not the low-address SMG map. Battery and phase-A telemetry have a source-backed offline decoder. The public fork is useful corroboration, not a safe automatic binding: immutable model/class values and split-phase semantics remain unresolved. This research record does not claim runtime support.",
+  "source_keys": [
+    "issue_49_ges_7530_read_evidence",
+    "community_ges_modbus_v263",
+    "issue_49_txau_fork_a4125af"
+  ]
+}

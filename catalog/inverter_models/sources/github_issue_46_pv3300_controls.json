@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_46_pv3300_controls",
+  "kind": "github_comment",
+  "title": "PV3300 owner-confirmed local writes and HA readback for four controls",
+  "reference": "project-issue:46#issuecomment-5939601570",
+  "captured_at": "2026-10-02",
+  "visibility": "public",
+  "summary": "Owner reports successful changes and HA readback for Grid Max Charge Current 30 to 25 to 30 A, Max Combined Charge Current 80 to 70 to 80 A, Charge Source Priority Solar and Utility to Solar First and back, and Energy Use Mode UTI to SOL to UTI. This qualifies only these four controls on the locally identified PV3300. It is user-reported firmware write/readback evidence, not independent physical-behavior validation, validation of every range/enum value, or qualification of other MUST models or the remaining 23 controls. The original current-zero and separate Ongrid Switch questions remain distinct.",
+  "assertions": ["write_validation"]
+}

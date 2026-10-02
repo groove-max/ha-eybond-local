@@ -16,7 +16,8 @@ from tools.validate import affected_test_files
 class AffectedValidationSelectionTests(unittest.TestCase):
     def test_09c1_changes_select_wire_and_family_regressions(self) -> None:
         for path in (
-            "payload/urtu09c1.py", "drivers/eybond_09c1.py", "drivers/registry.py",
+            "payload/urtu09c1.py", "drivers/eybond_09c1.py", "drivers/eybond_09c1_pv.py",
+            "drivers/registry.py",
             "drivers/catalog_probe.py", "metadata/effective_metadata_snapshot.py",
             "protocol_catalogs/register_schemas/eybond_09c1/base.json",
             "protocol_catalogs/inverter_catalog.json",
@@ -79,6 +80,23 @@ class AffectedValidationSelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn("test_short_ascii_optional.py",
                               self._selected(f"custom_components/eybond_local/{path}"))
+
+    def test_must_variant_profiles_select_model_scoped_control_regressions(self) -> None:
+        selected = self._selected(
+            "custom_components/eybond_local/protocol_catalogs/profiles/must_pv_ph18/pv3300.json"
+        )
+        self.assertTrue({
+            "test_must_driver.py", "test_profile_loader.py", "test_write_exposure_policy.py",
+            "test_model_catalog.py", "test_runtime_inventory.py",
+        }.issubset(selected))
+
+    def test_ges_offline_schema_selects_evidence_and_nonactivation_checks(self) -> None:
+        selected = self._selected(
+            "custom_components/eybond_local/protocol_catalogs/register_schemas/sumry_ges_7530/base.json"
+        )
+        self.assertTrue({
+            "test_sumry_ges_7530.py", "test_register_schema_loader.py", "test_model_catalog.py",
+        }.issubset(selected))
 
     def test_smg_metadata_and_driver_select_compatible_protocol_replays(self) -> None:
         for path in (

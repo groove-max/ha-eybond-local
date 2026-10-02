@@ -101,8 +101,10 @@ class CollectorCapabilityProfileTests(unittest.TestCase):
         self.assertFalse(profile.virtual_bridge)
         self.assertEqual(profile.collector_kind, COLLECTOR_KIND_UNKNOWN)
         self.assertFalse(profile.cloud_connection_supported)
-        self.assertTrue(profile.ha_only_required)
+        self.assertFalse(profile.ha_only_required)
         self.assertFalse(profile.proxy_capture)
+        self.assertFalse(profile.shadow_learning)
+        self.assertFalse(profile.cloud_evidence)
 
     def test_persisted_inverter_identity_keeps_factory_capabilities(self) -> None:
         profile = collector_capability_profile_from_runtime(

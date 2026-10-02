@@ -19,8 +19,9 @@ from synthetic import SYNTHETIC_COLLECTOR_IP, SYNTHETIC_COLLECTOR_PN, SYNTHETIC_
 
 @pytest.mark.parametrize("mode", ["auto", "full"])
 @pytest.mark.parametrize("already_detected", [False, True])
+@pytest.mark.parametrize("pv_channels", [False, True])
 async def test_09c1_entities_reload_and_optional_failure(
-    hass, fake_runtime, monkeypatch, mode, already_detected,
+    hass, fake_runtime, monkeypatch, mode, already_detected, pv_channels,
 ):
     from conftest import FakeRuntimeManager
 
@@ -28,31 +29,47 @@ async def test_09c1_entities_reload_and_optional_failure(
         connected = True
         fail = False
         optional_fail = False
+        pv1_fail = False
+        pv1_zero = False
 
         async def async_send_payload(self, payload, *, route, request_timeout=None):
             assert (route.devcode, route.collector_addr) == (1, 255)
             if self.fail or (self.optional_fail and payload != b"Q1\r"):
                 raise TimeoutError("synthetic_read_timeout")
+            if payload == b"PV1\r":
+                if self.pv1_fail:
+                    raise TimeoutError("synthetic_channel_timeout")
+                if self.pv1_zero:
+                    return b"(0000 000 0 000000\r"
             return {
                 b"Q1\r": b"(232.0 241.0 229.0 025 49.9 52.4 31.0 00100001\r",
                 b"QF\r": b"(50.1\r", b"PV?\r": b"(3215 123 0 002180\r",
                 b"F\r": b"(230.0 12K 48.00 50.0\r",
                 b"G?\r": b"(Normal 04  \r",
+                b"PV1\r": b"(3105 101 0 003470\r", b"PV2\r": b"(2780 086 0 001230\r",
             }[payload]
 
     driver, transport = Eybond09C1Driver(), Transport()
     inverter = await driver.async_probe(transport, ProbeTarget(1, 255, 1))
     assert inverter is not None
+    read_clock = 0.0
 
     async def refresh(self, *, poll_interval=None):
+        nonlocal read_clock
+        read_clock += 31  # Both channels become due without real device waits.
+        if not hasattr(self, "pv_read_state"):
+            self.pv_read_state = {}
         try:
-            read = await driver.async_read_values(transport, inverter)
+            read = await driver.async_read_values(
+                transport, inverter, runtime_state=self.pv_read_state if pv_channels else None,
+                now_monotonic=read_clock, poll_interval=30,
+            )
         except TimeoutError:
             return RuntimeSnapshot(connected=False, inverter=inverter, values={})
         return RuntimeSnapshot(
             connected=True,
             collector=CollectorInfo(remote_ip=SYNTHETIC_COLLECTOR_IP, collector_pn=SYNTHETIC_COLLECTOR_PN),
-            inverter=inverter, values=dict(read.values),
+            inverter=inverter, values={**read.values, **read.diagnostics},
         )
 
     async def unexpected_write(*args, **kwargs):
@@ -83,8 +100,9 @@ async def test_09c1_entities_reload_and_optional_failure(
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    await entry.runtime_data.async_refresh()
-    await hass.async_block_till_done()
+    for _ in range(2 if pv_channels else 1):
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
     registry = er.async_get(hass)
 
     def sensor_id(key):
@@ -96,6 +114,9 @@ async def test_09c1_entities_reload_and_optional_failure(
         "temperature": "31.0", "pv_voltage": "321.5", "pv_current": "12.3",
         "protocol_id": "EYBOND_09C1", "operating_mode": "Bypass",
     }
+    if pv_channels:
+        expected.update({"pv1_voltage": "310.5", "pv1_current": "10.1",
+                         "pv2_voltage": "278.0", "pv2_current": "8.6"})
     identities = {key: sensor_id(key) for key in expected}
     for key, value in expected.items():
         assert identities[key] is not None, key
@@ -112,30 +133,68 @@ async def test_09c1_entities_reload_and_optional_failure(
                 if entity.device_id == device_id]
     assert all(entity.domain not in {"select", "number", "switch", "text", "time"} for entity in entities)
     assert not any(entity.unique_id.endswith("_sync_inverter_clock") for entity in entities)
-    for key in ("battery_soc", "output_power", "pv_power", "energy_total", "serial_number"):
+    for key in ("battery_soc", "output_power", "pv_power", "pv1_power", "pv2_power",
+                "estimated_pv_energy", "energy_total", "serial_number"):
         assert sensor_id(key) is None, key
 
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
-    await entry.runtime_data.async_refresh()
-    await hass.async_block_till_done()
+    for _ in range(2 if pv_channels else 1):
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
     assert {key: sensor_id(key) for key in expected} == identities
     assert registry.async_get(identities["grid_voltage"]).device_id == device_id
+
+    if pv_channels:
+        assert entry.runtime_data.data.values["urtu09c1_pv_qualified"] is True
+        transport.pv1_fail = True
+        for _ in range(2):
+            await entry.runtime_data.async_refresh()
+            await hass.async_block_till_done()
+        for key in ("pv1_voltage", "pv1_current"):
+            assert hass.states.get(identities[key]).state == "unavailable", key
+        assert hass.states.get(identities["pv2_voltage"]).state == "278.0"
+        assert hass.states.get(identities["pv_voltage"]).state == "321.5"
+        transport.pv1_fail = False
+        transport.pv1_zero = True
+        for _ in range(2):
+            await entry.runtime_data.async_refresh()
+            await hass.async_block_till_done()
+        assert hass.states.get(identities["pv1_voltage"]).state == "0.0"
+        assert hass.states.get(identities["pv1_current"]).state == "0.0"
+        transport.pv1_zero = False
 
     transport.optional_fail = True
     await entry.runtime_data.async_refresh()
     await hass.async_block_till_done()
+    if pv_channels:
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        for key in ("pv1_voltage", "pv1_current", "pv2_voltage", "pv2_current"):
+            assert hass.states.get(identities[key]).state == "unavailable", key
     assert hass.states.get(identities["grid_frequency"]).state == "49.9"
     for key in ("output_frequency", "pv_voltage", "pv_current"):
         assert hass.states.get(identities[key]).state == "unavailable", key
     transport.fail = True
     await entry.runtime_data.async_refresh()
     await hass.async_block_till_done()
+    if pv_channels:
+        # Mandatory failure cleared pair qualification; no old peer may revive.
+        assert hass.states.get(identities["pv2_voltage"]).state == "unavailable"
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
     for key in ("grid_voltage", "battery_voltage", "load_percent"):
         assert hass.states.get(identities[key]).state == "unavailable", key
     transport.fail = transport.optional_fail = False
     await entry.runtime_data.async_refresh()
     await hass.async_block_till_done()
+    if pv_channels:
+        # A new valid pair is needed after a mandatory failure. Neither the
+        # old second channel nor PV? may fill in the unqueried extension.
+        for key in ("pv1_voltage", "pv2_voltage"):
+            assert hass.states.get(identities[key]).state == "unavailable"
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
     for key, value in expected.items():
         assert hass.states.get(identities[key]).state == value, key
     archive_path = Path(await entry.runtime_data.async_export_support_package())
@@ -147,6 +206,8 @@ async def test_09c1_entities_reload_and_optional_failure(
     evidence = await hass.async_add_executor_job(inspect_archive)
     assert evidence["capture_kind"] == "09c1_read_only"
     assert evidence["failures"] == {}
-    assert set(evidence["responses_hex"]) == {"Q1", "QF", "PV?", "F", "G?"}
+    assert set(evidence["responses_hex"]) == {"Q1", "QF", "PV?", "F", "G?", "PV1", "PV2"}
+    assert bytes.fromhex(evidence["responses_hex"]["PV1"]) == b"(3105 101 0 003470\r"
+    assert bytes.fromhex(evidence["responses_hex"]["PV2"]) == b"(2780 086 0 001230\r"
     assert bytes.fromhex(evidence["responses_hex"]["F"]) == b"(230.0 12K 48.00 50.0\r"
     assert await hass.config_entries.async_unload(entry.entry_id)

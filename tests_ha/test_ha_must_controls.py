@@ -18,16 +18,22 @@ from custom_components.eybond_local.telemetry import TypedTelemetryFrame, fold_d
 from synthetic import SYNTHETIC_COLLECTOR_IP, SYNTHETIC_COLLECTOR_PN, SYNTHETIC_SERVER_IP
 
 
+PV3300_TESTED_KEYS = {
+    "grid_max_charge_current", "max_combined_charge_current",
+    "charge_source_priority", "energy_use_mode",
+}
+
+
 @pytest.mark.parametrize("mode", ["read_only", "auto", "full"])
 @pytest.mark.parametrize("upgrade", [False, True])
 @pytest.mark.parametrize("has_bms", [False, True])
-async def test_must_unverified_controls_and_bms(hass, fake_runtime, monkeypatch, mode, upgrade, has_bms):
+async def test_must_pv3300_qualified_controls_and_bms(hass, fake_runtime, monkeypatch, mode, upgrade, has_bms):
     from conftest import FakeRuntimeManager
 
     registers = {reg: 0 for start, count in _support_capture_ranges("must_pv_ph18/base.json")
                  for reg in range(start, start + count)} | {
         20000: int.from_bytes(b"PV", "big"), 20001: 3300,
-        20101: 1, 20109: 1, 20125: 100, 20143: 0, 25205: 512,
+        20101: 1, 20109: 3, 20125: 300, 20132: 800, 20143: 2, 25205: 512,
         25210: 1, 25211: 1, 25212: 1,
         109: 512, 110: 65526, 111: 25, 112: 0, 113: 73,
     }
@@ -35,18 +41,19 @@ async def test_must_unverified_controls_and_bms(hass, fake_runtime, monkeypatch,
         registers.update(dict.fromkeys(range(109, 114), 0))
     clock = [100.0]
     capture_read_counts = []
+    allow_writes = [False]
 
-    class ReadOnlyTransport(FixtureTransport):
+    class SyntheticTransport(FixtureTransport):
         requests = None
 
         async def async_send_payload(self, payload, *, route):
-            assert payload[1] == 3, "Setup/reload/support export must never write"
+            assert payload[1] == 3 or allow_writes[0], "Setup/reload/support export must never write"
             self.requests.append((int.from_bytes(payload[2:4], "big"), int.from_bytes(payload[4:6], "big")))
             return await super().async_send_payload(payload, route=route)
 
     driver = MustPvPh18Driver()
     target = ProbeTarget(1, 255, 4)
-    transport = ReadOnlyTransport(registers=registers, command_responses=None, probe_target=target)
+    transport = SyntheticTransport(registers=registers, command_responses=None, probe_target=target)
     transport.requests = []
     inverter = await driver.async_probe(transport, target)
     assert inverter is not None
@@ -71,13 +78,14 @@ async def test_must_unverified_controls_and_bms(hass, fake_runtime, monkeypatch,
         capture_read_counts.append(transport.requests.count((109, 5)) - before)
         return evidence
 
-    async def unexpected_write(*args, **kwargs):
-        pytest.fail("Blocked controls or automatic setup must not reach the write transport")
+    async def write(self, key, value):
+        assert allow_writes[0], "Blocked controls or automatic setup must not reach the write transport"
+        return await driver.async_write_capability(transport, getattr(self, "initial_binding", inverter), key, value)
 
     monkeypatch.setattr(FakeRuntimeManager, "set_initial_inverter_binding", seed_binding, raising=False)
     monkeypatch.setattr(FakeRuntimeManager, "async_refresh", refresh)
     monkeypatch.setattr(FakeRuntimeManager, "async_capture_support_evidence", capture)
-    monkeypatch.setattr(FakeRuntimeManager, "async_write_capability", unexpected_write)
+    monkeypatch.setattr(FakeRuntimeManager, "async_write_capability", write)
     entry = MockConfigEntry(domain=DOMAIN, version=5,
         unique_id=f"collector:{SYNTHETIC_COLLECTOR_PN}",
         data={"connection_type": "eybond", "connection_mode": "known_ip",
@@ -106,18 +114,20 @@ async def test_must_unverified_controls_and_bms(hass, fake_runtime, monkeypatch,
         await entry.runtime_data.async_refresh()
         await hass.async_block_till_done()
         capabilities = entry.runtime_data.data.inverter.capabilities
-        assert len(capabilities) == 27 and all(not c.tested for c in capabilities)
+        assert len(capabilities) == 27
+        assert {c.key for c in capabilities if c.tested} == PV3300_TESTED_KEYS
+        assert entry.runtime_data.effective_profile_name == "must_pv_ph18/pv3300.json"
         for capability in capabilities:
             kind = entity_kind_for_capability(capability)
             entity_id = registry.async_get_entity_id(kind, DOMAIN, f"{entry.entry_id}_{kind}_{capability.key}")
-            if mode == "full":
+            if mode == "full" or (mode == "auto" and capability.tested):
                 assert entity_id is not None, capability.key
                 assert hass.states.get(entity_id) is not None
             else:
                 assert entity_id is None, capability.key
                 with pytest.raises(PermissionError, match="capability_control_disabled"):
                     await entry.runtime_data.async_write_capability(capability.key, 1)
-        if mode == "full" and upgrade:
+        if mode in {"auto", "full"} and upgrade:
             assert registry.async_get_entity_id("select", DOMAIN, f"{entry.entry_id}_select_energy_use_mode") == old_id
             assert registry.async_get(old_id).name == "My priority"
         assert (109, 5) in transport.requests
@@ -128,6 +138,27 @@ async def test_must_unverified_controls_and_bms(hass, fake_runtime, monkeypatch,
             assert hass.states.get(entity_id).state == (value if has_bms else "unavailable")
         assert await hass.config_entries.async_reload(entry.entry_id)
         await hass.async_block_till_done()
+
+    if mode != "read_only":
+        # Explicit user actions only, through real HA number/select services;
+        # the transport is synthetic and the field-confirmed values are restored.
+        allow_writes[0] = True
+        for kind, key, register, changes in (
+            ("number", "grid_max_charge_current", 20125, ((25, 250), (30, 300))),
+            ("number", "max_combined_charge_current", 20132, ((70, 700), (80, 800))),
+            ("select", "charge_source_priority", 20143, (("Solar First", 0), ("Solar and Utility", 2))),
+            ("select", "energy_use_mode", 20109, (("SOL (Solar First)", 4), ("UTI (Utility First)", 3))),
+        ):
+            entity_id = registry.async_get_entity_id(kind, DOMAIN, f"{entry.entry_id}_{kind}_{key}")
+            for native, raw in changes:
+                await hass.services.async_call(kind, "set_value" if kind == "number" else "select_option",
+                    {"entity_id": entity_id, "value" if kind == "number" else "option": native}, blocking=True)
+                assert transport._registers[register] == raw
+                await entry.runtime_data.async_refresh()
+                await hass.async_block_till_done()
+                state = hass.states.get(entity_id).state
+                assert (float(state) if kind == "number" else state) == native
+        allow_writes[0] = False
 
     soc_id = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_battery_soc")
     registry.async_update_entity(soc_id, name="My BMS SOC")
@@ -160,3 +191,35 @@ async def test_must_unverified_controls_and_bms(hass, fake_runtime, monkeypatch,
     assert capture_read_counts == [1]
     assert registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_battery_percent") is None
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize(("section", "key", "value"), [
+    ("data", "detected_model", "MUST PV1800"),
+    ("data", "detected_model", "MUST PH3300"),
+    ("data", "detected_model", "MUST EP3300"),
+    ("data", "detected_driver", "modbus_smg"),
+    ("data", "detection_confidence", "medium"),
+    ("options", "driver_hint", "pi30"),
+    ("snapshot", "effective_owner_key", "modbus_smg"),
+    ("snapshot", "variant_key", "pv_ph18"),
+    ("snapshot", "register_schema_name", "must_pv_ph18/base.json"),
+    ("snapshot", "profile_name", "learned/must_controls.json"),
+    ("snapshot", "register_schema_name", "learned/must_reads.json"),
+    ("snapshot", "profile_name", "must_pv_ph18/pv3300.json"),
+    ("snapshot", "register_schema_name", []),
+    ("snapshot", "variant_key", []),
+])
+async def test_pv3300_control_upgrade_preserves_other_bindings(hass, section, key, value):
+    from custom_components.eybond_local.integration_metadata import _async_self_heal_must_pv3300_metadata
+
+    snapshot = {"effective_owner_key": "must_pv_ph18", "variant_key": "pv3300",
+                "profile_name": "must_pv_ph18/base.json", "register_schema_name": "must_pv_ph18/pv3300.json"}
+    data = {"detected_model": "MUST PV3300", "detected_driver": "must_pv_ph18",
+            "detection_confidence": "high", "driver_hint": "auto", "control_mode": "auto"}
+    options = {"effective_metadata_snapshot": snapshot, "poll_interval": 30}
+    {"data": data, "options": options, "snapshot": snapshot}[section][key] = value
+    entry = MockConfigEntry(domain=DOMAIN, version=5, data=data, options=options)
+    entry.add_to_hass(hass)
+    await _async_self_heal_must_pv3300_metadata(hass, entry)
+    assert dict(entry.data) == data
+    assert dict(entry.options) == options

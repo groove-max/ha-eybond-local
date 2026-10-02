@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import math
+import time
 
 from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
 from ..metadata.device_catalog_loader import resolve_catalog_surface_binding
@@ -14,6 +16,7 @@ from ..payload.urtu09c1 import (
 )
 from .base import InverterDriver
 from .catalog_probe import async_probe_ascii_catalog, catalog_model_name
+from .eybond_09c1_pv import pv_reads_for
 from .read_result import DriverReadMode, DriverReadResult
 from .support_marker import DriverSupportMarker
 
@@ -92,21 +95,49 @@ class Eybond09C1Driver(InverterDriver):
         self, transport, inverter: DetectedInverter, *, runtime_state=None,
         poll_interval=None, now_monotonic=None,
     ) -> DriverReadResult:
+        started = time.monotonic()
+        now = started if now_monotonic is None else float(now_monotonic)
+        if not math.isfinite(now):
+            raise ValueError("09c1_clock_invalid")
+        clock = lambda: now + max(0, time.monotonic() - started)
+        # Stateless callers retain the old read plan: without device-scoped
+        # state there is no safe negative cache or fair channel scheduling.
+        optional = (
+            pv_reads_for(runtime_state, transport, inverter, now)
+            if runtime_state is not None else None
+        )
         session = self._session(transport, inverter.probe_target)
-        values = parse_q1(await session.request("Q1"))
-        failures = {}
-        for command, parser in (("QF", parse_qf), ("PV?", parse_pv), ("F", parse_f)):
-            try:
-                values.update(parser(await session.request(command)))
-            except _READ_ERRORS as exc:
-                failures[command] = type(exc).__name__
+        failures, diagnostics = {}, {}
+        link_available = True
+        try:
+            values = parse_q1(await session.request("Q1"))
+            # Preserve the legacy every-cycle reads and failure isolation.
+            # Their support is never changed by PV1/PV2 negative caching.
+            for command, parser in (("QF", parse_qf), ("PV?", parse_pv), ("F", parse_f)):
+                try:
+                    values.update(parser(await session.request(command)))
+                except _READ_ERRORS as exc:
+                    failures[command] = type(exc).__name__
+                    if isinstance(exc, ConnectionError) or not transport.connected:
+                        link_available = False
+            if optional is not None:
+                interval = float(poll_interval) if poll_interval is not None else 0.0
+                ttl = max(60.0, 3 * interval) if math.isfinite(interval) else 60.0
+                extra, diagnostics = await optional.refresh_one(
+                    session, runtime_state, clock, ttl=ttl, link_available=link_available,
+                )
+                values.update(extra)
+        except BaseException:
+            if optional is not None:
+                optional.clear()
+            raise
         values = {key: value for key, value in values.items() if not key.endswith("_length")}
         values["protocol_id"] = PROTOCOL_ID
-        # No cross-cycle cache: failed optional groups disappear, while Q1
-        # remains available. In particular, never substitute input Hz for QF.
+        # Legacy groups never carry over; new channels have explicit freshness.
+        # Neither PV? nor differently timed PV1/PV2 samples are a combined total.
         return DriverReadResult(
             values=values, mode=DriverReadMode.FULL,
-            diagnostics={"urtu09c1_read_failures": failures},
+            diagnostics={"urtu09c1_read_failures": failures, **diagnostics},
         )
 
     async def async_capture_support_evidence(self, transport, inverter):

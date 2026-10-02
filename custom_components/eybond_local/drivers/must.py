@@ -1,4 +1,4 @@
-"""MUST PV/PH18 telemetry and document-backed, unverified local controls."""
+"""MUST PV/PH18 telemetry and model-qualified local controls."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import time
 from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
 from ..metadata.device_catalog_loader import resolve_support_capture_policy
 from ..metadata.detection_decision_tree import evaluate_detection_decision_tree_static
+from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from ..models import DetectedInverter, ProbeTarget
 from ..payload.modbus import ModbusError, ModbusSession
@@ -120,8 +121,9 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
             },
         }
         # Entity setup reads capabilities from the DetectedInverter; carry
-        # the profile's untested controls with the detection result.
-        profile = self.profile_metadata if surface.profile_name else None
+        # the identity-selected profile, not the common MUST profile. Only
+        # PV3300 has the four owner-confirmed controls from issue #46.
+        profile = load_driver_profile(surface.profile_name) if surface.profile_name else None
         return DetectedInverter(
             driver_key=self.key,
             protocol_family="must_pv_ph18",

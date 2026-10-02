@@ -429,7 +429,7 @@ async def _async_self_heal_valuecloud_driver_hint(
 
 
 async def _async_self_heal_must_pv3300_metadata(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Retire only the pre-PV3300 generic cache, preserving the proven identity.
+    """Retire PV3300 caches using the common MUST profile, preserving identity.
 
     The normal startup catalog lookup then rebuilds this exact model's binding.
     Do not invalidate another MUST model, an explicit different driver, learned
@@ -452,8 +452,10 @@ async def _async_self_heal_must_pv3300_metadata(hass: HomeAssistant, entry: Conf
         not in {DRIVER_HINT_AUTO, "must_pv_ph18"}
         or snapshot.get("effective_owner_key") != "must_pv_ph18"
         or snapshot.get("profile_name") != "must_pv_ph18/base.json"
-        or snapshot.get("register_schema_name") != "must_pv_ph18/base.json"
-        or snapshot.get("variant_key") != "pv_ph18"
+        or (snapshot.get("register_schema_name"), snapshot.get("variant_key")) not in (
+            ("must_pv_ph18/base.json", "pv_ph18"),
+            ("must_pv_ph18/pv3300.json", "pv3300"),
+        )
     ):
         return
     updated = dict(options)

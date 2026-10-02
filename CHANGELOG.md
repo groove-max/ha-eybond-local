@@ -9,6 +9,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Recorded Anenji GES48120M250-500P / Sumry-style register evidence and an
+  offline-tested read-only subset (#49). This is a research catalog entry,
+  not automatic device support: model/class identification still needs a
+  confirmed response. No additional live probes or controls are enabled.
+
 - Victor NM-PRO-6.2KW in the supported model catalog, backed by the owner's
   PI30 archive and specifically reported working controls. It reuses the
   existing VMII profile; no new device commands are introduced.
@@ -17,8 +22,8 @@ the GitHub release body should be rendered from the matching version section her
   signed current and temperature, backed by a successful local capture (#46).
   Missing/invalid BMS data is withdrawn without suppressing core telemetry;
   bounded reads and retry delays protect devices without the optional block.
-  Support Archives retain a separate raw BMS read. No controls are promoted
-  to tested, and other MUST variants keep their existing map.
+  Support Archives retain a separate raw BMS read. Other MUST variants keep
+  their existing telemetry map.
 
 - Advanced setup can include up to eight known collector IPs in the ordinary
   scan, alongside local discovery. Routed/VPN collectors no longer require a
@@ -30,6 +35,14 @@ the GitHub release body should be rendered from the matching version section her
   and output voltage/frequency separately, battery voltage, load percentage,
   temperature, PV voltage/current, status and ratings. No retail identity,
   measured power, energy counters or controls are inferred from these replies.
+
+- EyeBond 09C1 adds separate PV1/PV2 voltage and current from optional queries
+  confirmed in ZL Power captures (#50). One bounded extra query per poll, a
+  slower channel cadence and per-device unsupported-command tracking protect
+  existing devices. Failed or expired channel readings are withdrawn; the
+  original `PV?` readings keep their entity IDs. Channel numbers follow the
+  protocol, not necessarily the inverter's physical labels; no combined power
+  or fault state is invented.
 
 - Support archives include individual MUST PV3300 current-register checks
   when the combined block reports all three as zero (#46). These read-only
@@ -68,14 +81,22 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Collector connection settings remain reachable before the inverter is
+  identified (#49). Unknown collector capabilities no longer imply a local-only
+  ESP collector or hide callback diagnostics. Endpoint changes still require
+  explicit confirmation and verified reconnection; known ESP restrictions stay.
+
 - Shared PI30 `VMII-NXPW5KW` identification no longer labels every matching
   inverter as PowMr 4.2kW. It displays a neutral firmware-family name while
   preserving the old name as a compatibility alias, the profile and entity IDs.
 
 - MUST PV/PH18 controls no longer claim local write verification based only on
-  cloud-catalog presence. All 27 document-backed controls require Full Control;
-  the 20 previously shown in Auto are now correctly untested. No inverter
-  settings are changed automatically; review automations using those controls.
+  cloud-catalog presence. The shared 27-control profile requires Full Control.
+  For PV3300 only, the owner has since confirmed four local writes and HA
+  readbacks: grid/combined charge-current limits, charge-source priority and
+  energy-use mode (#46). Those four are available in Auto; the other 23 and
+  other MUST variants remain untested. Updating sends no setting changes;
+  review automations that used previously overqualified controls.
 
 - Manual callback identity checks now honor the configured advertised callback
   IP and port, separately from Home Assistant's local listener. NAT overrides
