@@ -1,4 +1,9 @@
-"""Offline qualification only: this schema must not auto-bind an inverter."""
+"""Exact-match Sumry/GES read-only binding for Anenji GES48120M250-500P.
+
+Detection requires model 45, product class 10 and protocol raw 220. The bound
+surface is the nine-field 0x7530 evidence subset only: no power totals, PV,
+second-leg telemetry or write profile.
+"""
 
 from __future__ import annotations
 
@@ -278,12 +283,24 @@ class SumryGesReadTests(unittest.IsolatedAsyncioTestCase):
                 transport = ReadOnlyTransport(registers)
                 self.assertIsNone(await ModbusCatalogDriver().async_probe(transport, TARGET))
 
+    async def test_identity_truncated_response_does_not_bind(self) -> None:
+        class TruncatedIdentityTransport(ReadOnlyTransport):
+            async def async_send_payload(self, payload, *, route):
+                response = await super().async_send_payload(payload, route=route)
+                if payload[2:4] in (b"\xC7\x38", b"\xC7\x68"):
+                    return response[:-1]
+                return response
+
+        transport = TruncatedIdentityTransport(_qualified_identity_registers())
+        self.assertIsNone(await ModbusCatalogDriver().async_probe(transport, TARGET))
+
     async def test_identity_bad_crc_does_not_bind(self) -> None:
         class BadCrcIdentityTransport(ReadOnlyTransport):
             async def async_send_payload(self, payload, *, route):
                 response = await super().async_send_payload(payload, route=route)
                 if payload[2:4] in (b"\xC7\x38", b"\xC7\x68"):
-                    return response[:-1]
+                    # Keep full length; flip the last CRC byte only.
+                    return response[:-1] + bytes([response[-1] ^ 0xFF])
                 return response
 
         transport = BadCrcIdentityTransport(_qualified_identity_registers())

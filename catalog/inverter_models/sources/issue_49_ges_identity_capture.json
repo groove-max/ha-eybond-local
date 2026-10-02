@@ -3,7 +3,7 @@
   "source_key": "issue_49_ges_identity_capture",
   "kind": "github_comment",
   "title": "Issue #49 GES48120M250-500P FC03 identity registers",
-  "reference": "project-issue:49; owner-modbus-capture:2026-10-02",
+  "reference": "project-issue:49; project-comment:5953299167",
   "captured_at": "2026-10-02",
   "visibility": "public",
   "summary": "Owner slave-1 FC03 reads at 0xC738 (2 words) and 0xC768 (1 word) pass CRC checks. Model code 45 (0x002D), product class 10 (0x000A), protocol version raw 220 (0x00DC). Together with the existing 0x7530 telemetry captures these anchors qualify automatic read-only binding for this unit.",
