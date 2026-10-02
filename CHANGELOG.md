@@ -9,10 +9,10 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
-- Recorded Anenji GES48120M250-500P / Sumry-style register evidence and an
-  offline-tested read-only subset (#49). This is a research catalog entry,
-  not automatic device support: model/class identification still needs a
-  confirmed response. No additional live probes or controls are enabled.
+- Anenji GES48120M250-500P auto-binds through exact Sumry/GES identity anchors
+  (model 45, product class 10, protocol raw 220) and exposes the existing
+  nine-field read-only 0x7530 subset (#49, #55). Broader telemetry, derived
+  power totals and controls remain out of scope.
 
 - Victor NM-PRO-6.2KW in the supported model catalog, backed by the owner's
   PI30 archive and specifically reported working controls. It reuses the
