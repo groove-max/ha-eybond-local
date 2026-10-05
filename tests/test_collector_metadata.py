@@ -757,7 +757,8 @@ class RouteBuilderTests(unittest.TestCase):
         queries, result = asyncio.run(_run())
         self.assertNotIn("INTPARA41", queries)
         self.assertNotIn("collector_ssid", result.values)
-        self.assertIn("INTPARA49", queries)
+        self.assertNotIn("INTPARA49", queries)
+        self.assertNotIn("collector_wifi_scan_list", result.values)
 
     def test_framed_delivery_failure_does_not_transfer_ssid_owner(self) -> None:
         async def _run():

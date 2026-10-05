@@ -81,6 +81,17 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Device learning keeps the original cloud API when the collector is temporarily
+  redirected to Home Assistant. A local port or AT traffic cannot replace a
+  known ValueCloud, SmartValue or SmartESS server with another provider (#46).
+  Unconfirmed endpoint restoration blocks a new active scan and offers an
+  explicit recovery action instead of reporting the connection as restored.
+
+- Collector metadata polling no longer requests nearby Wi-Fi scans. Connected
+  SSID and signal readings remain local queries; Wi-Fi setup still offers scans
+  on demand. This removes unnecessary background work without assuming it was
+  the cause of reported connection interruptions.
+
 - Newly learned Modbus controls retain the captured FC06 or FC16 write command
   through profile generation and runtime dispatch. Incomplete, conflicting or
   unrepresentable write shapes remain support evidence instead of guessed

@@ -16,10 +16,7 @@ from homeassistant.helpers.selector import (
 from ..common.translation import with_translation_bundle as _with_translation_bundle
 from .shared import (
     _BOOLEAN_SELECTOR,
-    CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED,
-    CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE,
-    CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
-    control_discovery_cloud_failure_reason,
+    CONTROL_DISCOVERY_FAILURE_GENERIC,
 )
 from ...support.shadow_learning.review_model import (
     build_activation_selection,
@@ -29,7 +26,6 @@ from ...support.cloud_local_coverage import (
     CLOUD_LOCAL_STATUS_AVAILABLE_CARRIED,
     CLOUD_LOCAL_STATUS_AVAILABLE_FRESH,
 )
-from ...support.cloud_active_workflow import ACTIVE_CORRELATION_NO_SAFE_CONTROLS
 from ...support.cloud_history_evidence import CloudHistoryCollection
 from .shadow_metadata_review import (
     cloud_history_collection,
@@ -58,11 +54,10 @@ CONTROL_DISCOVERY_RESULT_ACTION_SUPPORT = "create_support_package"
 
 CONTROL_DISCOVERY_RESULT_ACTION_RETRY = "retry"
 
+CONTROL_DISCOVERY_RESULT_ACTION_RESTORE = "restore_connection"
+
 
 CONTROL_DISCOVERY_RESULT_ACTION_DONE = "done"
-
-
-CONTROL_DISCOVERY_FAILURE_GENERIC = "control_discovery_failure_generic"
 
 
 def _coerce_int(value: Any) -> int | None:
@@ -513,80 +508,6 @@ class ShadowLearningReviewMixin:
             and str(discovery.get("status") or "") == "error"
         )
 
-    @staticmethod
-    def _control_discovery_failure_reason(
-        exc: Exception,
-        *,
-        cloud_error_code: object = "",
-    ) -> str:
-        """Reduce internal exceptions to a closed user-facing reason set."""
-
-        reason = str(exc).strip()
-        if reason in {
-            ACTIVE_CORRELATION_NO_SAFE_CONTROLS,
-            CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED,
-            CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE,
-            CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
-        }:
-            return reason
-        cloud_reason = control_discovery_cloud_failure_reason(cloud_error_code)
-        if cloud_reason:
-            return cloud_reason
-        return CONTROL_DISCOVERY_FAILURE_GENERIC
-
-    def _control_discovery_error_detail(self) -> str:
-        """Return a localized explanation without leaking internal exceptions."""
-
-        discovery = self._shadow_learning_state.get("discovery")
-        reason = (
-            str(discovery.get("reason") or "") if isinstance(discovery, dict) else ""
-        )
-        reason = reason.strip()
-        defaults = {
-            ACTIVE_CORRELATION_NO_SAFE_CONTROLS: (
-                "The selected cloud API did not expose any safe controls that "
-                "could be checked for this device. Nothing was changed."
-            ),
-            CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED: (
-                "The temporary cloud connection ended before all capabilities "
-                "could be checked. Home Assistant stopped safely and restored "
-                "the collector connection."
-            ),
-            CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE: (
-                "The device check ended before all planned capabilities were tested."
-            ),
-            CONTROL_DISCOVERY_FAILURE_SAFETY_STOP: (
-                "The safety check stopped the scan because a command may have "
-                "bypassed the local learning route. Check the inverter before trying again."
-            ),
-            "control_discovery_cloud_auth_failed": (
-                "The cloud service rejected the login. Check the username and password."
-            ),
-            "control_discovery_cloud_rate_limited": (
-                "The cloud service temporarily limited requests. Wait a little and try again."
-            ),
-            "control_discovery_cloud_unavailable": (
-                "The cloud service could not provide the device data needed for this check."
-            ),
-            "control_discovery_cloud_timeout": (
-                "The cloud service did not respond in time. Try again later."
-            ),
-            "control_discovery_cloud_network": (
-                "Home Assistant could not reach the cloud service. Check its internet connection."
-            ),
-            "control_discovery_cloud_unexpected": (
-                "The cloud service returned an unexpected response."
-            ),
-            CONTROL_DISCOVERY_FAILURE_GENERIC: (
-                "Home Assistant stopped safely and restored the collector connection."
-            ),
-        }
-        normalized = reason if reason in defaults else CONTROL_DISCOVERY_FAILURE_GENERIC
-        return self._tr(
-            f"common.dynamic.{normalized}",
-            defaults[normalized],
-        )
-
     def _control_discovery_already_supported_controls(self) -> list[dict[str, Any]]:
         """Return controls discovered but already supported by the base schema.
 
@@ -1021,6 +942,13 @@ class ShadowLearningReviewMixin:
         # error_detail falls back to the last status line, which on success holds
         # the success message — OR-ing it in here turned a successful-but-empty
         # run into a failure screen that printed the success text as the error.
+        restore_pending = bool(
+            getattr(coordinator, "shadow_learning_restore_pending", False)
+        )
+        if restore_pending:
+            self._shadow_learning_state["discovery"] = {
+                "status": "error", "reason": "shadow_learning_restore_pending",
+            }
         failed = self._control_discovery_failed()
         error_detail = self._control_discovery_error_detail() if failed else ""
         selected_count = self._control_discovery_enabled_selection_count()
@@ -1038,7 +966,9 @@ class ShadowLearningReviewMixin:
         # Learned read sensors are applied with the schema overlay regardless of
         # control selection, so selected read sensors make activation worthwhile
         # on their own.
-        can_activate = (bool(controls) and selected_count > 0) or read_count > 0
+        can_activate = not failed and (
+            (bool(controls) and selected_count > 0) or read_count > 0
+        )
 
         errors: dict[str, str] = {}
         notice = ""
@@ -1047,7 +977,7 @@ class ShadowLearningReviewMixin:
                 "result_action", CONTROL_DISCOVERY_RESULT_ACTION_DONE
             )
             action = raw_action if type(raw_action) is str else ""
-            if action == CONTROL_DISCOVERY_RESULT_ACTION_RETRY:
+            if action == CONTROL_DISCOVERY_RESULT_ACTION_RETRY and not restore_pending:
                 # Re-run the guided wizard from the consent step (it resets the
                 # run's transient state); credentials are re-gathered there.
                 for key in (
@@ -1112,6 +1042,15 @@ class ShadowLearningReviewMixin:
                     )
                 else:
                     errors["base"] = error
+            elif action == CONTROL_DISCOVERY_RESULT_ACTION_RESTORE and restore_pending:
+                if await self._async_control_discovery_retry_restore(coordinator):
+                    restore_pending = False
+                    error_detail = self._control_discovery_error_detail()
+                    notice = self._tr(
+                        "common.dynamic.shadow_learning_restore_confirmed",
+                        "✓ The previous collector connection was restored. "
+                        "You can start another check.",
+                    )
             elif action == CONTROL_DISCOVERY_RESULT_ACTION_DONE:
                 return await self.async_step_init()
             else:
@@ -1121,7 +1060,17 @@ class ShadowLearningReviewMixin:
         # least one discovered control; on a failed run it is replaced by "Try the
         # scan again". Support + Return are always offered.
         action_options: list[SelectOptionDict] = []
-        if can_activate:
+        if restore_pending:
+            action_options.append(
+                SelectOptionDict(
+                    value=CONTROL_DISCOVERY_RESULT_ACTION_RESTORE,
+                    label=self._tr(
+                        "common.dynamic.shadow_learning_restore_action",
+                        "Retry restoring the collector connection",
+                    ),
+                )
+            )
+        elif can_activate:
             action_options.append(
                 SelectOptionDict(
                     value=CONTROL_DISCOVERY_RESULT_ACTION_ACTIVATE,
@@ -1177,7 +1126,11 @@ class ShadowLearningReviewMixin:
             else action_options[0]["value"]
         )
 
-        if controls:
+        if restore_pending:
+            body_key = "common.dynamic.shadow_learning_restore_pending"
+            body_default = error_detail
+            hint_placeholders = {}
+        elif controls:
             if can_activate:
                 body_key = "common.dynamic.control_discovery_result_intro"
                 body_default = (

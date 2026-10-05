@@ -13,7 +13,9 @@ from dataclasses import dataclass
 from ..const import (
     CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
+    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
     CONF_DRIVER_HINT,
     DRIVER_HINT_AUTO,
 )
@@ -24,7 +26,13 @@ from ..metadata.collector_cloud_profile_catalog_loader import (
     resolve_collector_cloud_raw_passthrough_min_interval_ms,
     resolve_collector_cloud_session_protocol,
 )
-from .cloud_family import collector_cloud_family_observation_from_endpoint
+from .cloud_family import (
+    COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST,
+    CollectorCloudFamilyObservation,
+    collector_cloud_family_observation_from_endpoint,
+    collector_cloud_family_observation_from_mapping,
+    select_preferred_collector_cloud_family,
+)
 from .capabilities import (
     COLLECTOR_KIND_ENTRY_KEY,
     COLLECTOR_KIND_ESP_EYBOND_BRIDGE,
@@ -118,34 +126,69 @@ def collector_cloud_family_from_entry_context(
     options: Mapping[str, object],
     *,
     extra_endpoints: tuple[object, ...] = (),
+    extra_observations: tuple[CollectorCloudFamilyObservation, ...] = (),
 ) -> str:
     """Resolve collector cloud family from durable and runtime entry context."""
 
-    for source in (data, options):
-        family = known_collector_cloud_family(source.get(CONF_COLLECTOR_CLOUD_FAMILY, ""))
-        if family:
-            return family
+    return known_collector_cloud_family(
+        collector_cloud_family_observation_from_entry_context(
+            data, options,
+            extra_endpoints=extra_endpoints,
+            extra_observations=extra_observations,
+        ).family
+    )
 
-    for source in (options, data):
-        family = known_collector_cloud_family(
-            source.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY, "")
+
+def collector_cloud_family_observation_from_entry_context(
+    data: Mapping[str, object],
+    options: Mapping[str, object],
+    *,
+    extra_endpoints: tuple[object, ...] = (),
+    extra_observations: tuple[CollectorCloudFamilyObservation, ...] = (),
+) -> CollectorCloudFamilyObservation:
+    """Resolve cloud identity without confusing a local route with a provider.
+
+    A current known cloud host wins over the remembered host. Local endpoints,
+    shared ports and wire sniffing cannot replace either. Preserve the original
+    endpoint as one record: data owns it, options is only a legacy fallback.
+    This projection never chooses or confirms a session's wire protocol.
+    """
+
+    original_fields = (
+        CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
+        CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY,
+        CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_SOURCE,
+        CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_OBSERVED_AT,
+    )
+    original = data if any(key in data for key in original_fields) else options
+    endpoint_observations = tuple(
+        collector_cloud_family_observation_from_endpoint(endpoint)
+        for endpoint in (
+            *extra_endpoints,
+            original.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT, ""),
         )
-        if family:
-            return family
+    )
+    for observation in (*endpoint_observations, *extra_observations):
+        if (
+            observation.source == COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST
+            and known_collector_cloud_family(observation.family)
+        ):
+            return observation
 
-    for endpoint in extra_endpoints:
-        family = _known_family_from_endpoint(endpoint)
-        if family:
-            return family
+    original_family = known_collector_cloud_family(
+        original.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY, "")
+    )
+    if original_family:
+        return CollectorCloudFamilyObservation(family=original_family)
 
-    for source in (options, data):
-        family = _known_family_from_endpoint(
-            source.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT, "")
-        )
-        if family:
-            return family
-
-    return ""
+    durable_observations = tuple(
+        collector_cloud_family_observation_from_mapping(source)
+        for source in (data, options)
+    )
+    for observation in (*extra_observations, *durable_observations):
+        if known_collector_cloud_family(observation.family):
+            return observation
+    return select_preferred_collector_cloud_family(*endpoint_observations)
 
 
 def resolve_collector_transport_profile(
@@ -300,8 +343,3 @@ def resolve_collector_transport_profile_from_entry_context(
         runtime_owner_key=runtime_owner_key,
         virtual_bridge=entry_context_is_virtual_bridge(data, options),
     )
-
-
-def _known_family_from_endpoint(endpoint: object) -> str:
-    observation = collector_cloud_family_observation_from_endpoint(endpoint)
-    return known_collector_cloud_family(observation.family)

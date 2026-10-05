@@ -14,6 +14,7 @@ from ...const import (
     MIN_PROXY_CAPTURE_DURATION_MINUTES,
 )
 
+CONTROL_DISCOVERY_FAILURE_GENERIC = "control_discovery_failure_generic"
 CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED = "control_discovery_route_dropped"
 
 

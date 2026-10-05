@@ -29,7 +29,7 @@ _CONFIDENCE_RANK = {
 
 _SOURCE_RANK = {
     "": 0,
-    COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST: 1,
+    COLLECTOR_CLOUD_FAMILY_SOURCE_ENDPOINT_HOST: 3,
     COLLECTOR_CLOUD_FAMILY_SOURCE_EXPLICIT_ENDPOINT_PORT: 1,
     COLLECTOR_CLOUD_FAMILY_SOURCE_TRANSPORT_SNIFF: 2,
 }
@@ -189,9 +189,12 @@ def select_preferred_collector_cloud_family(
     for observation in observations:
         if not observation.known:
             continue
+        # AT traffic and shared ports identify a wire family, not a particular
+        # cloud account provider. A known cloud host remains authoritative even
+        # when the collector is temporarily redirected to a local listener.
         rank = (
-            _CONFIDENCE_RANK.get(observation.confidence, 0),
             _SOURCE_RANK.get(observation.source, 0),
+            _CONFIDENCE_RANK.get(observation.confidence, 0),
         )
         if rank > selected_rank:
             selected = observation

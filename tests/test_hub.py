@@ -986,7 +986,7 @@ class HubSnapshotTests(unittest.TestCase):
             "valuecloud_at",
         )
 
-    def test_build_snapshot_synchronizes_stronger_cloud_family_provenance(self) -> None:
+    def test_build_snapshot_keeps_cloud_host_identity_over_wire_sniff(self) -> None:
         hub = EybondHub(
             connection=EybondConnectionSpec(
                 server_ip="192.168.1.10",
@@ -1013,15 +1013,15 @@ class HubSnapshotTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(snapshot.collector.collector_cloud_family, "valuecloud_at")
+        self.assertEqual(snapshot.collector.collector_cloud_family, "smartess_at")
         self.assertEqual(
             snapshot.collector.collector_cloud_family_source,
-            "transport_sniff",
+            "endpoint_host",
         )
-        self.assertEqual(snapshot.values["collector_cloud_family"], "valuecloud_at")
+        self.assertEqual(snapshot.values["collector_cloud_family"], "smartess_at")
         self.assertEqual(
             snapshot.values["collector_cloud_family_confidence"],
-            "high",
+            "low",
         )
 
     def test_build_snapshot_does_not_reuse_stale_collector_identity_values(self) -> None:
@@ -1661,7 +1661,8 @@ class HubSnapshotTests(unittest.TestCase):
             self.assertEqual(snapshot.values["collector_cloud_heartbeat_value"], "60")
             self.assertEqual(snapshot.values["collector_ssid"], "MyWiFi")
             self.assertEqual(snapshot.values["collector_link_status"], "STA,CONNECTED")
-            self.assertEqual(snapshot.values["collector_wifi_scan_list"], "ssid1,-55;ssid2,-71")
+            self.assertNotIn("collector_wifi_scan_list", snapshot.values)
+            self.assertNotIn("INTPARA49", link_manager.collector_at_transport.queries)
 
         asyncio.run(_run())
 
@@ -1713,7 +1714,8 @@ class HubSnapshotTests(unittest.TestCase):
             self.assertEqual(snapshot.values["collector_cloud_heartbeat_value"], "60")
             self.assertEqual(snapshot.values["collector_ssid"], "MyWiFi")
             self.assertEqual(snapshot.values["collector_link_status"], "STA,CONNECTED")
-            self.assertEqual(snapshot.values["collector_wifi_scan_list"], "ssid1,-55;ssid2,-71")
+            self.assertNotIn("collector_wifi_scan_list", snapshot.values)
+            self.assertNotIn("INTPARA49", at_transport.queries)
 
         asyncio.run(_run())
 
@@ -2859,7 +2861,7 @@ class HubWriteBlockerTests(unittest.TestCase):
                     if not self._pending:
                         self.sweeps += 1
                         self._pending = True
-                    if command == "INTPARA49":  # last non-overlapping command
+                    if command == "LINK":  # last non-overlapping command
                         self._pending = False
                     return CollectorAtResponse(command=command, value="", raw=f"AT+{command}:")
 

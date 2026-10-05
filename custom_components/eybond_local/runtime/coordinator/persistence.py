@@ -7,6 +7,11 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from ...collector.cloud_family import (
+    collector_cloud_family_observation_from_collector,
+    collector_cloud_family_observation_from_mapping,
+)
+from ...collector.transport_profile import collector_cloud_family_from_entry_context
 from ...const import (
     COLLECTOR_CONFIRMED_SESSION_PROTOCOL_SOURCE_LIVE,
     CONF_COLLECTOR_CLOUD_FAMILY,
@@ -435,8 +440,14 @@ class CoordinatorPersistenceMixin:
         ):
             updated_data[CONF_COLLECTOR_IP] = collector_ip
 
-        collector_cloud_family = _known_collector_cloud_family(
-            snapshot.values.get("collector_cloud_family")
+        collector_cloud_family = collector_cloud_family_from_entry_context(
+            current_data,
+            self.config_entry.options,
+            extra_endpoints=(snapshot.collector_server_endpoint,),
+            extra_observations=(
+                collector_cloud_family_observation_from_collector(snapshot.collector),
+                collector_cloud_family_observation_from_mapping(snapshot.values),
+            ),
         )
         if not collector_cloud_family:
             collector_cloud_family = self.collector_cloud_family

@@ -26,11 +26,14 @@ from ..common.presentation import _smartess_credential_schema_fields
 from ..common.translation import with_translation_bundle as _with_translation_bundle
 from .shared import (
     _BOOLEAN_SELECTOR,
+    CONTROL_DISCOVERY_FAILURE_GENERIC,
     CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED,
     CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE,
     CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
+    control_discovery_cloud_failure_reason,
 )
 from ...runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
+from ...support.cloud_active_workflow import ACTIVE_CORRELATION_NO_SAFE_CONTROLS
 from ...support.cloud_local_coverage import build_cloud_local_coverage_report
 from ...support.cloud_learning_engines import (
     default_cloud_learning_method,
@@ -114,6 +117,115 @@ def _metadata_with_local_coverage(
 class ShadowLearningRunMixin:
     """ShadowLearningRun lifecycle."""
 
+    @staticmethod
+    def _control_discovery_failure_reason(
+        exc: Exception,
+        *,
+        cloud_error_code: object = "",
+    ) -> str:
+        """Reduce internal exceptions to a closed user-facing reason set."""
+
+        reason = str(exc).strip()
+        if reason == "shadow_learning_restore_pending" or (
+            reason.startswith("shadow_learning_preflight_blocked:")
+            and "shadow_learning_restore_pending" in reason.split(":", 1)[1].split(",")
+        ):
+            return "shadow_learning_restore_pending"
+        if reason in {
+            ACTIVE_CORRELATION_NO_SAFE_CONTROLS,
+            CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED,
+            CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE,
+            CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
+        }:
+            return reason
+        cloud_reason = control_discovery_cloud_failure_reason(cloud_error_code)
+        if cloud_reason:
+            return cloud_reason
+        return CONTROL_DISCOVERY_FAILURE_GENERIC
+
+    def _control_discovery_error_detail(self) -> str:
+        """Return a localized explanation without leaking internal exceptions."""
+
+        discovery = self._shadow_learning_state.get("discovery")
+        reason = (
+            str(discovery.get("reason") or "") if isinstance(discovery, dict) else ""
+        )
+        reason = reason.strip()
+        defaults = {
+            "shadow_learning_restore_pending": (
+                "Home Assistant could not confirm restoration of the previous "
+                "collector connection. Open Expand device support → Analyze cloud "
+                "data and device capabilities, then retry restoring the connection "
+                "before starting another check. Download a Support Archive if "
+                "restoration keeps failing."
+            ),
+            ACTIVE_CORRELATION_NO_SAFE_CONTROLS: (
+                "The selected cloud API did not expose any safe controls that "
+                "could be checked for this device. Nothing was changed."
+            ),
+            CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED: (
+                "The temporary cloud connection ended before all capabilities "
+                "could be checked. Home Assistant stopped safely and restored "
+                "the collector connection."
+            ),
+            CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE: (
+                "The device check ended before all planned capabilities were tested."
+            ),
+            CONTROL_DISCOVERY_FAILURE_SAFETY_STOP: (
+                "The safety check stopped the scan because a command may have "
+                "bypassed the local learning route. Check the inverter before trying again."
+            ),
+            "control_discovery_cloud_auth_failed": (
+                "The cloud service rejected the login. Check the username and password."
+            ),
+            "control_discovery_cloud_rate_limited": (
+                "The cloud service temporarily limited requests. Wait a little and try again."
+            ),
+            "control_discovery_cloud_unavailable": (
+                "The cloud service could not provide the device data needed for this check."
+            ),
+            "control_discovery_cloud_timeout": (
+                "The cloud service did not respond in time. Try again later."
+            ),
+            "control_discovery_cloud_network": (
+                "Home Assistant could not reach the cloud service. Check its internet connection."
+            ),
+            "control_discovery_cloud_unexpected": (
+                "The cloud service returned an unexpected response."
+            ),
+            CONTROL_DISCOVERY_FAILURE_GENERIC: (
+                "Home Assistant stopped safely and restored the collector connection."
+            ),
+        }
+        normalized = reason if reason in defaults else CONTROL_DISCOVERY_FAILURE_GENERIC
+        return self._tr(
+            f"common.dynamic.{normalized}",
+            defaults[normalized],
+        )
+
+    async def _async_control_discovery_retry_restore(self, coordinator) -> bool:
+        """Retry the existing restoration transaction without cloud probes."""
+
+        try:
+            result = await coordinator.async_stop_shadow_learning(
+                reason="user_restore_retry", raise_when_not_running=False,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Shadow-learning connection recovery failed: %s", type(exc).__name__,
+            )
+            result = {}
+        self._shadow_learning_state["session"] = {
+            **dict(self._shadow_learning_state.get("session") or {}), **result,
+        }
+        confirmed = result.get("restore_confirmed") is True
+        self._shadow_learning_state["discovery"] = {
+            "status": "error",
+            "reason": CONTROL_DISCOVERY_FAILURE_GENERIC if confirmed
+            else "shadow_learning_restore_pending",
+        }
+        return confirmed
+
     @_with_translation_bundle
     async def async_step_shadow_learning(
         self,
@@ -136,6 +248,13 @@ class ShadowLearningRunMixin:
                     "Ensure the entry is loaded, then try again.",
                 ),
             )
+
+        start_blocker = getattr(coordinator, "async_shadow_learning_start_blocker", None)
+        if callable(start_blocker) and await start_blocker():
+            self._shadow_learning_state["discovery"] = {
+                "status": "error", "reason": "shadow_learning_restore_pending",
+            }
+            return await self.async_step_shadow_learning_result()
 
         readiness = self._support_acquisition_readiness()
         if not (
@@ -622,6 +741,13 @@ class ShadowLearningRunMixin:
             )
             if self._control_discovery_requires_shadow_route(coordinator):
                 await self._async_control_discovery_failsafe_stop(coordinator)
+                session = self._shadow_learning_state.get("session") or {}
+                if (
+                    getattr(coordinator, "shadow_learning_restore_pending", False)
+                    or session.get("restore_confirmed") is False
+                    or session.get("status") in {"restore_failed", "restore_unconfirmed"}
+                ):
+                    failure_reason = "shadow_learning_restore_pending"
             self._shadow_learning_state["discovery"] = {
                 "status": "error",
                 "reason": failure_reason,
@@ -1123,8 +1249,15 @@ class ShadowLearningRunMixin:
         merged = {
             **dict(self._shadow_learning_state.get("session") or {}),
             **(dict(result) if isinstance(result, dict) else {}),
-            "status": "stopped",
         }
+        if (
+            merged.get("restore_confirmed") is False
+            or merged.get("status") in {"restore_failed", "restore_unconfirmed"}
+        ):
+            merged["status"] = "restore_failed"
+            self._shadow_learning_state["session"] = merged
+            raise RuntimeError("shadow_learning_restore_pending")
+        merged["status"] = "stopped"
         self._shadow_learning_state["session"] = merged
         return dict(result) if isinstance(result, dict) else {}
 

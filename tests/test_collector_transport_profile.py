@@ -17,6 +17,9 @@ from custom_components.eybond_local.collector.transport_profile import (
     resolve_collector_transport_profile_from_entry_context,
     runtime_owner_key_from_entry_context,
 )
+from custom_components.eybond_local.collector.cloud_family import (
+    CollectorCloudFamilyObservation,
+)
 from custom_components.eybond_local.const import (
     CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
@@ -29,6 +32,52 @@ from custom_components.eybond_local.metadata.collector_cloud_profile_catalog_loa
 
 
 class CollectorTransportProfileTests(unittest.TestCase):
+    def test_original_cloud_host_wins_over_local_endpoint_and_stale_family(self) -> None:
+        for family, host in (
+            ("valuecloud_at", "iot.eybond.com"),
+            ("smartvalue_at", "m2m.eybond.com"),
+            ("smartess_at", "dtu_ess.eybond.com"),
+        ):
+            with self.subTest(family=family):
+                data = {CONF_COLLECTOR_CLOUD_FAMILY: "legacy_binary"}
+                options = {
+                    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT: f"{host},18899,TCP",
+                    CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY: family,
+                }
+                profile = resolve_collector_transport_profile(
+                    cloud_family=collector_cloud_family_from_entry_context(
+                        data, options,
+                        extra_endpoints=("192.0.2.10,18899,TCP",),
+                        extra_observations=(CollectorCloudFamilyObservation(
+                            family="smartess_at", source="transport_sniff", confidence="high",
+                        ),),
+                    ),
+                )
+                self.assertEqual(profile.cloud_family, family)
+                self.assertEqual(profile.session_protocol, "")
+
+    def test_current_known_cloud_host_wins_over_saved_cloud_host(self) -> None:
+        self.assertEqual(collector_cloud_family_from_entry_context(
+            {}, {CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT: "iot.eybond.com,18899,TCP"},
+            extra_endpoints=("m2m.eybond.com,18899,TCP",),
+        ), "smartvalue_at")
+
+    def test_original_endpoint_record_is_not_mixed_with_legacy_options(self) -> None:
+        self.assertEqual(collector_cloud_family_from_entry_context(
+            {
+                CONF_COLLECTOR_CLOUD_FAMILY: "smartess_at",
+                CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT_PROFILE_KEY: "valuecloud_at",
+            },
+            {CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT: "m2m.eybond.com,18899,TCP"},
+        ), "valuecloud_at")
+
+    def test_unknown_original_host_retains_explicit_cloud_family(self) -> None:
+        self.assertEqual(collector_cloud_family_from_entry_context(
+            {CONF_COLLECTOR_CLOUD_FAMILY: "valuecloud_at"},
+            {CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT: "upstream.example.test,18899,TCP"},
+            extra_endpoints=("192.0.2.10,18899,TCP",),
+        ), "valuecloud_at")
+
     def test_no_cloud_family_in_catalog_selects_a_wire(self) -> None:
         for family in load_collector_cloud_profile_catalog().profiles:
             profile = resolve_collector_transport_profile(cloud_family=family)

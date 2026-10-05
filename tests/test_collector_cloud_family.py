@@ -20,10 +20,24 @@ from custom_components.eybond_local.collector.cloud_family import (  # noqa: E40
     collector_cloud_family_observation_from_mapping,
     collector_cloud_family_observation_from_endpoint,
     default_collector_cloud_host,
+    select_preferred_collector_cloud_family,
 )
 
 
 class CollectorCloudFamilyTests(unittest.TestCase):
+    def test_known_cloud_host_survives_local_port_and_at_sniff_observations(self) -> None:
+        for endpoint in ("iot.eybond.com", "iot.eybond.com,18899,TCP"):
+            trusted = collector_cloud_family_observation_from_endpoint(endpoint)
+            for weak in (
+                collector_cloud_family_observation_from_endpoint("192.0.2.10,18899,TCP"),
+                CollectorCloudFamilyObservation(
+                    family="smartess_at", source="transport_sniff", confidence="high",
+                ),
+            ):
+                with self.subTest(endpoint=endpoint, source=weak.source):
+                    self.assertEqual(select_preferred_collector_cloud_family(weak, trusted), trusted)
+                    self.assertEqual(select_preferred_collector_cloud_family(trusted, weak), trusted)
+
     def test_observation_constructor_is_strict(self) -> None:
         observation = CollectorCloudFamilyObservation(
             family="smartvalue_at",

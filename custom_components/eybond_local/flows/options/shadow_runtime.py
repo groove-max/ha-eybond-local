@@ -249,8 +249,10 @@ class ShadowLearningRuntimeMixin:
         self, coordinator
     ) -> dict[str, Any]:
         connected = bool(getattr(coordinator.data, "connected", False))
+        start_blocker = getattr(coordinator, "async_shadow_learning_start_blocker", None)
+        restore_blocker = await start_blocker() if callable(start_blocker) else ""
         raw_capture = None
-        if connected:
+        if connected and not restore_blocker:
             with suppress(Exception):
                 shadow_runtime = self._shadow_learning_runtime(coordinator)
                 if shadow_runtime is not None:
@@ -275,7 +277,8 @@ class ShadowLearningRuntimeMixin:
         )
         preflight = build_shadow_learning_preflight(seed)
         effective_blockers = list(blockers or preflight.blockers)
-        can_start = bool(preflight.can_start)
+        if restore_blocker:
+            effective_blockers.insert(0, restore_blocker)
         if not connected:
             # The register seed can only be captured from a LIVE collector. When it is offline
             # the seed is empty and the only blocker is the cryptic "missing_register_seed";
@@ -297,7 +300,7 @@ class ShadowLearningRuntimeMixin:
         memory_blocker = shadow_learning_memory_blocker(available_mib)
         if memory_blocker:
             effective_blockers = [memory_blocker] + effective_blockers
-            can_start = False
+        can_start = not effective_blockers
         route_status = self._shadow_learning_route_status(coordinator)
         return {
             "can_start": can_start,

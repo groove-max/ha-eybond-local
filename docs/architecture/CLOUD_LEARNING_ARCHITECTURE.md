@@ -19,6 +19,13 @@ It never chooses a method from a source, or an API from a hostname, collector
 kind, credentials, or cloud-family substring. Defaults are declared per exact
 provider/method pair; an absent or ambiguous default fails closed.
 
+The provider's cloud-family evidence is resolved independently of the live
+collector wire protocol. A known current or preserved cloud hostname outranks
+port-only and wire-shape guesses; a temporary local endpoint therefore cannot
+reclassify a ValueCloud device as SmartESS merely because both use port 18899.
+Family, source, and confidence are projected together. No hostname observation
+confirms `at_text` or `eybond_framed`; that requires the existing wire evidence.
+
 ## Support-acquisition readiness
 
 Support tools answer questions about devices that runtime may not recognize
@@ -50,6 +57,12 @@ shadow route, asking the selected cloud API to send bounded test commands,
 capturing and blocking the corresponding local writes, and restoring the
 previous endpoint. A cloud success without an exact post-action local
 observation is treated as a possible unproxied write and stops the run.
+
+A persisted `restoring` or `restore_failed` session blocks another active run
+before capture, redirect, or cloud commands. The result screen retains the
+actual restoration status and exposes a retry of the existing endpoint
+transaction, without credentials or another learning run. Only confirmed
+restoration releases that obligation; a restart or a failed retry does not.
 
 ## Current sources
 

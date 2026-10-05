@@ -732,6 +732,29 @@ class CoordinatorCloudToolsMixin:
                 allow_ack_writes=allow_ack_writes,
             )
 
+    @property
+    def shadow_learning_restore_pending(self) -> bool:
+        """Keep unconfirmed endpoint restoration visible after the route stops."""
+
+        state = getattr(self, "_cached_shadow_learning_session_state", None)
+        if str(getattr(state, "status", "") or "") in {"restoring", "restore_failed"}:
+            return True
+        values = getattr(self.data, "values", {}) or {}
+        return values.get("shadow_learning_session_status") in {
+            "restoring", "restore_failed",
+        }
+
+    async def async_shadow_learning_start_blocker(self) -> str:
+        """Read the persisted recovery obligation before any new learning I/O."""
+
+        state = await self._async_active_shadow_learning_state(require_process=False)
+        if (
+            str(getattr(state, "status", "") or "") in {"restoring", "restore_failed"}
+            or self.shadow_learning_restore_pending
+        ):
+            return "shadow_learning_restore_pending"
+        return ""
+
     async def _async_start_shadow_learning_exclusive(
         self,
         *,
@@ -755,6 +778,9 @@ class CoordinatorCloudToolsMixin:
             raise RuntimeError("proxy_capture_route_running")
         if self._shadow_learning_process_running():
             raise RuntimeError("shadow_learning_already_running")
+        restore_blocker = await self.async_shadow_learning_start_blocker()
+        if restore_blocker:
+            raise RuntimeError(restore_blocker)
 
         add_executor_job = getattr(
             getattr(self, "hass", None),
@@ -1241,7 +1267,10 @@ class CoordinatorCloudToolsMixin:
         self._publish_tooling_values(
             shadow_learning_session_status="stopped" if restore_confirmed else "restore_failed",
             shadow_learning_session_ready=False,
-            local_metadata_status="Shadow-learning route stopped",
+            local_metadata_status=(
+                "Shadow-learning route stopped" if restore_confirmed
+                else "Shadow-learning endpoint restore requires attention"
+            ),
         )
         return {
             "status": "stopped" if restore_confirmed else "restore_unconfirmed",
@@ -2520,7 +2549,7 @@ class CoordinatorCloudToolsMixin:
         """Return the persisted active shadow-learning state when it belongs to this entry."""
 
         del require_process
-        if self._shadow_learning_session_state_loaded:
+        if getattr(self, "_shadow_learning_session_state_loaded", False):
             # Authoritative in-memory cache: save/clear keep it fresh and this
             # coordinator is the only writer, so skip the per-refresh disk read.
             return self._cached_shadow_learning_session_state

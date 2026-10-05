@@ -237,6 +237,10 @@ can include controls missing from the built-in profile; it does not duplicate
 settings already provided by that profile or guarantee that every cloud control
 can be added.
 
+The cloud API is selected using the collector's original cloud server, including
+while learning temporarily routes the collector through Home Assistant. Moving
+to a local address does not change which cloud account you should use.
+
 Select and apply the controls you want to try. Selected learned controls are
 available in Auto or Full Control; Read Only still blocks all writes. Learning
 identifies the local commands but blocks the test writes, so it does **not** prove
@@ -256,6 +260,14 @@ profiles are not rewritten by an update; rerun learning if you need to regenerat
 an older learned control with the corrected command type.
 
 ## If learning fails
+
+If Home Assistant says it could not confirm restoration of the collector
+connection, open **Configure → Expand device support → Analyze cloud data and
+device capabilities** and choose **Retry restoring the collector connection**.
+This retries restoration of the saved connection;
+it does not start another learning run or send test commands to the inverter.
+Start another active check only after restoration is confirmed. If recovery
+keeps failing, create a Support Archive and share it with the maintainer.
 
 Common causes:
 

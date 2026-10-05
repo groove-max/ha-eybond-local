@@ -218,6 +218,25 @@ class CollectorAtTests(unittest.TestCase):
 
 
 class AtSweepTimeoutAbortTests(unittest.TestCase):
+    def test_runtime_metadata_reads_ssid_and_signal_without_scanning_wifi(self) -> None:
+        class Transport:
+            def __init__(self):
+                self.commands = []
+
+            async def async_query(self, command):
+                self.commands.append(command)
+                replies = {"WFSS": "-56", "INTPARA41": "Home WiFi"}
+                return parse_at_response(f"AT+{command}:{replies.get(command, '')}")
+
+        async def run():
+            transport = Transport()
+            result = await read_runtime_collector_at_values(transport)
+            self.assertNotIn("INTPARA49", transport.commands)
+            self.assertEqual(result.values["collector_ssid"], "Home WiFi")
+            self.assertEqual(result.values["collector_signal_strength"], -56)
+
+        asyncio.run(run())
+
     def test_first_timeout_aborts_the_remaining_sweep(self) -> None:
         class _DeadLinkTransport:
             def __init__(self) -> None:
@@ -231,7 +250,7 @@ class AtSweepTimeoutAbortTests(unittest.TestCase):
             transport = _DeadLinkTransport()
             result = await read_runtime_collector_at_values(transport)
             self.assertEqual(result.values, {})
-            # One strike ends the sweep instead of 13 consecutive timeouts.
+            # One strike ends the sweep instead of one timeout per command.
             self.assertEqual(len(transport.commands), 1)
 
         asyncio.run(_run())

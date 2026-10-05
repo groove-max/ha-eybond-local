@@ -6529,6 +6529,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         async def _run() -> None:
             coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
             coordinator._runtime_operation_lock = asyncio.Lock()
+            coordinator._shadow_learning_session_state_loaded = True
+            coordinator._cached_shadow_learning_session_state = None
+            coordinator.data = self.RuntimeSnapshot(values={})
             start_shadow_calls: list[dict[str, object]] = []
 
             async def _async_active_proxy_capture_state(*, require_process: bool = True):
@@ -7333,6 +7336,25 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                         ))
         asyncio.run(run())
 
+    def test_shadow_start_refuses_unconfirmed_restore_before_any_device_effect(self) -> None:
+        async def run():
+            for status in ("restoring", "restore_failed"):
+                with self.subTest(status=status):
+                    rec = self._fresh_rec()
+                    with self._shadow_start_env(rec) as coord:
+                        coord._cached_shadow_learning_session_state = types.SimpleNamespace(status=status)
+                        coord.data.connected = True
+                        capture = AsyncMock()
+                        coord._runtime.async_capture_support_evidence = capture
+                        with self.assertRaisesRegex(RuntimeError, "^shadow_learning_restore_pending$"):
+                            await coord.async_start_shadow_learning()
+                        capture.assert_not_awaited()
+                        self.assertEqual(rec["saved"], [])
+                        self.assertEqual(rec["route"], [])
+                        self.assertEqual(rec["redirect"], [])
+                        self.assertFalse(self._authority().is_held("entry-cancel"))
+        asyncio.run(run())
+
     def test_shadow_raw_capture_is_inside_poll_exclusion(self) -> None:
         async def run():
             rec = self._fresh_rec()
@@ -7485,6 +7507,8 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         coordinator._shadow_learning_process_running = lambda: False
         coordinator._async_preflight_proxy_capture_network = pick("preflight", d_preflight)
         coordinator._async_active_proxy_capture_state = d_active_proxy
+        coordinator._shadow_learning_session_state_loaded = True
+        coordinator._cached_shadow_learning_session_state = None
         coordinator._async_save_shadow_learning_session_state = pick("save", d_save)
         coordinator._async_wait_for_shadow_learning_ready = pick("wait", d_wait)
         coordinator._async_best_effort_restore_after_start_failure = pick("restore", d_restore)

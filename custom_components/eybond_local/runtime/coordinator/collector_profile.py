@@ -7,13 +7,18 @@ import logging
 from pathlib import Path
 
 from ...collector.callback_endpoint import home_assistant_callback_endpoint
+from ...collector.cloud_family import (
+    CollectorCloudFamilyObservation,
+    collector_cloud_family_observation_from_collector,
+    collector_cloud_family_observation_from_mapping,
+)
 from ...collector_endpoint import (
     CollectorEndpointWriteShape,
     resolve_collector_endpoint_write_shape,
 )
 from ...collector.transport_profile import (
     apply_observed_collector_session_protocol,
-    collector_cloud_family_from_entry_context,
+    collector_cloud_family_observation_from_entry_context,
     collector_session_protocol_from_inventory_state,
     normalize_collector_session_protocol,
     resolve_collector_transport_profile,
@@ -38,7 +43,6 @@ from ...const import (
 from ...models import CollectorCloudProfile
 from ...support.collector_registry import get_collector_registry_record
 from .endpoint_projection import (
-    collector_cloud_family_from_endpoint_shape as _collector_cloud_family_from_endpoint_shape,
     default_cloud_upstream_endpoint as _default_cloud_upstream_endpoint,
     format_home_assistant_collector_endpoint as _format_home_assistant_collector_endpoint,
     known_collector_cloud_family as _known_collector_cloud_family,
@@ -266,17 +270,14 @@ class CoordinatorCollectorProfileMixin:
     def collector_cloud_family(self) -> str:
         """Return the best available collector cloud family known to the coordinator."""
 
-        collector = getattr(self.data, "collector", None)
-        family = _known_collector_cloud_family(
-            getattr(collector, "collector_cloud_family", "")
+        return _known_collector_cloud_family(
+            self._collector_cloud_family_observation.family
         )
-        if family:
-            return family
-        family = _known_collector_cloud_family(
-            self.data.values.get("collector_cloud_family")
-        )
-        if family:
-            return family
+
+    @property
+    def _collector_cloud_family_observation(self) -> CollectorCloudFamilyObservation:
+        """Use the shared cloud-identity authority for runtime and durable facts."""
+
         config_entry = getattr(self, "config_entry", None)
         config_data = getattr(config_entry, "data", {}) if config_entry is not None else {}
         config_options = getattr(config_entry, "options", {}) if config_entry is not None else {}
@@ -286,19 +287,17 @@ class CoordinatorCollectorProfileMixin:
             self.collector_server_endpoint_rollback_target,
             getattr(self, "_remembered_collector_server_endpoint", ""),
         )
-        family = collector_cloud_family_from_entry_context(
+        return collector_cloud_family_observation_from_entry_context(
             config_data,
             config_options,
             extra_endpoints=endpoint_candidates,
+            extra_observations=(
+                collector_cloud_family_observation_from_collector(
+                    getattr(self.data, "collector", None)
+                ),
+                collector_cloud_family_observation_from_mapping(self.data.values),
+            ),
         )
-        if family:
-            return family
-
-        for endpoint in (*endpoint_candidates, config_options.get(CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT, "")):
-            family = _collector_cloud_family_from_endpoint_shape(endpoint)
-            if family:
-                return family
-        return ""
 
     @property
     def collector_session_protocol(self) -> str:

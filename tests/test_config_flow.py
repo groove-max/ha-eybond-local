@@ -9014,6 +9014,60 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done["type"], "menu")
         self.assertEqual(done["step_id"], "init")
 
+    async def test_control_discovery_stop_preserves_unconfirmed_restore(self) -> None:
+        options = self._wizard_options_flow()
+        coordinator = options._coordinator()
+        coordinator.async_stop_shadow_learning = AsyncMock(return_value={
+            "status": "restore_unconfirmed", "restore_confirmed": False,
+        })
+        with self.assertRaisesRegex(RuntimeError, "^shadow_learning_restore_pending$"):
+            await options._async_control_discovery_stop(coordinator)
+        self.assertEqual(options._shadow_learning_state["session"]["status"], "restore_failed")
+        self.assertFalse(options._shadow_learning_state["session"]["restore_confirmed"])
+
+    async def test_control_discovery_pending_restore_has_recovery_instead_of_retry(self) -> None:
+        options = self._wizard_options_flow()
+        coordinator = options._coordinator()
+        coordinator.shadow_learning_restore_pending = True
+        coordinator.async_shadow_learning_start_blocker = AsyncMock(
+            return_value="shadow_learning_restore_pending"
+        )
+        coordinator.async_stop_shadow_learning = AsyncMock(return_value={
+            "status": "restore_unconfirmed", "restore_confirmed": False,
+        })
+        options._shadow_learning_state["wizard_credentials"] = {"username": "demo", "password": "secret"}
+        shown = await options.async_step_shadow_learning()
+        self.assertEqual(shown["step_id"], "shadow_learning_result")
+        selector = shown["data_schema"].schema["result_action"]
+        self.assertEqual([item["value"] for item in selector.config.kwargs["options"]],
+                         ["restore_connection", "create_support_package", "done"])
+        self.assertNotIn("wizard_credentials", options._shadow_learning_state)
+        retried = await options.async_step_shadow_learning_result({"result_action": "restore_connection"})
+        self.assertEqual(retried["step_id"], "shadow_learning_result")
+        self.assertEqual(retried["errors"], {})
+        self.assertIn("could not confirm", retried["description_placeholders"]["control_discovery_hint"])
+        coordinator.async_stop_shadow_learning.assert_awaited_once_with(
+            reason="user_restore_retry", raise_when_not_running=False,
+        )
+
+    async def test_control_discovery_recovery_exception_keeps_restore_obligation(self) -> None:
+        options = self._wizard_options_flow()
+        coordinator = options._coordinator()
+        coordinator.shadow_learning_restore_pending = True
+        coordinator.async_stop_shadow_learning = AsyncMock(
+            side_effect=TimeoutError("private detail must not appear in UI or logs")
+        )
+        with self.assertLogs(options_shadow_run_module.logger, level="WARNING") as logs:
+            result = await options.async_step_shadow_learning_result(
+                {"result_action": "restore_connection"}
+            )
+        self.assertEqual(result["errors"], {})
+        self.assertEqual(options._shadow_learning_state["discovery"]["reason"],
+                         "shadow_learning_restore_pending")
+        self.assertIn("could not confirm", result["description_placeholders"]["control_discovery_hint"])
+        self.assertNotIn("private detail", str(result))
+        self.assertNotIn("private detail", str(logs.output))
+
     async def test_control_discovery_result_failed_run_shows_failure_copy(self) -> None:
         options = self._wizard_options_flow()
         # Discovery ran but failed (e.g. the device never reconnected in time):

@@ -747,9 +747,22 @@ class CoordinatorPollingMixin:
         self._sync_collector_capability_profile()
         self._configure_reverse_discovery_mode()
         await self._async_warm_effective_metadata_cache()
-        collector_cloud_family = self.collector_cloud_family
-        if collector_cloud_family:
-            snapshot.values["collector_cloud_family"] = collector_cloud_family
+        cloud_observation = self._collector_cloud_family_observation
+        if cloud_observation.known:
+            if snapshot.collector is not None:
+                # The resolved tuple is one observation, not a family override
+                # paired with the old local-port provenance in diagnostics.
+                snapshot.collector.collector_cloud_family = cloud_observation.family
+                snapshot.collector.collector_cloud_family_source = cloud_observation.source
+                snapshot.collector.collector_cloud_family_confidence = cloud_observation.confidence
+            snapshot.values["collector_cloud_family"] = cloud_observation.family
+            for field in ("source", "confidence"):
+                key = f"collector_cloud_family_{field}"
+                value = getattr(cloud_observation, field)
+                if value:
+                    snapshot.values[key] = value
+                else:
+                    snapshot.values.pop(key, None)
         collector_cloud_profile = self.collector_cloud_profile
         if collector_cloud_profile.known:
             snapshot.set_collector_cloud_profile(collector_cloud_profile)

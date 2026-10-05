@@ -94,8 +94,12 @@ detection remain on their own screen.
 If you use **Cloud + Home Assistant** and the collector never appears after a
 connection request, the diagnostics report a clear reason:
 
-- **callback timeout** — the collector did not answer in time. Check the network
-  path, the server the collector points at, and any firewall in between.
+- **callback timeout** — Home Assistant could not confirm an identified collector
+  connection in time. A TCP connection can arrive without identifying data;
+  that alone does not prove the collector protocol or identity. Check the network
+  path, the server the collector points at, and any firewall in between. If TCP
+  already reaches Home Assistant, keep the entry and use **Reconfigure** for the
+  [guided identity repair](SETUP_AND_DISCOVERY.md#repairing-an-older-unidentified-entry).
 - **identity mismatch** — a *different* collector answered. Check you are
   targeting the right collector.
 - **already bound to another entry** — this collector is already owned by
@@ -127,6 +131,10 @@ The collector device can expose a few practical actions.
 ### Change collector Wi-Fi
 
 Use this when the collector must join a different SSID or when you are moving it to another router or access point.
+
+The integration scans nearby networks only when you explicitly refresh the Wi-Fi list.
+Normal polling reads the current SSID and signal strength without requesting
+another network scan.
 
 - enter the new SSID and password
 - apply the new settings
