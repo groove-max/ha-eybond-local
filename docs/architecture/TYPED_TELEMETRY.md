@@ -109,6 +109,16 @@ Phase 4 removed that copy after all of the following became true:
 - The typed layer must not decide connection, recovery, ownership, or driver
   selection.
 
+PI30 runtime reads isolate payload failures per command and return successful
+values as a DELTA. The driver owns the QPIGS/QMOD field sets and runtime-only
+last-success timestamps. Failed required commands are retried on the next poll,
+never added to the optional-command negative cache. Their carried fields expire
+after `max(120 seconds, 3 * poll interval)` through explicit removals, including
+derived aliases; a new session cannot renew an old sample's age. Per-command
+failure/age diagnostics stay outside telemetry. Transport errors, cancellation
+and strict onboarding reads still propagate normally. A metadata-only or empty
+driver result cannot advance runtime success time or certify session recovery.
+
 ## Adjacent collector metadata boundary
 
 Collector connection metadata does not belong in telemetry. The existing

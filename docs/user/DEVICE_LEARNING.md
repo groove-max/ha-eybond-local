@@ -264,8 +264,12 @@ an older learned control with the corrected command type.
 If Home Assistant says it could not confirm restoration of the collector
 connection, open **Configure → Expand device support → Analyze cloud data and
 device capabilities** and choose **Retry restoring the collector connection**.
-This retries restoration of the saved connection;
-it does not start another learning run or send test commands to the inverter.
+Home Assistant checks the collector's current connection settings first. If
+the saved endpoint is already restored and applied, it does not rewrite it or
+restart the collector. If settings still need applying, it completes that step
+and checks again. This does not start another learning run or send test commands
+to the inverter. A successful check confirms the collector's connection settings,
+not whether the manufacturer's cloud is currently updating its data.
 Start another active check only after restoration is confirmed. If recovery
 keeps failing, create a Support Archive and share it with the maintainer.
 

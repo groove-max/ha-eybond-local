@@ -81,6 +81,20 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- PI30 polling preserves successful replies when another command times out,
+  returns NAK or has an invalid payload (#57). Required readings are carried
+  for a bounded period and then withdrawn individually; their commands remain
+  enabled. Diagnostics identify missed commands and sample age. Empty reads
+  no longer advance runtime success time or confirm a recovered session.
+
+- Collector connection recovery after cloud learning/proxy capture checks live
+  endpoint and apply state before repeating any changes (#46). An already
+  restored connection no longer needs another endpoint write. Recovery excludes
+  background polling, checks uncertain write outcomes without resending them,
+  and retains the recovery warning when application cannot be confirmed.
+  Support diagnostics distinguish write stages and retain the last failure
+  even after a successful verification read.
+
 - Device learning keeps the original cloud API when the collector is temporarily
   redirected to Home Assistant. A local port or AT traffic cannot replace a
   known ValueCloud, SmartValue or SmartESS server with another provider (#46).

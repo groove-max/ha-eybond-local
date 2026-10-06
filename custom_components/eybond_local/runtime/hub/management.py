@@ -248,8 +248,8 @@ class HubManagementMixin:
         """Return non-sensitive collector-management diagnostics.
 
         Never includes endpoint values, Wi-Fi credentials, or other secrets --
-        only the selected adapter, its capabilities, and the last operation's
-        status/error-class/duration/timestamp.
+        only the selected adapter, its capabilities, and the latest operation
+        and last failure's status/error-class/duration/timestamp.
         """
 
         caps = self.collector_management_capabilities()
@@ -274,6 +274,11 @@ class HubManagementMixin:
             diagnostics["collector_management_last_operation"] = dict(
                 self._last_management_operation
             )
+        failure = getattr(self, "_last_management_failure", None)
+        if failure is not None:
+            diagnostics["collector_management_last_failure"] = {
+                **failure, "failed_request": dict(failure.get("failed_request", {})),
+            }
         return diagnostics
 
     def collector_metadata_diagnostics(self) -> dict[str, object]:
@@ -452,7 +457,16 @@ class HubManagementMixin:
         if type(generation) is int:
             record["session_generation_start"] = generation
         try:
-            return await operation()
+            result = await operation()
+            if (
+                name == "read_endpoint_state"
+                and type(generation) is int
+                and generation != getattr(self._link_manager, "owned_session_generation", None)
+            ):
+                # Do not combine endpoint/apply observations across sessions or
+                # publish old data after ownership changed during the read.
+                raise CollectorManagementTransportError("collector_management_session_changed")
+            return result
         except asyncio.CancelledError:
             record["status"] = "cancelled"
             raise
@@ -478,6 +492,10 @@ class HubManagementMixin:
                 round((asyncio.get_running_loop().time() - started) * 1000.0)
             )
             self._last_management_operation = record
+            if record["status"] == "error":
+                # Preserve one timestamped failure when recovery's successful
+                # verification becomes the latest operation. Not a live error.
+                self._last_management_failure = dict(record)
 
     def _collector_endpoint_write_result_to_dict(
         self, result: CollectorEndpointWriteResult
@@ -550,10 +568,14 @@ class HubManagementMixin:
         self._collector_metadata_service.apply_authoritative_values(overlay)
         return self._collector_endpoint_write_result_to_dict(result)
 
-    async def async_apply_collector_changes(self) -> dict[str, object]:
+    async def async_apply_collector_changes(
+        self, *, timeout: float = 5.0, require_heartbeat: bool = True,
+    ) -> dict[str, object]:
         """Trigger collector apply on parameter 29 without changing parameter 21."""
 
-        return await self._async_execute_collector_system_action(action="apply")
+        return await self._async_execute_collector_system_action(
+            action="apply", timeout=timeout, require_heartbeat=require_heartbeat,
+        )
 
     async def async_reboot_collector(self) -> dict[str, object]:
         """Trigger collector reboot-intent on parameter 29."""
@@ -645,10 +667,12 @@ class HubManagementMixin:
         adapter = self._collector_management_adapter(active_only=True)
         return await adapter.async_set_uart_baudrate(baudrate)
 
-    async def _async_execute_collector_system_action(self, *, action: str) -> dict[str, object]:
+    async def _async_execute_collector_system_action(
+        self, *, action: str, timeout: float = 5.0, require_heartbeat: bool = True,
+    ) -> dict[str, object]:
         """Run a standalone collector apply/reboot via the management adapter."""
 
-        await self._async_ensure_connected(timeout=5.0, require_heartbeat=True)
+        await self._async_ensure_connected(timeout=timeout, require_heartbeat=require_heartbeat)
 
         adapter = self._collector_management_adapter()
         result: CollectorSystemActionResult = await self._run_management_operation(

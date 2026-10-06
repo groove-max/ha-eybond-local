@@ -532,6 +532,15 @@ _Q1_LAYOUT_27: tuple[tuple[str | None, str], ...] = (
     (None, "int"),
 )
 
+def qpigs_output_keys() -> frozenset[str]:
+    """Return all QPIGS fields, including locally derived parser values."""
+
+    return frozenset(name for name, _kind in _QPIGS_LAYOUT_24) | frozenset({
+        "qpigs_field_count", "pv_input_power", "battery_power_balance_current",
+        "status_bits_raw",
+    })
+
+
 def qpiws_output_keys() -> frozenset[str]:
     """Return the runtime value keys produced by :func:`parse_qpiws`."""
 

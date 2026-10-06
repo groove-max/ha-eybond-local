@@ -539,13 +539,15 @@ class HubRefreshMixin:
                 self._last_snapshot = snapshot
                 return snapshot
 
-        self._record_refresh_success()
+        if self._runtime_measurement_fresh_count:
+            self._record_refresh_success()
         merged_values = {**collector_values, **runtime_values}
         snapshot = self._build_snapshot(
             extra_values=merged_values,
             last_error=detect_error or None,
         )
-        self._mark_owned_session_stable()
+        if self._runtime_measurement_fresh_count:
+            self._mark_owned_session_stable()
         _mark_refresh_phase("snapshot_build")
         metadata_result = self._last_collector_metadata_result
         if metadata_result is not None:

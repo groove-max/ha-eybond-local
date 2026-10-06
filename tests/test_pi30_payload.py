@@ -27,6 +27,7 @@ from custom_components.eybond_local.payload.pi30 import (
     parse_qmod,
     parse_response,
     parse_serial_number,
+    qpigs_output_keys,
 )
 
 
@@ -43,6 +44,15 @@ def _frame(payload: str) -> bytes:
 
 
 class Pi30PayloadTests(unittest.TestCase):
+    def test_qpigs_ownership_covers_every_layout_and_derived_field(self) -> None:
+        fields = "239.5 49.9 239.5 49.9 0927 0924 015 396 27.30 000 100 0028 002.2 315.9 00.00 00000 00010000 00 00 00665 010 1 2 3".split()
+        actual_keys = set()
+        for count in (17, 21, 24):
+            values = parse_qpigs(" ".join(fields[:count]))
+            actual_keys.update(values)
+            self.assertLessEqual(set(values), qpigs_output_keys())
+        self.assertEqual(actual_keys, qpigs_output_keys())
+
     def test_build_request_appends_crc_and_cr(self) -> None:
         self.assertEqual(build_request("QPI"), b"QPI\xbe\xac\r")
 

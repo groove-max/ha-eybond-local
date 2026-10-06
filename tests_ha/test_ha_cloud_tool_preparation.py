@@ -9,6 +9,108 @@ from test_ha_config_flow import collector_entry
 
 
 @pytest.mark.parametrize("kind", ["proxy", "shadow"])
+@pytest.mark.parametrize("external_stop", [False, True])
+async def test_poll_expiry_reuses_its_lock_or_defers_to_waiting_stop(
+    hass, collector_entry, fake_runtime, monkeypatch, kind, external_stop,
+):
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = collector_entry.runtime_data
+    snapshot = coordinator.data
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+    method = "proxy_capture" if kind == "proxy" else "shadow_learning"
+    original = getattr(coordinator, f"_async_stop_{method}_once")
+
+    async def terminalize(**kwargs):
+        assert coordinator._runtime_operation_lock.locked()
+        calls.append("stop")
+        return {"status": "stopped"}
+
+    async def poll(**kwargs):
+        entered.set()
+        await release.wait()
+        result = await getattr(coordinator, f"async_stop_{method}")(request_refresh=False)
+        assert result["status"] == ("deferred" if external_stop else "stopped")
+        return snapshot
+
+    monkeypatch.setattr(coordinator, f"_async_stop_{method}_once", terminalize)
+    monkeypatch.setattr(coordinator, "_async_update_data_with_runtime_lock", poll)
+    tasks = []
+    try:
+        task = asyncio.create_task(coordinator._async_update_data())
+        tasks.append(task)
+        await asyncio.wait_for(entered.wait(), 1)
+        if external_stop:
+            stop = asyncio.create_task(getattr(coordinator, f"async_stop_{method}")(request_refresh=False))
+            tasks.append(stop)
+            for _ in range(20):
+                if coordinator._cloud_tool_preparation_task is stop:
+                    break
+                await asyncio.sleep(0)
+            assert coordinator._cloud_tool_preparation_task is stop
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*tasks), 2)
+        assert calls == ["stop"]
+        assert coordinator._runtime_poll_task is None
+        assert coordinator._cloud_tool_preparation_task is None
+        assert not coordinator._runtime_operation_lock.locked()
+    finally:
+        release.set()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        monkeypatch.setattr(coordinator, f"_async_stop_{method}_once", original)
+        await hass.config_entries.async_unload(collector_entry.entry_id)
+
+
+@pytest.mark.parametrize("kind", ["proxy", "shadow"])
+async def test_restoration_drains_polling_and_releases_guard_on_cancellation(
+    hass, collector_entry, fake_runtime, monkeypatch, kind,
+):
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = collector_entry.runtime_data
+    snapshot = coordinator.data
+    entered = asyncio.Event()
+
+    async def terminalize(**kwargs):
+        assert coordinator._runtime_operation_lock.locked()
+        entered.set()
+        await asyncio.Future()
+
+    method = "proxy_capture" if kind == "proxy" else "shadow_learning"
+    original = getattr(coordinator, f"_async_stop_{method}_once")
+    monkeypatch.setattr(coordinator, f"_async_stop_{method}_once", terminalize)
+    await coordinator._runtime_operation_lock.acquire()
+    task = asyncio.create_task(getattr(coordinator, f"async_stop_{method}")())
+    try:
+        for _ in range(20):
+            if coordinator._cloud_tool_preparation_task is task:
+                break
+            await asyncio.sleep(0)
+        assert coordinator._cloud_tool_preparation_task is task
+        assert not entered.is_set()  # Must wait for the current poll to drain.
+        assert await asyncio.wait_for(coordinator._async_update_data(), 1) is snapshot
+        coordinator._runtime_operation_lock.release()
+        await asyncio.wait_for(entered.wait(), 1)
+        assert await asyncio.wait_for(coordinator._async_update_data(), 1) is snapshot
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert coordinator._cloud_tool_preparation_task is None
+        assert not coordinator._runtime_operation_lock.locked()
+        assert not coordinator._collector_endpoint_terminalization_lock.locked()
+    finally:
+        if not entered.is_set() and coordinator._runtime_operation_lock.locked():
+            coordinator._runtime_operation_lock.release()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        monkeypatch.setattr(coordinator, f"_async_stop_{method}_once", original)
+        await hass.config_entries.async_unload(collector_entry.entry_id)
+
+
+@pytest.mark.parametrize("kind", ["proxy", "shadow"])
 @pytest.mark.parametrize("cancel_unload", [False, True])
 async def test_poll_drains_then_unload_waits_for_start_cleanup(
     hass, collector_entry, fake_runtime, monkeypatch, kind, cancel_unload,

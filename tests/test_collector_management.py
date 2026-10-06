@@ -112,6 +112,33 @@ class _FakeAtTransport:
 
 
 class FramedCollectorManagementAdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_endpoint_write_failure_identifies_phase_without_endpoint(self):
+        for failure_index, phase in enumerate((
+            "read_previous", "write_endpoint", "readback", "read_apply_state", "apply",
+        )):
+            with self.subTest(phase=phase):
+                transport = _FakeFramedTransport()
+                send = transport.async_send_collector
+                index = 0
+
+                async def fail_step(**kwargs):
+                    nonlocal index
+                    current = index
+                    index += 1
+                    if current == failure_index:
+                        raise TimeoutError("secret endpoint must not escape")
+                    return await send(**kwargs)
+
+                transport.async_send_collector = fail_step
+                with self.assertRaises(CollectorManagementTransportError) as caught:
+                    await self._adapter(transport).async_write_endpoint("new.host,18899,TCP")
+                self.assertEqual(caught.exception.request_diagnostics["phase"], phase)
+                self.assertEqual(caught.exception.diagnostic_code, "TimeoutError")
+                self.assertNotIn("secret", str(caught.exception.request_diagnostics))
+                self.assertNotIn("new.host", str(caught.exception.request_diagnostics))
+                if phase in {"read_previous", "readback"}:
+                    self.assertEqual(caught.exception.request_diagnostics["parameter"], 21)
+
     async def test_endpoint_read_transport_failure_identifies_exact_subrequest(self):
         from unittest.mock import patch
 
@@ -238,6 +265,25 @@ class FramedCollectorManagementAdapterTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AtTextCollectorManagementAdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_endpoint_write_readback_timeout_has_provider_neutral_phase(self):
+        transport = _FakeAtTransport()
+        query = transport.async_query
+        reads = 0
+
+        async def fail_readback(command):
+            nonlocal reads
+            reads += 1
+            if reads == 2:
+                raise TimeoutError()
+            return await query(command)
+
+        transport.async_query = fail_readback
+        with self.assertRaises(CollectorManagementTransportError) as caught:
+            await AtTextCollectorManagementAdapter(lambda: transport).async_write_endpoint(
+                "new.host,18899,TCP",
+            )
+        self.assertEqual(caught.exception.request_diagnostics, {"phase": "readback"})
+
     def _adapter(self, transport):
         return AtTextCollectorManagementAdapter(lambda: transport)
 

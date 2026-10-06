@@ -40,6 +40,7 @@ from ..payload.pi30 import (
     parse_qt_clock,
     parse_serial_number,
     q1_output_keys,
+    qpigs_output_keys,
     qpiws_output_keys,
 )
 from ..poll_policy import PollPolicy
@@ -100,6 +101,12 @@ _RUNTIME_COMMAND_SPECS: tuple[Pi30CommandSpec, ...] = (
     Pi30CommandSpec(command="QPIWS", parser=parse_qpiws, optional=True),
     Pi30CommandSpec(command="Q1", parser=parse_q1, optional=True),
 )
+
+# A transient miss can carry a prior runtime sample for at most two minutes,
+# or three configured poll intervals for deliberately slow polling. This is
+# runtime-only freshness bookkeeping, not a second measurement cache.
+_REQUIRED_SAMPLE_MAX_AGE_SECONDS = 120.0
+_REQUIRED_LAST_SUCCESS_KEY = "pi30_required_last_success"
 
 # A minimal subset read only during onboarding to enrich the confirmation UI --
 # not a runtime cadence.
@@ -612,13 +619,15 @@ def _pi30_command_output_keys() -> dict[str, frozenset[str]]:
     """Command (stable cache key) -> the runtime value keys it owns.
 
     Ownership lives here next to the specs/parsers (never in the hub): it maps
-    each optional command to the direct parser keys AND any value derived from
-    them, so a command that reaches a final unsupported verdict can invalidate
-    exactly the keys it produced. Q1/QPIWS key sets are derived from the payload
+    each command to the direct parser keys AND any value derived from them, so
+    an expired sample or final unsupported verdict can invalidate exactly the
+    keys it produced. QPIGS/Q1/QPIWS key sets are derived from the payload
     layouts so they cannot drift from the parsers.
     """
 
     return {
+        "QPIGS": qpigs_output_keys(),
+        "QMOD": frozenset({"operating_mode_code", "operating_mode"}),
         "QPIWS": qpiws_output_keys() | frozenset({"alarm_status"}),
         "Q1": q1_output_keys() | frozenset({"inverter_charge_state"}),
         "QET": frozenset({"pv_generation_sum"}),
@@ -719,6 +728,7 @@ async def _async_collect_values(
     runtime_state: dict[str, Any] | None = None,
     now_monotonic: float | None = None,
     command_timings: list[tuple[str, str, int, str]] | None = None,
+    allow_partial: bool = False,
 ) -> dict[str, Any]:
     values: dict[str, Any] = {}
 
@@ -737,17 +747,59 @@ async def _async_collect_values(
             _record_pi30_command_stat(
                 runtime_state, spec.command, spec.command, duration_ms, _command_outcome(exc), command_timings
             )
-            if not spec.optional:
+            if not spec.optional and not allow_partial:
                 raise
-            _record_command_failure(runtime_state, spec.command)
+            if spec.optional:
+                _record_command_failure(runtime_state, spec.command)
         else:
             duration_ms = int(round((time.monotonic() - started) * 1000.0))
             _record_pi30_command_stat(
                 runtime_state, spec.command, spec.command, duration_ms, "ok", command_timings
             )
             _record_command_success(runtime_state, spec.command)
+            if allow_partial and not spec.optional and runtime_state is not None:
+                runtime_state.setdefault(_REQUIRED_LAST_SUCCESS_KEY, {})[spec.command] = (
+                    time.monotonic() if now_monotonic is None else now_monotonic
+                )
 
     return values
+
+
+def _required_sample_freshness(
+    *,
+    runtime_state: dict[str, Any] | None,
+    command_timings: list[tuple[str, str, int, str]],
+    now: float,
+    poll_interval: float | None,
+) -> tuple[frozenset[str], dict[str, Any]]:
+    """Bound carried core values without disabling their required commands."""
+
+    max_age = max(_REQUIRED_SAMPLE_MAX_AGE_SECONDS, 3.0 * (poll_interval or 0.0))
+    successful = {key for key, _wire, _ms, outcome in command_timings if outcome == "ok"}
+    last_success = (runtime_state or {}).get(_REQUIRED_LAST_SUCCESS_KEY, {})
+    output_keys = _pi30_command_output_keys()
+    removed: set[str] = set()
+    stale: list[str] = []
+    expired: list[str] = []
+    diagnostics: dict[str, Any] = {"pi30_required_value_max_age_seconds": max_age}
+    for spec in _RUNTIME_COMMAND_SPECS:
+        if spec.optional:
+            continue
+        sampled_at = last_success.get(spec.command)
+        age = max(0.0, now - sampled_at) if sampled_at is not None else None
+        if age is not None:
+            diagnostics[f"pi30_{spec.command.lower()}_age_seconds"] = round(age, 3)
+        if spec.command in successful:
+            continue
+        stale.append(spec.command)
+        # No timestamp means this session has never confirmed that command.
+        # Remove detection/previous-session values instead of granting a new TTL.
+        if age is None or age >= max_age:
+            expired.append(spec.command)
+            removed.update(output_keys[spec.command])
+    diagnostics["pi30_required_stale_commands"] = ", ".join(stale)
+    diagnostics["pi30_required_expired_commands"] = ", ".join(expired)
+    return frozenset(removed), diagnostics
 
 
 def _pi30_unreachable_commands(unsupported: frozenset[str]) -> frozenset[str]:
@@ -801,6 +853,9 @@ def _build_pi30_read_meta(
         "pi30_poll_succeeded": sum(1 for _k, _w, _ms, o in attempted if o == "ok"),
         "pi30_poll_timeout": sum(1 for _k, _w, _ms, o in attempted if o == "timeout"),
         "pi30_poll_error": sum(1 for _k, _w, _ms, o in attempted if o == "error"),
+        "pi30_poll_failed_commands": ", ".join(
+            key for key, _wire, _ms, outcome in attempted if outcome in {"timeout", "error"}
+        ),
     }
 
     if runtime_state is None:
@@ -863,19 +918,20 @@ async def _async_collect_runtime_values(
     There is no fast/medium/slow scheduling and no empty cycle: every poll
     executes QPIGS, QMOD, then the optional QPIWS / Q1 (auto-skipped when finally
     unsupported), then the reachable energy chain (existing order + early-exit),
-    back to back with no artificial pause. The result is always a DELTA (see
-    :meth:`Pi30Driver.async_read_values`): a transient failure keeps last-good and
-    a final unsupported verdict invalidates the command's values via
-    ``removed_keys``. ``poll_interval`` / ``now_monotonic`` are accepted for the
-    driver contract but no longer gate anything -- the whole-cycle wall-clock is
-    the honest cost the neutral auto poll policy consumes.
+    back to back with no artificial pause. Per-command payload errors do not
+    discard other successful replies. Required commands are never disabled;
+    their last-good values expire through ``removed_keys``. Optional commands
+    retain the existing unsupported-command policy. Poll interval and monotonic
+    time bound freshness only; they do not gate command scheduling.
     """
 
     command_timings: list[tuple[str, str, int, str]] = []
     cycle_started = time.monotonic()
 
     values = await _async_collect_values(
-        session, _RUNTIME_COMMAND_SPECS, runtime_state=runtime_state, command_timings=command_timings
+        session, _RUNTIME_COMMAND_SPECS, runtime_state=runtime_state,
+        command_timings=command_timings, allow_partial=True,
+        now_monotonic=now_monotonic,
     )
     values.update(
         await _async_collect_energy_values(
@@ -885,13 +941,18 @@ async def _async_collect_runtime_values(
 
     cycle_wall_ms = int(round((time.monotonic() - cycle_started) * 1000.0))
 
-    removed_keys: frozenset[str] = frozenset()
+    removed_keys, freshness = _required_sample_freshness(
+        runtime_state=runtime_state,
+        command_timings=command_timings,
+        now=time.monotonic() if now_monotonic is None else now_monotonic,
+        poll_interval=poll_interval,
+    )
     if runtime_state is not None:
         _commit_cycle_failures(runtime_state)
         # Invalidate values owned by any command that reached a FINAL unsupported
         # verdict (incl. energy-chain reachability). Never remove a value read
         # THIS cycle; unsupported-command reporting is a separate diagnostic.
-        removed_keys = frozenset(
+        removed_keys |= frozenset(
             _pi30_removed_keys_for_unsupported(
                 frozenset(_unsupported_commands(runtime_state))
             )
@@ -904,6 +965,7 @@ async def _async_collect_runtime_values(
         cycle_wall_ms=cycle_wall_ms,
     )
     diagnostics.update(_unsupported_command_diagnostics(runtime_state))
+    diagnostics.update(freshness)
     return values, removed_keys, diagnostics
 
 

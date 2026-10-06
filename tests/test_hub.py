@@ -49,6 +49,33 @@ from custom_components.eybond_local.const import DRIVER_DETECTION_FULL_SCAN
 
 
 class HubEvidenceAdmissionAndRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_read_does_not_refresh_liveness_or_confirm_session(self):
+        from custom_components.eybond_local.drivers.read_result import DriverReadResult, DriverReadMode
+
+        hub = self.make_hub()
+        outcomes = [
+            DriverReadResult({"battery_voltage": 27.3}),
+            DriverReadResult({}, mode=DriverReadMode.DELTA),
+            DriverReadResult({}, mode=DriverReadMode.DELTA, removed_keys=frozenset({"battery_voltage"})),
+            DriverReadResult({"battery_voltage": 27.4}, mode=DriverReadMode.DELTA),
+        ]
+        with patch.object(hub._driver, "async_read_values", side_effect=outcomes), patch.object(hub, "_mark_owned_session_stable") as stable:
+            await hub.async_refresh(poll_interval=3)
+            last_success = hub._last_success_monotonic
+            self.assertIsNotNone(last_success)
+            carried = await hub.async_refresh(poll_interval=3)
+            self.assertEqual(carried.runtime_value("battery_voltage"), 27.3)
+            self.assertEqual(hub._last_success_monotonic, last_success)
+            expired = await hub.async_refresh(poll_interval=3)
+            self.assertIsNone(expired.runtime_value("battery_voltage"))
+            self.assertEqual(hub._last_success_monotonic, last_success)
+            self.assertEqual(stable.call_count, 1)
+            recovered = await hub.async_refresh(poll_interval=3)
+            self.assertEqual(recovered.runtime_value("battery_voltage"), 27.4)
+            self.assertGreater(hub._last_success_monotonic, last_success)
+            self.assertEqual(stable.call_count, 2)
+        self.assertEqual(hub._link_manager.reset_calls, 0)
+
     def make_hub(self):
         from custom_components.eybond_local.drivers.srne import SrneModbusDriver
 
@@ -4767,6 +4794,10 @@ class HubCollectorManagementTests(unittest.TestCase):
             op = hub.collector_management_diagnostics()["collector_management_last_operation"]
             self.assertNotIn("failed_request", op)
             self.assertEqual(op["status"], "ok")
+            failure = hub.collector_management_diagnostics()["collector_management_last_failure"]
+            self.assertEqual(failure["failed_request"]["parameter"], 30)
+            self.assertEqual(failure["status"], "error")
+            self.assertIn("timestamp", failure)
             with self.assertRaises(asyncio.CancelledError):
                 await hub._run_management_operation("read_endpoint_state", AsyncMock(side_effect=asyncio.CancelledError()))
             self.assertEqual(hub._last_management_operation["status"], "cancelled")
@@ -4781,6 +4812,31 @@ class HubCollectorManagementTests(unittest.TestCase):
         blob = str(diag)
         for secret in ("password", "ssid", "18899", "eybond.com"):
             self.assertNotIn(secret, blob)
+
+    def test_endpoint_read_rejects_session_replacement_before_metadata_publication(self):
+        from custom_components.eybond_local.collector.management import CollectorManagementTransportError
+
+        async def run():
+            hub, link = self._framed_hub()
+            link.owned_session_generation = 1
+            adapter = hub._collector_management_adapter()
+            read = adapter.async_read_endpoint_state
+
+            async def changed():
+                result = await read()
+                link.owned_session_generation += 1
+                return result
+
+            adapter.async_read_endpoint_state = changed
+            with patch.object(hub, "_collector_management_adapter", return_value=adapter):
+                with self.assertRaisesRegex(CollectorManagementTransportError, "session_changed"):
+                    await hub.async_get_collector_server_endpoint_state()
+            self.assertEqual(hub._last_management_operation["status"], "error")
+            self.assertEqual(hub._last_management_operation["session_generation_start"], 1)
+            self.assertEqual(hub._last_management_operation["session_generation_end"], 2)
+            self.assertNotIn("collector_server_endpoint", hub._collector_metadata_service.merged_values())
+
+        asyncio.run(run())
 
 
 if __name__ == "__main__":

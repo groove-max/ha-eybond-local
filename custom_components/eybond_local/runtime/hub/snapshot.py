@@ -521,7 +521,7 @@ class HubSnapshotMixin:
                     safe_extra_values.pop("collector_pn", None)
             values.update(safe_extra_values)
 
-        # Only the last operation owns these diagnostics. Neither a carried
+        # The runtime alone owns these diagnostics. Neither a carried
         # snapshot nor an extra metadata observation may restore an older error
         # or attribute its failed sub-request to a newer successful operation.
         for key in tuple(values):
@@ -543,6 +543,11 @@ class HubSnapshotMixin:
                     values[f"collector_management_last_{field}"] = (
                         dict(value) if isinstance(value, dict) else value
                     )
+        failure = getattr(self, "_last_management_failure", None)
+        if failure is not None:
+            values["collector_management_last_failure"] = {
+                **failure, "failed_request": dict(failure.get("failed_request", {})),
+            }
 
         # Owned by the payload-read outcome lifecycle, never by carried values
         # or collector metadata. Identity changes reset it with measurements.

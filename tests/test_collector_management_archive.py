@@ -147,8 +147,45 @@ class CollectorManagementArchiveTests(unittest.IsolatedAsyncioTestCase):
         current = self.archive(hub)
         self.assertEqual(current["runtime"]["values"][PREFIX + "failed_request"]["parameter"], 30)
         hub._last_management_operation = None
+        # Historical failure is a separate timestamped record, not a carried
+        # current-operation error. Clearing both owners removes all diagnostics.
+        for view in self.views(self.archive(hub)):
+            self.assertEqual(
+                {key for key in view if key.startswith(PREFIX)}, {PREFIX + "failure"},
+            )
+        hub._last_management_failure = None
         for view in self.views(self.archive(hub)):
             self.assertFalse(any(key.startswith(PREFIX) for key in view))
+
+    async def test_write_readback_phase_survives_successful_verification_in_zip(self):
+        hub, link = self.make_hub()
+        send = link.transport.async_send_collector
+        reads = 0
+
+        async def fail_readback(**kwargs):
+            nonlocal reads
+            if kwargs["fcode"] == 2 and kwargs["payload"] == bytes((21,)):
+                reads += 1
+                if reads == 2:
+                    raise TimeoutError("private-response-with-password")
+            return await send(**kwargs)
+
+        with patch.object(link.transport, "async_send_collector", side_effect=fail_readback):
+            with self.assertRaises(CollectorManagementTransportError):
+                await hub.async_set_collector_server_endpoint("new.example.test,18899,TCP")
+        await hub.async_get_collector_server_endpoint_state()
+        bundle = self.archive(hub)
+        for view in self.views(bundle):
+            self.assertEqual(view[PREFIX + "status"], "ok")
+            self.assertNotIn(PREFIX + "failed_request", view)
+            failure = view[PREFIX + "failure"]
+            self.assertEqual(failure["operation"], "write_endpoint")
+            self.assertEqual(failure["failed_request"]["phase"], "readback")
+            self.assertEqual(failure["failed_request"]["parameter"], 21)
+            self.assertLessEqual(failure["timestamp"], view[PREFIX + "timestamp"])
+        self.assertNotIn("private-response-with-password", json.dumps(bundle))
+        hub._last_snapshot.values[PREFIX + "failure"]["failed_request"]["phase"] = "changed"
+        self.assertEqual(hub._last_management_failure["failed_request"]["phase"], "readback")
 
     async def test_at_failure_does_not_inherit_framed_context(self):
         hub, link = self.make_hub()

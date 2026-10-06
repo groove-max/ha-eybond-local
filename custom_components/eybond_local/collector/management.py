@@ -111,6 +111,7 @@ class CollectorManagementTransportError(CollectorManagementError):
         super().__init__(message)
         # Numeric request context only; never endpoint values or response text.
         self.query_parameter = query_parameter
+        self.operation_phase = ""
 
     @property
     def diagnostic_code(self) -> str:
@@ -120,7 +121,10 @@ class CollectorManagementTransportError(CollectorManagementError):
             return type(self.__cause__).__name__
         # Directly constructed typed failures may already carry a class code.
         code = str(self)
-        if code in {failure.__name__ for failure in _TRANSPORT_FAILURES}:
+        if code in {
+            "collector_management_session_changed",
+            *(failure.__name__ for failure in _TRANSPORT_FAILURES),
+        }:
             return code
         return type(self).__name__
 
@@ -128,17 +132,33 @@ class CollectorManagementTransportError(CollectorManagementError):
     def request_diagnostics(self) -> dict[str, object]:
         """Project wire context here so runtime need not interpret parameters."""
 
-        if self.query_parameter is None:
-            return {}
-        return {
-            "protocol": "eybond_framed",
-            "function": 2,
-            "parameter": self.query_parameter,
-        }
+        result: dict[str, object] = {}
+        if self.query_parameter is not None:
+            result.update(protocol="eybond_framed", function=2, parameter=self.query_parameter)
+        if self.operation_phase:
+            result["phase"] = self.operation_phase
+        return result
 
 
 class CollectorManagementConfirmationError(CollectorManagementError):
     """A management command was sent but the collector did not confirm it."""
+
+
+async def _endpoint_step(phase: str, request):
+    """Annotate compound-operation failures without leaking endpoint values."""
+
+    try:
+        return await request
+    except CollectorManagementTransportError as exc:
+        exc.operation_phase = phase
+        raise
+    except CollectorManagementError:
+        raise
+    except Exception as exc:
+        wrapped = _wrap_wire_call(exc)
+        if isinstance(wrapped, CollectorManagementTransportError):
+            wrapped.operation_phase = phase
+        raise wrapped from exc
 
 
 # ---------------------------------------------------------------------------
@@ -458,26 +478,29 @@ class FramedCollectorManagementAdapter(CollectorManagementAdapter):
         self, endpoint: str, *, apply_changes: bool = True
     ) -> CollectorEndpointWriteResult:
         session, _ = self._session()
-        previous = await self._query_flag(session, SET_SERVER_ENDPOINT)
-        try:
-            set_response = await session.set_collector(SET_SERVER_ENDPOINT, endpoint)
-        except CollectorManagementError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise _wrap_wire_call(exc) from exc
+        previous = await _endpoint_step(
+            "read_previous", self._query_flag(session, SET_SERVER_ENDPOINT),
+        )
+        set_response = await _endpoint_step(
+            "write_endpoint", session.set_collector(SET_SERVER_ENDPOINT, endpoint),
+        )
         if set_response.status != 0 or set_response.parameter != SET_SERVER_ENDPOINT:
             raise CollectorManagementConfirmationError(
                 f"collector_set_unconfirmed:parameter={SET_SERVER_ENDPOINT}:"
                 f"status={set_response.status}"
             )
-        readback = await self._query_confirmed(session, SET_SERVER_ENDPOINT)
-        reboot_required = await self._query_flag(session, QUERY_REBOOT_REQUIRED)
+        readback = await _endpoint_step(
+            "readback", self._query_confirmed(session, SET_SERVER_ENDPOINT),
+        )
+        reboot_required = await _endpoint_step(
+            "read_apply_state", self._query_flag(session, QUERY_REBOOT_REQUIRED),
+        )
         confirmation_source = _confirm_write(endpoint, readback, ack_source="set_ack")
 
         apply_performed = False
         warnings: tuple[str, ...] = ()
         if apply_changes:
-            await self._apply(session)
+            await _endpoint_step("apply", self._apply(session))
             apply_performed = True
             warnings = (self._APPLY_WARNING,)
 
@@ -741,12 +764,16 @@ class AtTextCollectorManagementAdapter(CollectorManagementAdapter):
         self, endpoint: str, *, apply_changes: bool = True
     ) -> CollectorEndpointWriteResult:
         transport = self._resolve_transport(needs_write=True)
-        previous = await self._query(transport, _AT_ENDPOINT_COMMAND)
+        previous = await _endpoint_step(
+            "read_previous", self._query(transport, _AT_ENDPOINT_COMMAND),
+        )
         # CLDSRVHOST1 write ack: a W000 status OR a documented exact endpoint echo.
         # A Wxxx != W000 is NOT an ack (readback must then confirm).
-        write_value = await self._send_write(transport, _AT_ENDPOINT_COMMAND, endpoint)
+        write_value = await _endpoint_step(
+            "write_endpoint", self._send_write(transport, _AT_ENDPOINT_COMMAND, endpoint),
+        )
         write_ack = write_value == _AT_SUCCESS_STATUS or _endpoints_match(write_value, endpoint)
-        readback = await self._query(transport, _AT_ENDPOINT_COMMAND)
+        readback = await _endpoint_step("readback", self._query(transport, _AT_ENDPOINT_COMMAND))
         confirmation_source = _confirm_at_write(endpoint, readback, write_ack=write_ack)
 
         warnings: tuple[str, ...] = ()
@@ -754,7 +781,7 @@ class AtTextCollectorManagementAdapter(CollectorManagementAdapter):
         apply_performed = False
         if apply_changes:
             # An unconfirmed apply raises (never swallowed into a warning).
-            extra["at_apply_response"] = await self._apply(transport)
+            extra["at_apply_response"] = await _endpoint_step("apply", self._apply(transport))
             apply_performed = True
             warnings = (self._APPLY_WARNING,)
 

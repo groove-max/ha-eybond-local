@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timezone
 import ipaddress
 import logging
@@ -101,6 +101,7 @@ from .tooling_projection import (
     proxy_capture_state_wire_mode as _proxy_capture_state_wire_mode,
 )
 from ..shadow_learning_facade import ShadowLearningRuntimeFacade
+from ..endpoint_restore import restore_collector_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ class CoordinatorCloudToolsMixin:
     """Own the shared proxy/shadow endpoint transaction lifecycle."""
 
     @asynccontextmanager
-    async def _async_cloud_tool_preparation(self):
+    async def _async_cloud_tool_preparation(self, *, allow_shutdown: bool = False):
         """Drain polling before taking the bus through route handoff/cleanup.
 
         Announce ownership BEFORE waiting for the runtime lock so queued polls
@@ -118,7 +119,7 @@ class CoordinatorCloudToolsMixin:
         a separate authority and may outlive this transient preparation guard.
         """
 
-        if getattr(self, "_shutdown_complete", False):
+        if getattr(self, "_shutdown_complete", False) and not allow_shutdown:
             raise RuntimeError("coordinator_stopped")
         if getattr(self, "_cloud_tool_preparation_task", None) is not None:
             raise RuntimeError("collector_endpoint_operation_busy")
@@ -127,8 +128,14 @@ class CoordinatorCloudToolsMixin:
         self._cloud_tool_preparation_task = task
         self._cloud_tool_preparation_done = done
         try:
-            async with self._runtime_operation_lock:
-                if getattr(self, "_shutdown_complete", False):
+            lock = getattr(self, "_runtime_operation_lock", None)
+            if lock is None:
+                lock = self._runtime_operation_lock = asyncio.Lock()
+            # Expiry reconciliation runs inside the poll's runtime lock. Only
+            # that exact task may reuse it; locked() alone proves no ownership.
+            owns_poll = getattr(self, "_runtime_poll_task", None) is task
+            async with nullcontext() if owns_poll else lock:
+                if getattr(self, "_shutdown_complete", False) and not allow_shutdown:
                     raise RuntimeError("coordinator_stopped")
                 yield
         finally:
@@ -487,6 +494,14 @@ class CoordinatorCloudToolsMixin:
     ) -> dict[str, object]:
         """Serialize and stop one live collector proxy capture session."""
 
+        if (
+            getattr(self, "_runtime_poll_task", None) is asyncio.current_task()
+            and getattr(self, "_cloud_tool_preparation_task", None) is not None
+        ):
+            # A user operation is already waiting for this poll to drain. Do
+            # not invert runtime -> terminalization against its lock order.
+            return {"status": "deferred"}
+
         lock = getattr(self, "_collector_endpoint_terminalization_lock", None)
         if lock is None:
             # Bare coordinator test harnesses bypass __init__.  Production
@@ -494,11 +509,15 @@ class CoordinatorCloudToolsMixin:
             lock = asyncio.Lock()
             self._collector_endpoint_terminalization_lock = lock
         async with lock:
-            return await self._async_stop_proxy_capture_once(
-                reason=reason,
-                prefer_proxy_restore_trigger=prefer_proxy_restore_trigger,
-                request_refresh=request_refresh,
-            )
+            async with self._async_cloud_tool_preparation(allow_shutdown=True):
+                result = await self._async_stop_proxy_capture_once(
+                    reason=reason,
+                    prefer_proxy_restore_trigger=prefer_proxy_restore_trigger,
+                    request_refresh=False,
+                )
+        if request_refresh:
+            await self.async_request_refresh()
+        return result
 
     async def _async_stop_proxy_capture_once(
         self,
@@ -1115,17 +1134,27 @@ class CoordinatorCloudToolsMixin:
     ) -> dict[str, object]:
         """Serialize and stop one in-process shadow-learning session."""
 
+        if (
+            getattr(self, "_runtime_poll_task", None) is asyncio.current_task()
+            and getattr(self, "_cloud_tool_preparation_task", None) is not None
+        ):
+            return {"status": "deferred"}
+
         lock = getattr(self, "_collector_endpoint_terminalization_lock", None)
         if lock is None:
             lock = asyncio.Lock()
             self._collector_endpoint_terminalization_lock = lock
         async with lock:
-            return await self._async_stop_shadow_learning_once(
-                reason=reason,
-                request_refresh=request_refresh,
-                raise_when_not_running=raise_when_not_running,
-                clear_failed_restore=clear_failed_restore,
-            )
+            async with self._async_cloud_tool_preparation(allow_shutdown=True):
+                result = await self._async_stop_shadow_learning_once(
+                    reason=reason,
+                    request_refresh=False,
+                    raise_when_not_running=raise_when_not_running,
+                    clear_failed_restore=clear_failed_restore,
+                )
+        if request_refresh and result.get("status") != "not_running":
+            await self.async_request_refresh()
+        return result
 
     async def _async_stop_shadow_learning_once(
         self,
@@ -1559,25 +1588,13 @@ class CoordinatorCloudToolsMixin:
                 await stop_route()
 
     async def _async_restore_proxy_capture_endpoint(self, endpoint: str) -> str:
-        """Restore one collector callback endpoint captured before proxy redirect."""
+        """Reconcile a saved endpoint through fresh runtime-owned management."""
 
-        _parse_collector_server_endpoint(endpoint)
-        disconnect = getattr(
-            self._runtime,
-            "async_disconnect_collector_connections",
-            None,
+        return await restore_collector_endpoint(
+            self._runtime, endpoint,
+            timeout=DEFAULT_ONBOARDING_TIMEOUT_POLICY.callback_recovery_session_wait,
+            cloud_family=self.collector_cloud_family,
         )
-        if callable(disconnect):
-            await disconnect(reason="collector_endpoint_restore")
-        result = await self._runtime.async_set_collector_server_endpoint(
-            endpoint,
-            apply_changes=True,
-            timeout=(
-                DEFAULT_ONBOARDING_TIMEOUT_POLICY.callback_recovery_session_wait
-            ),
-            require_heartbeat=False,
-        )
-        return str(result.get("readback_endpoint") or endpoint)
 
     async def _async_verify_restored_collector_endpoint(
         self,
@@ -1667,6 +1684,12 @@ class CoordinatorCloudToolsMixin:
                 "restore_confirmed": False,
                 "observed_endpoint": normalized_observed,
                 "restore_error": "restore_live_endpoint_mismatch",
+            }
+        if result.get("reboot_required") not in (None, "", "0"):
+            return {
+                "restore_confirmed": False,
+                "observed_endpoint": normalized_observed,
+                "restore_error": "restore_apply_unconfirmed",
             }
         return {
             "restore_confirmed": True,

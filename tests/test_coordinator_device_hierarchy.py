@@ -8698,6 +8698,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 active -= 1
                 return {"status": "stopped"}
 
+            async def refresh():
+                self.assertIsNone(coordinator._cloud_tool_preparation_task)
+                self.assertFalse(coordinator._runtime_operation_lock.locked())
+
+            coordinator.async_request_refresh = refresh
             coordinator._async_stop_proxy_capture_once = _stop_once
             first = asyncio.create_task(coordinator.async_stop_proxy_capture())
             await entered.wait()
@@ -8726,13 +8731,17 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 calls.append(
                     (endpoint, apply_changes, timeout, require_heartbeat)
                 )
-                return {"readback_endpoint": endpoint}
+                return {"readback_endpoint": endpoint, "apply_performed": True}
 
             async def _async_disconnect_collector_connections(*, reason: str):
                 disconnect_reasons.append(reason)
 
             coordinator._runtime = types.SimpleNamespace(
                 async_set_collector_server_endpoint=_async_set_collector_server_endpoint,
+                async_get_collector_server_endpoint_state=AsyncMock(side_effect=[
+                    {"current_endpoint": "192.168.1.50,18899,TCP", "reboot_required": "0"},
+                    {"current_endpoint": "ess.eybond.com", "reboot_required": "0"},
+                ]),
                 async_disconnect_collector_connections=(
                     _async_disconnect_collector_connections
                 ),
@@ -8745,9 +8754,13 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 _raise_if_high_level_collector_actions_disabled
             )
 
-            restored_endpoint = await coordinator._async_restore_proxy_capture_endpoint(
-                "ess.eybond.com"
-            )
+            with patch.object(
+                self.coordinator_module.EybondLocalCoordinator, "collector_cloud_family",
+                new_callable=PropertyMock, return_value="legacy_binary",
+            ):
+                restored_endpoint = await coordinator._async_restore_proxy_capture_endpoint(
+                    "ess.eybond.com"
+                )
 
             self.assertEqual(restored_endpoint, "ess.eybond.com")
             self.assertEqual(
@@ -8763,7 +8776,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
             self.assertEqual(
                 disconnect_reasons,
-                ["collector_endpoint_restore"],
+                ["collector_endpoint_restore_verification"],
             )
 
         import asyncio

@@ -533,7 +533,10 @@ class _FakeTransport:
         key = (route.devcode, route.collector_addr, command)
         if key not in self._responses:
             raise asyncio.TimeoutError()
-        return self._frame(self._responses[key])
+        response = self._responses[key]
+        if isinstance(response, BaseException):
+            raise response
+        return response if isinstance(response, bytes) else self._frame(response)
 
 
 class Pi30ThroughHubCacheTests(unittest.TestCase):
@@ -1069,6 +1072,121 @@ class Pi30UnsupportedRemovalTests(unittest.TestCase):
         hub._resolve_runtime_measurements(result)
         hub._last_snapshot = hub._build_snapshot()
         return result, hub._last_snapshot.runtime_values()
+
+    def test_required_reply_failure_preserves_other_fresh_commands(self) -> None:
+        async def run_case(command, failure):
+            driver, inverter, hub, transport = await self._make(self._responses())
+            await self._cycle(driver, inverter, hub, transport, 100)
+            transport._responses[(0x0994, 0x01, "QPIGS")] = Pi30ThroughHubCacheTests._QPIGS_B
+            transport._responses[(0x0994, 0x01, "QMOD")] = "B"
+            transport._responses[(0x0994, 0x01, command)] = failure
+            transport.commands.clear()
+            result, snap = await self._cycle(driver, inverter, hub, transport, 110)
+            failed_key = "operating_mode_code" if command == "QMOD" else "battery_voltage"
+            fresh_key = "battery_voltage" if command == "QMOD" else "operating_mode_code"
+            self.assertNotIn(failed_key, result.values)
+            self.assertNotIn(failed_key, result.removed_keys)
+            self.assertEqual(snap[fresh_key], 27.4 if command == "QMOD" else "B")
+            self.assertIs(hub._last_snapshot.telemetry.point(failed_key).freshness, TelemetryFreshness.CARRIED)
+            self.assertIs(hub._last_snapshot.telemetry.point(fresh_key).freshness, TelemetryFreshness.FRESH)
+            self.assertEqual(result.diagnostics["pi30_poll_failed_commands"], command)
+            self.assertEqual(result.diagnostics["pi30_required_stale_commands"], command)
+            self.assertEqual(result.diagnostics[f"pi30_{command.lower()}_age_seconds"], 10.0)
+            self.assertEqual(transport.commands, Pi30ThroughHubCacheTests._FULL_SEQUENCE)
+
+        for command in ("QPIGS", "QMOD"):
+            for failure in ("NAK", asyncio.TimeoutError(), b"", b"(Lxx\r", ""):
+                with self.subTest(command=command, failure=repr(failure)):
+                    asyncio.run(run_case(command, failure))
+
+    def test_required_commands_expire_recover_and_are_never_disabled(self) -> None:
+        async def run_case(command, keys):
+            driver, inverter, hub, transport = await self._make(self._responses())
+            original = transport._responses[(0x0994, 0x01, command)]
+            await self._cycle(driver, inverter, hub, transport, 100)
+            transport._responses[(0x0994, 0x01, command)] = "NAK"
+            for t in (110, 120, 130, 140, 150):
+                transport.commands.clear()
+                result, snap = await self._cycle(driver, inverter, hub, transport, t)
+                self.assertIn(command, transport.commands)
+                self.assertNotIn(command, result.diagnostics.get("driver_unsupported_commands", ""))
+                for key in keys:
+                    self.assertIn(key, snap)
+            result, snap = await self._cycle(driver, inverter, hub, transport, 220)
+            self.assertEqual(result.diagnostics["pi30_required_expired_commands"], command)
+            for key in keys:
+                self.assertIn(key, result.removed_keys)
+                self.assertNotIn(key, snap)
+            self.assertIn("inverter_temperature", snap)  # independent Q1 remains fresh
+            if command == "QPIGS":
+                self.assertNotIn("grid_voltage", snap)  # canonical alias cannot resurrect it
+            transport._responses[(0x0994, 0x01, command)] = original
+            result, snap = await self._cycle(driver, inverter, hub, transport, 230)
+            self.assertEqual(result.diagnostics["pi30_required_expired_commands"], "")
+            for key in keys:
+                self.assertIn(key, snap)
+                self.assertNotIn(key, result.removed_keys)
+
+        for command, keys in (
+            ("QMOD", ("operating_mode_code", "operating_mode")),
+            ("QPIGS", ("battery_voltage", "input_voltage", "output_active_power", "pv_input_power", "status_bits_raw")),
+        ):
+            with self.subTest(command=command):
+                asyncio.run(run_case(command, keys))
+
+    def test_required_expiry_respects_slow_polling_and_new_session(self) -> None:
+        async def run():
+            driver, inverter, hub, transport = await self._make(self._responses())
+            await self._cycle(driver, inverter, hub, transport, 100)
+            transport._responses[(0x0994, 0x01, "QMOD")] = "NAK"
+            for t, expired in ((400, False), (999, False), (1000, True)):
+                result = await driver.async_read_values(
+                    transport, inverter, runtime_state=hub._runtime_read_state,
+                    poll_interval=300, now_monotonic=t,
+                )
+                self.assertEqual(result.diagnostics["pi30_required_value_max_age_seconds"], 900)
+                self.assertEqual("operating_mode" in result.removed_keys, expired)
+            hub._reset_runtime_read_state()
+            result, snap = await self._cycle(driver, inverter, hub, transport, 1001)
+            self.assertNotIn("operating_mode", snap)
+            self.assertIn("operating_mode", result.removed_keys)
+            self.assertNotIn("pi30_qmod_age_seconds", result.diagnostics)
+
+        asyncio.run(run())
+
+    def test_all_payloads_missing_has_no_fresh_measurements_or_unsupported_verdict(self) -> None:
+        async def run():
+            driver, inverter, hub, transport = await self._make(self._responses())
+            await self._cycle(driver, inverter, hub, transport, 100)
+            transport._responses.clear()
+            result, snap = await self._cycle(driver, inverter, hub, transport, 221)
+            self.assertEqual(result.values, {})
+            self.assertNotIn("battery_voltage", snap)
+            self.assertNotIn("operating_mode", snap)
+            self.assertNotIn("driver_unsupported_commands", result.diagnostics)
+            self.assertEqual(hub._runtime_measurement_telemetry.fresh_count, 0)
+
+        asyncio.run(run())
+
+    def test_transport_errors_cancellation_and_strict_read_still_propagate(self) -> None:
+        from custom_components.eybond_local.payload.pi30 import Pi30Error
+        from custom_components.eybond_local.drivers.pi30 import (
+            _async_collect_values, _ONBOARDING_RUNTIME_COMMAND_SPECS,
+        )
+
+        async def run():
+            driver, inverter, hub, transport = await self._make(self._responses())
+            for error in (ConnectionError("collector_disconnected"), asyncio.CancelledError()):
+                transport._responses[(0x0994, 0x01, "QMOD")] = error
+                transport.commands.clear()
+                with self.assertRaises(type(error)):
+                    await self._cycle(driver, inverter, hub, transport, 100)
+                self.assertEqual(transport.commands, ["QPIGS", "QMOD"])
+            transport._responses[(0x0994, 0x01, "QMOD")] = "NAK"
+            with self.assertRaisesRegex(Pi30Error, "nak"):
+                await _async_collect_values(driver._session(transport, inverter.probe_target), _ONBOARDING_RUNTIME_COMMAND_SPECS)
+
+        asyncio.run(run())
 
     def test_qpiws_lifecycle_success_transient_verdict_recheck(self) -> None:
         async def _run():

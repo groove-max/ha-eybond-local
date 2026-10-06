@@ -309,6 +309,7 @@ def _build_diagnostics_split(
                 "collector_management_last_duration_ms",
                 "collector_management_last_timestamp",
                 "collector_management_last_failed_request",
+                "collector_management_last_failure",
                 "collector_management_last_session_generation_start",
                 "collector_management_last_session_generation_end",
                 "smartess_device_address",

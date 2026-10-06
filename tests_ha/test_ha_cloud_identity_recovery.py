@@ -113,14 +113,14 @@ async def test_pending_restore_blocks_learning_and_allows_explicit_recovery(
     # Model a coordinator which has to load its recovery record from disk.
     coordinator._cached_shadow_learning_session_state = None
     coordinator._shadow_learning_session_state_loaded = False
-    coordinator.data = replace(coordinator.data, values={})
+    # Even a matching cached endpoint is not live recovery evidence.
+    coordinator.data = replace(coordinator.data, values={"collector_server_endpoint": original})
     capture = AsyncMock()
     monkeypatch.setattr(runtime, "async_capture_support_evidence", capture)
     write = AsyncMock(side_effect=TimeoutError())
     monkeypatch.setattr(runtime, "async_set_collector_server_endpoint", write)
-    monkeypatch.setattr(runtime, "async_get_collector_server_endpoint_state", AsyncMock(
-        return_value={"current_endpoint": original},
-    ))
+    read = AsyncMock(return_value={"current_endpoint": local_endpoint(), "reboot_required": "0"})
+    monkeypatch.setattr(runtime, "async_get_collector_server_endpoint_state", read)
     first = await hass.config_entries.options.async_init(collector_entry.entry_id)
     try:
         assert await coordinator.async_shadow_learning_start_blocker() == "shadow_learning_restore_pending"
@@ -138,8 +138,9 @@ async def test_pending_restore_blocks_learning_and_allows_explicit_recovery(
         assert coordinator.shadow_learning_restore_pending
         assert coordinator._cached_shadow_learning_session_state.status == "restore_failed"
         assert "could not confirm" in result["description_placeholders"]["control_discovery_hint"]
-        write.side_effect = None
-        write.return_value = {"readback_endpoint": original}
+        # The device has since restored its original endpoint. Fresh live reads
+        # must finalize the old obligation without another write/apply.
+        read.return_value = {"current_endpoint": original, "reboot_required": "0"}
         result = await flow.async_step_shadow_learning_result({"result_action": "restore_connection"})
         assert result["errors"] == {}
         assert not coordinator.shadow_learning_restore_pending
@@ -147,10 +148,12 @@ async def test_pending_restore_blocks_learning_and_allows_explicit_recovery(
         assert await coordinator.async_shadow_learning_start_blocker() == ""
         assert "was restored" in result["description_placeholders"]["control_discovery_hint"]
         assert all(call.args == (original,) for call in write.await_args_list)
+        write.assert_awaited_once()
         capture.assert_not_awaited()
     finally:
         # Leave the genuine persisted transaction finalized even on assertion failure.
         write.side_effect = None
-        write.return_value = {"readback_endpoint": original}
+        write.return_value = {"readback_endpoint": original, "apply_performed": True}
+        read.return_value = {"current_endpoint": original, "reboot_required": "0"}
         hass.config_entries.options.async_abort(first["flow_id"])
         await hass.config_entries.async_unload(collector_entry.entry_id)

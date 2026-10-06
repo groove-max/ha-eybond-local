@@ -86,6 +86,19 @@ If utilization remains high, use Automatic mode or increase the manual
 interval. Occasional long cycles during detection or reconnect recovery are not
 the same as continuously overloaded polling.
 
+### PI30: a missed reply during polling
+
+If one PI30 request fails, readings returned by the other requests still update.
+The last confirmed basic readings and operating mode can remain visible for up
+to two minutes, or three polling intervals if that is longer. If they still
+cannot be read, only the affected readings become unavailable. They return
+automatically when the inverter answers again.
+
+A missing inverter reply does not by itself require reconnecting the collector.
+Persistent failures still need investigation: create a Support Archive while
+the problem is present. It includes failed command names and the age of the
+last confirmed basic readings. Retained values are not new measurements.
+
 ## MUST PV/PH18 power and energy corrections
 
 The unreleased test build corrects several readings in the MUST PV/PH18 map:

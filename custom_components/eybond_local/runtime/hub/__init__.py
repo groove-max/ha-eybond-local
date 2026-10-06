@@ -163,6 +163,7 @@ class EybondHub(
         # Last collector-management operation record (non-sensitive) for support
         # diagnostics; populated by ``_run_management_operation``.
         self._last_management_operation: dict[str, object] | None = None
+        self._last_management_failure: dict[str, object] | None = None
         self._write_blockers: dict[str, CapabilityBlocker] = {}
         self._last_operating_mode: object | None = None
         self._last_success_monotonic: float | None = None

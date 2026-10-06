@@ -64,6 +64,21 @@ actual restoration status and exposes a retry of the existing endpoint
 transaction, without credentials or another learning run. Only confirmed
 restoration releases that obligation; a restart or a failed retry does not.
 
+Restoration and startup both drain and exclude ordinary polling using the
+coordinator's transient cloud-tool barrier. The persistent endpoint authority
+still spans the whole transaction, including a failed retry. Recovery reads
+the endpoint and apply state from live PN-owned management before mutating it;
+metadata-cache equality is never sufficient. A matching, applied endpoint needs
+no write or restart. A matching staged endpoint needs only apply. Wires without
+an apply-status read require a confirmed apply followed by independent readback.
+After an uncertain write outcome, reconnect/readback can prove a matching applied
+endpoint, but never authorizes an automatic repeat write. A mismatched endpoint,
+unknown apply outcome, invalid read, or changed session preserves the obligation.
+Reads spanning a session-generation change cannot publish metadata. Support
+diagnostics retain the last timestamped management failure separately from the
+latest operation, including its compound-operation phase and session generations.
+This confirms collector configuration, not cloud-service telemetry availability.
+
 ## Current sources
 
 | Source | Executable method | Collector endpoint | Cloud writes | Result |
