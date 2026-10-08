@@ -186,7 +186,7 @@ class ExactSessionIdentityNegotiatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.identified)
         self.assertEqual(channel.probes, [("s1", "at_text", PROBE_AT_DTUPN)])
 
-    async def test_weak_framed_observation_uses_fc2_not_fc1(self):
+    async def test_weak_framed_observation_uses_known_wire_identity_policy(self):
         channel = _Channel(
             [
                 SessionObservation(
@@ -207,7 +207,7 @@ class ExactSessionIdentityNegotiatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.identified)
         self.assertEqual(
             channel.probes,
-            [("s1", "eybond_framed", PROBE_FRAMED_FC2)],
+            [("s1", "eybond_framed", "")],
         )
 
     async def test_two_fresh_sessions_are_ambiguous_and_send_nothing(self):

@@ -113,6 +113,7 @@ class CollectorScenario:
     # unsolicited heartbeats). "gated" keeps the legacy coupling for tests
     # that model a device whose heartbeat engine is wholesale asleep.
     fc1_reply_mode: str = "immediate"
+    fc1_full_pn: bool = False
     # PI30 text forwarded over FC=4: "nak" keeps the legacy NAK reply;
     # "success" answers the minimal PI30 command set (QPI/QMOD/QPIGS) with
     # format-valid synthetic sentences so the real driver probe + runtime poll
@@ -153,10 +154,11 @@ def build_unsolicited_heartbeat(
     pn: str,
     devcode: int,
     collector_addr: int,
+    full_pn: bool = False,
 ) -> bytes:
     """Build one collector-originated FC=1 heartbeat carrying the PN prefix."""
 
-    heartbeat_text = (pn[:14]).ljust(14, "\x00")
+    heartbeat_text = pn if full_pn else (pn[:14]).ljust(14, "\x00")
     return build_collector_request(
         tid,
         heartbeat_text.encode("ascii", errors="ignore"),
@@ -237,9 +239,8 @@ def build_query_collector_response(parameter: int, scenario: CollectorScenario) 
     """Build one FC=2 SmartESS local collector reply payload or drop it."""
 
     parameter_u8 = int(parameter) & 0xFF
-    # Parameter 2 is the collector's own full PN. Every real collector answers
-    # it (it is how the cloud identifies the device), so the fake defaults to
-    # success unless a scenario explicitly overrides it via fc2_query_modes.
+    # FC2-capable firmware normally answers parameter2. FC1-only identity
+    # scenarios deliberately override it; FC2 support is not universal.
     default_mode = QUERY_MODE_SUCCESS if parameter_u8 == 2 else QUERY_MODE_FAIL
     behavior = scenario.fc2_query_modes.get(parameter_u8, default_mode)
     if behavior == QUERY_MODE_TIMEOUT:

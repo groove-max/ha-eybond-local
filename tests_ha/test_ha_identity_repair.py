@@ -74,6 +74,52 @@ async def start_repair(hass, entry):
     return await hass.config_entries.flow.async_configure(first["flow_id"], settings())
 
 
+@pytest.mark.parametrize("interface_present", [True, False])
+async def test_repair_preserves_available_saved_interface(hass, interface_present):
+    """Repair must not silently advertise the host's default-route interface."""
+    saved_ip = "198.51.100.10"
+    interfaces = [{"name": "eth0", "ip": SYNTHETIC_SERVER_IP, "label": "Default interface",
+                   "network": "192.0.2.0/24", "broadcast": SYNTHETIC_BROADCAST}]
+    if interface_present:
+        interfaces.append({"name": "eth1", "ip": saved_ip, "label": "Collector interface",
+                           "network": "198.51.100.0/24", "broadcast": "198.51.100.255"})
+    pending_entry = MockConfigEntry(
+        domain=DOMAIN, title="EyeBond Setup Pending", version=5,
+        data={"connection_type": "eybond", "connection_mode": "manual",
+              "server_ip": SYNTHETIC_SERVER_IP, "collector_ip": SYNTHETIC_COLLECTOR_IP,
+              "collector_pn": "", "tcp_port": 8899, "udp_port": 58899},
+        options={"server_ip": saved_ip},
+    )
+    pending_entry.add_to_hass(hass)
+    with patch("custom_components.eybond_local.network_interfaces.get_ipv4_interfaces",
+               return_value=interfaces):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "reconfigure", "entry_id": pending_entry.entry_id},
+        )
+    expected_ip = saved_ip if interface_present else SYNTHETIC_SERVER_IP
+    defaults = {str(key): key.default() for key in result["data_schema"].schema
+                if str(key) == "server_ip"}
+    assert defaults["server_ip"] == expected_ip
+    submitted = settings()
+    submitted["server_ip"] = defaults["server_ip"]
+    identity = AsyncMock(return_value=CallbackIdentityOutcome(result="callback_timeout"))
+    with patch(TX, identity):
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], submitted)
+    assert identity.await_args.args[1].server_ip == expected_ip
+    assert identity.await_args.args[1].target_ip == SYNTHETIC_COLLECTOR_IP
+    if interface_present:
+        result = await choose(hass, result, "manual_edit_settings")
+        submitted["server_ip"] = SYNTHETIC_SERVER_IP
+        with patch(TX, identity):
+            result = await hass.config_entries.flow.async_configure(result["flow_id"], submitted)
+        assert identity.await_args.args[1].server_ip == SYNTHETIC_SERVER_IP
+        result = await choose(hass, result, "manual_edit_settings")
+        defaults = {str(key): key.default() for key in result["data_schema"].schema
+                    if str(key) == "server_ip"}
+        assert defaults["server_ip"] == SYNTHETIC_SERVER_IP
+    hass.config_entries.flow.async_abort(result["flow_id"])
+
+
 async def choose(hass, result, action):
     return await hass.config_entries.flow.async_configure(
         result["flow_id"], {"next_step_id": action},

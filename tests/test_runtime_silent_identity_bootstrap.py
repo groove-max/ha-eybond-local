@@ -355,6 +355,12 @@ class RuntimeSilentIdentityBootstrapTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(handle.observed)
 
     async def test_issue37_fully_silent_unknown_wire_is_identified_by_fc1(self) -> None:
+        await self._assert_fc1_runtime_identity(announce=False)
+
+    async def test_fc1_only_weak_heartbeat_uses_known_wire_identity_policy(self) -> None:
+        await self._assert_fc1_runtime_identity(announce=True)
+
+    async def _assert_fc1_runtime_identity(self, *, announce: bool) -> None:
         port = _free_port()
         # Exact issue #37 shape: the durable entry has only the shortened PN,
         # while the fully silent collector returns its full PN to the bounded
@@ -367,6 +373,13 @@ class RuntimeSilentIdentityBootstrapTests(unittest.IsolatedAsyncioTestCase):
         collector = _SilentFramedFc1Collector(ISSUE37_FULL_PN)
         await manager.async_start()
         await collector.connect(port)
+        if announce:
+            payload = ISSUE37_FULL_PN.encode("ascii")
+            collector._writer.write(
+                encode_header(0x8001, 0x0102, HEADER_SIZE + len(payload), 255, FC_HEARTBEAT)
+                + payload
+            )
+            await collector._writer.drain()
         await asyncio.sleep(0.35)
         fake_probe = types.SimpleNamespace(reply="", reply_from="")
         try:
@@ -383,7 +396,7 @@ class RuntimeSilentIdentityBootstrapTests(unittest.IsolatedAsyncioTestCase):
             # succeeds, normal framed activation may immediately send its own
             # heartbeat request on the now-owned socket.
             self.assertGreaterEqual(collector.fc1_queries, 1)
-            self.assertEqual(collector.other_queries, 0)
+            self.assertEqual(collector.other_queries, 1 if announce else 0)
             handle = manager.session_handle
             self.assertTrue(handle.observed)
             self.assertTrue(handle.uses_framed_wire)

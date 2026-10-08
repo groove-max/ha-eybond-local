@@ -134,9 +134,15 @@ class EntryCommitFlowMixin:
             return self.async_abort(reason="reconfigure_not_required")
 
         self._repair_entry_id = entry.entry_id
-        await self._async_ensure_network_defaults()
-        if not self._manual_config:
+        if not self._manual_config and not self._manual_defaults:
             self._manual_defaults = {**entry.data, **entry.options}
+        # Repair the existing route, or the user's latest explicit correction,
+        # not the host's default-route interface. Network validation below still
+        # replaces an address no longer local.
+        self._auto_config[CONF_SERVER_IP] = str(
+            (self._manual_config or self._manual_defaults).get(CONF_SERVER_IP) or ""
+        )
+        await self._async_ensure_network_defaults()
 
         # A PN-less entry has no prior identity to match -> bind ANY freshly
         # triggered strong session. An entry that still carries a (short) PN must

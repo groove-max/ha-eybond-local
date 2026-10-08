@@ -321,6 +321,7 @@ class FakeCollectorService:
             pn=self._profile.pn,
             devcode=self._scenario.heartbeat_devcode,
             collector_addr=self._scenario.collector_addr,
+            full_pn=self._scenario.fc1_full_pn,
         )
         await self._send_raw(frame)
         _LOG.info(

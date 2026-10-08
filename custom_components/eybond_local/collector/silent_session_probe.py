@@ -16,8 +16,9 @@ adjacent negotiator rather than in listener internals:
 Both go through this channel and nothing else: the shared-listener
 acquire/release stays inside the collector layer, no listener internals leak
 out, and the channel itself never infers a wire -- the protocol is always the
-caller's typed authority. One call performs exactly ONE bounded identity
-query (framed FC=1 or FC=2 / ``AT+DTUPN``) on exactly one session id; a
+caller's typed authority. One call performs bounded identity acquisition
+(FC2 then FC1 on an authorized framed wire, or ``AT+DTUPN``) on one session id.
+An explicitly selected probe kind remains exactly one request; a
 valid strong-PN reply is recorded in the listener inventory (making the
 session visible to every normal path), anything else changes nothing.
 """
@@ -174,7 +175,7 @@ class SilentSessionIdentityProbeChannel:
         session_protocol: str,
         identity_probe_kind: str = "",
     ) -> str:
-        """ONE bounded identity query of one exact session, gated to a STRONG PN.
+        """Bounded identity acquisition of one exact session, gated to a STRONG PN.
 
         Returns a full PN ONLY when, AFTER the query, THIS exact session id carries
         a strong (correlated FC1 / FC2 parameter 2 / AT+DTUPN) inventory identity; returns
@@ -188,7 +189,7 @@ class SilentSessionIdentityProbeChannel:
 
         Must be called only when :attr:`available` is True (a closed channel is a
         separate, honestly-distinguishable condition -- see that property). Never
-        retries, never guesses, never falls back to another protocol; cancellation
+        repeat a failed method, guess, or fall back to another protocol; cancellation
         is never swallowed, and a diagnostics read failure fails closed to ``""``.
         """
 

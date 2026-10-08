@@ -455,6 +455,13 @@ class SharedEybondTransport:
             request_timeout=self._request_timeout,
         )
 
+    async def async_probe_identity(self, probe_kind: str) -> tuple[str, str]:
+        """Read identity using the same exact-session routing as other sends."""
+        connection = await self._active_connection_for_send()
+        return await connection.async_probe_identity(
+            probe_kind, request_timeout=self._request_timeout,
+        )
+
     async def _active_connection_for_send(self) -> _CollectorConnection:
         connection = self._connection(create_placeholder=bool(self._collector_ip))
         if connection is not None and connection.connected:

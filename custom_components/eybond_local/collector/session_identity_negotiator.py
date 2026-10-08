@@ -25,7 +25,6 @@ from ..collector_identity import (
 from .identity_probe import (
     PROBE_AT_DTUPN,
     PROBE_FRAMED_FC1,
-    PROBE_FRAMED_FC2,
     silent_probe_kind_for_protocol,
 )
 from .silent_session_probe import SessionObservation
@@ -100,7 +99,9 @@ def _known_probe_for_observation(
 ) -> tuple[str, str]:
     protocol = _protocol_from_observation(observation)
     if protocol == "eybond_framed":
-        return protocol, PROBE_FRAMED_FC2
+        # The dialect is observed, so use the shared bounded FC2/FC1 identity
+        # policy. Unknown-wire attempts below still choose ONE explicit method.
+        return protocol, ""
     if protocol == "at_text":
         return protocol, PROBE_AT_DTUPN
     return "", ""

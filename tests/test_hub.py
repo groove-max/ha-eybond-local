@@ -4838,6 +4838,42 @@ class HubCollectorManagementTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_endpoint_read_uses_live_socket_not_monitor_tick(self):
+        """A delayed observer tick is not replacement; a different socket is."""
+        from custom_components.eybond_local.collector.management import CollectorManagementTransportError
+
+        async def run(replaced):
+            hub, link = self._framed_hub()
+            link.owned_session_generation = 1
+            link.owned_session_identity = ("listener-synthetic-a", 8899)
+            adapter = hub._collector_management_adapter()
+            read = adapter.async_read_endpoint_state
+
+            async def observed():
+                result = await read()
+                if replaced:
+                    # The replacement is real even before the 200ms monitor tick.
+                    link.owned_session_identity = ("listener-synthetic-b", 8899)
+                else:
+                    link.owned_session_generation += 1
+                return result
+
+            adapter.async_read_endpoint_state = observed
+            with patch.object(hub, "_collector_management_adapter", return_value=adapter):
+                if replaced:
+                    with self.assertRaisesRegex(CollectorManagementTransportError, "session_changed"):
+                        await hub.async_get_collector_server_endpoint_state()
+                    self.assertNotIn("collector_server_endpoint", hub._collector_metadata_service.merged_values())
+                else:
+                    state = await hub.async_get_collector_server_endpoint_state()
+                    self.assertTrue(state["current_endpoint"])
+                    self.assertEqual(hub._last_management_operation["status"], "ok")
+            self.assertEqual(hub._last_management_operation["session_identity_changed"], replaced)
+
+        for replaced in (False, True):
+            with self.subTest(replaced=replaced):
+                asyncio.run(run(replaced))
+
 
 if __name__ == "__main__":
     unittest.main()

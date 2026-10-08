@@ -14,6 +14,18 @@ from tools.validate import affected_test_files
 
 
 class AffectedValidationSelectionTests(unittest.TestCase):
+    def test_collector_identity_changes_select_fc1_lifecycle_regressions(self):
+        for path in (
+            "collector/identity_probe.py", "collector/session_identity_reader.py",
+            "collector/session_identity_negotiator.py", "collector/silent_session_probe.py",
+            "collector/transport/connections.py", "collector/transport/listener.py",
+            "connection/callback_identity.py", "runtime/link/connection.py",
+        ):
+            with self.subTest(path=path):
+                self.assertIn("test_fc1_identity_onboarding.py", self._selected(
+                    f"custom_components/eybond_local/{path}",
+                ))
+
     def test_09c1_changes_select_wire_and_family_regressions(self) -> None:
         for path in (
             "payload/urtu09c1.py", "drivers/eybond_09c1.py", "drivers/eybond_09c1_pv.py",

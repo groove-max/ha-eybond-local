@@ -49,6 +49,21 @@ _IDENTITY_TID = 1
 _IDENTITY_HEARTBEAT_INTERVAL_SECONDS = 60
 
 
+def identity_probe_kinds(session_protocol: str, explicit_kind: str = "") -> tuple[str, ...]:
+    """Bounded identity methods on an already-authorized wire, never dialect guessing.
+
+    Preserve FC2 first. Some firmware only answers the FC1 handshake. An
+    explicit probe remains exactly one request (runtime dialect negotiation).
+    """
+    if explicit_kind:
+        return (explicit_kind,)
+    if session_protocol == "eybond_framed":
+        return (PROBE_FRAMED_FC2, PROBE_FRAMED_FC1)
+    if session_protocol == "at_text":
+        return (PROBE_AT_DTUPN,)
+    return ()
+
+
 @dataclass(frozen=True, slots=True)
 class IdentityProbeRequest:
     """One typed identity request and its expected response dialect."""
@@ -180,12 +195,16 @@ def parse_identity_probe_response(
     payload = response[HEADER_SIZE:]
 
     if request.probe_kind == PROBE_FRAMED_FC2:
-        if len(payload) < 3 or payload[1] != 2:
+        if len(payload) < 3 or payload[0] != 0 or payload[1] != 2:
             return "", ""
         raw_pn = payload[2:].rstrip(b"\x00")
         source = "fc2_parameter_2"
     elif request.probe_kind == PROBE_FRAMED_FC1:
         raw_pn = payload.rstrip(b"\x00")
+        # The ordinary 14-byte heartbeat prefix is NOT a full identity, even
+        # when it answers our TID. Leave those collectors on FC2/AT identity.
+        if len(raw_pn) <= 14:
+            return "", ""
         source = "fc1_identity_challenge"
     else:
         return "", ""
@@ -203,6 +222,7 @@ __all__ = [
     "PROBE_FRAMED_FC1",
     "PROBE_FRAMED_FC2",
     "build_identity_probe_request",
+    "identity_probe_kinds",
     "default_probe_kind_for_protocol",
     "parse_identity_probe_response",
     "silent_probe_kind_for_protocol",

@@ -68,6 +68,9 @@ class TransportModuleBoundaryTests(unittest.TestCase):
         extension = ("AsyncFunctionDef", "async_send_auxiliary_read")
         self.assertEqual(definitions.count(extension), 2)
         definitions = [item for item in definitions if item != extension]
+        identity_extension = ("AsyncFunctionDef", "async_probe_identity")
+        self.assertEqual(definitions.count(identity_extension), 2)
+        definitions = [item for item in definitions if item != identity_extension]
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()
@@ -87,6 +90,19 @@ class TransportModuleBoundaryTests(unittest.TestCase):
         source = (_TRANSPORT / "auxiliary_session.py").read_text(encoding="utf-8")
         for forbidden in ("...models", "...drivers", "...metadata", "...payload"):
             self.assertNotIn(forbidden, source)
+
+    def test_identity_probe_is_only_in_framed_connection_and_facade(self) -> None:
+        owners = []
+        for path in _FAMILY:
+            for node in _tree(path).body:
+                if isinstance(node, ast.ClassDef):
+                    for child in node.body:
+                        if isinstance(child, ast.AsyncFunctionDef) and child.name == "async_probe_identity":
+                            owners.append((path.name, node.name))
+        self.assertEqual(owners, [
+            ("connections.py", "_CollectorConnection"),
+            ("shared_framed.py", "SharedEybondTransport"),
+        ])
 
     def test_concrete_authorities_have_one_owner_module(self) -> None:
         expected = {

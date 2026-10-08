@@ -11,6 +11,20 @@ The whole point of this design is that these decisions are **explicit and
 opaque**. They are *not* inferred from hostnames, peer IP addresses, or collector
 type at runtime.
 
+## Identity methods within an authorized wire
+
+Framed collector identity acquisition tries FC2 parameter2 first, then one FC1
+full-PN challenge if no usable identity arrives. Both attempts stay pinned to
+the same physical session; this is not a fallback to another transport dialect.
+The pending-socket path and the claimed-session reader use the same method order.
+Explicit runtime dialect probes remain single-method. AT uses DTUPN unchanged.
+FC1 certification requires the request's TID/function and a valid PN longer than
+the ordinary 14-byte heartbeat prefix. Unsolicited heartbeat, peer address and
+cached PN do not certify identity. A valid foreign PN is rejected by the existing
+matcher, not retried until another method returns a preferred answer. Recovery
+still requires its own fresh-session proof; identity does not certify reboot,
+endpoint management, inverter telemetry or controls.
+
 ## Three independent connection axes
 
 Every config entry carries three durable, opaque axes. They are resolved by
@@ -231,6 +245,15 @@ exact, registry-owned physical session. The temporary management facade is
 session-pinned and its teardown preserves that socket; it cannot switch to a
 same-PN sibling and cannot create reconnect evidence by closing the socket
 itself.
+
+Compound runtime endpoint reads compare the live registry-owned session id and
+listener port before and after the operation. The periodic session-generation
+counter is diagnostic, not the production readback authority: its observer may
+tick after a new socket is already usable. A different socket invalidates the
+read before metadata publication, even if the counter has not ticked yet.
+The archive records `session_identity_changed` without exposing socket addresses
+or command values. This check neither retries writes nor treats cached metadata
+as proof that recovery succeeded.
 
 The negotiated wire adapter owns the distinction between applying staged
 collector settings and requesting a reboot. On AT-text sessions these are

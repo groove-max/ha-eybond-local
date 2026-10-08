@@ -81,6 +81,22 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Collector onboarding and recovery can confirm identity through a correlated
+  FC1 full-PN reply when the framed FC2 identity query does not answer. Existing
+  FC2/AT paths remain preferred; unsolicited or short heartbeats are not enough
+  to bind a device. This does not imply support for its inverter or controls.
+
+- Reconfiguring an older unidentified collector preserves its saved Home
+  Assistant interface when that interface is still available, instead of
+  silently selecting the host's default interface. Explicit NAT callback
+  settings and the existing identity-verification requirements are unchanged.
+
+- Endpoint readback checks the current registry-owned socket directly, rather
+  than treating a delayed background session-counter update as a reconnect.
+  Actual socket replacement still invalidates the read. Support archives now
+  distinguish a changed socket from a changed observer counter; collector
+  timeouts still leave recovery unconfirmed.
+
 - PI30 polling preserves successful replies when another command times out,
   returns NAK or has an invalid payload (#57). Required readings are carried
   for a bounded period and then withdrawn individually; their commands remain

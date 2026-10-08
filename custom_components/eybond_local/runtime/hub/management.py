@@ -454,17 +454,24 @@ class HubManagementMixin:
             "timestamp": _wall_time(),
         }
         generation = getattr(self._link_manager, "owned_session_generation", None)
+        session_identity = getattr(self._link_manager, "owned_session_identity", None)
         if type(generation) is int:
             record["session_generation_start"] = generation
         try:
             result = await operation()
             if (
                 name == "read_endpoint_state"
-                and type(generation) is int
-                and generation != getattr(self._link_manager, "owned_session_generation", None)
+                and (
+                    session_identity != getattr(self._link_manager, "owned_session_identity", None)
+                    if session_identity is not None
+                    else type(generation) is int
+                    and generation != getattr(self._link_manager, "owned_session_generation", None)
+                )
             ):
                 # Do not combine endpoint/apply observations across sessions or
-                # publish old data after ownership changed during the read.
+                # publish old data after ownership changed during the read. The
+                # periodic monitor may tick late: compare the live registry token,
+                # not its counter (retained as fallback for older link providers).
                 raise CollectorManagementTransportError("collector_management_session_changed")
             return result
         except asyncio.CancelledError:
@@ -485,6 +492,10 @@ class HubManagementMixin:
             record["error_class"] = type(exc).__name__
             raise
         finally:
+            if session_identity is not None:
+                record["session_identity_changed"] = session_identity != getattr(
+                    self._link_manager, "owned_session_identity", None,
+                )
             generation = getattr(self._link_manager, "owned_session_generation", None)
             if type(generation) is int:
                 record["session_generation_end"] = generation

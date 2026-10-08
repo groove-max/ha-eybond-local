@@ -382,6 +382,42 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["operating_mode"], "Line")
         self.assertTrue(all(command.startswith("Q") for command in transport.commands))
 
+    async def test_vmii_partial_archive_keeps_qmod_q1_without_inventing_qpigs(self) -> None:
+        """Issue59 response shape; no serial, brand or rating inferred from cloud labels."""
+        target = ProbeTarget(devcode=0x0994, collector_addr=1, device_addr=0)
+        replies = {
+            "QPI": "PI30", "QID": "NAK", "QSID": "NAK", "QMN": "VMII-NXPW5KW",
+            "QPIRI": (
+                "230.0 44.3 230.0 50.0 44.3 0200 0200 48.0 48.0 46.0 "
+                "56.5 52.0 4 080 080 0 2 0 1 01 0 0 54.0 0 1 48.0 10 44.0"
+            ),
+            "QMOD": "B", "Q1": "01 00 59 000 037 023 044 00 00 000 0100 0000 12",
+            "QPIGS": "NAK", "QFLAG": "", "QPIWS": "",
+            "QVFW": "NAK", "QVFW2": "NAK", "QVFW3": "NAK",
+            "QET": "NAK", "QLT": "NAK", "QT": "NAK",
+        }
+        transport = _FakeTransport({(target.devcode, target.collector_addr, k): v for k, v in replies.items()})
+        driver = Pi30Driver()
+        inverter = await driver.async_probe(transport, target)
+        self.assertIsNotNone(inverter)
+        self.assertEqual(inverter.variant_key, "vmii_nxpw5kw")
+        self.assertEqual(inverter.model_name, "PI30 VMII-NXPW5KW")
+        self.assertEqual(inverter.serial_number, "")
+        state = {}
+        for now in (100, 110, 120, 300):
+            result = await driver.async_read_values(
+                transport, inverter, runtime_state=state,
+                poll_interval=10, now_monotonic=now,
+            )
+            self.assertEqual(result.values["operating_mode"], "Battery")
+            self.assertEqual(result.values["inverter_temperature"], 37)
+            self.assertEqual(result.values["fan_speed"], 100)
+            for key in ("battery_voltage", "output_active_power", "pv_input_power"):
+                self.assertNotIn(key, result.values)
+                self.assertIn(key, result.removed_keys)
+            self.assertNotIn("QPIGS", result.diagnostics.get("driver_unsupported_commands", ""))
+        self.assertTrue(all(command.startswith("Q") for command in transport.commands))
+
     async def test_probe_collects_variant_detection_facts(self) -> None:
         driver = Pi30Driver()
         target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)

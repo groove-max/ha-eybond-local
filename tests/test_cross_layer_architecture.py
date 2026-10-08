@@ -308,7 +308,7 @@ class CallbackIdentityIsolationGuardTests(unittest.TestCase):
     def test_callback_identity_uses_the_shared_neutral_reader(self) -> None:
         # The ONE session-pinned reader lives in collector/session_identity_reader
         # (shared with the inbound recovery verifier); the transaction must use
-        # it, and the reader itself must use the NEUTRAL management session --
+        # it, and the reader itself must use the NEUTRAL exact-session probe --
         # never the SmartESS subclass.
         code = _code_identifiers(_read(_CALLBACK_IDENTITY)) | _imported_modules(
             _read(_CALLBACK_IDENTITY)
@@ -316,7 +316,10 @@ class CallbackIdentityIsolationGuardTests(unittest.TestCase):
         self.assertIn("SessionPinnedIdentityReader", code)
         reader_source = _read(_CC / "collector" / "session_identity_reader.py")
         reader_code = _code_identifiers(reader_source) | _imported_modules(reader_source)
-        self.assertIn("CollectorWireManagementSession", reader_code)
+        self.assertIn("SharedEybondTransport", reader_code)
+        self.assertIn("async_probe_identity", reader_code)
+        self.assertIn("identity_probe_kinds", reader_code)
+        self.assertIn("set_claimed_session_provider", reader_code)
         self.assertNotIn("SmartEssLocalSession", reader_code)
         self.assertNotIn("smartess_local", reader_code)
 

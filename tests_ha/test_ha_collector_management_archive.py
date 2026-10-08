@@ -22,14 +22,16 @@ from synthetic import SYNTHETIC_COLLECTOR_IP, SYNTHETIC_COLLECTOR_PN, SYNTHETIC_
 
 
 @pytest.mark.parametrize("parameter", [21, 30])
+@pytest.mark.parametrize("identity_changed", [False, True])
 async def test_failed_collector_read_context_reaches_downloaded_archive(
-    hass, hass_client_no_auth, fake_runtime, monkeypatch, parameter,
+    hass, hass_client_no_auth, fake_runtime, monkeypatch, parameter, identity_changed,
 ):
     from conftest import FakeRuntimeManager
 
     calls = []
     link = SimpleNamespace(
         connected=True, owned_session_generation=17,
+        owned_session_identity=("listener-synthetic-old", 8899),
         collector_info=CollectorInfo(remote_ip=SYNTHETIC_COLLECTOR_IP,
                                      collector_pn=SYNTHETIC_COLLECTOR_PN),
         collector_management_adapter_id=lambda: ADAPTER_COLLECTOR_FRAMED_COMMANDS,
@@ -41,7 +43,9 @@ async def test_failed_collector_read_context_reaches_downloaded_archive(
             assert fcode == 2
             if payload == bytes((parameter,)):
                 link.owned_session_generation += 1
-                link.connected = False
+                link.connected = not identity_changed
+                if identity_changed:
+                    link.owned_session_identity = ("", 0)
                 raise TimeoutError("private socket response")
             assert payload == b"\x15"
             return None, b"\x00\x15private-endpoint.example.test,18899,TCP"
@@ -95,7 +99,7 @@ async def test_failed_collector_read_context_reaches_downloaded_archive(
         bundle = json.loads(text)
     for secret in ("private socket response", "private-endpoint.example.test", SYNTHETIC_COLLECTOR_PN):
         assert secret not in text
-    assert not bundle["runtime"]["connected"]
+    assert bundle["runtime"]["connected"] is not identity_changed
     for view in (
         bundle["runtime"]["values"], bundle["runtime"]["metadata"],
         bundle["roles"]["collector"]["values"],
@@ -107,6 +111,8 @@ async def test_failed_collector_read_context_reaches_downloaded_archive(
         assert view["collector_management_last_error_code"] == "TimeoutError"
         assert view["collector_management_last_session_generation_start"] == 17
         assert view["collector_management_last_session_generation_end"] == 18
+        assert view["collector_management_last_session_identity_changed"] is identity_changed
+        assert view["collector_management_last_failure"]["session_identity_changed"] is identity_changed
     assert calls == [(2, b"\x15")] + ([(2, b"\x1e")] if parameter == 30 else [])
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()

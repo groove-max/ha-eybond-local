@@ -120,6 +120,7 @@ class CallbackRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
         *,
         set_29_mode: str,
         reboot_reconnect_delay: float = 0.3,
+        fc1_identity_only: bool = False,
     ) -> FakeCollectorService:
         service = FakeCollectorService(
             listen_ip="127.0.0.1",
@@ -135,6 +136,11 @@ class CallbackRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
                 reboot_reconnect_delay=reboot_reconnect_delay,
             ),
         )
+        if fc1_identity_only:
+            service._scenario = replace(
+                service._scenario, fc1_full_pn=True,
+                fc2_query_modes={2: "timeout", 5: "timeout", 14: "timeout"},
+            )
         await service.start()
         self._service = service
         return service
@@ -182,12 +188,20 @@ class CallbackRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_silent_reboot_then_real_unicast_yields_callback_proof(self) -> None:
+        await self._assert_silent_reboot_callback_proof(fc1_identity_only=False)
+
+    async def test_fc1_identity_survives_reboot_and_silent_callback(self) -> None:
+        await self._assert_silent_reboot_callback_proof(fc1_identity_only=True)
+
+    async def _assert_silent_reboot_callback_proof(self, *, fc1_identity_only: bool) -> None:
         """reset ack -> socket drops -> full inbound window stays EMPTY ->
         production trigger facade sends a real unicast -> collector dials in ->
         FC=2 read -> retarget -> CallbackRecoveryProof accepted by the
         contract."""
 
-        service = await self._start_service(set_29_mode="reboot_silent")
+        service = await self._start_service(
+            set_29_mode="reboot_silent", fc1_identity_only=fc1_identity_only,
+        )
         old_session_id = await self._dial_in_and_wait(service)
         rx_before = service.discovery_rx_count
         generation_before = get_callback_trigger_ledger().snapshot_generation()
@@ -231,7 +245,10 @@ class CallbackRecoveryProductionWireTests(unittest.IsolatedAsyncioTestCase):
         proof = outcome.callback_proof
         self.assertEqual(proof.method, CALLBACK_RECOVERY_RESET_UNICAST_RECONNECT)
         self.assertEqual(proof.collector_pn, FULL_PN)
-        self.assertEqual(proof.identity_source, "fc2_parameter_2")
+        self.assertEqual(
+            proof.identity_source,
+            "fc1_identity_challenge" if fc1_identity_only else "fc2_parameter_2",
+        )
         self.assertEqual(proof.verified_at, TS)
         self.assertEqual(
             proof.trigger_target, f"127.0.0.1:{self._service_udp_port()}"

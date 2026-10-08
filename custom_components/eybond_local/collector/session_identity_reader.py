@@ -15,12 +15,12 @@ only route they can resolve is the claimed session id -- never a socket picked
 by peer IP, a PN index, or "the current connection". The two shapes reuse the
 integration's existing reads:
 
-* framed  -> the neutral ``CollectorWireManagementSession.query_collector_pn``
-  (FC=2 parameter 2);
+* framed  -> FC=2 parameter 2, then a correlated FC=1 full-PN challenge when
+  FC=2 gives no usable identity (same socket and wire, not protocol guessing);
 * at_text -> the DTUPN query (``AT+DTUPN``).
 
 Both replies are also stamped into the listener inventory by the transport
-itself (``fc2_parameter_2`` / ``at_dtupn``), which is how the session becomes
+itself (``fc2_parameter_2`` / ``fc1_identity_challenge`` / ``at_dtupn``), so it becomes
 strongly identified for the session registry immediately afterwards.
 
 The wire argument must be the LIVE NEGOTIATED wire (from
@@ -36,6 +36,7 @@ import logging
 from typing import Any
 
 from ..connection.session_handle import WIRE_AT_TEXT, WIRE_FRAMED
+from .identity_probe import identity_probe_kinds
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +66,7 @@ class SessionPinnedIdentityReader:
         del expected_pn
         wire = str(session_protocol or "").strip().lower()
         if wire == WIRE_FRAMED:
-            return (
-                await self._async_read_framed(session_id, listener_port),
-                "fc2_parameter_2",
-            )
+            return await self._async_read_framed(session_id, listener_port)
         if wire == WIRE_AT_TEXT:
             return (await self._async_read_at(session_id, listener_port), "at_dtupn")
         # Fail closed: an unknown/raw/untrusted wire is not something we may
@@ -76,8 +74,7 @@ class SessionPinnedIdentityReader:
         logger.debug("Identity read skipped: untrusted wire %r", session_protocol)
         return ("", "")
 
-    async def _async_read_framed(self, session_id: str, listener_port: int) -> str:
-        from .collector_wire import CollectorWireManagementSession
+    async def _async_read_framed(self, session_id: str, listener_port: int) -> tuple[str, str]:
         from .transport import SharedEybondTransport
 
         # collector_ip/collector_pn stay EMPTY on purpose: the claimed session
@@ -91,11 +88,17 @@ class SessionPinnedIdentityReader:
             collector_pn="",
         )
         transport.set_claimed_session_provider(lambda: session_id)
-        # The NEUTRAL management session: FC=2 parameter 2 and nothing else.
-        return await self._async_with_transport(
-            transport,
-            lambda: CollectorWireManagementSession(transport).query_collector_pn(),
-        )
+        async def _query() -> tuple[str, str]:
+            for kind in identity_probe_kinds(WIRE_FRAMED):
+                try:
+                    pn, source = await transport.async_probe_identity(kind)
+                except TimeoutError:
+                    continue
+                if pn:
+                    return pn, source
+            return "", ""
+
+        return await self._async_with_transport(transport, _query) or ("", "")
 
     async def _async_read_at(self, session_id: str, listener_port: int) -> str:
         from .transport import SharedCollectorAtTransport
@@ -116,7 +119,7 @@ class SessionPinnedIdentityReader:
 
         return await self._async_with_transport(transport, _query)
 
-    async def _async_with_transport(self, transport: Any, read) -> str:
+    async def _async_with_transport(self, transport: Any, read) -> Any:
         """Start, read, and ALWAYS stop -- on success, error and cancellation."""
 
         await transport.start()
@@ -126,7 +129,7 @@ class SessionPinnedIdentityReader:
             )
             if not connected:
                 return ""
-            return str(await read() or "").strip()
+            return await read()
         finally:
             with suppress(Exception):
                 await transport.stop()

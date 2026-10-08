@@ -88,6 +88,16 @@ class LinkSessionProjectionMixin:
         self._adopt_trusted_live_binding()
 
     @property
+    def owned_session_identity(self) -> tuple[str, int]:
+        """Current registry-owned socket, without waiting for the monitor tick.
+
+        A pure observation: no claim, binding adoption, probing or cache update.
+        Compound management reads use this token to reject cross-socket data.
+        """
+
+        return self._current_owned_session_fingerprint()
+
+    @property
     def owned_session_generation(self) -> int:
         """Return the generation of the currently owned inbound socket."""
 

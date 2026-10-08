@@ -2147,6 +2147,24 @@ class DomainTransportOwnershipTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_owned_session_identity_is_live_before_monitor_and_has_no_side_effects(self) -> None:
+        manager = self._manager(collector_pn=self.FULL_PN)
+        inventory = [self._domain_session(
+            "listener-synthetic-old", self.FULL_PN, listener_port=8899,
+            state="routed_framed",
+        )]
+        self._wire_domain(manager, inventory)
+        generation = manager.owned_session_generation
+        self.assertEqual(manager.owned_session_identity, ("listener-synthetic-old", 8899))
+        inventory[:] = [self._domain_session(
+            "listener-synthetic-new", self.FULL_PN, listener_port=18899,
+            state="routed_framed",
+        )]
+        self.assertEqual(manager.owned_session_identity, ("listener-synthetic-new", 18899))
+        inventory.clear()
+        self.assertEqual(manager.owned_session_identity, ("", 0))
+        self.assertEqual(manager.owned_session_generation, generation)
+
     # 9. Stop releases the auxiliary facades; the domain claim release itself is
     # owned by the entry unload hook (integration __init__).
     def test_stop_cleans_auxiliary_facades(self) -> None:

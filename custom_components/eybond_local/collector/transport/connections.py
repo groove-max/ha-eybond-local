@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from time import monotonic
 from typing import Any, Callable
 
 from ..at import CollectorAtResponse, build_at_query, build_at_write, parse_at_response
+from ..identity_probe import build_identity_probe_request, parse_identity_probe_response
 from ..cloud_family import (
     apply_collector_cloud_family_observation,
     collector_cloud_family_observation_from_endpoint,
@@ -24,6 +26,7 @@ from ..protocol import (
     build_collector_request,
     build_heartbeat_request,
     decode_header,
+    encode_header,
     parse_heartbeat_pn,
 )
 from .auxiliary_session import AuxiliaryReadSession
@@ -255,6 +258,30 @@ class _CollectorConnection:
                     self._pending.pop(tid, None)
                     self._pending_fcode.pop(tid, None)
                 finish_request_future(future)
+
+    async def async_probe_identity(self, probe_kind: str, *, request_timeout: float) -> tuple[str, str]:
+        """One correlated identity challenge on this exact physical connection."""
+        request = build_identity_probe_request("eybond_framed", probe_kind=probe_kind)
+        if request is None:
+            return "", ""
+        spec = decode_header(request.payload[:HEADER_SIZE])
+        owner = SocketSendOwner.capture(self)
+        header, payload = await self.async_send_collector(
+            fcode=spec.fcode, payload=request.payload[HEADER_SIZE:],
+            devcode=spec.devcode, collector_addr=spec.devaddr,
+            request_timeout=request_timeout,
+        )
+        owner.check_reply(self)
+        # async_send_collector matched BOTH allocated TID and function before
+        # resolving its future. Use that allocated TID, not the probe template's.
+        request = replace(request, transaction_id=header.tid)
+        pn, source = parse_identity_probe_response(
+            request,
+            encode_header(header.tid, header.devcode, header.total_len, header.devaddr, header.fcode) + payload,
+        )
+        if pn:
+            self._record_session_identity(pn, source)
+        return pn, source
 
     async def async_send_auxiliary_read(
         self, payload: bytes, *, request_timeout: float,

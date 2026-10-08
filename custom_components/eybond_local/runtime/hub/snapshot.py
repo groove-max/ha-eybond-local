@@ -535,7 +535,7 @@ class HubSnapshotMixin:
             values["collector_management_last_error_code"] = op.get("error_code", "")
             values["collector_management_last_duration_ms"] = op.get("duration_ms", 0)
             values["collector_management_last_timestamp"] = op.get("timestamp", 0.0)
-            for field in ("failed_request", "session_generation_start", "session_generation_end"):
+            for field in ("failed_request", "session_generation_start", "session_generation_end", "session_identity_changed"):
                 if field in op:
                     value = op[field]
                     # Wire context is already bounded by the adapter. Detach it

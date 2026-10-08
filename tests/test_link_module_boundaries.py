@@ -39,7 +39,7 @@ EXPECTED_MRO = [
 ]
 
 EXPECTED_METHOD_MULTISET_SHA256 = (
-    "5f2f8c893414c94ad7639d001cf4c382030f368f1130169363add4e4a7da267c"
+    "e9f390cdf84eede6005ab84a636743abda7fba6796466a7cc9f6c4c421d4cb6e"
 )
 
 
@@ -105,8 +105,8 @@ class LinkCompositionBoundaryTests(unittest.TestCase):
             {},
         )
         payload = "\n".join(f"{name}:{count}" for name, count in sorted(counts.items()))
-        self.assertEqual(sum(counts.values()), 118)
-        self.assertEqual(len(counts), 118)
+        self.assertEqual(sum(counts.values()), 119)
+        self.assertEqual(len(counts), 119)
         self.assertEqual(
             hashlib.sha256(payload.encode()).hexdigest(),
             EXPECTED_METHOD_MULTISET_SHA256,
@@ -129,6 +129,7 @@ class LinkCompositionBoundaryTests(unittest.TestCase):
             "async_start_proxy_capture_route": "cloud_routes.py",
             "async_start_shadow_learning_route": "cloud_routes.py",
             "_live_session_handle": "wire_authority.py",
+            "owned_session_identity": "session_projection.py",
             "_effective_wire_binding": "wire_authority.py",
             "_apply_live_wire_to_transports": "wire_authority.py",
             "_build_transport_pair": "transport_lifecycle.py",

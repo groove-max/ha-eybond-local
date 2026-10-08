@@ -18,6 +18,7 @@ from ...collector_identity import (
 from ..identity_probe import (
     IdentityProbeRequest,
     build_identity_probe_request,
+    identity_probe_kinds,
     parse_identity_probe_response,
 )
 from ..protocol import HEADER_SIZE, decode_header
@@ -1217,13 +1218,13 @@ class _SharedEybondListener:
         session_protocol: str,
         identity_probe_kind: str = "",
     ) -> str:
-        """ONE read-only identity probe of one exact silent pending socket.
+        """Bounded read-only identity acquisition of one exact pending socket.
 
         The onboarding-bootstrap entry point into the SAME probe algorithm the
         confirmed-owner route activation uses
         (``_identify_pending_socket_for_route``): pause the sniffer, send the
-        single identity query of the given wire (framed FC=2 parameter 2 /
-        ``AT+DTUPN``), record a strong identity on a valid reply, and keep the
+        identity methods of the authorized wire (FC2 then FC1 / ``AT+DTUPN``),
+        record a strong identity on a valid reply, and keep the
         socket watched either way. Returns the PN or ``""`` -- never guesses,
         never retries, never falls back to another protocol.
         """
@@ -2165,37 +2166,29 @@ class _SharedEybondListener:
         protocol = str(session_protocol or "").strip().lower()
         if not protocol:
             protocol = self._single_registered_session_protocol()
-        request = build_identity_probe_request(
-            protocol,
-            probe_kind=identity_probe_kind,
-        )
-        if request is None:
-            # No wire to upgrade with: keep whatever weak identity we already read.
-            return weak_pn
-
-        self._mark_session_state(
-            pending.session_id,
-            f"probing_route_identity_{request.probe_kind}",
-        )
-        try:
-            pending.writer.write(request.payload)
-            await asyncio.wait_for(pending.writer.drain(), timeout=1.5)
-            response, collector_pn, source = await self._read_identity_probe_response(
-                pending,
-                request,
-                timeout=1.5,
+        for kind in identity_probe_kinds(protocol, identity_probe_kind):
+            request = build_identity_probe_request(protocol, probe_kind=kind)
+            if request is None or not self._pending_socket_still_registered(pending):
+                return weak_pn
+            self._mark_session_state(
+                pending.session_id, f"probing_route_identity_{request.probe_kind}",
             )
-        except asyncio.TimeoutError:
-            self._mark_session_state(pending.session_id, "route_identity_probe_timeout")
-            return weak_pn
-        except Exception:
-            self._mark_session_state(pending.session_id, "route_identity_probe_failed")
-            return weak_pn
-
-        if collector_pn:
-            self._mark_session_first_bytes(pending.session_id, response)
-            self._mark_session_identity(pending.session_id, collector_pn, source)
-            return collector_pn
+            try:
+                pending.writer.write(request.payload)
+                await asyncio.wait_for(pending.writer.drain(), timeout=1.5)
+                response, collector_pn, source = await self._read_identity_probe_response(
+                    pending, request, timeout=1.5,
+                )
+            except asyncio.TimeoutError:
+                self._mark_session_state(pending.session_id, "route_identity_probe_timeout")
+                continue
+            except Exception:
+                self._mark_session_state(pending.session_id, "route_identity_probe_failed")
+                return weak_pn
+            if collector_pn:
+                self._mark_session_first_bytes(pending.session_id, response)
+                self._mark_session_identity(pending.session_id, collector_pn, source)
+                return collector_pn
         # The upgrade produced nothing usable: never LOSE the weak identity.
         return weak_pn
 

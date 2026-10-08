@@ -153,6 +153,11 @@ If an older installation still shows **EyeBond Setup Pending** or reports that
 the collector identity needs verification, keep the entry. Open its three-dot
 menu under **Devices & Services → EyeBond Local** and choose **Reconfigure**.
 Check the collector address and connection settings, then submit the form.
+On a server with multiple network interfaces, keep the Home Assistant interface
+that can be reached from the collector's network. The form preserves the saved
+interface when it is still available. If that interface no longer exists, select
+its replacement; for NAT, also check the advertised callback address and port
+in the advanced settings.
 
 If the collector connects without identifying itself, the result offers
 **Silent collector: query with EyeBond framed protocol** and **Silent collector:

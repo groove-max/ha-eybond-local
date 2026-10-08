@@ -79,6 +79,8 @@ _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "test_runtime_link.py",
             "test_link_module_boundaries.py",
             "test_runtime_silent_identity_bootstrap.py",
+            "test_fc1_identity_onboarding.py",
+            "test_callback_recovery_production_wire.py",
         ),
     ),
     (
@@ -92,6 +94,8 @@ _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "test_short_ascii_mppt.py",
             "test_transport_module_boundaries.py",
             "test_runtime_silent_identity_bootstrap.py",
+            "test_fc1_identity_onboarding.py",
+            "test_callback_recovery_production_wire.py",
         ),
     ),
     (
@@ -155,6 +159,13 @@ _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # these entries prevent a cheap ``affected`` run from silently missing a typed
 # boundary or neutral wire contract.
 _EXACT_TESTS: dict[str, tuple[str, ...]] = {
+    **{
+        f"custom_components/eybond_local/collector/{name}.py": (
+            "test_fc1_identity_onboarding.py", "test_callback_recovery_production_wire.py",
+            "test_runtime_silent_identity_bootstrap.py", "test_session_identity_negotiator.py",
+        )
+        for name in ("identity_probe", "session_identity_reader", "session_identity_negotiator", "silent_session_probe")
+    },
     "custom_components/eybond_local/protocol_catalogs/profiles/must_pv_ph18/base.json": (
         "test_must_driver.py", "test_profile_loader.py", "test_write_exposure_policy.py",
         "test_model_catalog.py", "test_runtime_inventory.py",
@@ -165,6 +176,7 @@ _EXACT_TESTS: dict[str, tuple[str, ...]] = {
     "custom_components/eybond_local/connection/callback_identity.py": (
         "test_callback_identity.py", "test_callback_identity_advertised_route.py",
         "test_callback_identity_production_wire.py", "test_config_flow.py",
+        "test_fc1_identity_onboarding.py",
     ),
     "custom_components/eybond_local/payload/urtu09c1.py": ("test_eybond_09c1.py",),
     "custom_components/eybond_local/drivers/eybond_09c1.py": ("test_eybond_09c1.py",),

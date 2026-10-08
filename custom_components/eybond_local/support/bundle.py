@@ -312,6 +312,7 @@ def _build_diagnostics_split(
                 "collector_management_last_failure",
                 "collector_management_last_session_generation_start",
                 "collector_management_last_session_generation_end",
+                "collector_management_last_session_identity_changed",
                 "smartess_device_address",
             ),
         },
