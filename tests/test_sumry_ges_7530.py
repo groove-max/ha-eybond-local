@@ -1,4 +1,9 @@
-"""Offline qualification only: this schema must not auto-bind an inverter."""
+"""Exact-match Sumry/GES read-only binding for Anenji GES48120M250-500P.
+
+Detection requires model 45, product class 10 and protocol raw 220. The bound
+surface is the nine-field 0x7530 evidence subset only: no power totals, PV,
+second-leg telemetry or write profile.
+"""
 
 from __future__ import annotations
 
@@ -37,6 +42,20 @@ SCHEMA_NAME = "sumry_ges_7530/base.json"
 TARGET = ProbeTarget(devcode=1, collector_addr=255, device_addr=1)
 # Public telemetry only, issue #49 comment 5881411950. These are separate
 # samples, not a simultaneous snapshot and not a model/class fingerprint.
+IDENTITY_CAPTURES = (
+    (
+        0xC738,
+        2,
+        "01 03 C7 38 00 02 78 B2",
+        "01 03 04 00 2D 00 0A EA 3D",
+    ),
+    (
+        0xC768,
+        1,
+        "01 03 C7 68 00 01 38 A2",
+        "01 03 02 00 DC B9 DD",
+    ),
+)
 CAPTURES = (
     (
         0x7530,
@@ -60,6 +79,14 @@ def _captured_registers() -> dict[int, int]:
     registers = {}
     for start, _, response in CAPTURES:
         words = parse_read_holding_response(bytes.fromhex(response), slave_id=1, count=10)
+        registers.update({start + index: word for index, word in enumerate(words)})
+    return registers
+
+
+def _qualified_identity_registers() -> dict[int, int]:
+    registers = {}
+    for start, count, _, response in IDENTITY_CAPTURES:
+        words = parse_read_holding_response(bytes.fromhex(response), slave_id=1, count=count)
         registers.update({start + index: word for index, word in enumerate(words)})
     return registers
 
@@ -126,45 +153,64 @@ class SumryGesQualificationTests(unittest.TestCase):
             self.assertIn("Phase A", schema.measurement_description(key).name)
         self.assertEqual(schema.measurement_description("output_frequency").suggested_display_precision, 2)
 
-    def test_catalog_records_research_without_runtime_binding(self) -> None:
+    def test_catalog_records_experimental_read_only_binding(self) -> None:
         model = next(model for model in load_models() if model["model_key"] == "anenji_ges48120m250_500p")
-        self.assertEqual(model["lifecycle"], "research")
+        self.assertEqual(model["lifecycle"], "experimental")
         self.assertEqual(model["coverage"]["runtime_control_surface"], "none")
         self.assertEqual(model["validation"]["telemetry"], "partial")
         self.assertEqual(model["validation"]["controls"], "none")
-        self.assertTrue(all(not variant["device_descriptor_keys"] for variant in model["variants"]))
+        variant = model["variants"][0]
+        self.assertEqual(variant["variant_key"], "sumry_ges_7530")
+        self.assertEqual(variant["device_descriptor_keys"], ["anenji_ges48120m250_500p"])
         sources = {source["source_key"]: source for source in load_sources()}
         self.assertTrue(set(model["source_keys"]).issubset(sources))
-        self.assertFalse(any("fingerprint" in sources[key]["assertions"] for key in model["source_keys"]))
+        self.assertIn("fingerprint", sources["issue_49_ges_identity_capture"]["assertions"])
         catalog = load_compiled_detection_catalog()
-        self.assertFalse(any(surface.register_schema_name == SCHEMA_NAME for surface in catalog.surfaces.values()))
+        surface = next(surface for surface in catalog.surfaces.values()
+                       if surface.register_schema_name == SCHEMA_NAME)
+        self.assertEqual(surface.key, "sumry_ges_7530_read_only")
+        self.assertTrue(surface.read_only)
+        device = catalog.devices["anenji_ges48120m250_500p"]
+        self.assertEqual(device.surface_key, "sumry_ges_7530_read_only")
+        self.assertEqual(
+            {anchor.key: anchor.equals for anchor in device.anchors if anchor.equals is not None},
+            {
+                "identity.sumry_ges_model_code": 45,
+                "identity.sumry_ges_product_class": 10,
+                "identity.sumry_ges_protocol_version": 220,
+            },
+        )
 
-    def test_metadata_startup_does_not_implicitly_load_unbound_schema(self) -> None:
+    def test_metadata_startup_loads_catalog_bound_schema_without_telemetry_probes(self) -> None:
         with patch("custom_components.eybond_local.drivers.registry.load_register_schema",
                    wraps=load_register_schema) as loader:
             prime_metadata_caches()
         self.assertGreater(loader.call_count, 0)
-        self.assertFalse(any(call.args[0].removeprefix("builtin:") == SCHEMA_NAME
-                             for call in loader.call_args_list))
+        self.assertTrue(any(call.args[0].removeprefix("builtin:") == SCHEMA_NAME
+                            for call in loader.call_args_list))
         for protocol in load_compiled_detection_catalog().protocols.values():
             for action in protocol.probe_actions:
                 if action.register is None or action.count is None:
                     continue
                 addresses = range(action.register, action.register + action.count)
                 with self.subTest(protocol=protocol.key, action=action.key):
+                    # Telemetry blocks are runtime-only; identity probes may be catalog actions.
                     self.assertFalse(any(address in addresses for address in
-                                         (0x7530, 0x7548, 0x756A, 0xC738, 0xC739, 0xC768)))
+                                         (0x7530, 0x7548, 0x756A)))
 
-    def test_documented_diagnostic_frames_are_exact_read_only_requests(self) -> None:
-        # Validation of the handoff commands only; these are not probe actions
-        # and no responses/identity constants are invented for them.
-        for start, count, request in (
-            (0xC738, 2, "01 03 C7 38 00 02 78 B2"),
-            (0xC768, 1, "01 03 C7 68 00 01 38 A2"),
-            (0xC764, 5, "01 03 C7 64 00 05 F9 62"),
-        ):
+    def test_owner_identity_frames_validate_crc_and_decode(self) -> None:
+        for start, count, request, response in IDENTITY_CAPTURES:
             with self.subTest(start=hex(start)):
                 self.assertEqual(build_read_holding_request(1, start, count), bytes.fromhex(request))
+                words = parse_read_holding_response(bytes.fromhex(response), slave_id=1, count=count)
+                if start == 0xC738:
+                    self.assertEqual(words, [45, 10])
+                else:
+                    self.assertEqual(words, [220])
+
+    def test_documented_diagnostic_frames_are_exact_read_only_requests(self) -> None:
+        start, count, request = 0xC764, 5, "01 03 C7 64 00 05 F9 62"
+        self.assertEqual(build_read_holding_request(1, start, count), bytes.fromhex(request))
 
 
 class SumryGesReadTests(unittest.IsolatedAsyncioTestCase):
@@ -204,20 +250,61 @@ class SumryGesReadTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ModbusError):
             await read_spec_set_values(session, load_register_schema(SCHEMA_NAME))
 
-    async def test_telemetry_and_unqualified_class_values_do_not_auto_bind(self) -> None:
-        # Class 0/10/20 occurs in the PDF, but none is proven for this GES.
-        # A made-up nonzero model plus a class enum must not become an anchor.
-        for product_class in (None, 0, 10, 20):
-            with self.subTest(product_class=product_class):
-                registers = _captured_registers()
-                if product_class is not None:
-                    registers.update({0xC738: 1234, 0xC739: product_class})
+    async def test_qualified_identity_binds_read_only_surface_without_telemetry_probe(self) -> None:
+        transport = ReadOnlyTransport(_qualified_identity_registers())
+        inverter = await ModbusCatalogDriver().async_probe(transport, TARGET)
+        self.assertIsNotNone(inverter)
+        self.assertEqual(inverter.variant_key, "sumry_ges_7530")
+        self.assertEqual(inverter.register_schema_name, SCHEMA_NAME)
+        self.assertEqual(inverter.profile_name, "")
+        self.assertFalse(any(0x7530 <= int.from_bytes(req[2:4], "big") <= 0x756A
+                             for req in transport.requests))
+
+    async def test_telemetry_without_identity_does_not_bind(self) -> None:
+        transport = ReadOnlyTransport(_captured_registers())
+        self.assertIsNone(await ModbusCatalogDriver().async_probe(transport, TARGET))
+
+    async def test_wrong_or_partial_identity_does_not_bind(self) -> None:
+        base = _qualified_identity_registers()
+        cases = (
+            "missing",
+            {0xC738: 44},
+            {0xC739: 20},
+            {0xC768: 219},
+            {0xC738: 45, 0xC739: 10},
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                registers = dict(base) if case != "missing" else {}
+                if isinstance(case, dict):
+                    registers.update(case)
+                    if 0xC768 not in case and 0xC738 in case and 0xC739 in case:
+                        del registers[0xC768]
                 transport = ReadOnlyTransport(registers)
                 self.assertIsNone(await ModbusCatalogDriver().async_probe(transport, TARGET))
-                # This change adds no automatic requests to the candidate map.
-                self.assertFalse(any(0x7530 <= int.from_bytes(req[2:4], "big") <= 0x7596
-                                     or 0xC738 <= int.from_bytes(req[2:4], "big") <= 0xC768
-                                     for req in transport.requests))
+
+    async def test_identity_truncated_response_does_not_bind(self) -> None:
+        class TruncatedIdentityTransport(ReadOnlyTransport):
+            async def async_send_payload(self, payload, *, route):
+                response = await super().async_send_payload(payload, route=route)
+                if payload[2:4] in (b"\xC7\x38", b"\xC7\x68"):
+                    return response[:-1]
+                return response
+
+        transport = TruncatedIdentityTransport(_qualified_identity_registers())
+        self.assertIsNone(await ModbusCatalogDriver().async_probe(transport, TARGET))
+
+    async def test_identity_bad_crc_does_not_bind(self) -> None:
+        class BadCrcIdentityTransport(ReadOnlyTransport):
+            async def async_send_payload(self, payload, *, route):
+                response = await super().async_send_payload(payload, route=route)
+                if payload[2:4] in (b"\xC7\x38", b"\xC7\x68"):
+                    # Keep full length; flip the last CRC byte only.
+                    return response[:-1] + bytes([response[-1] ^ 0xFF])
+                return response
+
+        transport = BadCrcIdentityTransport(_qualified_identity_registers())
+        self.assertIsNone(await ModbusCatalogDriver().async_probe(transport, TARGET))
 
 
 if __name__ == "__main__":

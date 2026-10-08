@@ -6,6 +6,6 @@
   "reference": "project-issue:49; project-comment:5881202245; project-comment:5881411950",
   "captured_at": "2026-10-02",
   "visibility": "public",
-  "summary": "Owner identifies the white 12kW split-phase unit as GES48120M250-500P. Raw slave-1 FC03 replies at 0x7530, 0x7548 and 0x756A pass CRC and length checks. Battery voltage 51.5 V, SOC 65%, phase-A output 122.9 V and mains 122.7 V agree with the community protocol. No 0xC738/0xC739 model/class response is supplied; successful telemetry alone does not qualify automatic binding.",
+  "summary": "Owner identifies the white 12kW split-phase unit as GES48120M250-500P. Raw slave-1 FC03 replies at 0x7530, 0x7548 and 0x756A pass CRC and length checks. Battery voltage 51.5 V, SOC 65%, phase-A output 122.9 V and mains 122.7 V agree with the community protocol. Identity registers 0xC738/0xC739 and 0xC768 are captured separately in issue_49_ges_identity_capture.",
   "assertions": ["commercial_identity", "register_map", "telemetry_validation"]
 }

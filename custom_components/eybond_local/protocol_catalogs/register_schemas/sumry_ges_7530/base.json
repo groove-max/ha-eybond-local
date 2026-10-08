@@ -1,6 +1,6 @@
 {
   "schema_key": "sumry_ges_7530_evidence_subset",
-  "title": "Sumry/GES 0x7530 evidence subset (not enabled for detection)",
+  "title": "Sumry/GES 0x7530 read-only telemetry subset",
   "driver_key": "modbus_catalog",
   "protocol_family": "sumry_ges_7530",
   "blocks": [

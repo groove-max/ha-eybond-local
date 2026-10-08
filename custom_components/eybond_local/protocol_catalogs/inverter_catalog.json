@@ -930,6 +930,46 @@
       {"key": "identity.hopewind_switch", "source_key": "hopewind_switch", "register": 40546},
       {"key": "identity.hopewind_state", "source_key": "hopewind_state", "register": 40547}
      ]
+    },
+    {
+     "key": "modbus_catalog.sumry_ges_identity_model_class",
+     "kind": "modbus_read",
+     "register": 51000,
+     "count": 2,
+     "function": 3,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.sumry_ges_model_code",
+       "source_key": "sumry_ges_model_code",
+       "register": 51000,
+       "words": 1
+      },
+      {
+       "key": "identity.sumry_ges_product_class",
+       "source_key": "sumry_ges_product_class",
+       "register": 51001,
+       "words": 1
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.sumry_ges_identity_protocol",
+     "kind": "modbus_read",
+     "register": 51048,
+     "count": 1,
+     "function": 3,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.sumry_ges_protocol_version",
+       "source_key": "sumry_ges_protocol_version",
+       "register": 51048,
+       "words": 1
+      }
+     ]
     }
    ],
    "layouts": [],
@@ -1204,6 +1244,33 @@
    "notes": [
     "EyeBond/JsdSolar G-ASCII support is read-only. Current evidence comes from SmartValue proxy/support captures and a matching local protocol document covering GPDAT<n>, GPV, GBAT, GCHG, GOP, GLINE, GINV, GWS, GTMP, FAN???, SVFW, GMOD, F, and BL responses.",
     "Support capture uses protocol_catalogs/command_schemas/eybond_g_ascii/base.json as the schema-driven read-only command probe plan. Captured unknown fields are maintainer evidence only until the schema/driver decoder is explicitly updated."
+   ]
+  },
+  "sumry_ges_7530": {
+   "ranges": [
+    [
+     30000,
+     3
+    ],
+    [
+     30024,
+     3
+    ],
+    [
+     30058,
+     3
+    ],
+    [
+     51000,
+     2
+    ],
+    [
+     51048,
+     1
+    ]
+   ],
+   "notes": [
+    "Anenji GES48120M250-500P Sumry/GES map: read-only FC03 telemetry at 0x7530/0x7548/0x756A plus identity holding registers 0xC738-0xC739 (model/class) and 0xC768 (protocol version raw 220). Modbus RTU 9600 8N1, slave 1."
    ]
   },
   "aohai_fsa": {
@@ -1812,6 +1879,17 @@
    "read_only": true,
    "default_for_driver": true,
    "support_capture_policy": "aohai_fsa"
+  },
+  {
+   "key": "sumry_ges_7530_read_only",
+   "protocol_key": "modbus_catalog",
+   "driver_key": "modbus_catalog",
+   "variant_key": "sumry_ges_7530",
+   "profile_name": "",
+   "register_schema_name": "sumry_ges_7530/base.json",
+   "tier": "partial",
+   "read_only": true,
+   "support_capture_policy": "sumry_ges_7530"
   },
   {
    "key": "growatt_spf_untested",
@@ -3121,6 +3199,39 @@
      "external JsdSolar SmartESS G-command discussion: confirms the same GPDAT0/GPV/GBAT/GMOD command family exists outside this capture"
     ],
     "confidence": "documented-read-only"
+   }
+  },
+  {
+   "entry_key": "anenji_ges48120m250_500p",
+   "surface_key": "sumry_ges_7530_read_only",
+   "model_name": "Anenji GES48120M250-500P (Sumry/GES 0x7530)",
+   "aliases": [
+    "Anenji white 12kW split-phase"
+   ],
+   "priority": 115,
+   "anchors": [
+    {
+     "key": "identity.sumry_ges_model_code",
+     "equals": 45,
+     "cost": 1
+    },
+    {
+     "key": "identity.sumry_ges_product_class",
+     "equals": 10,
+     "cost": 1
+    },
+    {
+     "key": "identity.sumry_ges_protocol_version",
+     "equals": 220,
+     "cost": 1
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "GitHub issue #49 owner capture: FC03 0xC738/0xC739 model 45 product class 10, 0xC768 protocol 220, and CRC-valid 0x7530 telemetry",
+     "community Sumry/GES inverter Modbus protocol V2.6.3 (quky PDF)"
+    ],
+    "confidence": "capture-confirmed-read-only"
    }
   },
   {
