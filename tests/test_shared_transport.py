@@ -286,6 +286,106 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await connection.wait_until_liveness(0.02))
         self.assertFalse(connection.collector_info.heartbeat_fresh)
 
+    async def test_crlf_at_response_between_framed_replies_preserves_boundaries(self) -> None:
+        before = build_collector_request(20, b"before", devcode=1, collector_addr=1, fcode=4)
+        after = build_collector_request(21, b"after", devcode=1, collector_addr=1, fcode=4)
+        wire = before + b"\r\nAT+SYST:20261008000000\r\n" + after
+        # Coalesced, split inside the ambiguous prefix, and byte-by-byte TCP.
+        splits = [len(before) + offset for offset in range(1, 9)]
+        deliveries = [[wire], *[[wire[:cut], wire[cut:]] for cut in splits],
+                      [bytes([byte]) for byte in wire]]
+        for auxiliary_enabled, chunks in (
+            (enabled, chunks) for enabled in (False, True) for chunks in deliveries
+        ):
+            with self.subTest(auxiliary=auxiliary_enabled, chunks=len(chunks), first=len(chunks[0])):
+                connection = _CollectorConnection(heartbeat_interval=60, write_timeout=.5)
+                connection._auxiliary_session.enabled = auxiliary_enabled
+                at_reply = asyncio.get_running_loop().create_future()
+                connection._pending_at_response = at_reply
+                replies = {}
+                for tid in (20, 21):
+                    replies[tid] = asyncio.get_running_loop().create_future()
+                    connection._pending[tid] = replies[tid]
+                    connection._pending_fcode[tid] = 4
+                reader = asyncio.StreamReader()
+                task = asyncio.create_task(connection._read_loop(reader))
+                try:
+                    for chunk in chunks:
+                        reader.feed_data(chunk)
+                        await asyncio.sleep(0)
+                    reader.feed_eof()
+                    await asyncio.wait_for(task, 1)
+                    self.assertTrue(at_reply.done(), connection.collector_info.last_disconnect_reason)
+                    self.assertEqual(at_reply.result().command, "SYST")
+                    self.assertEqual(at_reply.result().value, "20261008000000")
+                    for tid, expected in ((20, b"before"), (21, b"after")):
+                        self.assertTrue(replies[tid].done())
+                        self.assertEqual(replies[tid].result()[1], expected)
+                    self.assertEqual(connection.collector_info.last_disconnect_reason, "collector_eof")
+                finally:
+                    if not task.done():
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+
+    async def test_crlf_like_binary_headers_and_payloads_are_not_stripped(self) -> None:
+        # TID CR/LF is legal. The last case starts CR/LF/AT+ but its sixth
+        # byte is binary FC4, not the first ASCII letter of an AT command.
+        for devcode, address in ((1, 1), (0x4100, 1), (0x4154, 0x2B)):
+            with self.subTest(devcode=devcode):
+                connection = _CollectorConnection(heartbeat_interval=60, write_timeout=.5)
+                reply = asyncio.get_running_loop().create_future()
+                connection._pending[0x0D0A] = reply
+                connection._pending_fcode[0x0D0A] = 4
+                payload = b"\r\nAT+SYST:inside-binary-payload\r\n"
+                wire = build_collector_request(
+                    0x0D0A, payload, devcode=devcode, collector_addr=address, fcode=4,
+                )
+                reader = asyncio.StreamReader()
+                reader.feed_data(wire)
+                reader.feed_eof()
+                await connection._read_loop(reader)
+                self.assertTrue(reply.done())
+                self.assertEqual(reply.result()[1], payload)
+
+    async def test_crlf_at_prefix_has_bounded_header_wait_and_keeps_cancellation(self) -> None:
+        for wire in (b"\r\nA", b"\r\nAT+"):
+            connection = _CollectorConnection(heartbeat_interval=60, write_timeout=.5)
+            reader = asyncio.StreamReader()
+            reader.feed_data(wire)
+            with patch(
+                "custom_components.eybond_local.collector.transport.connections._FRAMED_HEADER_COMPLETION_TIMEOUT",
+                .02,
+            ):
+                await asyncio.wait_for(connection._read_loop(reader), 1)
+            self.assertEqual(connection.collector_info.last_disconnect_reason, "collector_frame_header_timeout")
+
+        connection = _CollectorConnection(heartbeat_interval=60, write_timeout=.5)
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"\r\nAT+")
+        task = asyncio.create_task(connection._read_loop(reader))
+        await asyncio.sleep(.01)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+    async def test_crlf_does_not_resynchronize_past_unrecognized_bytes(self) -> None:
+        connection = _CollectorConnection(heartbeat_interval=60, write_timeout=.5)
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"\r\nNOT-AT\r\nAT+FWVER:must-not-be-adopted\r\n")
+        reader.feed_eof()
+        await connection._read_loop(reader)
+        self.assertTrue(connection.collector_info.last_disconnect_reason.startswith("collector_frame_"))
+        self.assertNotEqual(connection.collector_info.smartess_collector_version, "must-not-be-adopted")
+
+    async def test_eof_in_crlf_at_prefix_does_not_wait_or_adopt_metadata(self) -> None:
+        for wire in (b"\r\nA", b"\r\nAT+"):
+            connection = _CollectorConnection(heartbeat_interval=60, write_timeout=.5)
+            reader = asyncio.StreamReader()
+            reader.feed_data(wire)
+            reader.feed_eof()
+            await asyncio.wait_for(connection._read_loop(reader), .5)
+            self.assertEqual(connection.collector_info.last_disconnect_reason, "collector_eof")
+
     async def test_delimiterless_at_response_preserves_following_framed_response(
         self,
     ) -> None:

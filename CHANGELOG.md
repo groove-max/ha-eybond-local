@@ -81,6 +81,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Framed collector connections accept AT metadata replies preceded by CR/LF
+  without treating them as oversized binary frames and disconnecting. Binary
+  transaction IDs and payloads remain intact; this does not change inverter
+  transport selection or establish support for previously unreadable devices.
+
 - Collector onboarding and recovery can confirm identity through a correlated
   FC1 full-PN reply when the framed FC2 identity query does not answer. Existing
   FC2/AT paths remain preferred; unsolicited or short heartbeats are not enough

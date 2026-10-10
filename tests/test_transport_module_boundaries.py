@@ -71,6 +71,17 @@ class TransportModuleBoundaryTests(unittest.TestCase):
         identity_extension = ("AsyncFunctionDef", "async_probe_identity")
         self.assertEqual(definitions.count(identity_extension), 2)
         definitions = [item for item in definitions if item != identity_extension]
+        prefix_extension = ("AsyncFunctionDef", "read_framed_prefix")
+        self.assertEqual(definitions.count(prefix_extension), 1)
+        reader_class = next(
+            node for node in _tree(_TRANSPORT / "common.py").body
+            if isinstance(node, ast.ClassDef) and node.name == "_PrefixedAsyncReader"
+        )
+        self.assertEqual(sum(
+            isinstance(node, ast.AsyncFunctionDef) and node.name == "read_framed_prefix"
+            for node in reader_class.body
+        ), 1)
+        definitions = [item for item in definitions if item != prefix_extension]
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()

@@ -210,6 +210,16 @@ reader. The reader never scans forward for a convenient byte pattern and never
 reclassifies an unexpected raw RTU response as a framed reply, because either
 would risk dispatching bytes from different transactions together.
 
+At an established framed boundary the reader also accepts an AT metadata reply
+with one leading CR/LF pair, but only after a bounded lookahead confirms
+`\r\nAT+` followed by an uppercase command letter. That letter occupies the
+binary function-code position and cannot be a supported EyeBond function.
+All other prefixes remain untouched: CR/LF can be a valid binary transaction ID,
+and AT-looking text inside a binary payload is still payload. This is separator
+handling for the existing mixed metadata reader, not protocol negotiation or
+permission to send inverter commands over raw AT passthrough. Header timeouts,
+payload limits, auxiliary ownership and malformed-frame rejection still apply.
+
 ## `callback_on_demand` is one-shot
 
 `runtime/link/` sends exactly one `async_probe_target` datagram per connect

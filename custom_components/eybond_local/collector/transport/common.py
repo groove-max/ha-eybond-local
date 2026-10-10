@@ -462,6 +462,23 @@ class _PrefixedAsyncReader:
         self._buffer.clear()
         return data + await self._reader.readuntil(separator)
 
+    async def read_framed_prefix(self, first: bytes) -> bytes:
+        """Read a bounded EyeBond/AT prefix at an established frame boundary.
+
+        A leading CR/LF is a separator ONLY before AT+ and an uppercase command
+        letter. That letter occupies the binary function-code position, where
+        no supported EyeBond function is an ASCII letter. Otherwise preserve
+        every byte, including valid binary TID 0x0D0A and devcode 0x4154.
+        Never scan ahead or skip arbitrary whitespace. The caller owns the
+        first-byte header deadline and cancellation for the whole lookahead.
+        """
+        prefix = first + await self.readexactly(2)
+        if prefix == b"\r\nA":
+            prefix += await self.readexactly(3)
+            if prefix[:5] == b"\r\nAT+" and 0x41 <= prefix[5] <= 0x5A:
+                return prefix[2:]
+        return prefix
+
     async def read_at_response(self) -> bytes:
         """Read one AT response terminated by newline or a bounded idle gap.
 

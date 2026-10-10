@@ -499,8 +499,8 @@ class _CollectorConnection:
                 frame_started = asyncio.get_running_loop().time()
                 auxiliary_claim = auxiliary.claim
                 try:
-                    prefix = first + await read(asyncio.wait_for(
-                        reader.readexactly(2),
+                    prefix = await read(asyncio.wait_for(
+                        reader.read_framed_prefix(first),
                         timeout=_FRAMED_HEADER_COMPLETION_TIMEOUT,
                     ))
                 except asyncio.TimeoutError:
@@ -514,7 +514,7 @@ class _CollectorConnection:
                         first.hex(),
                     )
                     return
-                if prefix == b"AT+":
+                if prefix.startswith(b"AT+"):
                     line = prefix + await read(reader.read_at_response())
                     self._handle_at_response(line)
                     continue

@@ -111,6 +111,17 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(writer.writes[-1], _query(subtype))
         return task
 
+    async def test_framed_crlf_at_metadata_does_not_consume_auxiliary_reply(self):
+        connection, reader, writer, _ = await self._open("framed")
+        pending = await self._start_read(connection, writer)
+        wire = _reply()
+        reader.feed_data(b"\r\nAT+FWVER:8.50.12.3\r\n" + wire)
+        self.assertEqual(await asyncio.wait_for(pending, 1), wire)
+        self.assertEqual(connection.collector_info.smartess_collector_version, "8.50.12.3")
+        self.assertTrue(connection.connected)
+        # No UART command or protocol switch was sent by receiving AT metadata.
+        self.assertEqual(writer.writes, [_query()])
+
     async def test_both_readers_every_split_and_no_uart_bootstrap(self):
         for kind in ("framed", "at"):
             connection, reader, writer, _ = await self._open(kind)
