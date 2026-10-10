@@ -95,6 +95,12 @@ class _CoordinatorStub:
         self.controls_summary = "Controls are enabled automatically."
         self.collector_capabilities = collector_capability_profile()
         self.calls: list[tuple[str, str]] = []
+        self.identified_inverter = None
+        self.listeners = []
+
+    def async_add_listener(self, listener):
+        self.listeners.append(listener)
+        return lambda: self.listeners.remove(listener)
 
     def collector_device_info(self):
         return {"scope": "collector"}
@@ -125,7 +131,9 @@ class RuntimeSelectInventoryTests(unittest.TestCase):
     def test_runtime_setup_creates_no_writable_operation_mode_select(self) -> None:
         async def _run() -> list[object]:
             coordinator = _CoordinatorStub()
-            entry = types.SimpleNamespace(data={}, options={}, runtime_data=coordinator)
+            entry = types.SimpleNamespace(
+                data={}, options={}, runtime_data=coordinator, async_on_unload=[].append,
+            )
             entities: list[object] = []
             await async_setup_entry(None, entry, entities.extend)
             return entities
@@ -149,6 +157,7 @@ class RuntimeSelectInventoryTests(unittest.TestCase):
                 data={"collector_virtual_bridge": True},
                 options={},
                 runtime_data=coordinator,
+                async_on_unload=[].append,
             )
             entities: list[object] = []
             await async_setup_entry(None, entry, entities.extend)

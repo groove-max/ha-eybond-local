@@ -9,6 +9,8 @@ silent socket does not answer, that exact socket is retired before the next
 normal callback attempt may try the alternate dialect.  This prevents an AT
 query from following a framed query (or vice versa) on one stream while keeping
 the established one-``set>server``-per-attempt contract intact.
+A short heartbeat learned during FC1 permits a bounded FC2 identity upgrade on
+that now-known framed socket; it does not permit claiming the short identity.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from ..collector_identity import (
 from .identity_probe import (
     PROBE_AT_DTUPN,
     PROBE_FRAMED_FC1,
+    PROBE_FRAMED_FC2,
     silent_probe_kind_for_protocol,
 )
 from .silent_session_probe import SessionObservation
@@ -281,6 +284,48 @@ class ExactSessionIdentityNegotiator:
                 session_protocol=protocol,
                 identity_probe_kind=probe_kind,
             )
+            post = next(
+                (observation for observation in channel.snapshot_session_observations()
+                 if observation.session_id == selected.session_id),
+                selected,
+            )
+            if (
+                not identity_source_is_strong(post.identity_source)
+                and unknown_wire
+                and protocol == "eybond_framed"
+                and post.identity_source == "framed_heartbeat"
+                and validated_collector_pn(post.collector_pn)
+                and post.state not in _TERMINAL_STATES
+                and not post.state.startswith("closed")
+            ):
+                # FC1 can reveal only a short PN on an initially silent socket.
+                # This proves the framed dialect, NOT ownership. Upgrade that
+                # exact stream with FC2, rather than discarding the observation
+                # and trying AT on the next connection. Never mix dialects or
+                # extend the caller's deadline; a failed upgrade stays weak.
+                unknown_wire = False
+                if not pn_is_same_identity(durable_pn, post.collector_pn):
+                    return ExactSessionIdentityResult(
+                        NEGOTIATION_FOREIGN_IDENTITY,
+                        session_id=selected.session_id,
+                        collector_pn=post.collector_pn,
+                        session_protocol=protocol,
+                        identity_source=post.identity_source,
+                    )
+                remaining = deadline - loop.time()
+                if remaining > 0:
+                    probe_kind = PROBE_FRAMED_FC2
+                    try:
+                        identified_pn = await asyncio.wait_for(
+                            channel.async_identify_exact_session(
+                                selected.session_id,
+                                session_protocol=protocol,
+                                identity_probe_kind=probe_kind,
+                            ),
+                            timeout=remaining,
+                        )
+                    except asyncio.TimeoutError:
+                        identified_pn = ""
         except asyncio.CancelledError as original_cancel:
             if unknown_wire:
                 try:
@@ -292,7 +337,17 @@ class ExactSessionIdentityNegotiator:
                     pass
             raise original_cancel
 
-        strong_pn = validated_collector_pn(identified_pn)
+        post = next(
+            (observation for observation in channel.snapshot_session_observations()
+             if observation.session_id == selected.session_id),
+            selected,
+        )
+        strong_pn = (
+            validated_collector_pn(post.collector_pn)
+            if identity_source_is_strong(post.identity_source)
+            and pn_is_same_identity(identified_pn, post.collector_pn)
+            else ""
+        )
         if strong_pn:
             if not pn_is_same_identity(durable_pn, strong_pn):
                 return ExactSessionIdentityResult(
@@ -302,14 +357,6 @@ class ExactSessionIdentityNegotiator:
                     session_protocol=protocol,
                     probe_kind=probe_kind,
                 )
-            post = next(
-                (
-                    observation
-                    for observation in channel.snapshot_session_observations()
-                    if observation.session_id == selected.session_id
-                ),
-                selected,
-            )
             self._reset_unknown_candidate()
             return ExactSessionIdentityResult(
                 NEGOTIATION_IDENTIFIED,
@@ -337,7 +384,7 @@ class ExactSessionIdentityNegotiator:
             NEGOTIATION_PROBE_FAILED,
             session_id=selected.session_id,
             session_protocol=protocol,
-            identity_source=selected.identity_source,
+            identity_source=post.identity_source,
             probe_kind=probe_kind,
         )
 

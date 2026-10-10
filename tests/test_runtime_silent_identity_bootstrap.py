@@ -165,8 +165,9 @@ class _SilentAtCollector:
 class _SilentFramedFc1Collector:
     """Issue #37 collector: silent until HA sends the server FC=1 request."""
 
-    def __init__(self, pn: str) -> None:
+    def __init__(self, pn: str, *, short_fc1: bool = False) -> None:
         self._pn = pn
+        self._short_fc1 = short_fc1
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._task: asyncio.Task[None] | None = None
@@ -186,20 +187,27 @@ class _SilentFramedFc1Collector:
             while True:
                 header_bytes = await self._reader.readexactly(HEADER_SIZE)
                 header = decode_header(header_bytes)
-                await self._reader.readexactly(header.payload_len)
+                payload = await self._reader.readexactly(header.payload_len)
                 if header.fcode != FC_HEARTBEAT:
                     self.other_queries += 1
+                    if self._short_fc1 and header.fcode == 2 and payload == b"\x02":
+                        response = b"\x00\x02" + self._pn.encode("ascii")
+                        self._writer.write(encode_header(
+                            header.tid, 1, HEADER_SIZE + len(response), 1, 2,
+                        ) + response)
+                        await self._writer.drain()
                     continue
                 self.fc1_queries += 1
+                pn = self._pn[:14] if self._short_fc1 else self._pn
                 response = (
                     encode_header(
                         header.tid,
                         0x0102,
-                        HEADER_SIZE + len(self._pn),
+                        HEADER_SIZE + len(pn),
                         0xFF,
                         FC_HEARTBEAT,
                     )
-                    + self._pn.encode("ascii")
+                    + pn.encode("ascii")
                 )
                 self._writer.write(response)
                 await self._writer.drain()
@@ -269,6 +277,27 @@ class _SilentAtModbusCollector(_SilentAtCollector):
 
 
 class RuntimeSilentIdentityBootstrapTests(unittest.IsolatedAsyncioTestCase):
+    async def test_silent_fc1_short_heartbeat_upgrades_on_same_socket(self) -> None:
+        """A late short heartbeat proves the dialect, not the full identity."""
+        port = _free_port()
+        manager = self._manager(port=port, challenge="eybond_framed")
+        collector = _SilentFramedFc1Collector(FULL_PN, short_fc1=True)
+        await manager.async_start()
+        self.addAsyncCleanup(manager.async_stop)
+        await collector.connect(port)
+        self.addAsyncCleanup(collector.stop)
+        await asyncio.sleep(0.35)
+        with patch(
+            "custom_components.eybond_local.runtime.link.callback.async_send_callback_trigger",
+            new=AsyncMock(return_value=types.SimpleNamespace(reply="", reply_from="")),
+        ) as trigger:
+            connected = await manager.async_try_connect(timeout=4.0)
+        self.assertTrue(connected)
+        self.assertEqual(trigger.await_count, 1)
+        self.assertEqual(collector.other_queries, 1)
+        self.assertEqual(manager.session_handle.collector_pn, FULL_PN)
+        self.assertIn("fc2_parameter_2", manager.session_handle.identity_sources)
+
     def _manager(
         self,
         *,

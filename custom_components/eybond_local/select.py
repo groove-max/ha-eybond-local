@@ -122,6 +122,28 @@ async def async_setup_entry(
             ],
         ]
     )
+    # Some protocol controls are qualified from device-advertised choices only
+    # after the startup snapshot has built the platforms. Add newly confirmed
+    # enum surfaces without reloading the entry (which would lose that live
+    # evidence and recreate the same startup gap). Stable IDs remain unchanged.
+    added_keys = {capability.key for capability in exposable_capabilities}
+
+    def add_live_capabilities() -> None:
+        inverter = coordinator.identified_inverter
+        if inverter is None:
+            return
+        additions = [
+            capability for capability in inverter.capabilities
+            if capability.key not in added_keys
+            and capability.value_kind == "enum" and capability.enum_value_map
+            and coordinator.can_expose_capability(capability)
+        ]
+        if additions:
+            added_keys.update(capability.key for capability in additions)
+            async_add_entities([EybondCapabilitySelect(coordinator, cap) for cap in additions])
+
+    entry.async_on_unload(coordinator.async_add_listener(add_live_capabilities))
+    add_live_capabilities()
 
 
 class EybondRuntimeSettingSelect(CoordinatorEntity[EybondLocalCoordinator], SelectEntity):
@@ -203,6 +225,15 @@ class EybondCapabilitySelect(CoordinatorEntity[EybondLocalCoordinator], SelectEn
     def device_info(self):
         return self.coordinator.inverter_device_info()
 
+    def _handle_coordinator_update(self) -> None:
+        inverter = self.coordinator.data.inverter
+        if inverter is not None:
+            current = next((cap for cap in inverter.capabilities if cap.key == self._capability.key), None)
+            if current is not None and current.value_kind == "enum":
+                self._capability = current
+                self._attr_options = current.enum_options
+        super()._handle_coordinator_update()
+
     @property
     def available(self) -> bool:
         snapshot = self.coordinator.data
@@ -210,6 +241,8 @@ class EybondCapabilitySelect(CoordinatorEntity[EybondLocalCoordinator], SelectEn
         if not snapshot.connected or inverter is None:
             return False
         if not any(cap.key == self._capability.key for cap in inverter.capabilities):
+            return False
+        if not self.coordinator.can_expose_capability(self._capability):
             return False
         return self._capability.runtime_state(snapshot.runtime_values()).visible
 

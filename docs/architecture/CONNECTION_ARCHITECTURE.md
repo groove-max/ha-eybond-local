@@ -200,6 +200,13 @@ wire from the *observed* session, not from a persisted `collector_session_protoc
 hint. Untrusted states (`route_identity_mismatch`, `waiting_for_route_identity`,
 `parked_*`, `closed_*`) can never override a claimed, routed session.
 
+If a first-contact FC1 probe on an initially silent socket reveals only a
+short framed heartbeat, the exact-session negotiator may send one FC2 PN query
+on that same now-observed framed stream, within the caller's remaining deadline.
+This is a same-dialect identity upgrade, not an AT fallback or permission to
+claim the weak PN. Failure preserves the known framed candidate for a later
+normal attempt; only a still-unknown dialect is retired before trying another.
+
 The framed runtime reader is fail-closed at the physical socket boundary. An
 idle socket may remain silent indefinitely, but once the first byte of a frame
 arrives, header and payload completion are bounded and the decoded local-runtime

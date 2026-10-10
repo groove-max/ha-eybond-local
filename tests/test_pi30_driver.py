@@ -18,7 +18,7 @@ from custom_components.eybond_local.drivers.read_result import (
 )
 from custom_components.eybond_local.drivers.registry import driver_options, get_driver
 from custom_components.eybond_local.models import CollectorInfo, ProbeTarget
-from custom_components.eybond_local.payload.pi30 import crc16_xmodem
+from custom_components.eybond_local.payload.pi30 import Pi30Error, crc16_xmodem
 
 
 async def _read_values(driver, *args, **kwargs):
@@ -83,6 +83,44 @@ class _FakeTransport:
 
 
 class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_generic_pi30_uses_own_current_choices_without_retail_guess(self):
+        """Issue58 response shapes; identity is deliberately synthetic/absent."""
+        target = ProbeTarget(devcode=0x0994, collector_addr=1, device_addr=0)
+        replies = {
+            "QPI": "PI30", "QID": "NAK", "QSID": "NAK", "QMN": "NAK",
+            "QPIRI": "220.0 14.5 220.0 60.0 13.9 3200 3000 24.0 25.3 24.0 28.7 27.0 2 10 050 1 0 2 6 01 0 0 00.0 0 1",
+            "QFLAG": "EabxzDjkuvy",
+            "QMCHGCR": "010 020 030 040 050 060 070 080 090 100 110",
+            "QMUCHGCR": "002 010 020 030 040 050 060 070 080",
+            "MCHGC040": "ACK", "MUCHGC002": "ACK", "PDA": "NAK",
+        }
+        transport = _FakeTransport({(target.devcode, 1, k): v for k, v in replies.items()})
+        driver = Pi30Driver()
+        inverter = await driver.async_probe(transport, target)
+        self.assertIsNotNone(inverter)
+        self.assertEqual(inverter.model_name, "PI30 3000")
+        caps = {cap.key: cap for cap in inverter.capabilities}
+        for key in ("max_charging_current", "max_ac_charging_current"):
+            self.assertFalse(caps[key].tested)
+            self.assertEqual(caps[key].provenance, "doc_backed")
+        self.assertEqual(list(caps["max_charging_current"].enum_value_map), list(range(10, 111, 10)))
+        self.assertEqual(list(caps["max_ac_charging_current"].enum_value_map), [2, *range(10, 81, 10)])
+        self.assertEqual(inverter.details["max_charging_current"], "50 A")
+        self.assertTrue(all(command.startswith("Q") for command in transport.commands))
+        self.assertEqual(await driver.async_write_capability(
+            transport, inverter, "max_charging_current", "40 A",
+        ), "40 A")
+        self.assertEqual(await driver.async_write_capability(
+            transport, inverter, "max_ac_charging_current", "2 A",
+        ), "2 A")
+        before = len(transport.commands)
+        with self.assertRaises(ValueError):
+            await driver.async_write_capability(transport, inverter, "max_charging_current", "120 A")
+        self.assertEqual(len(transport.commands), before)
+        # A reported flag does not prove that the write is accepted.
+        with self.assertRaises(Pi30Error):
+            await driver.async_write_capability(transport, inverter, "buzzer_enabled", False)
+
     async def test_probe_uses_optional_smartess_evidence_provider(self) -> None:
         target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
         transport = _FakeTransport(

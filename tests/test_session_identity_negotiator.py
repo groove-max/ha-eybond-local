@@ -104,6 +104,28 @@ def _deadline(seconds=1.0):
     return asyncio.get_running_loop().time() + seconds
 
 
+class _LateFramedChannel(_Channel):
+    """A first-contact probe learns a short PN; only FC2 may certify it."""
+
+    def __init__(self, *, pn=FULL_PN, reply=FULL_PN, return_weak=False, block=False):
+        super().__init__([SessionObservation(session_id="s1")], replies=[reply])
+        self.pn = pn
+        self.return_weak = return_weak
+        self.block_upgrade = block
+
+    async def async_identify_exact_session(self, session_id, **kwargs):
+        if not self.probes:
+            self.probes.append((session_id, kwargs["session_protocol"], kwargs["identity_probe_kind"]))
+            self.observations = [SessionObservation(
+                session_id=session_id, collector_pn=self.pn[:14],
+                identity_source="framed_heartbeat", protocol_shape="eybond_framed",
+                state="waiting_for_route_identity",
+            )]
+            return self.pn[:14] if self.return_weak else ""
+        self.block = self.block_upgrade
+        return await super().async_identify_exact_session(session_id, **kwargs)
+
+
 class IdentityProbeWireTests(unittest.TestCase):
     def test_fc1_requires_exact_tid_function_and_returns_full_pn(self):
         request = build_identity_probe_request(
@@ -145,6 +167,83 @@ class IdentityProbeWireTests(unittest.TestCase):
 
 
 class ExactSessionIdentityNegotiatorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_late_heartbeat_upgrades_without_changing_socket_or_dialect(self):
+        for return_weak in (False, True):
+            with self.subTest(return_weak=return_weak):
+                channel = _LateFramedChannel(return_weak=return_weak)
+                result = await ExactSessionIdentityNegotiator().async_negotiate(
+                    channel=channel, expected_pn=FULL_PN,
+                    baseline_session_ids=frozenset(), deadline=_deadline(),
+                )
+                self.assertTrue(result.identified)
+                self.assertEqual(channel.probes, [
+                    ("s1", "eybond_framed", PROBE_FRAMED_FC1),
+                    ("s1", "eybond_framed", PROBE_FRAMED_FC2),
+                ])
+                self.assertEqual(channel.retired, [])
+
+    async def test_late_foreign_prefix_is_not_queried_or_claimed(self):
+        channel = _LateFramedChannel(pn="Q" + FULL_PN[1:])
+        result = await ExactSessionIdentityNegotiator().async_negotiate(
+            channel=channel, expected_pn=FULL_PN,
+            baseline_session_ids=frozenset(), deadline=_deadline(),
+        )
+        self.assertEqual(result.status, NEGOTIATION_FOREIGN_IDENTITY)
+        self.assertEqual(len(channel.probes), 1)
+        self.assertEqual(channel.retired, [])
+
+    async def test_late_heartbeat_failed_upgrade_remains_weak(self):
+        channel = _LateFramedChannel(reply="")
+        negotiator = ExactSessionIdentityNegotiator()
+        result = await negotiator.async_negotiate(
+            channel=channel, expected_pn=FULL_PN,
+            baseline_session_ids=frozenset(), deadline=_deadline(),
+        )
+        self.assertEqual(result.status, NEGOTIATION_PROBE_FAILED)
+        self.assertEqual(channel.retired, [])
+        self.assertEqual(channel.observations[0].identity_source, "framed_heartbeat")
+        # The next normal attempt reuses the observed dialect, never AT.
+        await negotiator.async_negotiate(
+            channel=channel, expected_pn=FULL_PN,
+            baseline_session_ids=frozenset({"s1"}), deadline=_deadline(),
+        )
+        self.assertEqual(channel.probes[-1], ("s1", "eybond_framed", ""))
+
+    async def test_late_heartbeat_upgrade_obeys_deadline_and_cancellation(self):
+        channel = _LateFramedChannel(block=True)
+        result = await asyncio.wait_for(ExactSessionIdentityNegotiator().async_negotiate(
+            channel=channel, expected_pn=FULL_PN,
+            baseline_session_ids=frozenset(), deadline=_deadline(0.02),
+        ), timeout=0.5)
+        self.assertEqual(result.status, NEGOTIATION_PROBE_FAILED)
+        self.assertEqual(channel.retired, [])
+        channel = _LateFramedChannel(block=True)
+        task = asyncio.create_task(ExactSessionIdentityNegotiator().async_negotiate(
+            channel=channel, expected_pn=FULL_PN,
+            baseline_session_ids=frozenset(), deadline=_deadline(),
+        ))
+        await channel.probe_started.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertEqual(channel.retired, [])
+
+    async def test_short_return_value_without_strong_evidence_is_not_identity(self):
+        channel = _LateFramedChannel(reply="", return_weak=True)
+        # First call makes the heartbeat available; next call returns only that
+        # weak value (as a listener may do after an unanswered FC2 query).
+        await channel.async_identify_exact_session(
+            "s1", session_protocol="eybond_framed", identity_probe_kind=PROBE_FRAMED_FC1,
+        )
+        async def return_weak(*args, **kwargs):
+            return FULL_PN[:14]
+        channel.async_identify_exact_session = return_weak
+        result = await ExactSessionIdentityNegotiator().async_negotiate(
+            channel=channel, expected_pn=FULL_PN,
+            baseline_session_ids=frozenset(), deadline=_deadline(),
+        )
+        self.assertFalse(result.identified)
+
     async def test_unknown_uses_fc1_then_at_on_next_attempt_only(self):
         negotiator = ExactSessionIdentityNegotiator()
         first = _Channel([SessionObservation(session_id="s1")])

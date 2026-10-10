@@ -66,6 +66,7 @@ from .command_support import (
     unsupported_commands as _unsupported_commands,
 )
 from .read_result import DriverReadMode, DriverReadResult
+from .pi30_controls import async_enrich_charge_current_controls
 from .support_probe import SupportProbeRequest
 
 
@@ -270,6 +271,7 @@ class Pi30Driver(InverterDriver):
         )
 
     async def async_probe(self, transport, target: ProbeTarget) -> DetectedInverter | None:
+        started = time.monotonic()
         session = self._session(transport, target)
         try:
             probe = await async_probe_ascii_catalog(
@@ -315,6 +317,12 @@ class Pi30Driver(InverterDriver):
         config_values.update(serial_identity.as_details())
 
         capabilities = _build_pi30_capabilities(config_values, profile.capabilities)
+        # Enrichment must not extend the existing driver probe window or make
+        # unsupported optional queries a reason to lose positive PI30 identity.
+        capabilities = await async_enrich_charge_current_controls(
+            session, config_values, capabilities,
+            timeout=min(3.0, max(0.0, self.probe_timeout - (time.monotonic() - started) - 0.1)),
+        )
         _translate_capability_enum_values(config_values, capabilities)
 
         return DetectedInverter(

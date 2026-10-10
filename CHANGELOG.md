@@ -9,6 +9,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- PI30 devices without model-specific charge-current controls can expose
+  **Max Total Charge Current** and **Max Utility Charge Current** in Full
+  Control, using only the selectable values read from that inverter (#58).
+  These writes remain untested. Two bounded read-only queries enrich detection;
+  normal polling and existing model-specific controls are unchanged.
+
 - Anenji GES48120M250-500P auto-binds through exact Sumry/GES identity anchors
   (model 45, product class 10, protocol raw 220) and exposes the existing
   nine-field read-only 0x7530 subset (#49, #55). Broader telemetry, derived
@@ -80,6 +86,14 @@ the GitHub release body should be rendered from the matching version section her
   this is not full device or control support (#45).
 
 ### Fixed
+
+- An initially silent collector that reveals a short framed heartbeat can
+  confirm its full PN through FC2 on the same socket instead of being closed
+  and retried with another dialect (#23). A short PN alone still cannot claim
+  a device; foreign identities, deadlines and cancellation remain guarded.
+- Enum controls discovered after HA platform setup are added without an entry
+  reload. Updated device-specific choices replace stale options, and controls
+  become unavailable when their live capability is withdrawn.
 
 - Framed collector connections accept AT metadata replies preceded by CR/LF
   without treating them as oversized binary frames and disconnecting. Binary

@@ -99,6 +99,21 @@ Persistent failures still need investigation: create a Support Archive while
 the problem is present. It includes failed command names and the age of the
 last confirmed basic readings. Retained values are not new measurements.
 
+### PI30: charge-current settings
+
+In **Full Control**, compatible PI30 inverters can show **Max Total Charge
+Current** and **Max Utility Charge Current**. The first limits total battery
+charging current; the second limits charging from the grid. They are dropdowns,
+not unrestricted number inputs: available values come from the inverter itself.
+
+For devices without an existing model-specific control map, these controls are
+marked **untested** until local writes are confirmed. Enabling Full Control does
+not change any inverter setting. If the inverter cannot supply a valid list of
+choices, the corresponding new control is not offered. Existing model-specific
+controls are unchanged. A readable buzzer/backlight state does not guarantee
+that the inverter accepts its enable/disable command; a `NAK` is a rejection,
+not a successful change.
+
 ## MUST PV/PH18 power and energy corrections
 
 The unreleased test build corrects several readings in the MUST PV/PH18 map:
