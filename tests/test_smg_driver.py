@@ -654,6 +654,40 @@ class SmgAnenjiVariantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["max_discharge_current_protection"], 0)
         self.assertEqual(inverter.details["output_mode"], "Split-Phase-P1")
 
+    async def test_anenji_runtime_reads_grid_power_340_on_each_poll(self) -> None:
+        # The pavelrzn fork reports 338/342 reads but no 340. Verify the
+        # production schema/driver, not just the presence of a JSON spec.
+        # This synthetic fixture does not assert BaikalTesla's model identity.
+        class RecordingTransport(FixtureTransport):
+            def _handle_read_holding(self, payload: bytes) -> bytes:
+                start = int.from_bytes(payload[2:4], "big")
+                count = int.from_bytes(payload[4:6], "big")
+                reads.append((start, count))
+                return super()._handle_read_holding(payload)
+
+        reads: list[tuple[int, int]] = []
+        driver = SmgModbusDriver()
+        target = ProbeTarget(devcode=0x0001, collector_addr=0xFF, device_addr=0x01)
+        registers = self._anenji_registers()
+        registers[204] = 0
+        transport = RecordingTransport(
+            registers=registers, command_responses=None, probe_target=target,
+        )
+        inverter = await driver.async_probe(transport, target)
+        assert inverter is not None
+        self.assertEqual(inverter.variant_key, "anenji_anj_11kw_48v_wifi_p")
+        runtime_state: dict[str, object] = {}
+
+        for raw, expected in ((119, 119), (0, 0), (0xFF88, -120)):
+            with self.subTest(raw=raw):
+                transport._registers[340] = raw
+                reads.clear()
+                result = await driver.async_read_values(
+                    transport, inverter, runtime_state=runtime_state,
+                )
+                self.assertTrue(any(start <= 340 < start + count for start, count in reads))
+                self.assertEqual(_full_values(result)["grid_power"], expected)
+
     async def test_issue_13_sandisolar_fingerprint_uses_protocol_4_schema(self) -> None:
         fixture = json.loads(
             (

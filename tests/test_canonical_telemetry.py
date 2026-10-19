@@ -450,6 +450,39 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["grid_to_battery_power"], 94.0)
         self.assertEqual(values["grid_to_home_power"], 109.0)
 
+    def test_reported_baikal_tesla_pv_charge_is_not_reallocated_to_grid(self) -> None:
+        # pavelrzn fork docs, 2026-10-19: synthetic replay of the reported
+        # measurements, not a support capture or proof of the OEM fingerprint.
+        # The 119 W balance deficit must not steal 119 W from the measured
+        # PV-to-battery route. Missing grid power and measured zero differ.
+        for mode in ("Mains", "Battery"):
+            for grid_power in (None, 0.0, 119.0):
+                with self.subTest(mode=mode, grid_power=grid_power):
+                    values = {
+                        "operating_mode": mode,
+                        "output_power": 409.0,
+                        "pv_power": 850.0,
+                        "battery_average_power": 560.0,
+                        "pv_charging_power": 560.0,
+                        "grid_voltage": 230.0,
+                    }
+                    if grid_power is not None:
+                        values["grid_power"] = grid_power
+
+                    apply_canonical_measurements("modbus_smg", values)
+
+                    self.assertEqual(values["pv_to_battery_power"], 560.0)
+                    self.assertEqual(values["grid_to_battery_power"], 0.0)
+                    self.assertEqual(values["pv_to_home_power"], 290.0)
+                    self.assertEqual(
+                        values["grid_to_home_power"],
+                        0.0 if grid_power == 0.0 else 119.0,
+                    )
+                    if grid_power is None:
+                        self.assertNotIn("grid_power", values)
+                    else:
+                        self.assertEqual(values["grid_power"], grid_power)
+
     def test_pv_only_charging_is_not_reattributed_to_grid_when_pv_power_under_reads(
         self,
     ) -> None:
