@@ -4,6 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -108,7 +109,9 @@ def _iter_repository_text_files() -> list[Path]:
 
     files: list[Path] = []
     for path in paths:
-        if any(part in _SKIP_DIR_NAMES for part in path.parts):
+        # Exclusions apply INSIDE this checkout. An ancestor named .local is
+        # a valid worktree location, not grounds to skip every tracked file.
+        if any(part in _SKIP_DIR_NAMES for part in path.relative_to(REPO_ROOT).parts):
             continue
         if path.is_file() and path.suffix in _SCAN_SUFFIXES:
             files.append(path)
@@ -117,6 +120,24 @@ def _iter_repository_text_files() -> list[Path]:
 
 class NoRealIdentifiersTest(unittest.TestCase):
     """Every PN-shaped token in tracked text files must be a known synthetic."""
+
+    def test_local_ancestor_does_not_hide_worktree_from_git_or_fallback_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / ".local" / "worktrees" / "project"
+            public = root / "tests" / "public.py"
+            private = root / ".local" / "private.py"
+            for path in (public, private):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("# fixture\n", encoding="utf-8")
+            listing = subprocess.CompletedProcess(
+                args=[], returncode=0,
+                stdout=b"tests/public.py\0.local/private.py\0",
+            )
+            with patch.dict(globals(), {"REPO_ROOT": root}):
+                with patch.object(subprocess, "run", return_value=listing):
+                    self.assertEqual(_iter_repository_text_files(), [public])
+                with patch.object(subprocess, "run", side_effect=OSError("no git")):
+                    self.assertEqual(_iter_repository_text_files(), [public])
 
     def test_only_allowlisted_pn_shaped_tokens_present(self) -> None:
         offenders: list[str] = []
