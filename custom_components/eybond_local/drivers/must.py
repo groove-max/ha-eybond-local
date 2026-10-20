@@ -167,7 +167,9 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
         if "model_prefix" in values and "model_suffix" in values:
             values["model_number"] = f"{values['model_prefix']}{values['model_suffix']}"
         diagnostics = {}
-        if schema.source_name == "must_pv_ph18/pv3300.json":
+        # The optional BMS read is declared by the schema (PV3300, PV3900), not
+        # by the model name, so other MUST models never send the extra read.
+        if _supports_bms_read(schema):
             bms_values, diagnostics = await async_read_bms(
                 session, transport, inverter, schema,
                 runtime_state if runtime_state is not None else {},
@@ -209,9 +211,9 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
         inverter: DetectedInverter,
     ) -> dict[str, Any]:
         session = self._session(transport, inverter.probe_target)
-        ranges = _support_capture_ranges(
-            inverter.register_schema_name or self.register_schema_name
-        )
+        schema_name = inverter.register_schema_name or self.register_schema_name
+        schema = load_register_schema(schema_name)
+        ranges = _support_capture_ranges(schema_name)
         captured_ranges: list[dict[str, Any]] = []
         failures: list[dict[str, Any]] = []
         for start, count in ranges:
@@ -269,6 +271,7 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
                     source="PH/PV Modbus 1.4.3 and protocol 1916 current registers",
                     purpose="support_only_zero_bulk_current_single_read_comparison",
                 )
+        if _supports_bms_read(schema):
             # The vendor's 6422/1916 map describes a separate optional BMS
             # window (voltage/current/temperature/reserved/SOC). Keep the raw
             # diagnostic read independently bounded, even during runtime backoff.
@@ -317,6 +320,11 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
             route=target.link_route,
             slave_id=target.payload_address,
         )
+
+
+def _supports_bms_read(schema) -> bool:
+    """Use the same schema opt-in for runtime and bounded support evidence."""
+    return any(block.key == "bms" for block in schema.blocks) and "bms" in schema.spec_sets
 
 
 def _must_default_schema_name() -> str:

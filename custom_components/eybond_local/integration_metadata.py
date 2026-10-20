@@ -429,7 +429,7 @@ async def _async_self_heal_valuecloud_driver_hint(
 
 
 async def _async_self_heal_must_pv3300_metadata(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Retire PV3300 caches using the common MUST profile, preserving identity.
+    """Retire PV3300/PV3900 caches using the common MUST map, preserving identity.
 
     The normal startup catalog lookup then rebuilds this exact model's binding.
     Do not invalidate another MUST model, an explicit different driver, learned
@@ -440,22 +440,30 @@ async def _async_self_heal_must_pv3300_metadata(hass: HomeAssistant, entry: Conf
 
     from collections.abc import Mapping
 
+    # Stale (register schema, variant) bindings per documented model override.
+    # PV3900 keeps the common profile, so only the generic binding is stale.
+    stale_bindings = {
+        "must pv3300": (
+            ("must_pv_ph18/base.json", "pv_ph18"),
+            ("must_pv_ph18/pv3300.json", "pv3300"),
+        ),
+        "must pv3900": (("must_pv_ph18/base.json", "pv_ph18"),),
+    }
     data, options = entry.data, entry.options
     snapshot = options.get("effective_metadata_snapshot")
     if not isinstance(snapshot, Mapping):
         return
+    model = str(data.get(CONF_DETECTED_MODEL, "")).strip().casefold()
     if (
         data.get("detected_driver") != "must_pv_ph18"
         or data.get("detection_confidence") != "high"
-        or str(data.get(CONF_DETECTED_MODEL, "")).strip().casefold() != "must pv3300"
+        or model not in stale_bindings
         or options.get(CONF_DRIVER_HINT, data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO))
         not in {DRIVER_HINT_AUTO, "must_pv_ph18"}
         or snapshot.get("effective_owner_key") != "must_pv_ph18"
         or snapshot.get("profile_name") != "must_pv_ph18/base.json"
-        or (snapshot.get("register_schema_name"), snapshot.get("variant_key")) not in (
-            ("must_pv_ph18/base.json", "pv_ph18"),
-            ("must_pv_ph18/pv3300.json", "pv3300"),
-        )
+        or (snapshot.get("register_schema_name"), snapshot.get("variant_key"))
+        not in stale_bindings[model]
     ):
         return
     updated = dict(options)
