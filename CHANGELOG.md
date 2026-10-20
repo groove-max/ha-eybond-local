@@ -9,6 +9,16 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- MUST PV3900 (retail PV39-8048 TLV) gets its own catalog entry and reads the
+  same optional BMS block as PV3300 (registers 109-113: state of charge, BMS
+  voltage, signed current and temperature), confirmed against the BMS app and
+  SmartValue on a CAN-connected PACE BMS. PV3900 keeps the common MUST map,
+  profile and direction conventions. The optional BMS read is now enabled by a
+  schema that declares the `bms` block, not by a PV3300 file-name check; other
+  MUST models are unchanged. Confirmed PV3900 entries leave the generic cached
+  binding on restart, as PV3300 entries already do. Support Archives include
+  the same independently bounded raw BMS read for both models.
+
 - PI30 runtime options offer an explicit, per-entry PE/PD flag-letter case
   override for firmware that rejects the profile default (#58/#64). Saving sends
   no inverter writes. Defaults, non-flag/learned/custom commands, control gates

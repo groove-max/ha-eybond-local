@@ -597,8 +597,9 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
                 singles = [call for call in session.read_holding.await_args_list if call.args[1] == 1]
                 self.assertEqual(len(singles), 3 if expected else 0)
 
-    async def test_pv3300_bms_evidence_preserves_raw_invalid_values_and_model_scope(self):
-        for suffix in (3300, 1800):
+    async def test_bms_evidence_preserves_raw_invalid_values_and_model_scope(self):
+        for suffix in (3300, 3900, 1800):
+            has_bms = suffix in (3300, 3900)
             driver = MustPvPh18Driver()
             target = ProbeTarget(1, 255, 4)
             link = FixtureTransport(registers=_must_registers() | {20001: suffix},
@@ -615,21 +616,32 @@ class MustPvPh18DriverTests(unittest.IsolatedAsyncioTestCase):
                                                "read_registers": AsyncMock(side_effect=read)})()
                 with patch.object(driver, "_session", return_value=session):
                     values = _full_values(await driver.async_read_values(link, inverter))
-                    self.assertEqual(session.read_holding.await_count, int(suffix == 3300))
+                    self.assertEqual(session.read_holding.await_count, int(has_bms))
                     self.assertFalse(any(call.args[0] == 109 for call in session.read_registers.await_args_list))
                     evidence = await driver.async_capture_support_evidence(link, inverter)
-                self.assertEqual(values.get("battery_soc"), 72 if suffix == 3300 and words[-1] == 72 else None)
+                self.assertEqual(values.get("battery_soc"), 72 if has_bms and words[-1] == 72 else None)
                 self.assertNotIn("battery_percent", values)
-                self.assertEqual("bms_read_diagnostics" in evidence, suffix == 3300)
-                if suffix == 3300:
+                self.assertEqual("bms_read_diagnostics" in evidence, has_bms)
+                if has_bms:
                     extra = evidence["bms_read_diagnostics"]
                     self.assertEqual(extra["status"], "completed")
                     self.assertEqual(extra["captured_ranges"], [{"start": 109, "count": 5, "words": words}])
                     self.assertNotIn(109, [b["start"] for b in evidence["fixture_ranges"]])
+                    # One runtime read and one independently bounded export read.
+                    self.assertEqual(
+                        sum(call.args == (109, 5) for call in session.read_holding.await_args_list), 2
+                    )
+                if suffix == 3900:
+                    self.assertNotIn("current_read_diagnostics", evidence)
 
     async def test_bms_unsupported_or_timed_out_does_not_break_support_export(self):
+        for suffix in (3300, 3900):
+            with self.subTest(model=suffix):
+                await self._check_bms_capture_failures(suffix)
+
+    async def _check_bms_capture_failures(self, suffix):
         driver = MustPvPh18Driver()
-        link = FixtureTransport(registers=_must_registers() | {20001: 3300},
+        link = FixtureTransport(registers=_must_registers() | {20001: suffix},
                                 command_responses=None, probe_target=ProbeTarget(1, 255, 4))
         inverter = await driver.async_probe(link, ProbeTarget(1, 255, 4))
         for kind in ("unsupported", "disconnect", "timeout"):

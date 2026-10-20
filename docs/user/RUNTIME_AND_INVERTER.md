@@ -233,7 +233,7 @@ and the selected control mode are not changed. No local hardware qualification
 is implied by the existing broad setpoint limits; use only settings appropriate
 to your exact model and battery.
 
-PV3300 devices with supported BMS communication now expose **Battery State of
+PV3300 and PV3900 devices with supported BMS communication now expose **Battery State of
 Charge** directly from the BMS, not an estimate from battery voltage. Separate
 **BMS Battery Voltage**, **BMS Battery Current** and **BMS Battery Temperature**
 appear under inverter diagnostics. Update the main test build and restart HA;
@@ -248,8 +248,9 @@ The optional BMS request has a three-second limit. Missing or invalid readings
 become unavailable, not zero or a frozen last value. Other inverter telemetry
 continues; after a failure or an empty BMS response the integration retries after
 one minute, or five minutes if the device explicitly rejects the command/address.
-A genuine 0% SOC with valid BMS data remains 0%. Other MUST models keep their
-existing map. A Support Archive also includes a separate bounded raw BMS read
+A genuine 0% SOC with valid BMS data remains 0%. PV3900 adds only the BMS
+readings; unlike PV3300, it keeps the common load-percentage and direction
+conventions. Other MUST models keep their existing map. A Support Archive also includes a separate bounded raw BMS read
 for troubleshooting.
 
 ## SRNE partial battery / PV readings

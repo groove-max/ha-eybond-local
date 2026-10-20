@@ -1800,6 +1800,17 @@
    "support_capture_policy": "must_pv_ph18"
   },
   {
+   "key": "must_pv3900_full",
+   "protocol_key": "must_pv_ph18",
+   "driver_key": "must_pv_ph18",
+   "variant_key": "pv3900",
+   "profile_name": "must_pv_ph18/base.json",
+   "register_schema_name": "must_pv_ph18/pv3900.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "must_pv_ph18"
+  },
+  {
    "key": "eybond_g_ascii_gootu_gt_h2436m14p5",
    "protocol_key": "eybond_g_ascii",
    "driver_key": "eybond_g_ascii",
@@ -2991,6 +3002,23 @@
      "github:issue#46 LCD and cloud comparisons during battery charge and discharge"
     ],
     "confidence": "documented-with-field-telemetry"
+   }
+  },
+  {
+   "entry_key": "must_pv3900",
+   "surface_key": "must_pv3900_full",
+   "model_name": "MUST PV3900",
+   "priority": 220,
+   "anchors": [
+    {"key": "protocol.protocol_id", "equals": "MUST_PV_PH18"},
+    {"key": "identity.model_number", "equals": "PV3900"}
+   ],
+   "provenance": {
+    "sources": [
+     "manufacturer protocol 6422 / 1916 BMS block",
+     "field capture: PV39-8048 TLV, PACE BMS on CAN, FC03 109-113 vs BMS app and SmartValue"
+    ],
+    "confidence": "documented-with-register-capture"
    }
   },
   {

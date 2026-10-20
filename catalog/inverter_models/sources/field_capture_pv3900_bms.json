@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "source_key": "field_capture_pv3900_bms",
+  "kind": "github_comment",
+  "title": "PV3900 (PV39-8048 TLV) optional BMS block captured with a CAN-connected BMS",
+  "reference": "https://github.com/groove-max/ha-eybond-local/pull/65",
+  "captured_at": "2026-10-20",
+  "visibility": "public",
+  "summary": "Owner unit reports model PV3900 at 20000-20001 and uses the common MUST telemetry conventions (charge-negative battery current/power, fractional load percent). With a PACE BMS on CAN (PYLON_CAN), local FC03 registers 109-114 returned 549, 65356, 36, 0, 99, 100 while the BMS app and SmartValue both showed 99% SOC, 100% SOH and 36 C; 109 tracked the inverter battery voltage (54.9 V).",
+  "assertions": ["telemetry_validation", "fingerprint"]
+}

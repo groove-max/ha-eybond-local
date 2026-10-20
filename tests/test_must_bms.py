@@ -138,3 +138,28 @@ class MustBmsTests(unittest.IsolatedAsyncioTestCase):
         )) as factory:
             await driver.async_read_values(link, other, runtime_state=self.state)
             factory.return_value.read_holding.assert_not_awaited()
+
+    async def test_pv3900_reads_bms_block_with_common_telemetry_conventions(self):
+        driver = MustPvPh18Driver()
+        target = ProbeTarget(1, 255, 4)
+        # Field capture: 109-113 = 54.9 V, -18.0 A (charging), 36 C, reserved, 99 %.
+        registers = _must_registers() | {20001: 3900} | dict(zip(range(109, 114), [549, 65356, 36, 0, 99]))
+        link = FixtureTransport(registers=registers, command_responses=None, probe_target=target)
+        inverter = await driver.async_probe(link, target)
+        self.assertEqual(inverter.register_schema_name, "must_pv_ph18/pv3900.json")
+        self.assertEqual(inverter.profile_name, "must_pv_ph18/base.json")
+        result = await driver.async_read_values(link, inverter, runtime_state=self.state, now_monotonic=10)
+        self.assertEqual(result.mode, DriverReadMode.FULL)
+        self.assertEqual(result.values["battery_soc"], 99)
+        self.assertEqual(result.values["bms_battery_voltage"], 54.9)
+        self.assertEqual(result.values["bms_battery_current"], -18.0)
+        self.assertEqual(result.values["bms_battery_temperature"], 36)
+        self.assertEqual(result.diagnostics["must_bms_status"], "ok")
+        # Unlike PV3300, PV3900 keeps the common MUST direction and load scaling.
+        common = await MustPvPh18Driver().async_read_values(
+            link, replace(inverter, register_schema_name="must_pv_ph18/base.json")
+        )
+        for key in ("battery_current", "battery_power", "grid_power", "load_percent"):
+            with self.subTest(key=key):
+                self.assertEqual(result.values[key], common.values[key])
+        self.assertNotIn("battery_soc", common.values)

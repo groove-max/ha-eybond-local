@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "model_key": "must_pv3900",
+  "manufacturer": "MUST",
+  "model": "PV3900",
+  "aliases": [
+    "MUST PV3900",
+    "MUST PV39-8048 TLV"
+  ],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "pv3900",
+      "label": "PV3900 common MUST map with optional BMS block",
+      "device_descriptor_keys": [
+        "must_pv3900"
+      ],
+      "known_firmware": []
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "partial",
+    "controls": "none"
+  },
+  "coverage": {
+    "runtime_control_surface": "available",
+    "smartess_control_surface": "cloud_catalog",
+    "vendor_register_map": "partial",
+    "notes": [
+      "Keeps the common MUST PV/PH18 profile, register map and telemetry conventions; only the optional BMS block (109-113) is added.",
+      "Controls inherit the document-backed MUST surface, all untested, available only in Full Control. The reporting unit runs in Read only mode."
+    ]
+  },
+  "known_limitations": [
+    "SOC and separate BMS voltage/current/temperature require a BMS connected to the inverter (CAN or RS485). Missing or invalid data stays unavailable; BMS current keeps the native signed convention.",
+    "Register 114 returned the BMS SOH (100%) on the reporting unit but is not exposed until confirmed on more units.",
+    "Previously accumulated energy/history is not rewritten."
+  ],
+  "knowledge_summary": "PV3900 (retail PV39-8048 TLV) is identified by the PV3900 marker at 20000-20001 and keeps the common MUST map. A field capture with a CAN-connected PACE BMS confirmed the optional 109-113 BMS block already used for PV3300 (voltage/10, signed current/10, temperature, SOC) against the BMS app and SmartValue.",
+  "source_keys": [
+    "private_must_pv_ph18_modbus_map",
+    "field_capture_pv3900_bms"
+  ]
+}

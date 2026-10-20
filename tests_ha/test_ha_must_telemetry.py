@@ -253,3 +253,25 @@ async def test_pv3300_cache_repair_preserves_other_bindings(hass, section, key, 
     await _async_self_heal_must_pv3300_metadata(hass, entry)
     assert dict(entry.data) == data
     assert dict(entry.options) == options
+
+
+@pytest.mark.parametrize(("model", "schema", "variant", "repaired"), [
+    ("MUST PV3900", "must_pv_ph18/base.json", "pv_ph18", True),
+    ("MUST PV3900", "must_pv_ph18/pv3900.json", "pv3900", False),
+    ("MUST PV3900", "must_pv_ph18/pv3300.json", "pv3300", False),
+    ("MUST PV3901", "must_pv_ph18/base.json", "pv_ph18", False),
+    ("MUST PH3900", "must_pv_ph18/base.json", "pv_ph18", False),
+])
+async def test_pv3900_cache_repair_only_retires_the_generic_binding(hass, model, schema, variant, repaired):
+    from custom_components.eybond_local.integration_metadata import _async_self_heal_must_pv3300_metadata
+
+    snapshot = {"effective_owner_key": "must_pv_ph18", "variant_key": variant,
+                "profile_name": "must_pv_ph18/base.json", "register_schema_name": schema}
+    data = {"detected_model": model, "detected_driver": "must_pv_ph18",
+            "detection_confidence": "high", "driver_hint": "auto"}
+    options = {"effective_metadata_snapshot": snapshot, "poll_interval": 30}
+    entry = MockConfigEntry(domain=DOMAIN, version=5, data=data, options=options)
+    entry.add_to_hass(hass)
+    await _async_self_heal_must_pv3300_metadata(hass, entry)
+    assert dict(entry.data) == data
+    assert dict(entry.options) == ({"poll_interval": 30} if repaired else options)
