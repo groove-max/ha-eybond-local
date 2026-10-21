@@ -1,0 +1,18 @@
+{
+  "extends": "./pi30_max.json",
+  "profile_key": "pi30_ascii_vmii_6200_31_07",
+  "title": "PI30 VMII-NXPW5KW 6200 / firmware 31.07",
+  "driver_key": "pi30",
+  "protocol_family": "pi30",
+  "capabilities": [
+    {
+      "key": "charger_source_priority",
+      "note": "Issue #62: owner-confirmed three-option PCP mapping on VMII-NXPW5KW, 6200 W, 28-field QPIRI, main firmware 00031.07. Not a generic PI30 MAX mapping.",
+      "enum_map": {
+        "0": "Solar first",
+        "1": "Solar + Utility",
+        "2": "Only solar charging permitted"
+      }
+    }
+  ]
+}

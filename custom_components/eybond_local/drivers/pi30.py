@@ -1674,7 +1674,9 @@ def _translate_capability_enum_values(
             continue
         if capability.unit:
             continue
-        current = values.get(capability.value_key)
+        # Schema translation may already have produced a generic label. The
+        # selected model's control map owns both the select and its readback.
+        current = values.get(f"{capability.value_key}_code", values.get(capability.value_key))
         if not isinstance(current, int) or isinstance(current, bool):
             continue
         values[capability.value_key] = capability.enum_value_map.get(

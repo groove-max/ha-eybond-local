@@ -251,6 +251,8 @@ class InProcessFailClosedShadowProxyHandler:
                 if self._backend.cloud_protocol_evidence is not None and self._identity_verified else None
             ),
             "protocol_diagnostics": {"samples": list(self._protocol_samples),
+                                     "local_inverter_target": self._backend._seed.inverter_target,
+                                     "captured_inverter_targets": self._backend._seed.captured_inverter_targets,
                                      "reason": self._protocol_preparation_error},
             "cloud_modbus_read": (
                 self._backend.cloud_modbus_read.to_mapping()

@@ -26,6 +26,7 @@ from ...support.cloud_learning_models import (
     CloudLearningSelection,
 )
 from ...support.memory_guard import (
+    SHADOW_LEARNING_MIN_AVAILABLE_MIB,
     read_available_memory_mib,
     shadow_learning_memory_blocker,
 )
@@ -331,6 +332,11 @@ class ShadowLearningRuntimeMixin:
             "shadow_session_running": route_status.running,
             "shadow_session_collector_connected": route_status.collector_connected,
             "shadow_session_upstream_connected": route_status.upstream_connected,
+            "memory": {
+                "available_mib": available_mib,
+                "required_mib": SHADOW_LEARNING_MIN_AVAILABLE_MIB,
+                "source": "proc_meminfo_memavailable",
+            },
         }
 
     @staticmethod

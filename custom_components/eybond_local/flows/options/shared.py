@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ...support.memory_guard import shadow_learning_memory_failure_details
+
 from homeassistant.helpers.selector import (
     BooleanSelector,
     TextSelector,
@@ -40,6 +42,35 @@ def control_discovery_cloud_failure_reason(error_code: object) -> str:
     if type(error_code) is not str or error_code != error_code.strip():
         return ""
     return CONTROL_DISCOVERY_CLOUD_FAILURE_REASONS.get(error_code, "")
+
+
+def control_discovery_memory_detail(discovery: object, translate) -> str:
+    """Render only validated memory numbers, without hiding a previous hold."""
+    if not isinstance(discovery, dict):
+        return ""
+    reason = discovery.get("reason")
+    diagnostics = discovery.get("diagnostics")
+    primary = diagnostics.get("primary_failure_reason") if isinstance(diagnostics, dict) else None
+    if reason != "control_discovery_insufficient_memory" and not (
+        reason == "cloud_learning_protection_held" and primary == "control_discovery_insufficient_memory"
+    ):
+        return ""
+    details = diagnostics.get("memory", {}) if isinstance(diagnostics, dict) else {}
+    available = details.get("available_mib") if isinstance(details, dict) else None
+    safe = shadow_learning_memory_failure_details(
+        f"shadow_learning_preflight_blocked:insufficient_memory:{available}MiB"
+    ) if type(available) is int else {}
+    if not safe:
+        return ""
+    return translate(
+        "common.dynamic.control_discovery_insufficient_memory",
+        "Learning could not start: Home Assistant reported {available_mib} MiB "
+        "of available RAM; the current admission threshold is {required_mib} MiB. "
+        "No test controls were sent by this attempt. Free memory or increase "
+        "the host/VM memory before retrying. See connection and protection "
+        "status below; an earlier protection hold is not removed.",
+        safe,
+    )
 
 
 def _build_multiline_log_text_selector() -> TextSelector:

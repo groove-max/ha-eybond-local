@@ -517,6 +517,7 @@
       "shadow_learning_restore_action": "Retry restoring the collector connection",
       "shadow_learning_restore_confirmed": "✓ The previous collector connection was restored. You can start another check.",
       "control_discovery_failure_generic": "The check stopped. See the connection and protection status below; this message does not confirm cloud restoration.",
+      "control_discovery_insufficient_memory": "Learning could not start: Home Assistant reported {available_mib} MiB of available RAM; the current admission threshold is {required_mib} MiB. No test controls were sent by this attempt. Free memory or increase the host/VM memory before retrying. See connection and protection status below; an earlier protection hold is not removed.",
       "control_discovery_result_failed": "The check couldn't finish. {control_discovery_error} Try again, download the support package so the developer can inspect what happened, or return to the menu.",
       "control_discovery_result_action_retry": "Try the scan again",
       "control_discovery_result_notice_applied": "✓ The selected control(s) were added to Home Assistant.",

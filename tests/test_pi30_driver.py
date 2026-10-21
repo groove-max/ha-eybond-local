@@ -404,7 +404,9 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(transport, target)
 
         assert inverter is not None
-        self.assertEqual(inverter.model_name, "PI30 6200")
+        # Firmware-scoped refinement now reads QMN/QVFW, but this older
+        # firmware must retain its original MAX controls.
+        self.assertEqual(inverter.model_name, "VMII-NXPW5KW")
         self.assertEqual(inverter.variant_key, "pi30_max")
         self.assertEqual(inverter.profile_name, "pi30_ascii/models/pi30_max.json")
         self.assertEqual(inverter.register_schema_name, "pi30_ascii/models/pi30_max.json")

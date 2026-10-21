@@ -142,6 +142,7 @@ class ShadowLearningSeed:
     prepare_native_pi30: bool = False
     inspect_cloud_protocol: bool = False
     inverter_device_addr: int | None = None
+    captured_inverter_targets: tuple[tuple[int, int], ...] = ()
 
 
 def pi30_learning_target(inverter: Any) -> tuple[int, int] | None:
@@ -215,6 +216,7 @@ def build_shadow_learning_seed(
     prepare_native_pi30: bool = False,
     inspect_cloud_protocol: bool = False,
     inverter_device_addr: int | None = None,
+    identified_inverter: Any = None,
 ) -> tuple[ShadowLearningSeed, tuple[str, ...]]:
     """Build one normalized shadow-learning seed and return its preflight blockers."""
 
@@ -238,6 +240,8 @@ def build_shadow_learning_seed(
         observed_cloud_request=observed_cloud_request,
     )
     normalized_mode = "ack" if allow_ack_writes and str(write_response_mode or "").strip().lower() == "ack" else "exception"
+    from .routes import captured_learning_targets
+
     seed = ShadowLearningSeed(
         session_id=str(session_id or "").strip(),
         entry_id=str(entry_id or "").strip(),
@@ -261,6 +265,7 @@ def build_shadow_learning_seed(
         prepare_native_pi30=prepare_native_pi30,
         inspect_cloud_protocol=inspect_cloud_protocol,
         inverter_device_addr=inverter_device_addr,
+        captured_inverter_targets=captured_learning_targets(identified_inverter, raw_capture),
     )
     if _can_prepare_native_pi30(seed):
         seed = replace(seed, protocol_adapter_key="pi30_pending_cloud_proof")
@@ -376,7 +381,10 @@ class InProcessShadowLearningHandler:
             return "cloud_protocol_mismatch"
         if not driver.cloud_learning_supported:
             return "cloud_protocol_learning_unsupported"
-        if (evidence.devcode, evidence.collector_addr) != self._seed.inverter_target:
+        if (evidence.devcode, evidence.collector_addr) != self._seed.inverter_target and not (
+                codec == "modbus_rtu" and self._seed.inverter_target is not None
+                and evidence.devcode == self._seed.inverter_target[0]
+                and (evidence.devcode, evidence.collector_addr) in self._seed.captured_inverter_targets):
             # Same codec on another route is not proof this local seed belongs
             # to it. Read-only compatibility can verify the new route instead.
             return "cloud_protocol_route_mismatch"

@@ -11394,6 +11394,28 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         action.assert_not_called()
 
+    async def test_control_discovery_memory_failure_shows_numbers_without_cloud_requests(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=True)
+        options = self._runner_options_flow(coordinator)
+        preflight = {"can_start": False, "blockers": ["insufficient_memory:184MiB"]}
+        login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(captured={})
+        with (
+            patch.object(options, "_build_shadow_learning_preflight_snapshot", new=AsyncMock(return_value=preflight)),
+            login_p as login, fetch_p as fetch, orchestrate_p as learn, overlay_p,
+        ):
+            await options._async_run_control_discovery()
+        for call in (login, fetch, learn):
+            call.assert_not_called()
+        self.assertEqual(coordinator.started, [])
+        result = options._shadow_learning_state["discovery"]
+        self.assertEqual(result["reason"], "control_discovery_insufficient_memory")
+        self.assertEqual(result["diagnostics"]["memory"], {"available_mib": 184, "required_mib": 400})
+        summary = options._control_discovery_error_detail()
+        self.assertIn("184 MiB", summary)
+        self.assertIn("400 MiB", summary)
+        self.assertIn("No test controls", summary)
+        self.assertNotIn("private-secret", summary)
+
     async def test_control_discovery_runner_is_fail_closed_on_failure(self) -> None:
         coordinator = self._RunnerCoordinator(ready=True)
         options = self._runner_options_flow(coordinator)

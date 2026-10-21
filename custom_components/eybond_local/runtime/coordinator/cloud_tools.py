@@ -974,6 +974,7 @@ class CoordinatorCloudToolsMixin:
                 write_response_mode="ack" if allow_ack_writes else "exception",
                 allow_ack_writes=allow_ack_writes,
                 inverter_target=learning_probe_target(getattr(self, "identified_inverter", None)),
+                identified_inverter=getattr(self, "identified_inverter", None),
                 prepare_native_pi30=True,
                 inspect_cloud_protocol=getattr(self, "collector_session_protocol", "") == "eybond_framed",
                 inverter_device_addr=getattr(getattr(getattr(self, "identified_inverter", None), "probe_target", None), "device_addr", None),

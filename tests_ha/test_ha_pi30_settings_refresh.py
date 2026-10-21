@@ -14,7 +14,8 @@ from synthetic import SYNTHETIC_COLLECTOR_IP, SYNTHETIC_COLLECTOR_PN, SYNTHETIC_
 
 
 @pytest.mark.parametrize("control_mode", ["read_only", "full"])
-async def test_external_settings_refresh_without_writes(hass, fake_runtime, monkeypatch, control_mode):
+@pytest.mark.parametrize("firmware_scoped", [False, True])
+async def test_external_settings_refresh_without_writes(hass, fake_runtime, monkeypatch, control_mode, firmware_scoped):
     from conftest import FakeRuntimeManager
 
     target = ProbeTarget(0x0994, 1, 0)
@@ -27,6 +28,9 @@ async def test_external_settings_refresh_without_writes(hass, fake_runtime, monk
         "QPIGS": "232.1 50.0 232.1 50.0 0440 0227 007 429 54.60 000 100 0043 00.0 000.0 00.00 00000 00010101 00 00 00000 110",
         "Q1": "00 00 00 000 042 030 043 00 00 000 0030 0000 13",
     }
+    if firmware_scoped:
+        replies.update(QMN="VMII-NXPW5KW", QVFW="VERFW:00031.07")
+        replies["QPIRI"] += " 50.0 22 51.2"
     transport = FixtureTransport(
         registers=None, probe_target=target,
         command_responses={(target.devcode, 1, key): value for key, value in replies.items()},
@@ -44,6 +48,8 @@ async def test_external_settings_refresh_without_writes(hass, fake_runtime, monk
     driver = Pi30Driver()
     inverter = await driver.async_probe(transport, target)
     assert inverter is not None
+    if firmware_scoped:
+        assert inverter.profile_name == "pi30_ascii/models/vmii_6200_31_07.json"
     state = {}
     values = dict(inverter.details)
     frame = fold_driver_telemetry(
@@ -116,7 +122,13 @@ async def test_external_settings_refresh_without_writes(hass, fake_runtime, monk
         return found
 
     fields = replies["QPIRI"].split()
-    fields[16], fields[17], fields[10] = "2", "3", "56.4"
+    if firmware_scoped:
+        assert hass.states.get(entity_id("sensor", "charger_source_priority")).state == "Solar + Utility"
+        if control_mode == "full":
+            control = hass.states.get(entity_id("select", "charger_source_priority"))
+            assert control.state == "Solar + Utility"
+            assert control.attributes["options"] == ["Solar first", "Solar + Utility", "Only solar charging permitted"]
+    fields[16], fields[17], fields[10] = "2", "2" if firmware_scoped else "3", "56.4"
     transport._command_responses[(target.devcode, 1, "QPIRI")] = " ".join(fields)
     transport._command_responses[(target.devcode, 1, "QFLAG")] = "EaDx"
     commands.clear()

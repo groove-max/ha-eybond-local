@@ -39,6 +39,21 @@ timeout. If a test command's result is uncertain, the run stops without sending
 that command again automatically. Cancelling can take a little time because HA
 waits for an already started request to finish before connection cleanup.
 
+## If preparation reports insufficient memory
+
+Active learning currently requires at least 400 MiB of available RAM reported
+by Linux `MemAvailable`. This is conservative admission headroom, not a claim
+that learning itself allocates 400 MiB. A memory-blocked attempt sends no test
+controls; it does not establish a cloud-protocol mismatch or remove any previous
+protection hold. The result shows the measured availability and the threshold;
+the Support Archive preserves the same numeric reason.
+
+Free memory by stopping nonessential workloads, or increase the host/VM memory
+allocation, before retrying. Changing the inverter profile or repeating the same
+run without changing memory availability will not resolve this blocker. Keep the
+existing connection settings and check the connection/protection status shown
+by the wizard. Do not delete recovery files to bypass it.
+
 ## When cloud and local profiles use different protocols
 
 Some inverters support several protocols. During framed EyeBond preparation,
@@ -53,6 +68,12 @@ UART or current profile.
 This includes **SmartESS 0925**. Where its catalog requires a separate tunnel
 address for the identity check, only that specific read is allowed; the inverter
 unit address is unchanged. A cloud device code alone does not select a profile.
+
+During learning, a split-route driver can also use the additional tunnel
+addresses it successfully read while collecting that run's seed. This covers
+0925's separate data and configuration routes without treating address 255 as
+a universal alias. The driver, device code and inverter unit must still match;
+unproven routes stop preparation before test controls are sent.
 
 A reply to one register request is not enough: the check must identify a supported
 profile and obtain comparable live readings. Compare the displayed values with

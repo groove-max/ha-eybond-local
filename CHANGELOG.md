@@ -9,6 +9,20 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Learning accepts driver-declared split tunnel routes only after matching
+  successful seed reads from the same bound inverter (#62). SmartESS 0925's
+  configuration route no longer rejects its independently captured data route;
+  unrelated devcodes, units and unproven routes remain blocked.
+- Scope the owner-confirmed three-option PI30 charger-priority map to
+  VMII-NXPW5KW 6200 W / 28-field QPIRI / main firmware 31.07 (#62). Detection
+  verifies model and firmware; generic PI30/MAX controls are unchanged. Selected
+  control enums now also override generic schema labels during readback.
+
+- Memory-blocked learning reports available RAM and the admission threshold
+  instead of a generic preparation failure (#62). The same bounded numeric
+  evidence is included in logs and support diagnostics, including protected
+  retries. The existing 400 MiB headroom guard and prior holds are unchanged.
+
 - Qualify SmartESS SMG6200's explicit parsed read-only refusal against the
   captured bare FC16 request and drained negative response. Generic API errors
   still retain protection. Shadow-only clock/UART setup no longer invalidates

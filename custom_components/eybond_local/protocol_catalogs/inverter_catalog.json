@@ -1,6 +1,6 @@
 {
  "schema_version": 2,
- "catalog_version": "2026.08.8",
+ "catalog_version": "2026.10.21",
  "description": "Universal offline inverter catalog with reusable protocol actions, runtime surfaces, and deterministic identity evidence.",
  "protocols": [
   {
@@ -262,7 +262,12 @@
      "cost": 1,
      "optional": true,
      "timeout": 2.0,
-     "evidence_fields": []
+     "evidence_fields": [
+      {
+       "key": "identity.main_firmware",
+       "source_key": "main_cpu_firmware_version"
+      }
+     ]
     },
     {
      "key": "pi30.qvfw2",
@@ -1731,6 +1736,17 @@
    "support_capture_policy": "pi_ascii"
   },
   {
+   "key": "pi30_vmii_6200_31_07_full",
+   "protocol_key": "pi30",
+   "driver_key": "pi30",
+   "variant_key": "pi30_max",
+   "profile_name": "pi30_ascii/models/vmii_6200_31_07.json",
+   "register_schema_name": "pi30_ascii/models/pi30_max.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "pi_ascii"
+  },
+  {
    "key": "pi30_pip_gk_full",
    "protocol_key": "pi30",
    "driver_key": "pi30",
@@ -2798,6 +2814,23 @@
      "fixture:pi30-vmii-nxpw5kw-live-capture",
      "project-issue:54"
     ],
+    "confidence": "capture-derived"
+   }
+  },
+  {
+   "entry_key": "pi30_vmii_6200_31_07",
+   "surface_key": "pi30_vmii_6200_31_07_full",
+   "model_name": "PI30 VMII-NXPW5KW 6200",
+   "priority": 260,
+   "anchors": [
+    {"key": "protocol.protocol_id", "equals": "PI30"},
+    {"key": "identity.model_number", "equals": "VMII-NXPW5KW"},
+    {"key": "identity.main_firmware", "equals": "VERFW:00031.07"},
+    {"key": "identity.rated_power", "equals": 6200},
+    {"key": "shape.qpiri_field_count", "equals": 28}
+   ],
+   "provenance": {
+    "sources": ["project-issue:62"],
     "confidence": "capture-derived"
    }
   },

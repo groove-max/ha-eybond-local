@@ -92,8 +92,8 @@ async def async_start_protected_retry(c, *, confirm_cloud_outage, cloud_source, 
         if not c.collector_actions_enabled or not c.support_acquisition_readiness.active_control_learning.can_start:
             raise RuntimeError("shadow_learning_collector_control_disabled")
         memory = await async_run_owned_worker(read_available_memory_mib)
-        if shadow_learning_memory_blocker(memory):
-            raise RuntimeError("shadow_learning_preflight_memory")
+        if blocker := shadow_learning_memory_blocker(memory):
+            raise RuntimeError(f"shadow_learning_preflight_blocked:{blocker}")
         token = AUTHORITY.adopt(previous.entry_id, OPERATION_SHADOW_LEARNING, previous.route_owner_id)
         if token is None:
             raise RuntimeError("collector_endpoint_operation_busy")
@@ -118,6 +118,7 @@ async def async_start_protected_retry(c, *, confirm_cloud_outage, cloud_source, 
             effective_metadata_snapshot=c.shadow_learning_effective_metadata,
             raw_capture=raw, write_response_mode="exception", allow_ack_writes=False,
             inverter_target=learning_probe_target(getattr(c, "identified_inverter", None)),
+            identified_inverter=getattr(c, "identified_inverter", None),
             prepare_native_pi30=True,
             inspect_cloud_protocol=getattr(c, "collector_session_protocol", "") == "eybond_framed",
             inverter_device_addr=getattr(getattr(getattr(c, "identified_inverter", None), "probe_target", None), "device_addr", None),

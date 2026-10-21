@@ -31,6 +31,7 @@ from .shared import (
     CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE,
     CONTROL_DISCOVERY_FAILURE_SAFETY_STOP,
     control_discovery_cloud_failure_reason,
+    control_discovery_memory_detail,
 )
 from ...runtime.shadow_learning_facade import ShadowLearningRuntimeFacade
 from ...support.cloud_active_workflow import ACTIVE_CORRELATION_NO_SAFE_CONTROLS
@@ -43,6 +44,7 @@ from ...support.cloud_learning_models import (
     LEARNING_METHOD_READ_ONLY_EVIDENCE,
 )
 from ...support.cloud_semantic_evidence import CloudSemanticEvidenceReport
+from ...support.memory_guard import shadow_learning_memory_failure_details
 from ...support.shadow_learning.overlay_generator import (
     generate_shadow_learning_overlay_drafts,
 )
@@ -218,6 +220,8 @@ class ShadowLearningRunMixin:
             and "shadow_learning_restore_pending" in reason.split(":", 1)[1].split(",")
         ):
             return "shadow_learning_restore_pending"
+        if shadow_learning_memory_failure_details(reason):
+            return "control_discovery_insufficient_memory"
         if reason in {
             ACTIVE_CORRELATION_NO_SAFE_CONTROLS,
             CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED,
@@ -238,6 +242,8 @@ class ShadowLearningRunMixin:
             str(discovery.get("reason") or "") if isinstance(discovery, dict) else ""
         )
         reason = reason.strip()
+        if memory_detail := control_discovery_memory_detail(discovery, self._tr):
+            return memory_detail
         if self._shadow_learning_state.get("cloud_protocol_evidence") or self._shadow_learning_state.get("protocol_diagnostics"):
             return self._tr("common.dynamic.cloud_protocol_problem",
                 "Cloud protocol compatibility or learning readiness was not confirmed. "
@@ -875,6 +881,7 @@ class ShadowLearningRunMixin:
             primary_failure_reason = failure_reason
             failure_location = _learning_failure_location(exc)
             management_failure = _learning_management_failure(exc)
+            memory_failure = shadow_learning_memory_failure_details(str(exc))
             request_stage = provider_diagnostics.get(
                 "request_stage", str(getattr(exc, "stage", "") or "unknown")
             )
@@ -884,7 +891,7 @@ class ShadowLearningRunMixin:
             logger.error(
                 "Control discovery failed entry=%s source=%s stage=%s "
                 "request_stage=%s provider_reason=%s exception_type=%s "
-                "cloud_error_code=%s failure_reason=%s http_status=%s location=%s management=%s",
+                "cloud_error_code=%s failure_reason=%s http_status=%s location=%s management=%s memory=%s",
                 getattr(self._config_entry, "entry_id", ""),
                 source_id,
                 str(progress.get("stage") or "unknown"),
@@ -896,6 +903,7 @@ class ShadowLearningRunMixin:
                 provider_diagnostics.get("http_status", "unknown"),
                 failure_location,
                 management_failure,
+                memory_failure,
             )
             recovery_pending = False
             if self._control_discovery_requires_shadow_route(coordinator):
@@ -921,6 +929,7 @@ class ShadowLearningRunMixin:
                 "diagnostics": {
                     "primary_failure_reason": primary_failure_reason,
                     "failure_location": failure_location,
+                    **({"memory": memory_failure} if memory_failure else {}),
                     **management_failure,
                     "recovery_pending": recovery_pending,
                     **provider_diagnostics,

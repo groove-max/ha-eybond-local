@@ -517,6 +517,7 @@
       "shadow_learning_restore_action": "Повторити відновлення підключення колектора",
       "shadow_learning_restore_confirmed": "✓ Попереднє підключення колектора відновлено. Можна почати нову перевірку.",
       "control_discovery_failure_generic": "Перевірку зупинено. Див. стан підключення та захисту нижче: це повідомлення не підтверджує відновлення хмари.",
+      "control_discovery_insufficient_memory": "Навчання не почалося: Home Assistant повідомив про {available_mib} MiB доступної RAM; поточний поріг допуску — {required_mib} MiB. У цій спробі тестові команди не надсилалися. Звільніть пам’ять або збільште RAM хоста/VM перед повтором. Див. стан підключення та захисту нижче: попереднє утримання захисту не знімається.",
       "control_discovery_result_failed": "Перевірку не вдалося завершити. {control_discovery_error} Повторіть спробу, завантажте пакет підтримки, щоб розробник міг розібратися, або поверніться до меню.",
       "control_discovery_result_action_retry": "Повторити спробу",
       "control_discovery_result_notice_applied": "✓ Вибрані елементи керування додано до Home Assistant.",

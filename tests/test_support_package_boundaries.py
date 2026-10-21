@@ -74,6 +74,7 @@ class SupportPackageBoundaryTests(unittest.TestCase):
                 "pi30_protocol.py",
                 "protocol_mismatch.py",
                 "protocol_evidence.py",
+                "routes.py",
                 "protocol.py",
                 "protection_store.py",
                 "completion.py",

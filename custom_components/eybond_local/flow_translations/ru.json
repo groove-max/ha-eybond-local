@@ -517,6 +517,7 @@
       "shadow_learning_restore_action": "Повторить восстановление подключения коллектора",
       "shadow_learning_restore_confirmed": "✓ Прежнее подключение коллектора восстановлено. Можно начать новую проверку.",
       "control_discovery_failure_generic": "Проверка остановлена. См. статус подключения и защиты ниже: это сообщение не подтверждает восстановление облака.",
+      "control_discovery_insufficient_memory": "Обучение не началось: Home Assistant сообщил о {available_mib} MiB доступной RAM; текущий порог допуска — {required_mib} MiB. В этой попытке тестовые команды не отправлялись. Освободите память или увеличьте RAM хоста/VM перед повтором. См. статус подключения и защиты ниже: прежнее удержание защиты не снимается.",
       "control_discovery_result_failed": "Проверку не удалось завершить. {control_discovery_error} Повторите попытку, загрузите пакет поддержки, чтобы разработчик мог разобраться, или вернитесь в меню.",
       "control_discovery_result_action_retry": "Повторить попытку",
       "control_discovery_result_notice_applied": "✓ Выбранные элементы управления добавлены в Home Assistant.",
