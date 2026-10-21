@@ -110,6 +110,33 @@ async def test_permanent_route_proves_reset_identity_endpoint_and_fresh_local_io
     ctx.c._runtime.async_refresh.assert_awaited_once()
 
 
+async def test_host_only_collector_proves_fixed_listener_not_callback_port(isolation):
+    from custom_components.eybond_local.runtime.coordinator.learning_route import learning_target_endpoint
+
+    ctx = isolation
+    ctx.c.collector_cloud_family = "legacy_binary"
+    ctx.c._effective_callback_server_host = "192.0.2.1"
+    ctx.c._connection_spec.effective_advertised_tcp_port = 8899
+    state = replace(ctx.state, proxy_endpoint=learning_target_endpoint(ctx.c))
+    assert state.proxy_endpoint == "192.0.2.1"  # no comma/port in CLDSRVHOST1
+    ctx.c._async_active_shadow_learning_state.return_value = state
+    ctx.c._runtime.async_get_collector_server_endpoint_state.return_value = {"current_endpoint": state.proxy_endpoint}
+    ctx.new_port = 502
+    proof = await learning_isolation.async_prepare_local_learning_route(ctx.c, state)
+    assert proof.local_port == 502
+    assert ctx.events == [("write", "192.0.2.1")]
+    ctx.c._runtime.async_ensure_callback_listener.assert_any_await(502)
+
+
+def test_host_only_explicit_nat_port_mapping_is_preserved():
+    from custom_components.eybond_local.runtime.coordinator.learning_route import learning_listener_port, learning_target_endpoint
+
+    c = SimpleNamespace(collector_cloud_family="legacy_binary", _effective_callback_server_host="198.51.100.2",
+                        _connection_spec=SimpleNamespace(tcp_port=8899, effective_advertised_tcp_port=502))
+    assert learning_listener_port(c) == 8899
+    assert learning_target_endpoint(c) == "198.51.100.2"
+
+
 @pytest.mark.parametrize("flag", ["0", "", False])
 async def test_local_proof_accepts_cleared_or_unsupported_apply_flag(isolation, flag):
     ctx = isolation

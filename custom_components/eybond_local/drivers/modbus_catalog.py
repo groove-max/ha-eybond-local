@@ -67,6 +67,8 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
     """Generic read-only driver executing catalog device packs over Modbus."""
 
     key = PROTOCOL_KEY
+    cloud_probe_codecs = ("modbus_rtu",)
+    cloud_learning_supported = True
     name = "Modbus / Device Catalog"
 
     @property

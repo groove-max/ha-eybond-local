@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable
 
 from ...const import PI30_FLAG_CASE_PROFILE, PI30_FLAG_COMMAND_CASES
+from ...models import ProbeTarget
 
 from .common import (
     Any,
@@ -48,12 +49,14 @@ class EybondHub(
         *,
         connection: EybondConnectionSpec,
         driver_hint: str = DRIVER_HINT_AUTO,
+        inverter_probe_target: ProbeTarget | None = None,
         driver_detection_strategy: str = DEFAULT_DRIVER_DETECTION_STRATEGY,
         pi30_flag_command_case: str = PI30_FLAG_CASE_PROFILE,
         connection_mode: str = "",
         collector_mutation_guard: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._driver_hint = driver_hint
+        self._inverter_probe_target = inverter_probe_target
         if type(pi30_flag_command_case) is not str or pi30_flag_command_case not in PI30_FLAG_COMMAND_CASES:
             raise ValueError("invalid_pi30_flag_command_case")
         self._pi30_flag_command_case = pi30_flag_command_case

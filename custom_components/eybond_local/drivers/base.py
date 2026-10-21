@@ -59,6 +59,10 @@ class InverterDriver(ABC):
     capability_groups: tuple[CapabilityGroup, ...] = ()
     write_capabilities: tuple[WriteCapability, ...] = ()
     capability_presets: tuple[CapabilityPreset, ...] = ()
+    # Opt-in wire contract, not a model/brand heuristic. Learning support is
+    # independent of read-only profile detection and still needs live seed data.
+    cloud_probe_codecs: tuple[str, ...] = ()
+    cloud_learning_supported: bool = False
 
     # A driver with a single, model-independent timing envelope just sets this
     # class attribute (e.g. ``poll_policy = PI30_POLL_POLICY`` in pi30.py). A
@@ -166,6 +170,14 @@ class InverterDriver(ABC):
         """Return driver-specific raw evidence for support/debug packages."""
 
         return {}
+
+    def probe_read_plans(self, target: ProbeTarget) -> tuple[LocalRegisterReadPlan, ...]:
+        """Declare additional exact reads needed by a split-route probe.
+
+        These are catalog probe intentions, not evidence of device support.
+        A caller may use them to constrain reads before a device is identified.
+        """
+        return ()
 
     def local_register_read_plans(
         self, inverter: DetectedInverter

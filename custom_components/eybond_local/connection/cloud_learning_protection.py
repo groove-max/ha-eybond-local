@@ -1,10 +1,10 @@
 """Provider-neutral write-ahead hold; NOT proof of a live interception route.
 
 A cloud request may survive its HTTP caller. Neither endpoint readback, a
-successful HTTP response, nor elapsed time establishes that it cannot be
-delivered again. This record intentionally has no automatic expiry or clear
-transition based on cloud responses or age. A separate exact no-request receipt
-can retire an intent that never reached HTTP dispatch. A lifecycle owner must enforce it before changing the collector's
+successful HTTP status, nor elapsed time establishes completed delivery. This
+record has no automatic expiry. Separate exact no-request or completed-command
+receipts can retire an intent through its lifecycle owner, never a bare counter
+or HTTP status. A lifecycle owner must enforce it before changing the collector's
 route; persisting the record alone does not protect an inverter.
 """
 

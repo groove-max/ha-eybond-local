@@ -7,6 +7,86 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+### Changed
+
+- Qualify SmartESS SMG6200's explicit parsed read-only refusal against the
+  captured bare FC16 request and drained negative response. Generic API errors
+  still retain protection. Shadow-only clock/UART setup no longer invalidates
+  command completion; traces preserve the final completion diagnostic summary.
+
+- Learning preparation accepts bare cloud reads against a verified collector's
+  existing local seed. Matching codec and device address remain mandatory;
+  an absent EyeBond wrapper no longer rejects a compatible SMG cloud session.
+
+- Automatically restore the original collector endpoint after a fully confirmed
+  learning run through a shared provider/codec-neutral completion policy.
+  SmartESS/DESSMonitor wire echoes and Modbus/PI30/GASCII refusal adapters cover
+  framed and single-flight raw exchanges. Per-command wire/API completion receipts
+  are persisted after interception drains; uncertain, legacy, acceptance-only and
+  earlier held studies remain protected. Recovery can finish after restart.
+
+- SmartESS 0925 polling decodes activated device-scoped controls from live
+  registers, including single-register fallback reads. Learned writes use the
+  activated capability and its observed FC06/FC16, with readback confirmation.
+
+- Retire the previous metadata snapshot when confirming a cloud-compatible
+  profile. Startup rejects profile/schema bindings owned by another driver;
+  live metadata takes precedence over an older snapshot. Support archives
+  preserve binary read-request bytes while still masking embedded identifiers.
+
+- Preserve the exact registry-owned socket when equally identified connections
+  coexist on different listener ports. Listener enumeration order no longer
+  returns protected learning to the old callback after a verified handoff.
+  Closed, foreign and weakly identified sessions keep their existing guards.
+
+- Generalize cloud/local protocol compatibility checks around driver-declared
+  wire capabilities. Recognize supported read dialects independently of the
+  selected profile, preserve ambiguous/unknown diagnostics, and require explicit
+  profile confirmation. Framed preparation verifies protocol/route and learning
+  support before cloud test controls; read compatibility alone does not enable
+  writes or remove restoration/protection obligations.
+
+- Include SmartESS 0925 in read-only cloud-Modbus/local-PI30 compatibility checks,
+  allowing only its catalogued split-route identity read. Reuse fresh probe
+  measurements instead of polling all settings before offering an explicit switch.
+
+- Shadow Learning reports cloud Modbus/local PI30 mismatches even when their
+  tunnel addresses differ. After connection restoration, users can run a
+  read-only compatible-profile check and explicitly switch to a confirmed
+  Modbus profile. The checked slave address survives reload; PI30 remains
+  unchanged when compatibility is unconfirmed. No controls are tested or
+  activated by this check.
+
+- Shadow Learning recovery journals are isolated per HA entry. A retained hold
+  on one collector no longer blocks learning on another. Existing legacy
+  journals remain intact; removing/re-adding a collector cannot hide its hold.
+  Failure diagnostics include safe code locations without exception contents.
+  Protected learning also honors host-only collector endpoints and their fixed
+  listener port, while preserving explicitly configured NAT port mappings.
+  Exact-session activation waits for the listener inventory to converge before
+  releasing its temporary pin, avoiding a read on the closing pre-reset socket.
+  Pending native PI30 preparation forwards validated collector clock/heartbeat
+  and bounded metadata reads (excluding credential/system-action parameters)
+  without treating them as inverter-protocol proof or allowing writes.
+
+- SmartESS/DESSMonitor learning samples quantitative choice lists instead of
+  sending hundreds of numeric variants, supports decimal PI30 choices, and
+  bounds ambiguous lists to 32 exact mappings. Mixed voltage-family lists do
+  not supply device limits. SmartESS automatic learning skips destructive
+  cloud actions and system-clock changes.
+
+- Learned native PI30 controls now use fresh QFLAG/QPIRI readback for known
+  settings, preserving cloud choice labels even when provider and inverter
+  codes differ. External changes refresh their state; missing/unrepresented
+  values invalidate old learned state. ACKs and cached values cannot confirm
+  unknown native commands. PI30 drafts no longer inherit G-ASCII read keys.
+
+- PI30 battery and other primary live measurements are ordinary sensors rather
+  than diagnostics. Rated values and charging-threshold sensor readbacks are
+  diagnostics; writable controls, entity IDs and user-disabled state are
+  unchanged (#62). This does not change charger-source command mappings or add
+  equalization controls.
+
 ### Added
 
 - MUST PV3900 (retail PV39-8048 TLV) gets its own catalog entry and reads the
@@ -19,11 +99,19 @@ the GitHub release body should be rendered from the matching version section her
   binding on restart, as PV3300 entries already do. Support Archives include
   the same independently bounded raw BMS read for both models.
 
+- Classic protected Shadow Learning can prepare native PI30 learning from local
+  query data and a matching CRC-checked cloud read on the identified inverter
+  route. Test controls remain blocked until the current socket proves that
+  protocol; reconnects require new proof. Modbus/cloud-format mismatches stop
+  explicitly instead of inventing a register bank. Native learned command
+  drafts retain exact case, padding and evidenced numeric formatting.
+
 - PI30 runtime options offer an explicit, per-entry PE/PD flag-letter case
   override for firmware that rejects the profile default (#58/#64). Saving sends
   no inverter writes. Defaults, non-flag/learned/custom commands, control gates
   and fresh readback stay unchanged; rejected commands are not retried in another
-  dialect. Easun flag acceptance still needs owner confirmation.
+  dialect. The owner of the Easun in #58 confirmed buzzer/backlight acceptance
+  with the lowercase override; this is not confirmation for every PI30 model.
 
 - Protected Shadow Learning can be explicitly repeated while retaining the
   original cloud protection hold. An exact local identity/endpoint/telemetry
@@ -169,6 +257,14 @@ the GitHub release body should be rendered from the matching version section her
   this is not full device or control support (#45).
 
 ### Fixed
+
+- PI30 periodically rereads priorities, charging thresholds/currents and flags
+  changed through the vendor app or inverter panel (#62). `QPIRI`/`QFLAG` run
+  after telemetry, at most one extra request per poll and no more often than
+  once a minute per group, with a three-second request limit. Startup metadata
+  and immediate HA write confirmation take priority. Failed settings reads
+  retain last-known values without discarding live readings; retries remain
+  bounded. This does not correct firmware-specific mode mappings.
 
 - SmartESS 0925 refreshes supported individual configuration registers on the
   slow polling cadence when a bulk read fails or is already skipped (#59).

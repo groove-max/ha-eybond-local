@@ -81,6 +81,34 @@ def _persisted_anenji_entry(hass: HomeAssistant) -> MockConfigEntry:
     return entry
 
 
+async def test_metadata_warmup_precedes_cloud_context(hass, fake_runtime, monkeypatch):
+    import threading
+    from custom_components.eybond_local.runtime.coordinator import EybondLocalCoordinator
+
+    main_thread = threading.get_ident()
+    calls = []
+    original_metadata = EybondLocalCoordinator._warm_effective_metadata_cache_blocking
+    original_cloud = EybondLocalCoordinator._async_warm_smartess_cloud_evidence_cache
+
+    def warm_metadata(self):
+        assert threading.get_ident() != main_thread
+        calls.append("metadata")
+        return original_metadata(self)
+
+    async def warm_cloud(self):
+        assert calls and calls[-1] == "metadata"
+        assert self._cached_effective_metadata is not None
+        calls.append("cloud")
+        await original_cloud(self)
+
+    monkeypatch.setattr(EybondLocalCoordinator, "_warm_effective_metadata_cache_blocking", warm_metadata)
+    monkeypatch.setattr(EybondLocalCoordinator, "_async_warm_smartess_cloud_evidence_cache", warm_cloud)
+    entry = _collector_entry(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    assert calls[:2] == ["metadata", "cloud"]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_component_setup_removes_obsolete_pending_entry_without_runtime(
     hass: HomeAssistant,
     fake_runtime,
@@ -310,6 +338,47 @@ async def test_sensor_recategorization_preserves_existing_registry_identity(
         assert entity.name == f"My {key}"
         assert entity.disabled_by is (
             er.RegistryEntryDisabler.USER if key == "inverter_current" else None
+        )
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_pi30_sensor_categories_update_without_replacing_entities(
+    hass: HomeAssistant, fake_runtime,
+) -> None:
+    """Upgrade both directions, retaining ids, names and user-disabled state."""
+    entry = _collector_entry(hass)
+    data = {**entry.data, "detected_driver": "pi30", "detected_model": "PI30 6200",
+            "detected_serial": "99000000000062", "detection_confidence": "high"}
+    options = {**entry.options, "effective_metadata_snapshot": {
+        "effective_owner_key": "pi30", "variant_key": "pi30_max",
+        "profile_name": "pi30_ascii/models/pi30_max.json",
+        "register_schema_name": "pi30_ascii/models/pi30_max.json", "confidence": "high",
+    }}
+    hass.config_entries.async_update_entry(entry, data=data, options=options)
+    registry = er.async_get(hass)
+    live = ("battery_voltage", "battery_charge_current", "battery_discharge_current")
+    settings = ("battery_bulk_voltage", "battery_float_voltage")
+    existing = {}
+    for key in (*live, *settings):
+        entity = registry.async_get_or_create(
+            "sensor", DOMAIN, f"{entry.entry_id}_{key}", config_entry=entry,
+            suggested_object_id=f"my_{key}",
+            entity_category=EntityCategory.DIAGNOSTIC if key in live else None,
+            disabled_by=er.RegistryEntryDisabler.USER if key == "battery_float_voltage" else None,
+        )
+        registry.async_update_entity(entity.entity_id, name=f"My {key}")
+        existing[key] = entity.entity_id
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    for key, entity_id in existing.items():
+        entity = registry.async_get(entity_id)
+        assert entity is not None
+        assert entity.unique_id == f"{entry.entry_id}_{key}"
+        assert entity.entity_category == (None if key in live else EntityCategory.DIAGNOSTIC)
+        assert entity.name == f"My {key}"
+        assert entity.disabled_by == (
+            er.RegistryEntryDisabler.USER if key == "battery_float_voltage" else None
         )
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()

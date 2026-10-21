@@ -226,6 +226,7 @@ def _install_coordinator_stubs() -> None:
 
     drivers_registry = ensure_module("custom_components.eybond_local.drivers.registry")
     drivers_registry.get_driver = lambda *args, **kwargs: None
+    drivers_registry.iter_drivers = lambda *args, **kwargs: ()
     drivers_registry.all_write_capabilities = lambda *args, **kwargs: []
     # A realistic test double for the neutral policy resolver: mirrors what each
     # real driver declares via ``poll_policy_for`` (the coordinator only consumes
@@ -623,6 +624,8 @@ def _install_coordinator_stubs() -> None:
     support_shadow_backend.build_shadow_learning_seed = (
         lambda *args, **kwargs: (types.SimpleNamespace(write_response_mode="exception"), [])
     )
+    support_shadow_backend.pi30_learning_target = lambda inverter: None
+    support_shadow_backend.learning_probe_target = lambda inverter: None
     support_shadow_backend.build_shadow_learning_trace_path = (
         lambda *args, **kwargs: Path("/tmp/shadow-learning.jsonl")
     )
@@ -665,6 +668,9 @@ def _install_coordinator_stubs() -> None:
         lambda *args, **kwargs: None
     )
     support_shadow_session.load_shadow_learning_session_state = (
+        lambda *args, **kwargs: None
+    )
+    support_shadow_session.find_shadow_learning_session_for_collector = (
         lambda *args, **kwargs: None
     )
     support_shadow_session.inspect_shadow_learning_recovery = (

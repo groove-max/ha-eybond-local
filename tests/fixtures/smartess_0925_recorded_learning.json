@@ -1,0 +1,412 @@
+{
+  "schema_version": 1,
+  "description": "Recorded SmartESS 0925 / 24V bench learning, sanitized whitelist. Cloud uses Modbus; inverter also speaks PI30. No network or credentials.",
+  "source_sha256": "cd2151b9f60b321e21b26b6d26b781131cad830f5a26eb5a70a95c9b27213211",
+  "firmware": "3.6.7.6",
+  "source_profile": "smartess_local/models/0925.json",
+  "source_schema": "smartess_local/models/0925.json",
+  "unit": 5,
+  "data_collector_addr": 255,
+  "config_collector_addr": 5,
+  "devcode": 1,
+  "register_ranges": [
+    {
+      "start": 4529,
+      "values": [
+        0,
+        0
+      ]
+    },
+    {
+      "start": 4501,
+      "values": [
+        4,
+        2296,
+        499,
+        0,
+        4,
+        277,
+        100,
+        4,
+        0,
+        2296,
+        499,
+        849,
+        844,
+        20
+      ]
+    },
+    {
+      "start": 5011,
+      "values": [
+        0
+      ]
+    },
+    {
+      "start": 5002,
+      "values": [
+        0
+      ]
+    },
+    {
+      "start": 5003,
+      "values": [
+        0
+      ]
+    },
+    {
+      "start": 5004,
+      "values": [
+        0
+      ]
+    },
+    {
+      "start": 5005,
+      "values": [
+        0
+      ]
+    },
+    {
+      "start": 5006,
+      "values": [
+        0
+      ]
+    },
+    {
+      "start": 5007,
+      "values": [
+        0
+      ]
+    },
+    {
+      "start": 5008,
+      "values": [
+        1
+      ]
+    },
+    {
+      "start": 5009,
+      "values": [
+        1
+      ]
+    },
+    {
+      "start": 5010,
+      "values": [
+        1
+      ]
+    },
+    {
+      "start": 4517,
+      "values": [
+        220,
+        7510,
+        0,
+        1,
+        4200,
+        4200,
+        230,
+        18,
+        240,
+        230,
+        500,
+        18
+      ]
+    },
+    {
+      "start": 4535,
+      "values": [
+        448,
+        1,
+        1,
+        1,
+        2,
+        0,
+        60,
+        220,
+        30,
+        230,
+        270,
+        278,
+        277,
+        220,
+        292,
+        60,
+        120,
+        30
+      ]
+    },
+    {
+      "start": 4554,
+      "values": [
+        2,
+        13,
+        0,
+        26,
+        0,
+        0,
+        5,
+        1
+      ]
+    }
+  ],
+  "reads": [
+    {
+      "address": 4563,
+      "count": 2,
+      "devaddr": 255,
+      "devcode": 1,
+      "function_code": 3,
+      "tid": 7031,
+      "values": [
+        0,
+        0
+      ]
+    },
+    {
+      "address": 4501,
+      "count": 45,
+      "devaddr": 255,
+      "devcode": 1,
+      "function_code": 3,
+      "tid": 7032,
+      "values": [
+        4,
+        2350,
+        500,
+        0,
+        4,
+        277,
+        100,
+        4,
+        0,
+        2350,
+        500,
+        0,
+        0,
+        0,
+        0,
+        0,
+        220,
+        7510,
+        0,
+        1,
+        4200,
+        4200,
+        230,
+        18,
+        240,
+        230,
+        500,
+        18,
+        0,
+        0,
+        5535,
+        5535,
+        5535,
+        55,
+        448,
+        1,
+        1,
+        1,
+        2,
+        0,
+        60,
+        220,
+        30,
+        230,
+        270
+      ]
+    },
+    {
+      "address": 4546,
+      "count": 16,
+      "devaddr": 255,
+      "devcode": 1,
+      "function_code": 3,
+      "tid": 7033,
+      "values": [
+        278,
+        277,
+        220,
+        292,
+        60,
+        120,
+        30,
+        0,
+        2,
+        13,
+        0,
+        26,
+        0,
+        0,
+        5,
+        1
+      ]
+    }
+  ],
+  "attempt_columns": [
+    "field_id",
+    "field_name",
+    "requested_value",
+    "value_label",
+    "value_source",
+    "numeric_evidence",
+    "write_payload_hex",
+    "api_response_frame_hex",
+    "api_status"
+  ],
+  "expected": {
+    "matched": 146,
+    "new_controls": 11,
+    "existing_controls": 17
+  },
+  "attempts": [
+    ["grd_ac_input_range","AC Input Range","0","Appliance","choice",null,"0506139b0000fd25","1B7B000100070504058601C261",0],
+    ["grd_ac_input_range","AC Input Range","1","UPS","choice",null,"0506139b00013ce5","1B7C000100070504058601C261",0],
+    ["los_output_source_priority","Output Source Priority","0","Utility","choice",null,"0506139a0000ace5","1B7D000100070504058601C261",0],
+    ["los_output_source_priority","Output Source Priority","1","Solar","choice",null,"0506139a00016d25","1B7E000100070504058601C261",0],
+    ["los_output_source_priority","Output Source Priority","2","SBU","choice",null,"0506139a00022d24","1B7F000100070504058601C261",0],
+    ["bat_charger_source_priority","Charger Source Priority","0","Solar priority","choice",null,"0506139900005ce5","1B80000100070504058601C261",0],
+    ["bat_charger_source_priority","Charger Source Priority","1","Solar and mains","choice",null,"0506139900019d25","1B81000100070504058601C261",0],
+    ["bat_charger_source_priority","Charger Source Priority","2","Solar only","choice",null,"050613990002dd24","1B82000100070504058601C261",0],
+    ["los_output_voltage","Output Voltage","220","220Vac","choice",null,"0506139f00dcbd7d","1B83000100070504058601C261",0],
+    ["los_output_voltage","Output Voltage","230","230Vac","choice",null,"0506139f00e63d6e","1B84000100070504058601C261",0],
+    ["los_output_voltage","Output Voltage","240","240Vac","choice",null,"0506139f00f0bca0","1B85000100070504058601C261",0],
+    ["los_output_frequency","Output Frequency","0","50Hz","choice",null,"0506139d00001d24","1B86000100070504058601C261",0],
+    ["los_output_frequency","Output Frequency","1","60Hz","choice",null,"0506139d0001dce4","1B87000100070504058601C261",0],
+    ["bat_max_total_charge_current","Max Total Charge Current","10","10A","choice",null,"0506139e000a6d23","1B88000100070504058601C261",0],
+    ["bat_max_total_charge_current","Max Total Charge Current","20","20A","choice",null,"0506139e0014ed2b","1B89000100070504058601C261",0],
+    ["bat_max_total_charge_current","Max Total Charge Current","30","30A","choice",null,"0506139e001e6d2c","1B8A000100070504058601C261",0],
+    ["bat_max_total_charge_current","Max Total Charge Current","40","40A","choice",null,"0506139e0028ed3a","1B8B000100070504058601C261",0],
+    ["bat_max_total_charge_current","Max Total Charge Current","50","50A","choice",null,"0506139e00326cf1","1B8C000100070504058601C261",0],
+    ["bat_max_total_charge_current","Max Total Charge Current","60","60A","choice",null,"0506139e003ced35","1B8D000100070504058601C261",0],
+    ["bat_max_total_charge_current","Max Total Charge Current","70","70A","choice",null,"0506139e00466cd6","1B8E000100070504058601C261",0],
+    ["bat_max_total_charge_current","Max Total Charge Current","80","80A","choice",null,"0506139e0050ed18","1B8F000100070504058601C261",0],
+    ["bat_max_total_charge_current","Max Total Charge Current","90","90A","choice",null,"0506139e005a6d1f","1B90000100070504058601C261",0],
+    ["bat_max_total_charge_current","Max Total Charge Current","100","100A","choice",null,"0506139e0064eccf","1B91000100070504058601C261",0],
+    ["bat_max_total_charge_current","Max Total Charge Current","110","110A","choice",null,"0506139e006e6cc8","1B92000100070504058601C261",0],
+    ["bat_max_total_charge_current","Max Total Charge Current","120","120A","choice",null,"0506139e0078ed06","1B93000100070504058601C261",0],
+    ["bat_max_utility_charge_current","Max Utility Charge Current","2","2A","choice",null,"050613a000020d29","1B94000100070504058601C261",0],
+    ["bat_max_utility_charge_current","Max Utility Charge Current","10","10A","choice",null,"050613a0000a0cef","1B95000100070504058601C261",0],
+    ["bat_max_utility_charge_current","Max Utility Charge Current","20","20A","choice",null,"050613a000148ce7","1B96000100070504058601C261",0],
+    ["bat_max_utility_charge_current","Max Utility Charge Current","30","30A","choice",null,"050613a0001e0ce0","1B97000100070504058601C261",0],
+    ["bat_max_utility_charge_current","Max Utility Charge Current","40","40A","choice",null,"050613a000288cf6","1B98000100070504058601C261",0],
+    ["bat_max_utility_charge_current","Max Utility Charge Current","50","50A","choice",null,"050613a000320d3d","1B99000100070504058601C261",0],
+    ["bat_max_utility_charge_current","Max Utility Charge Current","60","60A","choice",null,"050613a0003c8cf9","1B9A000100070504058601C261",0],
+    ["bat_max_utility_charge_current","Max Utility Charge Current","70","70A","choice",null,"050613a000460d1a","1B9B000100070504058601C261",0],
+    ["bat_max_utility_charge_current","Max Utility Charge Current","80","80A","choice",null,"050613a000508cd4","1B9C000100070504058601C261",0],
+    ["bat_max_utility_charge_current","Max Utility Charge Current","90","90A","choice",null,"050613a0005a0cd3","1B9D000100070504058601C261",0],
+    ["bat_max_utility_charge_current","Max Utility Charge Current","100","100A","choice",null,"050613a000648d03","1B9E000100070504058601C261",0],
+    ["bat_battery_type","Battery Type","0","AGM","choice",null,"0506139c00004ce4","1B9F000100070504058601C261",0],
+    ["bat_battery_type","Battery Type","1","Flooded","choice",null,"0506139c00018d24","1BA0000100070504058601C261",0],
+    ["bat_battery_type","Battery Type","2","User","choice",null,"0506139c0002cd25","1BA1000100070504058601C261",0],
+    ["bat_sp_bulk_charging_voltage","Bulk Charging Voltage","12.0","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a300787cca","1BA2000100070504058601C261",0],
+    ["bat_sp_bulk_charging_voltage","Bulk Charging Voltage","12.1","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a30079bd0a","1BA3000100070504058601C261",0],
+    ["bat_sp_bulk_charging_voltage","Bulk Charging Voltage","12.2","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a3007afd0b","1BA4000100070504058601C261",0],
+    ["bat_sp_floting_charging_voltage","Floating Charging Voltage","12.0","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a40078cd0b","1BA5000100070504058601C261",0],
+    ["bat_sp_floting_charging_voltage","Floating Charging Voltage","12.1","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a400790ccb","1BA6000100070504058601C261",0],
+    ["bat_sp_floting_charging_voltage","Floating Charging Voltage","12.2","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a4007a4cca","1BA7000100070504058601C261",0],
+    ["bat_sp_low_battery_voltage","Low Battery Cut-off Voltage","10.0","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a500649d02","1BA8000100070504058601C261",0],
+    ["bat_sp_low_battery_voltage","Low Battery Cut-off Voltage","10.1","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a500655cc2","1BA9000100070504058601C261",0],
+    ["bat_sp_low_battery_voltage","Low Battery Cut-off Voltage","10.2","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a500661cc3","1BAA000100070504058601C261",0],
+    ["bat_sp_utility_mode_voltage","Comeback utility mode voltage point (SBU priority)","10.5","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a100691d06","1BAB000100070504058601C261",0],
+    ["bat_sp_utility_mode_voltage","Comeback utility mode voltage point (SBU priority)","11.0","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a1006e5cc4","1BAC000100070504058601C261",0],
+    ["bat_sp_utility_mode_voltage","Comeback utility mode voltage point (SBU priority)","11.5","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a100739ccd","1BAD000100070504058601C261",0],
+    ["bat_sp_battery_mode_voltage","Comeback battery mode voltage point (SBU priority)","12.0","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a200782d0a","1BAE000100070504058601C261",0],
+    ["bat_sp_battery_mode_voltage","Comeback battery mode voltage point (SBU priority)","12.5","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a2007ded09","1BAF000100070504058601C261",0],
+    ["bat_sp_battery_mode_voltage","Comeback battery mode voltage point (SBU priority)","13.0","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a20082ad49","1BB0000100070504058601C261",0],
+    ["bat_battery_equalization","Battery Equalization","0","Prohibited","choice",null,"0506139300007ce7","1BB1000100070504058601C261",0],
+    ["bat_battery_equalization","Battery Equalization","1","Enable","choice",null,"050613930001bd27","1BB2000100070504058601C261",0],
+    ["bat_sp_battery_equalization_voltage","Battery Equalization Voltage","25.0","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a600faecaa","1BB3000100070504058601C261",0],
+    ["bat_sp_battery_equalization_voltage","Battery Equalization Voltage","25.1","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a600fb2d6a","1BB4000100070504058601C261",0],
+    ["bat_sp_battery_equalization_voltage","Battery Equalization Voltage","25.2","","numeric_probe",{"kind":"number","unit":"V","sample_source":"provider_choices"},"050613a600fc6ca8","1BB5000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","5","5min","choice",null,"050613a70005fd2a","1BB6000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","10","10min","choice",null,"050613a7000abd2e","1BB7000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","15","15min","choice",null,"050613a7000f7d2d","1BB8000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","20","20min","choice",null,"050613a700143d26","1BB9000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","25","25min","choice",null,"050613a70019fce3","1BBA000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","30","30min","choice",null,"050613a7001ebd21","1BBB000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","35","35min","choice",null,"050613a700237cf0","1BBC000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","40","40min","choice",null,"050613a700283d37","1BBD000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","45","45min","choice",null,"050613a7002dfd34","1BBE000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","50","50min","choice",null,"050613a70032bcfc","1BBF000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","55","55min","choice",null,"050613a700377cff","1BC0000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","60","60min","choice",null,"050613a7003c3d38","1BC1000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","65","65min","choice",null,"050613a70041fd19","1BC2000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","70","70min","choice",null,"050613a70046bcdb","1BC3000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","75","75min","choice",null,"050613a7004b7d1e","1BC4000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","80","80min","choice",null,"050613a700503d15","1BC5000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","85","85min","choice",null,"050613a70055fd16","1BC6000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","90","90min","choice",null,"050613a7005abd12","1BC7000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","95","95min","choice",null,"050613a7005f7d11","1BC8000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","100","100min","choice",null,"050613a700643cc2","1BC9000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","105","105min","choice",null,"050613a70069fd07","1BCA000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","110","110min","choice",null,"050613a7006ebcc5","1BCB000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","115","115min","choice",null,"050613a700737ccc","1BCC000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","120","120min","choice",null,"050613a700783d0b","1BCD000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","125","125min","choice",null,"050613a7007dfd08","1BCE000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","130","130min","choice",null,"050613a70082bd48","1BCF000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","135","135min","choice",null,"050613a700877d4b","1BD0000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","140","140min","choice",null,"050613a7008c3c8c","1BD1000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","145","145min","choice",null,"050613a70091fc85","1BD2000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","150","150min","choice",null,"050613a70096bd47","1BD3000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","155","155min","choice",null,"050613a7009b7c82","1BD4000100070504058601C261",0],
+    ["bat_sp_battery_equalized_time","Battery Equalized Time","160","160min","choice",null,"050613a700a03d51","1BD5000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","5","5min","choice",null,"050613a80005cd29","1BD6000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","10","10min","choice",null,"050613a8000a8d2d","1BD7000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","15","15min","choice",null,"050613a8000f4d2e","1BD8000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","20","20min","choice",null,"050613a800140d25","1BD9000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","25","25min","choice",null,"050613a80019cce0","1BDA000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","30","30min","choice",null,"050613a8001e8d22","1BDB000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","35","35min","choice",null,"050613a800234cf3","1BDC000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","40","40min","choice",null,"050613a800280d34","1BDD000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","45","45min","choice",null,"050613a8002dcd37","1BDE000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","50","50min","choice",null,"050613a800328cff","1BDF000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","55","55min","choice",null,"050613a800374cfc","1BE0000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","60","60min","choice",null,"050613a8003c0d3b","1BE1000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","65","65min","choice",null,"050613a80041cd1a","1BE2000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","70","70min","choice",null,"050613a800468cd8","1BE3000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","75","75min","choice",null,"050613a8004b4d1d","1BE4000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","80","80min","choice",null,"050613a800500d16","1BE5000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","85","85min","choice",null,"050613a80055cd15","1BE6000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","90","90min","choice",null,"050613a8005a8d11","1BE7000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","95","95min","choice",null,"050613a8005f4d12","1BE8000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","100","100min","choice",null,"050613a800640cc1","1BE9000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","105","105min","choice",null,"050613a80069cd04","1BEA000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","110","110min","choice",null,"050613a8006e8cc6","1BEB000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","115","115min","choice",null,"050613a800734ccf","1BEC000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","120","120min","choice",null,"050613a800780d08","1BED000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","125","125min","choice",null,"050613a8007dcd0b","1BEE000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","130","130min","choice",null,"050613a800828d4b","1BEF000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","135","135min","choice",null,"050613a800874d48","1BF0000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","140","140min","choice",null,"050613a8008c0c8f","1BF1000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","145","145min","choice",null,"050613a80091cc86","1BF2000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","150","150min","choice",null,"050613a800968d44","1BF3000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","155","155min","choice",null,"050613a8009b4c81","1BF4000100070504058601C261",0],
+    ["bat_sp_battery_equalized_timeout","Battery Equalized Timeout","160","160min","choice",null,"050613a800a00d52","1BF5000100070504058601C261",0],
+    ["bat_sp_battery_equalization_interval","Battery Equalization Interval","1","","numeric_probe",{"kind":"number","unit":"day","sample_source":"provider_choices"},"050613a900019d2a","1BF6000100070504058601C261",0],
+    ["bat_sp_battery_equalization_interval","Battery Equalization Interval","2","","numeric_probe",{"kind":"number","unit":"day","sample_source":"provider_choices"},"050613a90002dd2b","1BF7000100070504058601C261",0],
+    ["bat_sp_battery_equalization_interval","Battery Equalization Interval","3","","numeric_probe",{"kind":"number","unit":"day","sample_source":"provider_choices"},"050613a900031ceb","1BF8000100070504058601C261",0],
+    ["bat_battery_equalization_activated_immediately","Battery Equalization Activated Immediately","0","Prohibited","choice",null,"050613940000cd26","1BF9000100070504058601C261",0],
+    ["bat_battery_equalization_activated_immediately","Battery Equalization Activated Immediately","1","Enable","choice",null,"0506139400010ce6","1BFA000100070504058601C261",0],
+    ["cts_buzzer_alarm","Buzzer Alarm","0","Prohibited","choice",null,"0506138a0000ad20","1BFB000100070504058601C261",0],
+    ["cts_buzzer_alarm","Buzzer Alarm","1","Enable","choice",null,"0506138a00016ce0","1BFC000100070504058601C261",0],
+    ["cts_beeps_while_primary_source_interupt","Beeps While Primary Source Interrupt","0","Prohibited","choice",null,"0506138f0000bd21","1BFD000100070504058601C261",0],
+    ["cts_beeps_while_primary_source_interupt","Beeps While Primary Source Interrupt","1","Enable","choice",null,"0506138f00017ce1","1BFE000100070504058601C261",0],
+    ["cts_lcd_backlight","LCD Backlight","0","Prohibited","choice",null,"0506138c00004d21","1BFF000100070504058601C261",0],
+    ["cts_lcd_backlight","LCD Backlight","1","Enable","choice",null,"0506138c00018ce1","1C00000100070504058601C261",0],
+    ["cts_return_to_the_main_page","Return To The Main LCD Page","0","Prohibited","choice",null,"0506139000008ce7","1C01000100070504058601C261",0],
+    ["cts_return_to_the_main_page","Return To The Main LCD Page","1","Enable","choice",null,"0506139000014d27","1C02000100070504058601C261",0],
+    ["cts_power_saving_mode","Power Saving Mode","0","Prohibited","choice",null,"0506138b0000fce0","1C03000100070504058601C261",0],
+    ["cts_power_saving_mode","Power Saving Mode","1","Enable","choice",null,"0506138b00013d20","1C04000100070504058601C261",0],
+    ["los_overload_auto_restart","Overload Auto Restart","0","Prohibited","choice",null,"0506138d00001ce1","1C05000100070504058601C261",0],
+    ["los_overload_auto_restart","Overload Auto Restart","1","Enable","choice",null,"0506138d0001dd21","1C06000100070504058601C261",0],
+    ["cts_over_temperature_auto_restart","Over Temperature Auto Restart","0","Prohibited","choice",null,"0506138e0000ece1","1C07000100070504058601C261",0],
+    ["cts_over_temperature_auto_restart","Over Temperature Auto Restart","1","Enable","choice",null,"0506138e00012d21","1C08000100070504058601C261",0],
+    ["los_transfer_to_bypass_overload","Transfer To Bypass Overload","0","Prohibited","choice",null,"050613910000dd27","1C09000100070504058601C261",0],
+    ["los_transfer_to_bypass_overload","Transfer To Bypass Overload","1","Enable","choice",null,"0506139100011ce7","1C0A000100070504058601C261",0],
+    ["cts_record_fault_code","Record Fault Code","0","Prohibited","choice",null,"0506139200002d27","1C0B000100070504058601C261",0],
+    ["cts_record_fault_code","Record Fault Code","1","Enable","choice",null,"050613920001ece7","1C0C000100070504058601C261",0]
+  ]
+}

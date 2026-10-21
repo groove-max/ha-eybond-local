@@ -74,6 +74,7 @@ from ...support.shadow_learning.backend import (
     build_shadow_learning_preflight,
     build_shadow_learning_seed,
     build_shadow_learning_trace_path,
+    learning_probe_target,
 )
 from ...support.shadow_learning.proxy import route_status_indicates_control_ready
 from ...support.shadow_learning.session import (
@@ -952,10 +953,10 @@ class CoordinatorCloudToolsMixin:
             endpoint_context = await self._async_prepare_cloud_tool_endpoint_context()
             # A held run must survive stopping the temporary route/restarting HA.
             # Use the normal listener, preserving NAT advertised vs local ports.
+            from .learning_route import learning_listener_port, learning_target_endpoint
             endpoint_context = replace(
                 endpoint_context,
-                target_endpoint=(f"{self._effective_callback_server_host},"
-                                 f"{self._connection_spec.effective_advertised_tcp_port},TCP"),
+                target_endpoint=learning_target_endpoint(self),
             )
             seed, blockers = build_shadow_learning_seed(
                 session_id=session_id,
@@ -972,6 +973,10 @@ class CoordinatorCloudToolsMixin:
                 raw_capture=raw_capture,
                 write_response_mode="ack" if allow_ack_writes else "exception",
                 allow_ack_writes=allow_ack_writes,
+                inverter_target=learning_probe_target(getattr(self, "identified_inverter", None)),
+                prepare_native_pi30=True,
+                inspect_cloud_protocol=getattr(self, "collector_session_protocol", "") == "eybond_framed",
+                inverter_device_addr=getattr(getattr(getattr(self, "identified_inverter", None), "probe_target", None), "device_addr", None),
             )
             if blockers:
                 raise RuntimeError(
@@ -1076,7 +1081,7 @@ class CoordinatorCloudToolsMixin:
                     expected_session_protocol=resolve_collector_cloud_session_protocol(
                         self.collector_cloud_family
                     ),
-                    listen_port=self._connection_spec.tcp_port,
+                    listen_port=learning_listener_port(self),
                     upstream_host=upstream_host,
                     upstream_port=upstream_port,
                     output_path=trace_path,
@@ -1267,7 +1272,7 @@ class CoordinatorCloudToolsMixin:
         raise_when_not_running: bool,
         clear_failed_restore: bool,
     ) -> dict[str, object]:
-        """Stop interception; restore only pre-command runs without a hold."""
+        """Drain interception; retire only exact completed or no-request studies."""
 
         from .learning_recovery import async_preserve_interrupted_learning_hold
 
@@ -1325,16 +1330,36 @@ class CoordinatorCloudToolsMixin:
             )
             await self._async_save_shadow_learning_session_state(stopping_state)
 
+        get_completion = getattr(self._runtime, "shadow_learning_completion", None)
+        completion = get_completion() if callable(get_completion) else None
+        from ...support.shadow_learning.completion import CloudCommandCompletion
+        from .learning_completion import async_complete_live_study
+        run = getattr(self, "_protected_learning_run", None)
+        if type(completion) is CloudCommandCompletion:
+            completion.start_closing()
+
         if route_owner_id:
             await self._runtime.async_stop_shadow_learning_route(
                 owner_id=route_owner_id,
             )
         else:
             await self._runtime.async_stop_shadow_learning_route()
+        if state is not None:
+            try:
+                async def finish_completed():
+                    return await async_complete_live_study(self, stopping_state, run, completion)
+                completed, pending_cancel = await self._run_finalization_shielded(finish_completed)
+                if pending_cancel is not None:
+                    raise pending_cancel
+                if completed:
+                    state = stopping_state = await self._async_active_shadow_learning_state(require_process=False)
+                    hold_reason = await self._async_cloud_learning_hold_reason()
+            except Exception as exc:
+                logger.warning("Completed learning receipt could not be finalized: %s", type(exc).__name__)
         self._protected_learning_run = None
 
         # The cloud route is now closed; do not keep serving snapshot telemetry.
-        # A hold survives normal completion, retries, force-clear and restart.
+        # An unconfirmed hold survives retries, force-clear and restart.
         # Retain the exact endpoint-operation ownership and restoration evidence.
         # Protected runs already proved the normal listener and persistent local
         # endpoint before sending commands. Releasing the temporary reservation
@@ -2357,6 +2382,7 @@ class CoordinatorCloudToolsMixin:
             in {
                 "waiting_for_collector",
                 "connecting_upstream",
+                "waiting_for_cloud_protocol",
                 "ready",
                 "learning",
                 "degraded",
@@ -2426,6 +2452,19 @@ class CoordinatorCloudToolsMixin:
             "ready": bool(status.get("ready")),
             "upstream_error": str(status.get("upstream_error") or ""),
             "collector_identity_verified": status.get("collector_identity_verified") is True,
+            "cloud_modbus_read": status.get("cloud_modbus_read"),
+            "cloud_protocol_evidence": status.get("cloud_protocol_evidence"),
+            "protocol_diagnostics": status.get("protocol_diagnostics"),
+            "protocol_preparation_pending": (
+                status.get("protocol_preparation_pending") is not False
+                if "protocol_preparation_pending" in status else False
+            ),
+            "protocol_preparation_error": (
+                status["protocol_preparation_error"].strip()
+                if type(status.get("protocol_preparation_error")) is str
+                else "invalid_protocol_preparation_status"
+                if "protocol_preparation_error" in status else ""
+            ),
             "collector_identity_pn": (
                 status.get("collector_identity_pn", "")
                 if type(status.get("collector_identity_pn", "")) is str else ""
@@ -2455,6 +2494,24 @@ class CoordinatorCloudToolsMixin:
             if not self._shadow_learning_process_running():
                 raise RuntimeError("shadow_learning_route_stopped")
             status = self._shadow_learning_route_status()
+            preparation_error = str(status.get("protocol_preparation_error") or "")
+            if preparation_error:
+                from ...support.shadow_learning.protocol_mismatch import (
+                    CloudModbusRead, CloudProtocolMismatchError,
+                )
+
+                read = CloudModbusRead.from_mapping(status.get("cloud_modbus_read"))
+                if status.get("collector_identity_verified") is True:
+                    from ...support.shadow_learning.protocol_evidence import CloudProtocolEvidence
+
+                    evidence = CloudProtocolEvidence.from_mapping(status.get("cloud_protocol_evidence"))
+                    if preparation_error.startswith("cloud_protocol_"):
+                        raise CloudProtocolMismatchError(read, evidence=evidence,
+                            diagnostics=status.get("protocol_diagnostics"), reason=preparation_error)
+                if (read is not None and status.get("collector_identity_verified") is True
+                        and preparation_error == "cloud_payload_modbus_requires_register_seed"):
+                    raise CloudProtocolMismatchError(read)
+                raise RuntimeError(f"shadow_learning_protocol_preparation_failed:{preparation_error}")
             upstream_error = str(status.get("upstream_error") or "")
             if upstream_error:
                 raise RuntimeError(f"shadow_learning_upstream_connect_failed:{upstream_error}")
@@ -2474,7 +2531,11 @@ class CoordinatorCloudToolsMixin:
                     continue
                 return
             collector_connected = bool(status.get("collector_connected"))
-            next_phase = "connecting_upstream" if collector_connected else "waiting_for_collector"
+            next_phase = (
+                "waiting_for_cloud_protocol"
+                if status.get("protocol_preparation_pending") and status.get("upstream_connected")
+                else "connecting_upstream" if collector_connected else "waiting_for_collector"
+            )
             if next_phase != phase:
                 phase = next_phase
                 state = await self._async_active_shadow_learning_state(require_process=False)
@@ -2507,10 +2568,14 @@ class CoordinatorCloudToolsMixin:
                     local_metadata_status=(
                         "Shadow-learning waiting for collector"
                         if phase == "waiting_for_collector"
+                        else "Shadow-learning waiting for a verified cloud read"
+                        if phase == "waiting_for_cloud_protocol"
                         else "Shadow-learning connecting upstream"
                     ),
                 )
             await asyncio.sleep(1.0)
+        if self._shadow_learning_route_status().get("protocol_preparation_pending"):
+            raise TimeoutError("shadow_learning_cloud_protocol_not_confirmed")
         raise TimeoutError("shadow_learning_collector_reconnect_timeout")
 
     async def _async_guarded_proxy_capture_restore(
@@ -2779,7 +2844,9 @@ class CoordinatorCloudToolsMixin:
             # coordinator is the only writer, so skip the per-refresh disk read.
             return self._cached_shadow_learning_session_state
         state = await self.hass.async_add_executor_job(
-            lambda: load_shadow_learning_session_state(Path(self.hass.config.config_dir))
+            lambda: load_shadow_learning_session_state(
+                Path(self.hass.config.config_dir), entry_id=self.config_entry.entry_id,
+            )
         )
         self._shadow_learning_session_state_loaded = True
         if state is None:
@@ -2803,6 +2870,7 @@ class CoordinatorCloudToolsMixin:
                 save_shadow_learning_session_state,
                 config_dir=Path(self.hass.config.config_dir),
                 state=state,
+                entry_id=self.config_entry.entry_id,
             )
         except BaseException:
             # The worker may have completed its rename before cancellation or

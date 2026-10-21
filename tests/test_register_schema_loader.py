@@ -23,6 +23,35 @@ from custom_components.eybond_local.drivers.smg import SmgModbusDriver
 
 
 class RegisterSchemaLoaderTests(unittest.TestCase):
+    def test_pi30_live_measurements_and_settings_have_distinct_categories(self) -> None:
+        root = REPO_ROOT / "custom_components/eybond_local/protocol_catalogs/register_schemas"
+        live_keys = (
+            "battery_voltage", "battery_charge_current", "battery_discharge_current",
+            "output_voltage", "output_frequency", "output_apparent_power",
+            "inverter_bus_temperature", "pv_charging_power",
+        )
+        setting_keys = (
+            "input_rating_voltage", "output_rating_voltage", "output_rating_frequency",
+            "output_rating_active_power", "battery_rating_voltage",
+            "battery_recharge_voltage", "battery_redischarge_voltage",
+            "battery_under_voltage", "battery_bulk_voltage", "battery_float_voltage",
+        )
+        for path in (root / "pi30_ascii").rglob("*.json"):
+            schema = load_register_schema(str(path.relative_to(root)))
+            for key in live_keys:
+                with self.subTest(schema=path.name, key=key):
+                    description = schema.measurement_description(key)
+                    self.assertFalse(description.diagnostic)
+                    self.assertTrue(description.live)
+                    self.assertTrue(description.enabled_default)
+            for key in setting_keys:
+                with self.subTest(schema=path.name, key=key):
+                    description = schema.measurement_description(key)
+                    self.assertTrue(description.diagnostic)
+                    self.assertFalse(description.live)
+            self.assertTrue(schema.measurement_description("inverter_bus_voltage").diagnostic)
+            self.assertFalse(schema.measurement_description("pv_input_voltage").enabled_default)
+
     def tearDown(self) -> None:
         set_external_register_schema_roots(())
         load_register_schema.cache_clear()

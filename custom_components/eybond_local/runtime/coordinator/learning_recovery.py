@@ -10,6 +10,7 @@ from ...support.owned_worker import async_run_owned_worker
 from ...support.shadow_learning.protection_store import CloudLearningProtectionStore
 from ...support.shadow_learning.session import (
     inspect_shadow_learning_recovery, load_shadow_learning_session_state,
+    find_shadow_learning_session_for_collector,
     shadow_learning_session_timestamp,
 )
 
@@ -70,12 +71,23 @@ async def _async_preserve_interrupted_learning_hold(coordinator) -> None:
 
     c = coordinator
     state = await c._async_active_shadow_learning_state(require_process=False)
+    if state is None:
+        # Removing/re-adding an entry must not hide a collector's old scoped
+        # journal. Recover only its safety obligation, never the foreign owner.
+        state = await async_run_owned_worker(
+            find_shadow_learning_session_for_collector,
+            config_dir=Path(c.hass.config.config_dir), collector_pn=c.smartess_collector_pn,
+        )
     store = CloudLearningProtectionStore(Path(c.hass.config.config_dir))
     if state is not None:
         try:
             existing = await async_run_owned_worker(store.load, collector_pn=c.smartess_collector_pn)
             if existing is not None and await _async_complete_no_request_recovery(c, state, existing):
                 return
+            if existing is not None:
+                from .learning_completion import async_recover_completed_study
+                if await async_recover_completed_study(c, state, existing):
+                    return
         except CloudLearningProtectionRequired:
             return
     if state is not None and state.protection_version == 1 and not state.cloud_commands_possible:

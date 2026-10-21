@@ -10240,6 +10240,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 ):
                     await options._async_run_control_discovery()
                 artifact = coordinator.published[-1]["orchestration"]
+                location = artifact["failure"].pop("failure_location")
+                self.assertRegex(location, r"^shadow_run\.py:_async_run_control_discovery:\d+$")
                 self.assertEqual(artifact["failure"], {
                     "reason": "control_discovery_failure_generic",
                     "primary_failure_reason": "control_discovery_failure_generic",

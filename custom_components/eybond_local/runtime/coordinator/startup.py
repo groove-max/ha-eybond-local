@@ -326,7 +326,10 @@ class CoordinatorStartupIdentityMixin:
                 return None
         elif catalog_surface is None or not catalog_surface.read_only:
             return None
-        if catalog_identity_source:
+        # A persisted snapshot may outlive a driver selection (including a
+        # last update from the unloading coordinator). Never pair a new driver
+        # with another driver's old profile/schema, even for a valid snapshot.
+        if profile_name or catalog_identity_source:
             try:
                 register_schema = load_register_schema(register_schema_name)
             except Exception:
@@ -348,6 +351,12 @@ class CoordinatorStartupIdentityMixin:
             if probe_targets
             else ProbeTarget(devcode=0, collector_addr=0, device_addr=0)
         )
+        from ..protocol_check import PROBE_ROUTE_OPTION, selected_probe_target
+
+        probe_target = selected_probe_target(
+            self.config_entry.options.get(PROBE_ROUTE_OPTION),
+            self.config_entry.options.get(CONF_DRIVER_HINT, self.config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO)),
+        ) or probe_target
         return DetectedInverter(
             driver_key=str(getattr(driver, "key", "") or driver_key),
             protocol_family=str(

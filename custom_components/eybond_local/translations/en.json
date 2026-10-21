@@ -327,6 +327,7 @@
     "progress": {
       "scanning_network": "Scanning the local network for EyeBond devices…",
       "shadow_learning": "{control_discovery_hint}",
+      "cloud_modbus_check": "Checking identity and readings without changing settings, cloud routing or the current profile.",
       "verify_connection": "Restarting collector {collector_pn}. After the current connection closes, Home Assistant waits up to one minute for the replacement.",
       "active_scan_recovery_verify": "Checking the connection to collector {collector_pn}…",
       "manual_recovery_verify": "Verifying the recovery route for collector {collector_pn}: restarting it, waiting for its own reconnection, then (only if needed) sending one addressed callback request. This can take a couple of minutes."
@@ -649,6 +650,18 @@
         "data_description": {
           "enabled_controls": "Tick the extra controls you want in Home Assistant. Risky ones are left off by default.",
           "start_local_register_observation": "Collect five read-only local snapshots over about 20 minutes. The options dialog can be closed while this runs. No entity or control is added automatically."
+        }
+      },
+      "shadow_modbus_check": {
+        "title": "Check protocol compatibility",
+        "description": "Checking identity and readings without changing settings, cloud routing or the current profile."
+      },
+      "shadow_modbus_review": {
+        "title": "Check protocol compatibility",
+        "description": "{result}",
+        "data": {
+          "driver": "Protocol/profile",
+          "confirm_readings": "I checked the readings and want to switch to this profile"
         }
       },
       "shadow_learning_result": {

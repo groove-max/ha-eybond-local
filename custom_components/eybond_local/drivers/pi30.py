@@ -6,6 +6,7 @@ import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from typing import Any
 
 from ..const import (
@@ -77,6 +78,13 @@ from .pi30_controls import (
     charge_current_acquisition_diagnostics,
 )
 from .support_probe import SupportProbeRequest
+from .pi30_settings import (
+    BOOL_COMMANDS as _PI30_BOOL_COMMANDS,
+    ENUM_COMMANDS as _PI30_ENUM_COMMANDS,
+    NUMERIC_COMMANDS as _PI30_NUMERIC_COMMANDS,
+    project_learned_settings,
+    setting_readback,
+)
 
 
 PI30_POLL_POLICY = PollPolicy(
@@ -124,33 +132,6 @@ _ONBOARDING_RUNTIME_COMMAND_SPECS: tuple[Pi30CommandSpec, ...] = (
     Pi30CommandSpec(command="QPIGS", parser=parse_qpigs),
     Pi30CommandSpec(command="QMOD", parser=parse_qmod),
 )
-
-_PI30_BOOL_COMMANDS: dict[str, str] = {
-    "buzzer_enabled": "A",
-    "overload_bypass_enabled": "B",
-    "power_saving_enabled": "J",
-    "lcd_reset_to_default_enabled": "K",
-    "overload_restart_enabled": "U",
-    "over_temperature_restart_enabled": "V",
-    "lcd_backlight_enabled": "X",
-    "primary_source_interrupt_alarm_enabled": "Y",
-    "record_fault_code_enabled": "Z",
-}
-
-_PI30_ENUM_COMMANDS: dict[str, str] = {
-    "output_source_priority": "POP",
-    "charger_source_priority": "PCP",
-    "input_voltage_range": "PGR",
-    "battery_type": "PBT",
-}
-
-_PI30_NUMERIC_COMMANDS: dict[str, str] = {
-    "battery_recharge_voltage": "PBCV",
-    "battery_redischarge_voltage": "PBDV",
-    "battery_under_voltage": "PSDV",
-    "battery_bulk_voltage": "PCVV",
-    "battery_float_voltage": "PBFT",
-}
 
 _CATALOG_PARSERS = {
     "pi30.protocol_id": parse_protocol_id,
@@ -201,6 +182,90 @@ class _PendingSettingReadback:
 
 _SETTING_READBACK_KEY = "pi30_setting_readback"
 
+# These are settings, not live telemetry. Keep the normal telemetry cycle
+# intact and add at most one bounded settings read after it, no more often
+# than once a minute per group. The first minute is left to startup/acquisition.
+_SETTINGS_REFRESH_KEY = "pi30_settings_refresh"
+_SETTINGS_REFRESH_INTERVAL = 60.0
+_SETTINGS_REFRESH_TIMEOUT = 3.0
+
+
+@dataclass(slots=True)
+class _SettingsRefresh:
+    inverter: DetectedInverter
+    due: dict[str, float]
+
+
+async def _async_refresh_settings(
+    session,
+    inverter: DetectedInverter,
+    runtime_state: dict[str, Any] | None,
+    *,
+    fresh_required: bool,
+    now_monotonic: float | None,
+    command_timings: list[tuple[str, int, str]],
+) -> tuple[dict[str, Any], frozenset[str], dict[str, Any]]:
+    """Read external setting changes without writes, duplicate reads or bursts."""
+
+    diagnostics = {
+        "pi30_settings_refresh_command": "",
+        "pi30_settings_refresh_outcome": "not_due",
+    }
+    if runtime_state is None:
+        diagnostics["pi30_settings_refresh_outcome"] = "no_runtime_state"
+        return {}, frozenset(), diagnostics
+    now = time.monotonic() if now_monotonic is None else now_monotonic
+    state = runtime_state.get(_SETTINGS_REFRESH_KEY)
+    if not isinstance(state, _SettingsRefresh) or state.inverter is not inverter:
+        state = _SettingsRefresh(inverter, {
+            command: now + _SETTINGS_REFRESH_INTERVAL for command in ("QPIRI", "QFLAG")
+        })
+        runtime_state[_SETTINGS_REFRESH_KEY] = state
+    # Acquisition and immediate write readback take priority over this optional
+    # work. Their attempts also advance the corresponding periodic deadline.
+    for command, _duration, _outcome in command_timings:
+        if command in state.due:
+            state.due[command] = now + _SETTINGS_REFRESH_INTERVAL
+    if not fresh_required or command_timings:
+        diagnostics["pi30_settings_refresh_outcome"] = (
+            "busy" if fresh_required else "no_fresh_required_telemetry"
+        )
+        return {}, frozenset(), diagnostics
+    command = min(state.due, key=state.due.get)
+    if now < state.due[command]:
+        return {}, frozenset(), diagnostics
+    started = time.monotonic()
+    values: dict[str, Any] = {}
+    removed = frozenset()
+    outcome = "ok"
+    try:
+        payload = await asyncio.wait_for(
+            session.request(command), timeout=_SETTINGS_REFRESH_TIMEOUT,
+        )
+        parser = parse_qpiri if command == "QPIRI" else parse_qflag
+        parsed = parser(payload)
+        learned, removed = project_learned_settings(parsed, inverter.capabilities, command)
+        parsed.update(_translate_config_enums(parsed, _schema_for_inverter(inverter, "pi30_ascii.json")))
+        _translate_capability_enum_values(parsed, inverter.capabilities)
+        parsed.update(learned)
+        values = parsed
+    except Exception as exc:
+        # A settings NAK/timeout must not discard live readings, permanently
+        # disable the group, or provoke a transport reconnect. Payload transports
+        # also raise their own exception types; cancellation still propagates.
+        outcome = "timeout" if isinstance(exc, TimeoutError) else _command_outcome(exc)
+    finally:
+        elapsed = time.monotonic() - started
+        state.due[command] = now + elapsed + _SETTINGS_REFRESH_INTERVAL
+    if runtime_state.get(_SETTINGS_REFRESH_KEY) is not state:
+        return {}, frozenset(), diagnostics
+    command_timings.append((command, int(round(elapsed * 1000)), outcome))
+    diagnostics.update({
+        "pi30_settings_refresh_command": command,
+        "pi30_settings_refresh_outcome": outcome,
+    })
+    return values, removed, diagnostics
+
 
 async def _async_read_pending_setting(session, inverter, runtime_state):
     pending = (runtime_state or {}).get(_SETTING_READBACK_KEY)
@@ -209,15 +274,27 @@ async def _async_read_pending_setting(session, inverter, runtime_state):
     if pending.inverter is not inverter or pending.capability not in inverter.capabilities:
         runtime_state.pop(_SETTING_READBACK_KEY, None)
         return {}, frozenset(), {}
+    if not pending.command:
+        # An exact learned write does not necessarily reveal how to read it.
+        # Do not let a cached value turn its ACK into a false confirmation.
+        runtime_state.pop(_SETTING_READBACK_KEY, None)
+        return {}, frozenset({pending.capability.value_key}), {
+            "pi30_setting_readback_command": "",
+            "pi30_setting_readback_outcome": "unsupported",
+            "pi30_setting_readback_duration_ms": 0,
+        }
     pending.remaining -= 1
     parser = parse_qflag if pending.command == "QFLAG" else parse_qpiri
     started = time.monotonic()
     outcome = "ok"
     values = {}
+    removed = frozenset()
     try:
         values = parser(await asyncio.wait_for(session.request(pending.command), timeout=3.0))
+        learned, removed = project_learned_settings(values, inverter.capabilities, pending.command)
         values.update(_translate_config_enums(values, _schema_for_inverter(inverter, "pi30_ascii.json")))
         _translate_capability_enum_values(values, inverter.capabilities)
+        values.update(learned)
     except asyncio.CancelledError:
         if runtime_state.get(_SETTING_READBACK_KEY) is pending:
             runtime_state.pop(_SETTING_READBACK_KEY, None)
@@ -235,7 +312,7 @@ async def _async_read_pending_setting(session, inverter, runtime_state):
     if not current:
         return {}, frozenset(), {}
     missing = frozenset({pending.capability.value_key}) - values.keys()
-    return values, frozenset(missing), {
+    return values, frozenset(missing) | removed, {
         "pi30_setting_readback_command": pending.command,
         "pi30_setting_readback_outcome": outcome if not missing else "unavailable",
         "pi30_setting_readback_duration_ms": int((time.monotonic() - started) * 1000),
@@ -246,6 +323,8 @@ class Pi30Driver(InverterDriver):
     """PI30 probe, runtime reader, and command-based controller."""
 
     key = "pi30"
+    cloud_probe_codecs = ("pi30_ascii",)
+    cloud_learning_supported = True
     poll_policy = PI30_POLL_POLICY
     name = "PI30 / ASCII"
 
@@ -446,9 +525,24 @@ class Pi30Driver(InverterDriver):
         for key in setting_removed:
             values.pop(key, None)
         diagnostics.update(setting_diagnostics)
+        if setting_diagnostics:
+            metadata_timings.append((
+                setting_diagnostics["pi30_setting_readback_command"],
+                setting_diagnostics["pi30_setting_readback_duration_ms"],
+                setting_diagnostics["pi30_setting_readback_outcome"],
+            ))
+        periodic_values, periodic_removed, periodic_diagnostics = await _async_refresh_settings(
+            session, inverter, runtime_state, fresh_required=fresh_required,
+            now_monotonic=now_monotonic, command_timings=metadata_timings,
+        )
+        values.update(periodic_values)
+        removed_keys |= periodic_removed
+        for key in periodic_removed:
+            values.pop(key, None)
+        diagnostics.update(periodic_diagnostics)
         diagnostics.update(charge_current_acquisition_diagnostics(runtime_state))
-        # The recurring telemetry estimate must not learn the cost of finite
-        # acquisition. Expose both phases plus their actual combined timeline.
+        # The recurring telemetry estimate must not learn the cost of optional
+        # acquisition/settings work. Expose both phases and the full timeline.
         metadata_commands = ", ".join(command for command, _ms, _outcome in metadata_timings)
         metadata_durations = ", ".join(
             f"{command}={ms}:{outcome}" for command, ms, outcome in metadata_timings
@@ -539,8 +633,8 @@ class Pi30Driver(InverterDriver):
             raise RuntimeError(f"unexpected_write_response:{capability.key}:{response}")
 
         written_value = _decode_capability_value(capability, raw_value)
-        # ACK is not readback. Normal telemetry does not query QPIRI/QFLAG;
-        # schedule fresh setting reads instead of mutating cached identity.
+        # ACK is not readback. Do not wait for the periodic QPIRI/QFLAG refresh;
+        # schedule immediate fresh reads instead of mutating cached identity.
         read_command = (
             "QFLAG" if capability.key in _PI30_BOOL_COMMANDS else
             "QPIRI" if capability.key in (
@@ -548,7 +642,10 @@ class Pi30Driver(InverterDriver):
                 "max_charging_current", "max_ac_charging_current",
             ) else ""
         )
-        if runtime_state is not None and read_command:
+        if capability.is_device_scoped_experimental:
+            readback = setting_readback(command)
+            read_command = readback[0] if readback is not None else ""
+        if runtime_state is not None and (read_command or capability.is_device_scoped_experimental):
             runtime_state[_SETTING_READBACK_KEY] = _PendingSettingReadback(
                 inverter, capability, read_command,
             )
@@ -1542,6 +1639,13 @@ def _build_write_command(capability: WriteCapability, raw_value: int) -> str:
             raise ValueError(f"unsupported_write_value:{capability.key}:{raw_value}") from exc
     if capability.command:
         encoded = str(raw_value)
+        if capability.command_precision is not None:
+            # Learned native numeric commands carry a proven wire decimal
+            # format. Do not send scaled HA storage units as the ASCII value.
+            value = Decimal(raw_value) / Decimal(capability.divisor or 1)
+            encoded = f"{value:.{capability.command_precision}f}"
+            if Decimal(encoded) != value:
+                raise ValueError(f"unrepresentable_write_value:{capability.key}:{raw_value}")
         if capability.command_width is not None:
             encoded = encoded.zfill(capability.command_width)
         return f"{capability.command}{encoded}"

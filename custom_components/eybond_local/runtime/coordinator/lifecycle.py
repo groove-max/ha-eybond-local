@@ -37,8 +37,10 @@ class CoordinatorLifecycleMixin:
             )
         await self._async_recover_proxy_capture_state()
         await self._async_recover_shadow_learning_state()
-        await self._async_warm_smartess_cloud_evidence_cache()
+        # Cloud-evidence context resolves activated profile/schema metadata.
+        # Warm those files in the executor before any synchronous consumer.
         await self._async_warm_effective_metadata_cache()
+        await self._async_warm_smartess_cloud_evidence_cache()
 
     async def _async_observe_runtime_listener(self) -> None:
         """Keep the configured port visible to the domain owner for this entry.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from pathlib import Path
 from threading import Lock
@@ -26,6 +27,7 @@ _ACTIVE_SHADOW_LEARNING_SESSION_STATUSES = {
     "starting",
     "waiting_for_collector",
     "connecting_upstream",
+    "waiting_for_cloud_protocol",
     "ready",
     "learning",
     "degraded",
@@ -63,10 +65,32 @@ def shadow_learning_session_root(config_dir: Path) -> Path:
     return Path(config_dir) / LOCAL_METADATA_DIR / _SHADOW_SESSION_DIR
 
 
-def active_shadow_learning_state_path(config_dir: Path) -> Path:
+def active_shadow_learning_state_path(config_dir: Path, *, entry_id: str = "") -> Path:
     """Return the persisted active shadow-learning session state path."""
 
-    return shadow_learning_session_root(config_dir) / _SHADOW_SESSION_FILE
+    name = ("active_" + hashlib.sha256(entry_id.encode()).hexdigest() + ".json"
+            if entry_id else _SHADOW_SESSION_FILE)
+    return shadow_learning_session_root(config_dir) / name
+
+
+def _owned_session_path(config_dir: Path, entry_id: str) -> Path:
+    """Retain an existing legacy owner's record; new owners use separate files.
+
+    The unscoped API is retained for legacy readers/tools. Product callers supply
+    their entry identity. No migration, overwrite or deletion of a foreign
+    recovery record is needed to start another collector's learning session.
+    """
+    legacy = active_shadow_learning_state_path(config_dir)
+    if not entry_id:
+        return legacy
+    scoped = active_shadow_learning_state_path(config_dir, entry_id=entry_id)
+    if scoped.exists():
+        return scoped
+    if legacy.exists():
+        state = load_shadow_learning_session_state(config_dir)
+        if state is None or not state.entry_id or state.entry_id == entry_id:
+            return legacy
+    return scoped
 
 
 def build_shadow_learning_session_state(
@@ -168,12 +192,22 @@ def save_shadow_learning_session_state(
     *,
     config_dir: Path,
     state: ShadowLearningSessionState,
+    entry_id: str = "",
 ) -> Path:
     """Persist the active shadow-learning session state."""
 
     with _SESSION_RECORD_LOCK:
-        path = active_shadow_learning_state_path(config_dir)
-        current = load_shadow_learning_session_state(config_dir)
+        if entry_id and entry_id != state.entry_id:
+            raise RuntimeError("shadow_learning_recovery_record_owned")
+        path = _owned_session_path(config_dir, entry_id)
+        current = load_shadow_learning_session_state(config_dir, entry_id=entry_id)
+        legacy = load_shadow_learning_session_state(config_dir)
+        if entry_id and path != active_shadow_learning_state_path(config_dir):
+            if active_shadow_learning_state_path(config_dir).exists() and (
+                legacy is None or not legacy.entry_id or not legacy.collector_pn
+                or legacy.entry_id == entry_id or legacy.collector_pn == state.collector_pn
+            ):
+                raise RuntimeError("shadow_learning_recovery_record_owned")
         if path.exists() and (
             current is None or (current.entry_id, current.route_owner_id, current.collector_pn)
             != (state.entry_id, state.route_owner_id, state.collector_pn)
@@ -190,19 +224,25 @@ def save_shadow_learning_session_state(
                         or current.route_owner_id != "shadow_learning:" + hold.study_id
                         or current.cloud_source != hold.source or state.cloud_source != hold.source):
                     raise ValueError("no_receipt")
-                store.require_no_request_receipt(hold)
+                try:
+                    store.require_no_request_receipt(hold)
+                except CloudLearningProtectionRequired:
+                    if current.status not in {"restoring", "restore_failed"} or state.status != current.status:
+                        raise
+                    from .completion_store import CompletedLearningStore
+                    CompletedLearningStore(config_dir).require_completed_receipt(hold)
             except (ValueError, CloudLearningProtectionRequired):
                 raise RuntimeError("shadow_learning_recovery_intent_regression") from None
-        return _save_shadow_learning_session_state(config_dir=config_dir, state=state)
+        return _save_shadow_learning_session_state(config_dir=config_dir, state=state, entry_id=entry_id)
 
 
-def _save_shadow_learning_session_state(*, config_dir: Path, state: ShadowLearningSessionState) -> Path:
+def _save_shadow_learning_session_state(*, config_dir: Path, state: ShadowLearningSessionState, entry_id: str = "") -> Path:
     root = shadow_learning_session_root(config_dir)
     root.mkdir(parents=True, exist_ok=True)
     # Persist the parent links too when this is the first recovery record.
     sync_directory(Path(config_dir))
     sync_directory(root.parent)
-    path = active_shadow_learning_state_path(config_dir)
+    path = _owned_session_path(config_dir, entry_id)
     payload = {
         "entry_id": state.entry_id,
         "route_owner_id": state.route_owner_id,
@@ -240,7 +280,7 @@ def replace_held_shadow_learning_session(*, config_dir: Path, previous: ShadowLe
 
     with _SESSION_RECORD_LOCK:
         CloudLearningProtectionStore(config_dir).require_exact_hold(hold)
-        if (load_shadow_learning_session_state(config_dir) != previous
+        if (load_shadow_learning_session_state(config_dir, entry_id=previous.entry_id) != previous
                 or previous.status != "restore_failed" or previous.protection_version != 1
                 or not previous.cloud_commands_possible or not state.cloud_commands_possible
                 or state.protection_version != 1 or state.status != "preflight"
@@ -262,13 +302,28 @@ def replace_held_shadow_learning_session(*, config_dir: Path, previous: ShadowLe
                 raise RuntimeError("cloud_learning_retry_archive_conflict")
         else:
             atomic_write_record(path, payload)
-        return _save_shadow_learning_session_state(config_dir=config_dir, state=state)
+        return _save_shadow_learning_session_state(config_dir=config_dir, state=state, entry_id=state.entry_id)
 
 
-def load_shadow_learning_session_state(config_dir: Path) -> ShadowLearningSessionState | None:
+def load_shadow_learning_session_state(config_dir: Path, *, entry_id: str = "") -> ShadowLearningSessionState | None:
     """Load the persisted active shadow-learning session state when present."""
 
-    path = active_shadow_learning_state_path(config_dir)
+    path = _owned_session_path(config_dir, entry_id)
+    return _load_session_path(path)
+
+
+def find_shadow_learning_session_for_collector(config_dir: Path, *, collector_pn: str):
+    """Find retained intent after entry recreation; this grants no ownership."""
+    matches = []
+    for path in sorted(shadow_learning_session_root(config_dir).glob("active_*.json")):
+        state = _load_session_path(path)
+        if state is not None and collector_pn and state.collector_pn == collector_pn:
+            matches.append(state)
+    return next((s for s in matches if s.cloud_commands_possible or s.protection_version != 1),
+                matches[0] if matches else None)
+
+
+def _load_session_path(path: Path) -> ShadowLearningSessionState | None:
     if not path.exists():
         return None
     try:
@@ -330,8 +385,10 @@ def clear_shadow_learning_session_state(
 
 
 def _clear_shadow_learning_session_state(config_dir, *, expected_state, outcome):
-    path = active_shadow_learning_state_path(config_dir)
-    state = load_shadow_learning_session_state(config_dir)
+    if type(expected_state) is not ShadowLearningSessionState:
+        raise RuntimeError("shadow_learning_recovery_record_changed")
+    path = _owned_session_path(config_dir, expected_state.entry_id)
+    state = load_shadow_learning_session_state(config_dir, entry_id=expected_state.entry_id)
     if type(expected_state) is not ShadowLearningSessionState or state != expected_state:
         raise RuntimeError("shadow_learning_recovery_record_changed")
     if outcome not in FINALIZATION_OUTCOMES:
@@ -375,7 +432,10 @@ def _inspect_active_recovery(
 ) -> dict[str, object]:
     prefix = "shadow_learning_recovery_"
     try:
-        with active_shadow_learning_state_path(config_dir).open("rb") as stream:
+        path = _owned_session_path(config_dir, entry_id)
+        if not path.exists():
+            path = active_shadow_learning_state_path(config_dir)
+        with path.open("rb") as stream:
             raw = stream.read(65537)
     except FileNotFoundError:
         return {prefix + "disk_status": "missing"}

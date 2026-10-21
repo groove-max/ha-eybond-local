@@ -276,6 +276,9 @@ class HubDetectionMixin:
                 else async_detect_inverter(
                     self._link_manager.transport,
                     driver_hint=detection_hint,
+                    **({"probe_target": self._inverter_probe_target}
+                       if getattr(self, "_inverter_probe_target", None) is not None
+                       and detection_hint == self._driver_hint else {}),
                 )
             ),
             name="eybond_inverter_detection",

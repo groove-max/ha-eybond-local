@@ -56,7 +56,7 @@ async def test_provider_http_outcome_preserves_exact_run_recovery(
 
     def connect():
         # Even DNS/TCP/TLS preparation is inside the durable dispatch transaction.
-        assert load_shadow_learning_session_state(root).cloud_commands_possible
+        assert load_shadow_learning_session_state(root, entry_id=c.config_entry.entry_id).cloud_commands_possible
         assert store.load(ctx.pn).source == source
         fail_at("connect")
         connection.sock = Mock()

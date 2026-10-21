@@ -2,6 +2,31 @@
 
 This project is designed to grow through transport-aware payload drivers plus declarative metadata, not through hardcoded model logic inside Home Assistant entities.
 
+### Cloud protocol compatibility contract
+
+Declare `cloud_probe_codecs` on the driver for read grammars it actually supports.
+The compatibility checker uses the driver registry, not a separate model list.
+A new dialect also needs a bounded read recognizer in
+`support/shadow_learning/protocol_evidence.py`; a cloud name or API device code
+is not wire evidence. Preserve all matching grammars when a command is ambiguous.
+
+`cloud_learning_supported` is separate from read/probe support. Set it only when
+a real Shadow Learning adapter exists; this flag does not replace current-session
+identity, seed, route, restoration or command-protection checks. Inspection may
+start on a framed route even when learning cannot, but test dispatch stays closed.
+
+Compatibility probes run through `ReadOnlyProtocolTransport` on the observed
+route. A split-route map may declare exact additional `probe_read_plans`, never
+an address sweep or a write. A candidate needs the ordinary driver's verified
+profile/schema and fresh comparable readings. User confirmation saves route
+intent for ordinary re-identification, not fabricated device identity or a write
+grant. Raw commands without a verified tunnel route remain diagnostic only.
+
+Cover the codec's valid/invalid reads, rejected writes, ambiguity, cancellation
+and wrong-route cases. Include support diagnostics for no-match/unknown results,
+without persisting arbitrary unknown payloads or credential-bearing responses.
+
+
 ### Internal auxiliary-channel foundation
 
 The short-ASCII auxiliary channel is not yet exposed by a driver, catalog entry

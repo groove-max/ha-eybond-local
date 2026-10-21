@@ -24,7 +24,7 @@ _NUMERIC_IDENTIFIER_BYTES_RE = re.compile(rb"(?<!\d)(\d{10,})(?!\d)")
 _WIRE_HEX_FIELDS = frozenset({
     "response_hex", "raw_response_hex", "payload_hex", "raw_payload_hex",
     "frame_hex", "chunk_hex", "remaining_hex", "buffer_hex", "raw_hex",
-    "command_hex",
+    "command_hex", "request_hex",
 })
 
 

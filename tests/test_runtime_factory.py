@@ -64,6 +64,7 @@ class RuntimeFactoryTests(unittest.TestCase):
         create_hub.assert_called_once_with(
             connection=connection,
             driver_hint="auto",
+            inverter_probe_target=None,
             driver_detection_strategy="first_match",
             pi30_flag_command_case="profile",
             connection_mode="known_ip",

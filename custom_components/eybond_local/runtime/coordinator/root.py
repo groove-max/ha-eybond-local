@@ -65,6 +65,7 @@ from .tooling_projection import (
 )
 from ..factory import create_runtime_manager
 from ..manager import RuntimeManager
+from ..protocol_check import PROBE_ROUTE_OPTION, selected_probe_target
 from ..poll_scheduler import PollDecision, PollScheduler
 
 logger = logging.getLogger(__name__)
@@ -139,6 +140,9 @@ class EybondLocalCoordinator(
         self._runtime: RuntimeManager = create_runtime_manager(
             connection_spec,
             driver_hint=runtime_driver_key,
+            **({"inverter_probe_target": selected_probe_target(
+                entry.options[PROBE_ROUTE_OPTION], driver_intent,
+            )} if PROBE_ROUTE_OPTION in entry.options else {}),
             driver_detection_strategy=driver_detection_strategy,
             pi30_flag_command_case=entry.options.get(
                 CONF_PI30_FLAG_COMMAND_CASE, PI30_FLAG_CASE_PROFILE,

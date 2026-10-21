@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from custom_components.eybond_local.cloud_numeric_learning import (
-    classify_numeric_encoding, numeric_learning_candidates,
+    classify_numeric_encoding, numeric_choice_learning_candidates, numeric_learning_candidates,
 )
 from custom_components.eybond_local.smartess_cloud import build_learn_settings_plan
 from custom_components.eybond_local.dessmonitor_cloud import DessMonitorControlField
@@ -20,6 +20,62 @@ def samples(probes, divisor=1):
 
 
 class NumericLearningTests(unittest.TestCase):
+    def test_numeric_choices_are_bounded_without_cross_family_limits(self):
+        choices = [(str(v / 10), f"{v / 10}V") for v in (*range(120, 151), *range(250, 316), *range(480, 611))]
+        probes = numeric_choice_learning_candidates(choices, current="27.9")
+        self.assertEqual(len(probes), 3)
+        self.assertEqual(probes[0]["value"], "27.9")
+        self.assertTrue(all((p["value"], p["value"] + "V") in choices for p in probes))
+        result = classify_numeric_encoding(samples(probes, 10))
+        self.assertEqual(result["unit"], "V")
+        self.assertNotIn("minimum", result)
+        self.assertNotIn("maximum", result)
+
+    def test_enum_codes_and_ambiguous_labels_are_not_quantities(self):
+        for choices in (
+            [("0", "50Hz"), ("1", "60Hz")],
+            [("2", "2A"), ("10", "10A")],
+            [("25.1", "25.1V"), ("25.2", "25.2A")],
+            [("25.1", "25.1V"), ("FULL", "Full")],
+            [("NaN", "NaNV"), ("25.2", "25.2V")],
+        ):
+            self.assertEqual(numeric_choice_learning_candidates(choices), [])
+
+    def test_smartess_omits_destructive_cloud_actions_but_keeps_settings(self):
+        fields = [dict(id=key, name=title, item=[dict(key="1", val="Enable")]) for key, title in (
+            ("clear_history", "Clear generation"), ("restore_defaults", "Factory settings"),
+            ("sys_system_time", "Clock"), ("overload_auto_restart", "Overload auto restart"),
+        )]
+        plan = build_learn_settings_plan({"field": fields}, field_ids=(), include_numeric=True)
+        self.assertEqual([p["field_id"] for p in plan], ["overload_auto_restart"])
+
+    def test_long_ambiguous_lists_are_bounded_exact_choices_not_numbers(self):
+        choices = [(str(i), f"Mode {i}") for i in range(180)]
+        smart = build_learn_settings_plan({"field": [dict(id="mode", name="Mode", item=[
+            dict(key=k, val=v) for k, v in choices])]}, field_ids=(), include_numeric=True, all_choice_values=True)
+        dess = build_dessmonitor_learning_plan((DessMonitorControlField(field_id="mode", title="Mode", choices=tuple(choices)),))
+        for plan in (smart, dess):
+            self.assertEqual(len(plan), 32)
+            self.assertEqual([p["value"] for p in plan], [str(i) for i in range(32)])
+            self.assertTrue(all(p["value_source"] == "choice" and "numeric_evidence" not in p for p in plan))
+
+    def test_both_providers_preserve_decimal_choices_and_numeric_evidence(self):
+        choices = [("27.9", "27.9V"), ("28.0", "28.0V")]
+        smart = build_learn_settings_plan({"field": [dict(id="bulk", name="Bulk", item=[
+            dict(key=k, val=v) for k, v in choices])]}, field_ids=(), include_numeric=True, all_choice_values=True)
+        dess = build_dessmonitor_learning_plan((DessMonitorControlField(field_id="bulk", title="Bulk", choices=tuple(choices)),))
+        for plan in (smart, dess):
+            self.assertEqual([p["value"] for p in plan], ["27.9", "28.0"])
+            self.assertTrue(all(p["value_source"] == "numeric_probe" for p in plan))
+            from custom_components.eybond_local.support.shadow_learning.pi30_protocol import classify_pi30_numeric_command
+            result = classify_pi30_numeric_command([dict(
+                requested_value=p["value"], numeric_evidence=p["numeric_evidence"],
+                observation=dict(command="PCVV" + p["value"]),
+            ) for p in plan])
+            self.assertEqual(result["command"], "PCVV")
+            self.assertEqual(result["command_precision"], 1)
+            self.assertNotIn("minimum", result)
+
     def test_no_range_is_not_a_blocker_or_a_fabricated_soc_limit(self):
         probes = numeric_learning_candidates(unit="%")
         self.assertEqual([p["value"] for p in probes], ["1", "2"])

@@ -386,6 +386,10 @@ class LinkCloudRoutesMixin:
             return 0
         return handler.observation_cursor()
 
+    def shadow_learning_completion(self):
+        """Return the exact live route ledger to its coordinator lifecycle owner."""
+        return getattr(self._shadow_learning_handler, "completion", None)
+
     def shadow_learning_observations_since(
         self,
         cursor: int,

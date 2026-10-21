@@ -10,6 +10,7 @@ from .flows.options.runtime import RuntimeOptionsMixin
 from .flows.options.shadow_review import ShadowLearningReviewMixin
 from .flows.options.shadow_run import ShadowLearningRunMixin
 from .flows.options.shadow_runtime import ShadowLearningRuntimeMixin
+from .flows.options.shadow_protocol import ShadowProtocolOptionsMixin
 from .flows.options.strategy import StrategyTransitionOptionsMixin
 
 
@@ -20,6 +21,7 @@ class EybondLocalOptionsFlow(
     ShadowLearningRunMixin,
     ShadowLearningReviewMixin,
     ShadowLearningRuntimeMixin,
+    ShadowProtocolOptionsMixin,
     ProxyCaptureOptionsMixin,
     DiagnosticsOptionsMixin,
     OptionsFlowBase,

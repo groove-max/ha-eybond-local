@@ -145,6 +145,8 @@ class EffectiveMetadataSelectionTests(unittest.TestCase):
 
         self.assertEqual(selection.profile_name, "modbus_smg/models/smg_6200.json")
         self.assertEqual(selection.register_schema_name, "modbus_smg/models/smg_6200.json")
+        self.assertEqual(selection.profile_metadata.source_name, selection.profile_name)
+        self.assertEqual(selection.register_schema_metadata.source_name, selection.register_schema_name)
 
     def test_invalid_persisted_snapshot_keeps_legacy_fallback(self) -> None:
         selection = resolve_effective_metadata_selection(

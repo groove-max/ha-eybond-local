@@ -151,6 +151,8 @@ class EybondGAsciiDriver(InverterDriver):
     """Read-only driver for the EyeBond G-command ASCII protocol family."""
 
     key = _EYBOND_G_ASCII_DRIVER_KEY
+    cloud_probe_codecs = ("eybond_g_ascii",)
+    cloud_learning_supported = True
     name = "EyeBond G-ASCII"
     probe_timeout = 12.0
     signature_timeout = 4.0

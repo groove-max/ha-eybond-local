@@ -1,7 +1,7 @@
 """Durable, create-only cloud-learning holds, scoped to collector identity.
 
 The wizard arms a hold only after proving its persistent local fallback route.
-Only an exact durable no-request receipt can retire a hold; there is no expiry.
+Exact no-request or completed-study receipts can retire a hold; there is no expiry.
 Re-adding an entry for the same PN must not hide an old study's hold.
 """
 
@@ -146,6 +146,10 @@ class CloudLearningProtectionStore:
     def retire_no_request(self, hold: CloudLearningHold) -> None:
         """Archive the exact hold after its journal's no-send correction is durable."""
         self.require_no_request_receipt(hold)
+        self._archive_hold(hold)
+
+    def _archive_hold(self, hold: CloudLearningHold) -> None:
+        """Caller verified its specific durable receipt before journal correction."""
         self.require_exact_hold(hold)
         destination = self._root / "retired_holds" / self._receipt_path(hold).name
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -206,7 +210,7 @@ class CloudLearningMutationFence:
     This is not a live-route certificate or permission to dispatch cloud writes.
     The HA composition root installs the same fence in lifecycle and management.
     Once a hold/corruption is seen, a later missing file cannot clear it in this
-    process. Only explicit exact no-request retirement can release that floor.
+    process. Only explicit exact receipt-backed retirement can release that floor.
     """
 
     def __init__(self, config_dir: Path, collector_pn: str) -> None:
@@ -244,6 +248,19 @@ class CloudLearningMutationFence:
         await async_run_owned_worker(self._store.require_no_hold, collector_pn=self._collector_pn)
         if self._blocked_reason not in ("", "cloud_learning_hold_pending"):
             raise CloudLearningProtectionRequired("cloud_learning_no_request_fence_conflict")
+        self._release_generation += 1
+        self._blocked_reason = ""
+
+    async def accept_completed_retirement(self, hold: CloudLearningHold) -> None:
+        """Only a validated completed-study receipt can clear this sticky floor."""
+        from .completion_store import CompletedLearningStore
+        if hold.collector_pn != self._collector_pn or self._blocked_reason not in ("", "cloud_learning_hold_pending"):
+            raise CloudLearningProtectionRequired("cloud_learning_completion_fence_conflict")
+        store = CompletedLearningStore(self._store._config_dir)
+        await async_run_owned_worker(store.require_completed_receipt, hold=hold)
+        await async_run_owned_worker(self._store.require_no_hold, collector_pn=self._collector_pn)
+        if self._blocked_reason not in ("", "cloud_learning_hold_pending"):
+            raise CloudLearningProtectionRequired("cloud_learning_completion_fence_conflict")
         self._release_generation += 1
         self._blocked_reason = ""
 

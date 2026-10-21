@@ -10,7 +10,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ...cloud_numeric_learning import numeric_learning_candidates
+from ...cloud_numeric_learning import MAX_LEARNING_CHOICE_VALUES, numeric_choice_learning_candidates, numeric_learning_candidates
 from ...dessmonitor_cloud import (
     DEFAULT_BASE_URL,
     DEFAULT_LANGUAGE,
@@ -122,11 +122,15 @@ def build_dessmonitor_learning_plan(
             break
 
         values = list(field.choices)
-        if values:
+        probes = numeric_choice_learning_candidates(values, current=field.current_value)
+        if probes:
+            selected = [(probe["value"], "") for probe in probes]
+            value_source = "numeric_probe"
+        elif values:
             alternatives = [
                 choice for choice in values if choice[0] != field.current_value
             ]
-            selected = values if all_choice_values else (alternatives or values[:1])
+            selected = values[:MAX_LEARNING_CHOICE_VALUES] if all_choice_values else (alternatives or values[:1])
             if not all_choice_values:
                 selected = selected[:1]
             value_source = "choice"

@@ -13,12 +13,14 @@ from ..const import (
 )
 from .hub import EybondHub
 from .manager import RuntimeManager
+from ..models import ProbeTarget
 
 
 def create_runtime_manager(
     connection: ConnectionSpec,
     *,
     driver_hint: str,
+    inverter_probe_target: ProbeTarget | None = None,
     driver_detection_strategy: str = DEFAULT_DRIVER_DETECTION_STRATEGY,
     pi30_flag_command_case: str = PI30_FLAG_CASE_PROFILE,
     connection_mode: str = "",
@@ -37,6 +39,7 @@ def create_runtime_manager(
     return EybondHub(
         connection=connection,
         driver_hint=driver_hint,
+        inverter_probe_target=inverter_probe_target,
         driver_detection_strategy=driver_detection_strategy,
         pi30_flag_command_case=pi30_flag_command_case,
         connection_mode=connection_mode,

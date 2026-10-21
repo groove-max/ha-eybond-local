@@ -25,6 +25,7 @@ _MODBUS_RTU_FAMILIES: frozenset[str] = frozenset(
         "modbus_smg",
         "srne_modbus",
         "must_pv_ph18",
+        "smartess_local",
     }
 )
 _MODBUS_RTU_CLOUD_FAMILIES: frozenset[str] = frozenset(
@@ -337,6 +338,7 @@ def resolve_shadow_learning_protocol_adapter(
     *,
     collector_cloud_family: str = "",
     raw_passthrough_frame_format: str = "",
+    observed_cloud_request: bytes = b"",
 ) -> ShadowLearningProtocolAdapter:
     """Resolve the cloud-side protocol adapter for one shadow-learning session.
 
@@ -347,6 +349,12 @@ def resolve_shadow_learning_protocol_adapter(
     compatibility. Explicit non-Modbus local protocols fail closed unless
     runtime protocol evidence identifies a supported dialect.
     """
+
+    # Only a complete CRC-checked request from the bound cloud route can
+    # override provider/local-driver heuristics. Invalid supplied evidence
+    # must not silently fall back to a different dialect.
+    if observed_cloud_request:
+        return resolve_shadow_learning_wire_adapter(observed_cloud_request)
 
     snapshot = snapshot if isinstance(snapshot, dict) else {}
     cloud_family = str(collector_cloud_family or "").strip().lower()
@@ -394,6 +402,31 @@ def resolve_shadow_learning_protocol_adapter(
     if "eybond_g_ascii" in evidence:
         return EybondGAsciiShadowLearningAdapter()
     return UnsupportedShadowLearningAdapter(protocol_family or driver_key or profile_name)
+
+
+def resolve_shadow_learning_wire_adapter(payload: bytes) -> ShadowLearningProtocolAdapter:
+    """Resolve native PI30/RTU from one request, not a host or device label.
+
+    The caller owns route/identity binding and must pass the inverter payload,
+    not an FC4 wrapper, a reply, or a command reconstructed from UI metadata.
+    """
+    from .pi30_protocol import Pi30ShadowLearningAdapter
+
+    if type(payload) is not bytes or len(payload) > 512:
+        return UnsupportedShadowLearningAdapter("unproven_cloud_payload")
+    candidates = []
+    for adapter in (Pi30ShadowLearningAdapter(), ModbusRtuShadowLearningAdapter()):
+        if (adapter.decode_read_request(payload) is not None
+                or adapter.decode_write_request(payload) is not None):
+            candidates.append(adapter)
+    # The G-ASCII write grammar is deliberately permissive once selected;
+    # arbitrary printable text must not identify it. Only catalog reads do.
+    g_adapter = EybondGAsciiShadowLearningAdapter()
+    if g_adapter.decode_read_request(payload) is not None:
+        candidates.append(g_adapter)
+    if len(candidates) == 1:
+        return candidates[0]
+    return UnsupportedShadowLearningAdapter("unproven_cloud_payload")
 
 
 def _decode_g_ascii_command(frame: bytes) -> str:
@@ -491,4 +524,5 @@ __all__ = [
     "EybondGAsciiShadowLearningAdapter",
     "UnsupportedShadowLearningAdapter",
     "resolve_shadow_learning_protocol_adapter",
+    "resolve_shadow_learning_wire_adapter",
 ]

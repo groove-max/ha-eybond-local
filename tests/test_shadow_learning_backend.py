@@ -488,6 +488,34 @@ class ShadowLearningBackendTests(unittest.TestCase):
         self.assertEqual(blockers, ())
         self.assertEqual(seed.protocol_adapter_key, "modbus_rtu")
 
+    def test_legacy_binary_pi30_ascii_capture_cannot_supply_register_seed(self) -> None:
+        """A supported provider/adapter is insufficient for ASCII-only evidence."""
+        seed, blockers = build_shadow_learning_seed(
+            session_id="synthetic-pi30-preflight",
+            entry_id="entry-1",
+            collector_pn="E5000020000000",
+            collector_cloud_family="legacy_binary",
+            collector_cloud_profile_key="legacy_binary",
+            collector_cloud_profile_label="Legacy binary",
+            collector_cloud_profile_source="endpoint_host",
+            collector_cloud_profile_confidence="low",
+            collector_callback_endpoint="192.0.2.1,8899,TCP",
+            effective_metadata_snapshot={
+                "effective_owner_key": "pi30", "variant_key": "pi30_max",
+                "profile_name": "pi30_ascii/models/pi30_max.json",
+                "register_schema_name": "pi30_ascii/models/pi30_max.json",
+                "protocol_family": "pi30", "confidence": "high",
+            },
+            raw_capture={
+                "capture_kind": "pi30_ascii_dump",
+                "driver_key": "pi30",
+                "responses": {"QPI": "PI30", "QFLAG": "EaDx"},
+            },
+        )
+        self.assertEqual(seed.protocol_adapter_key, "modbus_rtu")
+        self.assertEqual(seed.register_bank, {})
+        self.assertEqual(blockers, ("missing_register_seed",))
+
     def test_exception_mode_logs_write_without_mutating_register_bank(self) -> None:
         seed = ShadowLearningSeed(
             session_id="entry-1_20260605T120000Z",

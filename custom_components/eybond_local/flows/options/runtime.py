@@ -74,6 +74,7 @@ from ...const import (
 )
 from ...control_policy import control_mode_options
 from ...drivers.registry import driver_options
+from ...runtime.protocol_check import PROBE_ROUTE_OPTION
 from ..common.presentation import (
     _PASSWORD_TEXT_SELECTOR,
     CONF_WIFI_PASSWORD,
@@ -717,6 +718,11 @@ class RuntimeOptionsMixin:
             # scan depth so the reloaded runtime really performs the requested
             # identification instead of merely saving a decorative preference.
             _clear_runtime_inverter_facts(data)
+        # Polling/control-mode edits must not silently lose an explicitly
+        # checked slave address. Changing protocol intent retires that route.
+        if (submitted_driver_intent == current_driver_intent
+                and PROBE_ROUTE_OPTION in self._config_entry.options):
+            options[PROBE_ROUTE_OPTION] = self._config_entry.options[PROBE_ROUTE_OPTION]
         self.hass.config_entries.async_update_entry(
             self._config_entry,
             data=data,

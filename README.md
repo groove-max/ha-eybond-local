@@ -301,10 +301,11 @@ What to expect:
 The cloud password is not saved. Learned items apply only to this Home Assistant
 device until they are reviewed and added to the built-in catalog.
 
-In the current 0.3 test build, active learning keeps the collector local after
-the first test command, **including after success or a Home Assistant restart**.
-Local telemetry and supported controls remain available, but cloud telemetry
-and app control stay disconnected pending reviewed recovery. Do not start
+In the current 0.3 test build, active learning restores the original connection
+automatically only with verified completion receipts for every sent command
+(using provider and wire evidence, not a protocol-name restriction). Otherwise the collector stays local,
+**including after a successful scan or a Home Assistant restart**. Local telemetry
+and supported controls remain available; cloud access then needs reviewed recovery. Do not start
 active learning if you need uninterrupted cloud access. Read-only analysis does
 not change the connection. This protection is not Cloud Bridge.
 

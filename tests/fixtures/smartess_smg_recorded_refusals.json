@@ -1,0 +1,635 @@
+{
+  "description": "Sanitized SMG6200 live protected run; bare FC16 requests and typed SmartESS refusals. Wire replies are reconstructed in tests, not API byte echoes. No fixture authorizes retiring a live hold.",
+  "columns": [
+    "field_id",
+    "value",
+    "request_hex",
+    "err",
+    "desc"
+  ],
+  "attempts": [
+    [
+      "bse_eybond_ctrl_48",
+      "0",
+      "0110012c0001020000b13c",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_48",
+      "1",
+      "0110012c000102000170fc",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_48",
+      "2",
+      "0110012c000102000230fd",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_48",
+      "3",
+      "0110012c0001020003f13d",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_48",
+      "4",
+      "0110012c0001020004b0ff",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_48",
+      "5",
+      "0110012c0001020005713f",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_48",
+      "6",
+      "0110012c0001020006313e",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_49",
+      "0",
+      "0110012d0001020000b0ed",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_49",
+      "1",
+      "0110012d0001020001712d",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_49",
+      "2",
+      "0110012d0001020002312c",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_49",
+      "3",
+      "0110012d0001020003f0ec",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_50",
+      "0",
+      "0110012e0001020000b0de",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_50",
+      "1",
+      "0110012e0001020001711e",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_50",
+      "2",
+      "0110012e0001020002311f",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_51",
+      "0",
+      "0110012f0001020000b10f",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_51",
+      "1",
+      "0110012f000102000170cf",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_51",
+      "2",
+      "0110012f000102000230ce",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_51",
+      "3",
+      "0110012f0001020003f10e",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_52",
+      "0",
+      "011001300001020000b360",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_52",
+      "1",
+      "01100130000102000172a0",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_53",
+      "0",
+      "011001310001020000b2b1",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_53",
+      "1",
+      "0110013100010200017371",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_55",
+      "0",
+      "011001330001020000b353",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_55",
+      "1",
+      "0110013300010200017293",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_56",
+      "0",
+      "011001340001020000b2e4",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_56",
+      "1",
+      "0110013400010200017324",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_57",
+      "0",
+      "011001350001020000b335",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_57",
+      "1",
+      "01100135000102000172f5",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_58",
+      "0",
+      "011001360001020000b306",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_58",
+      "1",
+      "01100136000102000172c6",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_60",
+      "0",
+      "011001390001020000b3f9",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_60",
+      "1",
+      "0110013900010200017239",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_64",
+      "220.0",
+      "011001400001020898be3a",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_64",
+      "230.0",
+      "0110014000010208fcbfd1",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_64",
+      "240.0",
+      "011001400001020960be28",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_65",
+      "50.00",
+      "011001410001021388b4d7",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bse_eybond_ctrl_65",
+      "60.00",
+      "011001410001021770b795",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_83",
+      "1",
+      "0110015600010200017b66",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_83",
+      "2",
+      "0110015600010200023b67",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_82",
+      "1",
+      "0110015500010200017b55",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_82",
+      "2",
+      "0110015500010200023b54",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_84",
+      "1",
+      "0110015700010200017ab7",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_84",
+      "2",
+      "0110015700010200023ab6",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_66",
+      "0",
+      "011001420001020000b9b2",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_66",
+      "1",
+      "0110014200010200017872",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_66",
+      "2",
+      "0110014200010200023873",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_66",
+      "3",
+      "011001420001020003f9b3",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_66",
+      "4",
+      "011001420001020004b871",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_66",
+      "5",
+      "01100142000102000579b1",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_66",
+      "6",
+      "01100142000102000639b0",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_67",
+      "1",
+      "01100143000102000a3864",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_67",
+      "2",
+      "011001430001020014b86c",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_68",
+      "1",
+      "01100144000102000a39d3",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_68",
+      "2",
+      "011001440001020014b9db",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_69",
+      "1",
+      "01100145000102000a3802",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_69",
+      "2",
+      "011001450001020014b80a",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_70",
+      "1",
+      "01100146000102000a3831",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_70",
+      "2",
+      "011001460001020014b839",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_71",
+      "1",
+      "01100147000102000a39e0",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_71",
+      "2",
+      "011001470001020014b9e8",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_73",
+      "1",
+      "01100149000102000a38ce",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_73",
+      "2",
+      "011001490001020014b8c6",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_74",
+      "1",
+      "0110014a0001020001793a",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_74",
+      "2",
+      "0110014a0001020002393b",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_75",
+      "0",
+      "0110014b0001020000b92b",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_75",
+      "1",
+      "0110014b000102000178eb",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_75",
+      "2",
+      "0110014b000102000238ea",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_75",
+      "3",
+      "0110014b0001020003f92a",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_76",
+      "1",
+      "0110014c000102000a389b",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_76",
+      "2",
+      "0110014c0001020014b893",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_77",
+      "1",
+      "0110014d000102000a394a",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_77",
+      "2",
+      "0110014d0001020014b942",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_78",
+      "1",
+      "0110014e000102000a3979",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_78",
+      "2",
+      "0110014e0001020014b971",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_79",
+      "0",
+      "0110014f0001020000b8af",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_79",
+      "1",
+      "0110014f0001020001796f",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_80",
+      "0",
+      "011001500001020000bac0",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_80",
+      "1",
+      "0110015000010200017b00",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_81",
+      "1",
+      "0110015100010200017ad1",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "bat_eybond_ctrl_81",
+      "2",
+      "0110015100010200023ad0",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_98",
+      "0",
+      "011001960001020000aba6",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_98",
+      "1",
+      "0110019600010200016a66",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_98",
+      "2",
+      "0110019600010200022a67",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_82",
+      "0",
+      "011001520001020000bb22",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_82",
+      "1",
+      "0110015200010200017ae2",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_forced_eq_charging",
+      "1",
+      "011001a900010200016f69",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_exit_fault_mode",
+      "1",
+      "011001aa00010200016f5a",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_97",
+      "0",
+      "011001a40001020000afb4",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ],
+    [
+      "sys_eybond_ctrl_97",
+      "1",
+      "011001a400010200016e74",
+      1,
+      "ERR_FAIL(Read-Only Register)"
+    ]
+  ]
+}

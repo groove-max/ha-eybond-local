@@ -186,6 +186,8 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
     """Bench-safe SMG probe and runtime reader."""
 
     key = "modbus_smg"
+    cloud_probe_codecs = ("modbus_rtu",)
+    cloud_learning_supported = True
     poll_policy = SMG_MODBUS_POLL_POLICY
     name = "SMG / Modbus"
 

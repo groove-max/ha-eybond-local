@@ -242,6 +242,7 @@ async def _ordered_driver_targets(
     preferred_driver_keys: tuple[str, ...] = (),
     allowed_driver_keys: tuple[str, ...] = (),
     deadline: DriverDetectionDeadline | None = None,
+    probe_target: ProbeTarget | None = None,
 ) -> tuple[tuple[InverterDriver, tuple[ProbeTarget, ...]], ...]:
     """Return the probe order, seeded by collector metadata when available.
 
@@ -256,7 +257,7 @@ async def _ordered_driver_targets(
     """
 
     driver_targets = tuple(
-        (driver, _ordered_probe_targets(driver, transport))
+        (driver, (probe_target,) if probe_target is not None else _ordered_probe_targets(driver, transport))
         for driver in iter_drivers(driver_hint)
         if not allowed_driver_keys or driver.key in allowed_driver_keys
     )
@@ -306,6 +307,7 @@ async def async_detect_inverter(
     depth: str = "fast",
     preferred_driver_keys: tuple[str, ...] = (),
     remaining_seconds: Callable[[], float | None] | None = None,
+    probe_target: ProbeTarget | None = None,
 ) -> DetectedDriverContext:
     """Probe all drivers against one active transport and return the first match."""
 
@@ -314,11 +316,14 @@ async def async_detect_inverter(
     inverter_link_down = False
     deadline = DriverDetectionDeadline(remaining_seconds)
     logger.debug("Starting inverter driver detection depth=%s hint=%s", depth, driver_hint)
+    if probe_target is not None and driver_hint == "auto":
+        raise ValueError("explicit_probe_target_requires_driver")
     driver_targets = await _ordered_driver_targets(
         transport,
         driver_hint=driver_hint,
         preferred_driver_keys=preferred_driver_keys,
         deadline=deadline,
+        **({"probe_target": probe_target} if probe_target is not None else {}),
     )
 
     loop = asyncio.get_running_loop()

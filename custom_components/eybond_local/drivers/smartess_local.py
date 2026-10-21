@@ -61,6 +61,8 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
     """Runtime driver for SmartESS 0925 Modbus RTU over EyeBond binary tunnel."""
 
     key = "smartess_local"
+    cloud_probe_codecs = ("modbus_rtu",)
+    cloud_learning_supported = True
     poll_policy = PollPolicy(min_auto_interval=5.0, max_auto_interval=90.0)
     name = "SmartESS Local / Modbus"
     profile_name = SMARTESS_LOCAL_0925_PROFILE_NAME
@@ -105,6 +107,14 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
     @property
     def capability_presets(self):
         return ()
+
+    def probe_read_plans(self, target: ProbeTarget) -> tuple[LocalRegisterReadPlan, ...]:
+        # The sole off-data-route identity read; never authorize the entire
+        # configuration address space just to check a candidate profile.
+        return (LocalRegisterReadPlan.for_target(
+            _target_with_collector_addr(target, _SMARTESS_0925_CONFIG_COLLECTOR_ADDR),
+            function=3, start=5004, count=1,
+        ),)
 
     async def async_probe_signature(self, transport, target: ProbeTarget) -> bool:
         session = self._session(
@@ -220,6 +230,7 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
     ) -> DriverReadResult:
         schema = load_register_schema(inverter.register_schema_name or self.register_schema_name)
         now = time.monotonic() if now_monotonic is None else float(now_monotonic)
+        capabilities = inverter.capabilities or self.write_capabilities
         cache = _runtime_cache(runtime_state)
         values_cache: dict[str, Any] = cache.setdefault("values", {})
         register_cache: dict[int, int] = cache.setdefault("registers", {})
@@ -254,7 +265,7 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
             if not schema.spec_sets.get(block.key) and not any(
                 capability.value_kind != "action"
                 and block.start <= capability.register < block.start + block.count
-                for capability in self.write_capabilities
+                for capability in capabilities
             ):
                 continue
             if not _is_block_due(
@@ -291,7 +302,7 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
                         self,
                         transport,
                         inverter.probe_target,
-                        self.write_capabilities,
+                        capabilities,
                         block_start=block.start,
                         block_count=block.count,
                         register_cache=register_cache,
@@ -327,8 +338,8 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
                 values_cache[key] = value
                 cycle_values[key] = value
 
-        _apply_capability_read_back(values_cache, self.write_capabilities, register_cache)
-        _apply_capability_read_back(cycle_values, self.write_capabilities, cycle_registers)
+        _apply_capability_read_back(values_cache, capabilities, register_cache)
+        _apply_capability_read_back(cycle_values, capabilities, cycle_registers)
         commit_cycle_failures(runtime_state)
         diagnostics = unsupported_command_diagnostics(runtime_state)
         if request_timings:
@@ -362,13 +373,18 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
         *,
         runtime_state: dict[str, Any] | None = None,
     ) -> Any:
-        capability = _find_capability(capability_key, self.write_capabilities)
+        capability = _find_capability(capability_key, inverter.capabilities or self.write_capabilities)
+        if capability.word_count != 1 or capability.write_function not in (None, 6, 16):
+            raise ValueError(f"unsupported_write_shape:{capability.key}")
         raw_value = _encode_capability_value(capability, value)
         session = self._session(
             transport,
             _target_for_register(inverter.probe_target, capability.register),
         )
-        await session.write_single_holding(capability.register, raw_value)
+        if capability.write_function == 16:
+            await session.write_holding(capability.register, [raw_value])
+        else:
+            await session.write_single_holding(capability.register, raw_value)
         readback = await session.read_holding(capability.register, 1)
         readback = _normalize_register_words(capability.register, readback)
         if not readback:

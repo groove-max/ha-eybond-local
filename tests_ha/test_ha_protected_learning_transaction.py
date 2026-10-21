@@ -27,7 +27,7 @@ async def test_first_http_has_durable_intent_and_hold_and_later_commands_reuse_i
     seen = []
 
     def http():
-        persisted = load_shadow_learning_session_state(root)
+        persisted = load_shadow_learning_session_state(root, entry_id=c.config_entry.entry_id)
         assert persisted.cloud_commands_possible is True
         hold = store.load(ctx.pn)
         assert hold.source == source
@@ -179,7 +179,8 @@ async def test_each_command_rechecks_independent_hold(dispatch_context, monkeypa
 
 
 @pytest.mark.parametrize("same_pn", [False, True])
-async def test_readded_entry_cannot_hide_legacy_intent_for_same_collector(dispatch_context, monkeypatch, same_pn):
+@pytest.mark.parametrize("scoped", [False, True])
+async def test_readded_entry_cannot_hide_legacy_intent_for_same_collector(dispatch_context, monkeypatch, same_pn, scoped):
     from custom_components.eybond_local.runtime.coordinator.learning_recovery import async_preserve_interrupted_learning_hold
     from custom_components.eybond_local.support.shadow_learning.session import save_shadow_learning_session_state
     ctx = dispatch_context
@@ -187,7 +188,7 @@ async def test_readded_entry_cannot_hide_legacy_intent_for_same_collector(dispat
     old = replace(ctx.state, entry_id="old_removed_entry", protection_version=0,
                   collector_pn=ctx.pn if same_pn else "E5000099990002")
     await c.hass.async_add_executor_job(lambda: save_shadow_learning_session_state(
-        config_dir=Path(c.hass.config.config_dir), state=old,
+        config_dir=Path(c.hass.config.config_dir), state=old, entry_id=old.entry_id if scoped else "",
     ))
     monkeypatch.delattr(c, "_async_active_shadow_learning_state")
     c._shadow_learning_session_state_loaded = False

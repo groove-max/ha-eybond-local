@@ -59,6 +59,40 @@ logger = logging.getLogger(__name__)
 CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS = 40
 
 
+def _learning_failure_location(exc: Exception) -> str:
+    """Return code coordinates only, never exception text, locals or URLs."""
+    location = "unknown"
+    trace = exc.__traceback__
+    while trace is not None:
+        code = trace.tb_frame.f_code
+        path = Path(code.co_filename)
+        if "eybond_local" in path.parts:
+            location = f"{path.name}:{code.co_name}:{trace.tb_lineno}"
+        trace = trace.tb_next
+    return location
+
+
+def _learning_management_failure(exc: Exception) -> dict[str, object]:
+    """Preserve the primary typed failure even if endpoint recovery fails too."""
+    from ...collector.management import CollectorManagementTransportError
+
+    if not isinstance(exc, CollectorManagementTransportError):
+        return {}
+    calls = []
+    trace = exc.__traceback__
+    while trace is not None:
+        code = trace.tb_frame.f_code
+        path = Path(code.co_filename)
+        if "eybond_local" in path.parts:
+            calls.append(f"{path.name}:{code.co_name}:{trace.tb_lineno}")
+        trace = trace.tb_next
+    return {"management_failure": {
+        "error_code": exc.diagnostic_code,
+        "failed_request": exc.request_diagnostics,
+        "call_path": calls[-12:],
+    }}
+
+
 def _metadata_with_local_coverage(
     metadata_evidence: dict[str, Any],
     telemetry: object,
@@ -170,6 +204,13 @@ class ShadowLearningRunMixin:
         """Reduce internal exceptions to a closed user-facing reason set."""
 
         reason = str(exc).strip()
+        if reason == "shadow_learning_cloud_protocol_not_confirmed":
+            return "control_discovery_cloud_protocol_unconfirmed"
+        if reason == (
+            "shadow_learning_protocol_preparation_failed:"
+            "cloud_payload_modbus_requires_register_seed"
+        ):
+            return "control_discovery_cloud_register_seed_required"
         if reason == "cloud_learning_protection_held":
             return "cloud_learning_protection_held"
         if reason == "shadow_learning_restore_pending" or (
@@ -197,6 +238,17 @@ class ShadowLearningRunMixin:
             str(discovery.get("reason") or "") if isinstance(discovery, dict) else ""
         )
         reason = reason.strip()
+        if self._shadow_learning_state.get("cloud_protocol_evidence") or self._shadow_learning_state.get("protocol_diagnostics"):
+            return self._tr("common.dynamic.cloud_protocol_problem",
+                "Cloud protocol compatibility or learning readiness was not confirmed. "
+                "After connection recovery, use the read-only profile check if offered. "
+                "Otherwise download a Support Archive. Your current profile is unchanged; "
+                "do not choose an arbitrary map. Any learning protection remains active.")
+        if reason == CONTROL_DISCOVERY_FAILURE_GENERIC:
+            from ...support.shadow_learning.protocol_mismatch import CloudModbusRead
+
+            if CloudModbusRead.from_mapping(self._shadow_learning_state.get("cloud_modbus_read")) is not None:
+                reason = "control_discovery_cloud_register_seed_required"
         if reason == "cloud_learning_protection_held":
             diagnostics = discovery.get("diagnostics") or {}
             primary = diagnostics.get("primary_failure_reason") if isinstance(diagnostics, dict) else None
@@ -209,6 +261,17 @@ class ShadowLearningRunMixin:
             }:
                 reason = primary
         defaults = {
+            "control_discovery_cloud_protocol_unconfirmed": (
+                "No matching cloud read confirmed the PI30 protocol during preparation. "
+                "No test controls were sent. Download a Support Archive and check the "
+                "connection/restoration status below before trying again."
+            ),
+            "control_discovery_cloud_register_seed_required": (
+                "Modbus reads were observed from the cloud while local polling uses PI30. "
+                "No test controls were sent. Once the previous connection is restored, "
+                "use the Modbus compatibility check if offered, or share a Support Archive. A successful register read "
+                "alone does not confirm a compatible map."
+            ),
             "cloud_learning_protection_held": (
                 "Direct cloud reconnection remains blocked. Use a protected retry "
                 "only when offered by the wizard, or download a Support Archive "
@@ -742,6 +805,9 @@ class ShadowLearningRunMixin:
         the review/result screen.
         """
 
+        for key in ("cloud_modbus_read", "modbus_profile_check", "cloud_protocol_evidence", "protocol_diagnostics"):
+            self._shadow_learning_state.pop(key, None)
+
         coordinator = self._coordinator()
         if coordinator is None:
             self._shadow_learning_state["discovery"] = {
@@ -785,6 +851,15 @@ class ShadowLearningRunMixin:
         except Exception as exc:
             # Fail-closed cleanup: stop the shadow session and restore the
             # collector endpoint, then surface the failure in flow state.
+            from ...support.shadow_learning.protocol_mismatch import CloudProtocolMismatchError
+
+            self._shadow_learning_state.pop("cloud_modbus_read", None)
+            if isinstance(exc, CloudProtocolMismatchError):
+                if exc.cloud_read is not None:
+                    self._shadow_learning_state["cloud_modbus_read"] = exc.cloud_read.to_mapping()
+                if exc.evidence is not None:
+                    self._shadow_learning_state["cloud_protocol_evidence"] = exc.evidence.to_mapping()
+                self._shadow_learning_state["protocol_diagnostics"] = exc.diagnostics
             progress = dict(self._shadow_learning_state.get("progress") or {})
             source_id = self._control_discovery_learning_source(coordinator)
             cloud_error_code = ""
@@ -798,6 +873,8 @@ class ShadowLearningRunMixin:
                 cloud_error_code=cloud_error_code,
             )
             primary_failure_reason = failure_reason
+            failure_location = _learning_failure_location(exc)
+            management_failure = _learning_management_failure(exc)
             request_stage = provider_diagnostics.get(
                 "request_stage", str(getattr(exc, "stage", "") or "unknown")
             )
@@ -807,7 +884,7 @@ class ShadowLearningRunMixin:
             logger.error(
                 "Control discovery failed entry=%s source=%s stage=%s "
                 "request_stage=%s provider_reason=%s exception_type=%s "
-                "cloud_error_code=%s failure_reason=%s http_status=%s",
+                "cloud_error_code=%s failure_reason=%s http_status=%s location=%s management=%s",
                 getattr(self._config_entry, "entry_id", ""),
                 source_id,
                 str(progress.get("stage") or "unknown"),
@@ -817,6 +894,8 @@ class ShadowLearningRunMixin:
                 cloud_error_code or "not_cloud_classified",
                 failure_reason,
                 provider_diagnostics.get("http_status", "unknown"),
+                failure_location,
+                management_failure,
             )
             recovery_pending = False
             if self._control_discovery_requires_shadow_route(coordinator):
@@ -841,6 +920,8 @@ class ShadowLearningRunMixin:
                 # arbitrary provider attributes (which may contain credentials).
                 "diagnostics": {
                     "primary_failure_reason": primary_failure_reason,
+                    "failure_location": failure_location,
+                    **management_failure,
                     "recovery_pending": recovery_pending,
                     **provider_diagnostics,
                     "learning_source": source_id,

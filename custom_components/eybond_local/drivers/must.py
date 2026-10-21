@@ -41,6 +41,8 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
     """Driver for MUST PV/PH18 Modbus devices."""
 
     key = "must_pv_ph18"
+    cloud_probe_codecs = ("modbus_rtu",)
+    cloud_learning_supported = True
     poll_policy = PollPolicy(min_auto_interval=5.0, max_auto_interval=90.0)
     name = "MUST PV/PH18"
     profile_name = "must_pv_ph18/base.json"

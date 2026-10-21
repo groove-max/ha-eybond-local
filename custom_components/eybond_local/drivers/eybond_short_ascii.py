@@ -27,6 +27,7 @@ _PARSERS = {"short_ascii.md": parse_md, "short_ascii.mp": parse_mp, "short_ascii
 
 class EybondShortAsciiDriver(InverterDriver):
     key = "eybond_short_ascii"
+    cloud_probe_codecs = ("eybond_short_ascii",)
     name = "EyeBond Short-ASCII (read-only)"
     signature_timeout = 4.0
 

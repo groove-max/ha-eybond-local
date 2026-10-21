@@ -97,15 +97,35 @@ verifies a permanent local endpoint, then temporarily adds a filtered cloud
 route to that listener before asking the selected API for bounded test commands.
 The local writes are captured and blocked. Before the first command, both the
 command intent and an independent per-PN protection hold are durable. After
-that point, even successful completion retains the local endpoint rather than
-restoring the direct cloud connection. A cloud success without an exact post-action local
+that point, a successful scan without completion receipts retains the local
+endpoint rather than restoring direct cloud access. A cloud success without an exact post-action local
 observation is treated as a possible unproxied write and stops the run.
 
 A persisted recovery record blocks an ordinary new active run. Recovery before
 any possible cloud test command may restore the saved endpoint; a protection
-hold takes precedence and survives cancellation, success and restart. An exact
-operation-owned no-request receipt is the only automatic retirement path, and
-cannot retire an earlier run's hold. Interrupted legacy records are quarantined.
+hold takes precedence and survives cancellation, unverified completion and restart.
+Retirement requires an exact operation-owned no-request receipt or a completed
+study receipt. Completion policy is provider/codec-neutral: provider adapters bind
+the outbound action and validate terminal evidence; wire adapters validate the
+request/refusal through the existing learning codecs. SmartESS/DESSMonitor wire
+echoes support Modbus, PI30 and GASCII, framed or raw. A raw exchange requires
+single-flight dispatch, ordered receipts and one connection epoch; framed
+exchanges also require unique transaction IDs and a stable wrapper route.
+Unknown formats or acceptance-only API results cannot produce a terminal receipt.
+For the recorded SMG6200 bare FC16 path, SmartESS parses the exception reply
+instead of echoing it. Its exact typed `ERR_FAIL(Read-Only Register)` result is
+qualified only together with the captured request and drained, CRC-valid raw
+`0x90/0x01` refusal. Generic failures, timeouts and the same text without that
+wire evidence are not completion. Collector SYST/UART bootstrap settings are
+answered inside the shadow only, not counted as inverter test commands; unknown
+AT writes remain unproven. The final trace includes a diagnostic completion
+summary, which is never itself authority to retire a hold.
+The version-2 receipt binds provider, carrier, codec, epoch, sequence and API
+evidence; the store revalidates these against the hold source. No schema-1 trace
+is reinterpreted as universal evidence. All HTTP actions and proxy pumps must be
+drained, with no unparsed cloud tail. Persistence order is receipt, journal correction, hold archive, mutation
+fence acknowledgement, then ordinary verified endpoint restoration. Neither path
+can retire an earlier run's hold. Interrupted legacy records are quarantined.
 
 An explicit protected retry can retain the original hold while checking the
 same entry, PN, local endpoint and fresh payload. It archives the previous

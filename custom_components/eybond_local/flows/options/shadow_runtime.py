@@ -32,6 +32,7 @@ from ...support.memory_guard import (
 from ...support.shadow_learning.backend import (
     build_shadow_learning_preflight,
     build_shadow_learning_seed,
+    learning_probe_target,
 )
 from ...support.shadow_learning.proxy import route_status_indicates_control_write_ready
 from ...support.shadow_learning.runtime import (
@@ -278,6 +279,10 @@ class ShadowLearningRuntimeMixin:
             collector_callback_endpoint=coordinator.collector_callback_target_endpoint,
             effective_metadata_snapshot=self._preflight_effective_metadata(coordinator),
             raw_capture=raw_capture,
+            inverter_target=learning_probe_target(getattr(coordinator, "identified_inverter", None)),
+            prepare_native_pi30=True,
+            inspect_cloud_protocol=getattr(coordinator, "collector_session_protocol", "") == "eybond_framed",
+            inverter_device_addr=getattr(getattr(getattr(coordinator, "identified_inverter", None), "probe_target", None), "device_addr", None),
         )
         preflight = build_shadow_learning_preflight(seed)
         effective_blockers = list(blockers or preflight.blockers)
@@ -413,6 +418,13 @@ class ShadowLearningRuntimeMixin:
                     **diagnostics,
                 }
         correlation = orchestration.get("correlation")
+        if isinstance(state.get("cloud_modbus_read"), dict):
+            orchestration["cloud_modbus_read"] = dict(state["cloud_modbus_read"])
+        for key in ("cloud_protocol_evidence", "protocol_diagnostics"):
+            if isinstance(state.get(key), dict):
+                orchestration[key] = dict(state[key])
+        if isinstance(state.get("modbus_profile_check"), dict):
+            orchestration["modbus_profile_check"] = dict(state["modbus_profile_check"])
         if not isinstance(correlation, dict):
             correlation = {}
         session = dict(state.get("session") or {})
@@ -470,6 +482,8 @@ class ShadowLearningRuntimeMixin:
         route_status = self._shadow_learning_route_status(coordinator)
 
         # Route status is authoritative for live execution readiness.
+        if route_status.running and route_status.protocol_preparation_pending:
+            return "waiting_for_cloud_protocol"
         if route_status.ready:
             if explicit_state == "learning":
                 return "learning"

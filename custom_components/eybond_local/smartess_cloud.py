@@ -13,7 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from .cloud_numeric_learning import numeric_learning_candidates
+from .cloud_numeric_learning import MAX_LEARNING_CHOICE_VALUES, numeric_choice_learning_candidates, numeric_learning_candidates
 from .cloud_signing import password_signature, session_signature
 from .metadata.smartess_semantic_catalog_loader import (
     resolve_smartess_cloud_classification,
@@ -689,6 +689,11 @@ def build_learn_settings_plan(
             continue
         if requested_ids and field_id not in requested_ids:
             continue
+        # Learning ordinary controls must not submit cloud-side history erasure,
+        # factory reset or clock actions, even with inverter writes intercepted.
+        action_text = (field_id + " " + str(raw_field.get("name") or "")).replace("_", " ")
+        if re.search(r"\b(clear|erase|delete|reset|restore|defaults?|factory)\b|\bsystem\s+time\b", action_text, re.I):
+            continue
         if max_fields > 0 and visited_fields >= max_fields:
             break
 
@@ -741,8 +746,15 @@ def _candidate_learn_setting_values(
                     "source": "choice",
                 }
             )
+        if include_numeric:
+            current, _ = _extract_current_value(field)
+            probes = numeric_choice_learning_candidates(
+                [(item["value"], item["label"]) for item in candidates], current=current,
+            )
+            if probes:
+                return probes
         if all_choice_values:
-            return candidates
+            return candidates[:MAX_LEARNING_CHOICE_VALUES]
         return candidates[:1]
 
     if not include_numeric:

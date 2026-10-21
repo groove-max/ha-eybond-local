@@ -39,6 +39,46 @@ timeout. If a test command's result is uncertain, the run stops without sending
 that command again automatically. Cancelling can take a little time because HA
 waits for an already started request to finish before connection cleanup.
 
+## When cloud and local profiles use different protocols
+
+Some inverters support several protocols. During framed EyeBond preparation,
+the integration inspects cloud reads independently of the current driver.
+If the protocol, route or learning readiness cannot be confirmed, it stops
+before sending test controls and reports the problem.
+Once the previous collector connection is restored, the result can offer
+**Check cloud protocol compatibility (read-only)**. Candidates come from the
+drivers' declared wire capabilities, not a fixed list of models. This checks
+supported maps on the observed cloud address without changing the endpoint,
+UART or current profile.
+This includes **SmartESS 0925**. Where its catalog requires a separate tunnel
+address for the identity check, only that specific read is allowed; the inverter
+unit address is unchanged. A cloud device code alone does not select a profile.
+
+A reply to one register request is not enough: the check must identify a supported
+profile and obtain comparable live readings. Compare the displayed values with
+your inverter before explicitly choosing the candidate profile. The default is
+**Keep current profile**. Switching reloads the integration and repeats identification;
+available entities may change. It does not automatically run learning or change
+the control mode. Check the new readings, then start **Write Controls** again
+only if the selected profile supports learning. Reading telemetry does not
+prove write support; profiles without learning support are labelled accordingly.
+
+If no compatible profile is confirmed, keep your current profile and share a Support Archive.
+Do not select an arbitrary map. You can also return to the previous driver through the
+runtime driver setting. A pending connection restoration or learning protection
+must be resolved before this switch is offered.
+
+The recognizer covers Modbus RTU, native PI30, PI18, G-ASCII, addressed
+short-ASCII and 09C1 read grammars. A command shared by several dialects remains
+ambiguous; it never automatically selects a driver. Unknown data does not invent
+a map. The archive includes bounded validated read samples, route coordinates,
+candidate-check results and structural diagnostics (length/digest for unknown
+payloads, rather than arbitrary text that could contain credentials).
+
+An observed raw command without a verified tunnel route is diagnostic evidence,
+not permission to reuse or guess another route. The common profile mechanism
+does not introduce new physical transports or translate commands between codecs.
+
 ## When to use it
 
 Use device learning when:
@@ -140,16 +180,19 @@ applies to active verification, not ordinary read-only cloud analysis.
 5. Home Assistant captures the matching local write commands and blocks them
    before they reach the real inverter. If a cloud success cannot be matched to
    a local interception, the run stops as a possible unproxied write.
-6. After the first test command, Home Assistant **keeps the collector local**,
-   including after successful learning. Removing the temporary filter hands the
-   connection back to normal local polling; it does not restore direct cloud access.
+6. Home Assistant restores the original endpoint automatically only when every
+   sent command has a verified completion receipt from the cloud API and the
+   intercepted exchange. Otherwise it **keeps the collector local**, including after a scan
+   that successfully found controls. Removing the temporary filter then returns
+   the connection to normal local polling, not direct cloud access.
 7. It builds a local result for review.
 
 This endpoint transaction is the critical part of active verification. The
 confirmation checkboxes cover rerouting, bounded cloud test commands and their
-local interception, plus the cloud outage. Cloud telemetry and app control remain
-unavailable until safe recovery is reviewed with the maintainer. There is no
-automatic timeout, restart or force-clear that releases this protection. Local
+local interception, plus the possible continuing cloud outage. When completion
+cannot be verified, cloud telemetry and app control remain unavailable pending
+review with the maintainer. A timeout, restart or force-clear does not bypass
+this protection. Local
 HA telemetry and supported controls remain available, and successfully learned
 controls can still be reviewed and applied. Read-only analysis does none of
 these operations and never changes the collector endpoint.
@@ -162,6 +205,39 @@ The currently implemented method/source combinations are:
 | DESSMonitor API | Yes | Yes |
 | SmartClient / ShineMonitor | Yes | No |
 | ValueCloud API | No | Yes |
+
+API support alone does not guarantee that active learning is available for a
+particular inverter. The local capture must also provide the data needed to
+answer the cloud's protocol requests. For identified PI30 devices on a framed
+EyeBond cloud connection, preparation can use real local PI30 query responses.
+Inside the protected route it waits for a CRC-valid cloud read addressed to
+that same inverter, after verifying the collector identity on the new socket.
+Only a matching query with a captured answer enables test controls. Heartbeats,
+cloud login, a model name, and unverified write commands do not enable them.
+Each reconnect requires fresh protocol confirmation.
+
+If the cloud actually requests Modbus registers, PI30 ASCII responses cannot
+supply the missing register data. Preparation stops before test controls and
+explains the mismatch. A timeout without a matching read is reported separately.
+Download a Support Archive and check the displayed restoration/protection status;
+neither error is proof of cloud restoration. Other unsupported paths can still
+report `missing_register_seed`. Repeating the same capture or switching to
+read-only analysis does not resolve a protocol mismatch.
+
+Learned native PI30 controls preserve exact command case and padding. Numeric
+controls require consistent command/value samples and use cloud limits when
+provided; observed test values are not invented limits. Drafts remain scoped to
+the device and untested. A synthetic learning ACK is not physical write/readback
+confirmation. This preparation path does not yet implement native PI30 learning
+inside a persistent Cloud Bridge session.
+
+After activation, learned PI30 settings with a known QFLAG/QPIRI readback are
+updated from fresh inverter replies, including changes made outside HA. Cloud
+option numbers and labels are matched through the captured commands, not assumed
+to equal the inverter's codes. A real write requires fresh readback; an ACK alone
+does not confirm it. Unknown commands or values not represented by the learned
+choices cannot provide a confirmed current setting. A failed confirmation is
+not permission to repeat the write automatically: first check the actual setting.
 
 For active verification, the options flow shows only sources compatible with
 the cloud family already confirmed for this collector. Before a provider is
@@ -192,10 +268,18 @@ The goal is to learn what the device supports without permanently changing inver
 
 ### Numeric settings
 
-For supported Modbus numeric commands, active verification captures two distinct
-test values to check how the displayed number is encoded. These commands are
+For supported Modbus and native PI30 numeric commands, active verification captures
+distinct test values to check how the displayed number is encoded. These commands are
 intercepted, not applied to the inverter. A test value is not a recommended
 setting or evidence of the inverter's permitted operating range.
+
+Long numeric choice lists are sampled at up to three values actually offered by
+the cloud. Decimal choices use numeric encoding verification too. A list mixing
+12/24/48 V variants does not establish this inverter's limits. If choice labels
+and values disagree, no numeric encoding is inferred from that list: learning
+checks at most 32 exact choices and exposes only observed mappings, not the
+unexamined remainder. Short mode lists retain all their choices. Automatic
+SmartESS learning excludes clear-history, factory-reset and system-clock actions.
 
 When a cloud hint supplies an unambiguous range, it stays attached to this
 device's learned control. A 24 V device's limits are not reused for a 48 V device
@@ -333,10 +417,28 @@ maintainer.
 
 After a test command may have been sent, a **cloud protection hold** takes
 precedence over endpoint recovery. It survives cancellation, HA reload/restart
-and successful learning. Restoring an address, receiving HTTP success, token
+and learning without verified completion receipts. Restoring an address, receiving HTTP success, token
 expiry or waiting does not prove that the cloud discarded an undelivered
 command. Do not manually reconnect the collector to the cloud or delete its
 protection files. Share a debug log and fresh Support Archive for review.
+
+Automatic recovery uses the same rule for every protocol: each command needs a
+verified terminal API result matching its intercepted exchange. SmartESS and
+DESSMonitor adapters recognize exact returned wire responses; codec adapters
+validate Modbus, PI30 and GASCII refusals. Framed traffic is matched by transaction
+and route; raw traffic uses one outstanding command at a time on the same
+connection, with an ordered receipt sequence. All sends must finish, with no unmatched/duplicate writes or uncertain
+results, and both proxy pumps must stop before a durable completed-study receipt
+is saved. Only then can the hold be archived and the original endpoint restored
+and checked. A crash during this finalization can resume from the exact receipt.
+Counts alone, an HTTP success, or a successful retry of an older held study do
+not qualify. An API acceptance without terminal evidence (including the currently
+supported ValueCloud responses), an unknown codec, or old traces without these
+receipts retain protection. This does not enable learning on otherwise unsupported
+routes. SmartESS Modbus has recorded-device coverage; the other completion paths
+have synthetic API, loopback proxy and coordinator tests, not live-device qualification.
+Recovery verifies the connection settings, not live cloud
+telemetry. The receipt is not permission to resume test commands after restart.
 
 When the saved protected session belongs to this entry and collector, and its
 normal local endpoint has not changed, the wizard can offer **Repeat learning

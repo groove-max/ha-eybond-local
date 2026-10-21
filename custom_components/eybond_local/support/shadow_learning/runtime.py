@@ -25,6 +25,8 @@ class ShadowLearningRouteStatus:
     upstream_connected: bool = False
     ready: bool = False
     upstream_error: str = ""
+    protocol_preparation_pending: bool = False
+    protocol_preparation_error: str = ""
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -34,6 +36,7 @@ class ShadowLearningRouteStatus:
             "route_protocol_activity",
             "upstream_connected",
             "ready",
+            "protocol_preparation_pending",
         ):
             if type(getattr(self, field_name)) is not bool:
                 raise TypeError(f"shadow_learning_route_{field_name}_must_be_bool")
@@ -41,6 +44,10 @@ class ShadowLearningRouteStatus:
             raise TypeError("shadow_learning_route_upstream_error_must_be_str")
         if self.upstream_error != self.upstream_error.strip():
             raise ValueError("shadow_learning_route_upstream_error_not_normalized")
+        if type(self.protocol_preparation_error) is not str:
+            raise TypeError("shadow_learning_route_protocol_preparation_error_must_be_str")
+        if self.protocol_preparation_error != self.protocol_preparation_error.strip():
+            raise ValueError("shadow_learning_route_protocol_preparation_error_not_normalized")
 
     @classmethod
     def from_mapping(
@@ -72,6 +79,18 @@ class ShadowLearningRouteStatus:
             upstream_connected=_exact_bool("upstream_connected"),
             ready=_exact_bool("ready"),
             upstream_error=upstream_error,
+            # These are negative gates. An invalid explicit value must not
+            # disappear and turn a blocked route into a ready one.
+            protocol_preparation_pending=(
+                raw.get("protocol_preparation_pending") is not False
+                if "protocol_preparation_pending" in raw else False
+            ),
+            protocol_preparation_error=(
+                raw["protocol_preparation_error"].strip()
+                if type(raw.get("protocol_preparation_error")) is str
+                else "invalid_protocol_preparation_status"
+                if "protocol_preparation_error" in raw else ""
+            ),
         )
 
     def to_mapping(self) -> dict[str, object]:
@@ -85,6 +104,8 @@ class ShadowLearningRouteStatus:
             "upstream_connected": self.upstream_connected,
             "ready": self.ready,
             "upstream_error": self.upstream_error,
+            "protocol_preparation_pending": self.protocol_preparation_pending,
+            "protocol_preparation_error": self.protocol_preparation_error,
         }
 
 

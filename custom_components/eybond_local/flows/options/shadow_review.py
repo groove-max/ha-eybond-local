@@ -896,15 +896,16 @@ class ShadowLearningReviewMixin:
         """Return a short, non-technical suggested-state note for one control."""
 
         risk = str(control.get("risk_level") or "").strip().lower()
+        enabled = bool(control.get("enabled_by_default"))
         if risk == "high":
             return self._tr(
-                "common.dynamic.control_discovery_status_high",
-                "Risky — off by default",
+                "common.dynamic.control_discovery_status_high_on" if enabled else "common.dynamic.control_discovery_status_high",
+                "Risky — selected by default" if enabled else "Risky — off by default",
             )
-        if risk == "uncertain" or not bool(control.get("enabled_by_default")):
+        if risk == "uncertain" or not enabled:
             return self._tr(
-                "common.dynamic.control_discovery_status_uncertain",
-                "Needs a check — off by default",
+                "common.dynamic.control_discovery_status_uncertain_on" if enabled else "common.dynamic.control_discovery_status_uncertain",
+                "Needs a check — selected by default" if enabled else "Needs a check — off by default",
             )
         return self._tr(
             "common.dynamic.control_discovery_status_normal",
@@ -959,6 +960,9 @@ class ShadowLearningReviewMixin:
         )
         failed = self._control_discovery_failed()
         error_detail = self._control_discovery_error_detail() if failed else ""
+        can_check_modbus = self._cloud_modbus_check_available(
+            restore_pending=restore_pending, protection_held=protection_held,
+        )
         selected_count = self._control_discovery_enabled_selection_count()
         read_count = self._control_discovery_enabled_read_selection_count()
         metadata_count = len(self._control_discovery_metadata_fields())
@@ -985,6 +989,10 @@ class ShadowLearningReviewMixin:
                 "result_action", CONTROL_DISCOVERY_RESULT_ACTION_DONE
             )
             action = raw_action if type(raw_action) is str else ""
+            if action == "check_modbus_profile" and can_check_modbus:
+                self._cloud_modbus_check_task = None
+                self._shadow_learning_state.pop("modbus_profile_check", None)
+                return await self.async_step_shadow_modbus_check()
             if action == CONTROL_DISCOVERY_RESULT_ACTION_RETRY and not restore_pending:
                 # Re-run the guided wizard from the consent step (it resets the
                 # run's transient state); credentials are re-gathered there.
@@ -1068,6 +1076,11 @@ class ShadowLearningReviewMixin:
         # least one discovered control; on a failed run it is replaced by "Try the
         # scan again". Support + Return are always offered.
         action_options: list[SelectOptionDict] = []
+        # A successful restore above can make a previously blocked check
+        # available in this same render, without repeating cloud learning.
+        can_check_modbus = self._cloud_modbus_check_available(
+            restore_pending=restore_pending, protection_held=protection_held,
+        )
         if restore_pending and not protection_held:
             action_options.append(
                 SelectOptionDict(
@@ -1088,6 +1101,11 @@ class ShadowLearningReviewMixin:
                     ),
                 )
             )
+        elif can_check_modbus:
+            action_options.append(SelectOptionDict(
+                value="check_modbus_profile",
+                label=self._tr("common.dynamic.cloud_modbus_check", "Check cloud protocol compatibility (read-only)"),
+            ))
         elif failed and (not protection_held or self._shadow_learning_state.get("protected_retry_available") is True):
             action_options.append(
                 SelectOptionDict(

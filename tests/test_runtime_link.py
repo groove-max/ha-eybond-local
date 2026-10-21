@@ -1763,7 +1763,9 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
             )
 
         self.assertTrue(activated)
-        self.assertEqual(transport.connected_waits, [2.0])
+        self.assertEqual(len(transport.connected_waits), 1)
+        self.assertGreater(transport.connected_waits[0], 0)
+        self.assertLessEqual(transport.connected_waits[0], 2.0)
         self.assertEqual(probe.await_count, 0)
         self.assertEqual(manager._callback_trigger_count, 0)
 
@@ -1780,6 +1782,34 @@ class CallbackOnDemandPhase3Tests(unittest.TestCase):
         self.assertFalse(refused)
         self.assertEqual(transport.connected_waits, [])
         self.assertEqual(probe.await_count, 0)
+
+    def test_exact_activation_waits_for_inventory_before_releasing_pin(self) -> None:
+        async def run(*, publish):
+            manager = self._manager(callback_on_demand=True, collector_pn=self._PN)
+            old = dict(self._session(self._PN), session_id="old", state="routed_framed")
+            new = dict(self._session(self._PN), session_id="new", state="identified")
+            # Domain inventory order is listener order, not acceptance order:
+            # the new 502 socket can precede the still-live old 8899 socket.
+            inventory = [new, old]
+            domain = CallbackSessionRegistry(sessions_source=lambda: tuple(inventory))
+            domain.claim("entry-target", collector_pn=self._PN, session_id="new")
+            manager.set_callback_ownership(domain, "entry-target")
+            manager._transport = _ClaimRecordingTransport(
+                connected=True, observed_sessions=tuple(inventory),
+            )
+            self.assertEqual(domain.owned_session_location("entry-target").session_id, "old")
+            if publish:
+                asyncio.get_running_loop().call_later(.01, lambda: new.update(state="routed_framed"))
+            with patch.object(manager, "_async_await_callback_session", AsyncMock(return_value=True)):
+                activated = await manager.async_activate_claimed_session(expected_session_id="new", timeout=.08)
+            self.assertEqual(activated, publish)
+            self.assertEqual(manager._activation_session_id, "")
+            self.assertEqual(manager._callback_trigger_count, 0)
+            if activated:
+                self.assertEqual(manager._claimed_session_id(), "new")
+
+        asyncio.run(run(publish=True))
+        asyncio.run(run(publish=False))
 
     def test_callback_on_demand_does_not_retrigger_while_exact_session_is_unusable(
         self,

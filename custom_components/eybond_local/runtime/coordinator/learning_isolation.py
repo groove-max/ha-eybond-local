@@ -15,6 +15,7 @@ from ...const import CONNECTION_STRATEGY_INBOUND
 from ...support.shadow_learning.session import shadow_learning_session_timestamp
 from ...timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
 from ...telemetry import TelemetryFreshness
+from .learning_route import learning_listener_port
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ async def async_prepare_local_learning_route(coordinator, state) -> ProtectedLea
     c = coordinator
     registry = get_callback_session_registry(c.hass)
     entry = c.config_entry.entry_id
-    port = c._connection_spec.tcp_port
+    port = learning_listener_port(c)
     if registry is None or state.entry_id != entry or state.collector_pn != c.smartess_collector_pn:
         raise RuntimeError("cloud_learning_hold_local_identity_unavailable")
     sid = await c._async_prepare_strategy_transition_management_session(

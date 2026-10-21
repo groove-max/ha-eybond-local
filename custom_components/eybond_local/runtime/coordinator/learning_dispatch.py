@@ -20,6 +20,7 @@ from ...support.shadow_learning.session import (
     shadow_learning_session_timestamp,
 )
 from .learning_isolation import ProtectedLearningRun
+from .learning_route import learning_listener_port
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ async def async_dispatch_owned_shadow_action(
             or (run.entry_id, run.route_owner_id, run.collector_pn, run.local_endpoint)
             != (state.entry_id, state.route_owner_id, state.collector_pn, state.proxy_endpoint)
             or coordinator._protected_learning_run is not run
-            or run.local_port != coordinator._connection_spec.tcp_port
+            or run.local_port != learning_listener_port(coordinator)
             or action_kwargs.get("pn", collector_pn) != collector_pn
             or state.status not in {"ready", "learning"}
             or shadow_learning_session_is_expired(state)
@@ -103,9 +104,26 @@ async def async_dispatch_owned_shadow_action(
             coordinator._protected_learning_run = run
         await async_run_owned_worker(store.require_exact_hold, hold=run.hold)
         validate_context()
+        from ...support.shadow_learning.completion import CloudCommandCompletion
+        get_completion = getattr(coordinator._runtime, "shadow_learning_completion", None)
+        completion = get_completion() if callable(get_completion) else None
+        if (type(completion) is not CloudCommandCompletion
+                or (completion.entry_id, completion.study_id, completion.collector_pn)
+                != (run.entry_id, run.route_owner_id.removeprefix("shadow_learning:"), collector_pn)):
+            completion = None
+        if completion is not None:
+            completion.begin(run.source, action_kwargs)
         try:
-            return await async_dispatch_cloud_action(callable_, **action_kwargs)
-        except BaseException:
+            envelope = await async_dispatch_cloud_action(callable_, **action_kwargs)
+            if completion is not None:
+                completion.finish(envelope)
+            return envelope
+        except BaseException as exc:
+            if completion is not None:
+                # A provider may report a qualified terminal device refusal as
+                # a typed exception. All other failures still fail completion;
+                # preserve/re-raise the original outcome for the orchestrator.
+                completion.finish(exc)
             # Only these clients use this exact operation-owned HTTP resource.
             # Generic exceptions/ValueCloud callbacks have no no-send evidence.
             from .learning_recovery import async_complete_no_request_recovery

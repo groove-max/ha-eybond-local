@@ -14,6 +14,7 @@ from ...support.memory_guard import read_available_memory_mib, shadow_learning_m
 from ...support.owned_worker import async_run_owned_worker
 from ...support.shadow_learning.backend import (
     build_shadow_learning_seed, build_shadow_learning_preflight, build_shadow_learning_trace_path,
+    learning_probe_target,
 )
 from ...support.shadow_learning.protection_store import CloudLearningProtectionStore
 from ...support.shadow_learning.session import (
@@ -23,6 +24,7 @@ from ...support.shadow_learning.session import (
 from ...telemetry import TelemetryFreshness
 from .endpoint_projection import resolve_collector_server_endpoint
 from .learning_isolation import ProtectedLearningRun
+from .learning_route import learning_listener_port, learning_target_endpoint
 
 
 async def async_retry_context(c):
@@ -32,7 +34,7 @@ async def async_retry_context(c):
     state = await c._async_active_shadow_learning_state(require_process=False)
     store = CloudLearningProtectionStore(Path(c.hass.config.config_dir))
     hold = await async_run_owned_worker(store.load, collector_pn=c.smartess_collector_pn)
-    target = f"{c._effective_callback_server_host},{c._connection_spec.effective_advertised_tcp_port},TCP"
+    target = learning_target_endpoint(c)
     if (hold is None or state is None or state.status != "restore_failed"
             or state.protection_version != 1 or not state.cloud_commands_possible
             or hold.source not in {"smartess", "dessmonitor", "valuecloud"}
@@ -60,7 +62,7 @@ async def _prove_local_route(c, state):
     cert = registry.certify_permanent_owned_session(entry, sid)
     handle = registry.session_handle_for_owned_session(entry, sid)
     if (cert is None or cert.collector_pn != state.collector_pn or handle is None
-            or handle.listener_port != c._connection_spec.tcp_port):
+            or handle.listener_port != learning_listener_port(c)):
         raise RuntimeError("cloud_learning_retry_local_identity_unverified")
     endpoint = await c._runtime.async_get_collector_server_endpoint_state(require_heartbeat=False)
     if (endpoint.get("reboot_required") not in (None, "", "0", False)
@@ -115,6 +117,10 @@ async def async_start_protected_retry(c, *, confirm_cloud_outage, cloud_source, 
             collector_callback_endpoint=previous.proxy_endpoint,
             effective_metadata_snapshot=c.shadow_learning_effective_metadata,
             raw_capture=raw, write_response_mode="exception", allow_ack_writes=False,
+            inverter_target=learning_probe_target(getattr(c, "identified_inverter", None)),
+            prepare_native_pi30=True,
+            inspect_cloud_protocol=getattr(c, "collector_session_protocol", "") == "eybond_framed",
+            inverter_device_addr=getattr(getattr(getattr(c, "identified_inverter", None), "probe_target", None), "device_addr", None),
         )
         blockers = blockers or build_shadow_learning_preflight(seed).blockers
         if blockers:
@@ -147,7 +153,10 @@ async def async_start_protected_retry(c, *, confirm_cloud_outage, cloud_source, 
                 # A directory fsync may fail AFTER atomic replacement. Adopt the
                 # actual durable owner even on that failure; never leave a free gap.
                 c._shadow_learning_session_state_loaded = False
-                actual = await async_run_owned_worker(load_shadow_learning_session_state, config_dir=config_dir)
+                actual = await async_run_owned_worker(
+                    load_shadow_learning_session_state, config_dir=config_dir,
+                    entry_id=c.config_entry.entry_id,
+                )
                 if actual == state:
                     token = AUTHORITY.handoff_shadow_learning(token, state.route_owner_id)
                     c._cached_shadow_learning_session_state = state
@@ -165,7 +174,7 @@ async def async_start_protected_retry(c, *, confirm_cloud_outage, cloud_source, 
                 shadow_learning_session_ready=False, shadow_learning_trace_path=str(trace),
                 shadow_learning_session_id=state.route_owner_id)
             run = ProtectedLearningRun(state.entry_id, state.route_owner_id, state.collector_pn,
-                                       state.proxy_endpoint, c._connection_spec.tcp_port, cloud_source, hold)
+                                       state.proxy_endpoint, learning_listener_port(c), cloud_source, hold)
             c._protected_learning_run = run
 
             async def validate_route():

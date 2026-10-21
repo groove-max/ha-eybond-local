@@ -39,6 +39,7 @@ from .read_evidence import (
     ShadowReadRoute,
     read_register_evidence_from_map,
 )
+from .pi30_protocol import Pi30ShadowLearningAdapter, classify_pi30_numeric_command
 
 
 _LEARNED_PROFILE_TITLE_SUFFIX = " (Local Shadow Learned Draft)"
@@ -937,15 +938,24 @@ def _build_learned_capabilities(
     next_order = 9000
     for group in grouped:
         register = int(group.get("register", -1))
-        command = str(group.get("command") or "").strip().upper()
+        command = str(group.get("command") or "").strip()
         command_map = {
-            int(key): str(value).strip().upper()
+            int(key): str(value).strip()
             for key, value in dict(group.get("command_map") or {}).items()
             if str(value or "").strip()
         }
         field_name = str(group["field_name"])
         field_id = str(group["field_id"])
         title_key = _normalize_title(field_name)
+
+        if group.get("protocol") == "pi30_ascii":
+            reason = _validate_pi30_command_group(group, source_profile, session_manifest)
+            if reason:
+                rejected_summary.append({
+                    "field_id": field_id, "field_name": field_name,
+                    "register": register, "reason": reason,
+                })
+                continue
 
         if register >= 0 and register in existing_registers:
             skipped_summary.append(
@@ -996,6 +1006,14 @@ def _build_learned_capabilities(
             rejected_summary.append({"field_id": field_id, "field_name": field_name,
                                      "register": register, "reason": reason})
             continue
+        if group.get("protocol") == "pi30_ascii" and "command_precision" in classification:
+            command = classification["command"]
+            command_map = {}
+        if (group.get("protocol") == "pi30_ascii"
+                and classification.get("value_kind") == "bool"
+                and set(command_map) != {0, 1}):
+            # Do not reinterpret provider option codes (e.g. 48/49) as bools.
+            classification = {**classification, "value_kind": "enum"}
         if write_contract is not None and (
             write_contract[1] != 1
             or classification["word_count"] != write_contract[1]
@@ -1022,13 +1040,17 @@ def _build_learned_capabilities(
         capability_key = _unique_capability_key(base_key, existing_keys)
         existing_keys.add(capability_key)
 
-        read_key = _g_ascii_read_key_for_group(group)
-        classification, command_map = _normalize_g_ascii_feature_flag_capability(
-            group=group,
-            classification=classification,
-            command_map=command_map,
-            read_key=read_key,
-        )
+        # Provider field IDs/labels do not establish a native PI30 read mapping.
+        # Its driver projects exact learned commands from fresh QFLAG/QPIRI.
+        read_key = ""
+        if group.get("protocol") != "pi30_ascii":
+            read_key = _g_ascii_read_key_for_group(group)
+            classification, command_map = _normalize_g_ascii_feature_flag_capability(
+                group=group,
+                classification=classification,
+                command_map=command_map,
+                read_key=read_key,
+            )
         provenance = {
             "source": "cloud_shadow_learning",
             "scope": "device",
@@ -1087,6 +1109,9 @@ def _build_learned_capabilities(
             capability["command"] = command
         if command_map:
             capability["command_map"] = {int(key): value for key, value in sorted(command_map.items())}
+        for format_key in ("command_width", "command_precision"):
+            if format_key in classification:
+                capability[format_key] = classification[format_key]
         if read_key:
             capability["read_key"] = read_key
 
@@ -1365,9 +1390,11 @@ def _group_matched_command_records(correlation: dict[str, Any]) -> list[dict[str
         if not isinstance(observation, dict):
             continue
         protocol = str(observation.get("protocol") or "").strip()
-        command = str(observation.get("command") or "").strip().upper()
-        if protocol != "eybond_g_ascii" or not command:
+        command = str(observation.get("command") or "").strip()
+        if protocol not in {"eybond_g_ascii", "pi30_ascii"} or not command:
             continue
+        if protocol == "eybond_g_ascii":
+            command = command.upper()
 
         field_id = str(item.get("field_id") or "").strip()
         field_name = str(item.get("field_name") or field_id or command).strip()
@@ -1381,10 +1408,14 @@ def _group_matched_command_records(correlation: dict[str, Any]) -> list[dict[str
                 "field_name": field_name,
                 "register": -1,
                 "command": "",
+                "protocol": protocol,
                 "read_key": str(item.get("read_key") or "").strip(),
                 "samples": [],
             },
         )
+        if protocol == "pi30_ascii":
+            # A mixed dialect under one field must fail regardless of order.
+            entry["protocol"] = protocol
         entry["samples"].append(
             {
                 "sequence_index": _to_int(item.get("sequence_index")) or 0,
@@ -1392,6 +1423,8 @@ def _group_matched_command_records(correlation: dict[str, Any]) -> list[dict[str
                 "value_label": str(item.get("value_label") or "").strip(),
                 "value_source": str(item.get("value_source") or "").strip(),
                 "requested_at": str(item.get("requested_at") or "").strip(),
+                **({"numeric_evidence": dict(item["numeric_evidence"])}
+                   if protocol == "pi30_ascii" and isinstance(item.get("numeric_evidence"), dict) else {}),
                 "observation": {
                     "register": -1,
                     "function_code": 0,
@@ -1402,6 +1435,7 @@ def _group_matched_command_records(correlation: dict[str, Any]) -> list[dict[str
                     "devcode": _to_int(observation.get("devcode")),
                     "devaddr": _to_int(observation.get("devaddr")),
                     "timestamp": str(observation.get("timestamp") or "").strip(),
+                    "raw_payload_hex": str(observation.get("raw_payload_hex") or ""),
                 },
             }
         )
@@ -1412,7 +1446,7 @@ def _group_matched_command_records(correlation: dict[str, Any]) -> list[dict[str
         if not samples:
             continue
         commands = {
-            str(sample.get("observation", {}).get("command") or "").strip().upper()
+            str(sample.get("observation", {}).get("command") or "").strip()
             for sample in samples
             if str(sample.get("observation", {}).get("command") or "").strip()
         }
@@ -1435,6 +1469,7 @@ def _group_matched_command_records(correlation: dict[str, Any]) -> list[dict[str
                 "field_name": str(item["field_name"]),
                 "register": -1,
                 "command": common_command,
+                "protocol": item["protocol"],
                 "command_map": command_map,
                 "read_key": str(item.get("read_key") or ""),
                 "samples": samples,
@@ -1545,11 +1580,50 @@ def _normalize_g_ascii_feature_flag_capability(
 
 
 def _observed_ascii_command_line(observation: dict[str, Any]) -> str:
-    command = str(observation.get("command") or "").strip().upper()
+    command = str(observation.get("command") or "").strip()
     if not command:
         return ""
     value = str(observation.get("value") or "").strip()
     return f"{command}{value}" if value else command
+
+
+def _validate_pi30_command_group(group, source_profile, session_manifest) -> str:
+    """Only exact, route-bound discrete commands become executable controls.
+
+    Numeric samples are checked by the native numeric classifier afterwards,
+    never represented by a number entity with a finite command_map.
+    """
+    if source_profile.driver_key != "pi30":
+        return "pi30_local_route_unsupported"
+    adapter = Pi30ShadowLearningAdapter()
+    seen = {}
+    for sample in group["samples"]:
+        observation = sample["observation"]
+        if observation.get("protocol") != "pi30_ascii":
+            return "mixed_command_protocols"
+        for key in ("devcode", "devaddr"):
+            if (session_manifest.get(key) is None
+                    or observation.get(key) != session_manifest[key]):
+                return "pi30_command_route_mismatch"
+        try:
+            raw = bytes.fromhex(observation["raw_payload_hex"])
+        except (ValueError, TypeError):
+            return "pi30_command_evidence_invalid"
+        request = adapter.decode_write_request(raw)
+        if request is None or request.command != _observed_ascii_command_line(observation):
+            return "pi30_command_evidence_invalid"
+        if "numeric_evidence" in sample:
+            continue
+        value = _to_int(sample.get("requested_value"))
+        if (value is None or sample.get("value_source") != "choice"
+                or not sample.get("value_label") or "numeric_evidence" in sample):
+            return "pi30_numeric_encoding_not_proven"
+        if value in seen and seen[value] != request.command:
+            return "pi30_command_mapping_conflict"
+        seen[value] = request.command
+    if len(set(seen.values())) != len(seen):
+        return "pi30_command_mapping_conflict"
+    return ""
 
 
 _ON_OFF_OFF_RE = re.compile(r"\boff\b")
@@ -1578,6 +1652,8 @@ def _classify_learned_control(group: dict[str, Any]) -> dict[str, Any]:
     if any("numeric_evidence" in sample for sample in samples):
         if any(keyword in normalized_text for keyword in _DESTRUCTIVE_KEYWORDS):
             return {"rejection_reason": "destructive_numeric_control"}
+        if group.get("protocol") == "pi30_ascii":
+            return classify_pi30_numeric_command(samples)
         return classify_numeric_encoding(samples)
 
     requested_values = [str(sample.get("requested_value") or "").strip() for sample in samples]

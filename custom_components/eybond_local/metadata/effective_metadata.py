@@ -76,6 +76,17 @@ def resolve_effective_metadata_selection(
         entry_data=entry_data,
     )
 
+    # A driver hint alone is not a live identity and must not displace an
+    # authoritative read-only snapshot with default writable capabilities.
+    live_owner = _normalized_name(getattr(inverter, "driver_key", ""))
+    if persisted_snapshot is not None and live_owner and live_owner != persisted_snapshot.effective_owner_key:
+        persisted_snapshot = None
+    if persisted_snapshot is not None and inverter is not None and (
+        _normalized_name(getattr(inverter, "profile_name", "")) != persisted_snapshot.profile_name
+        or _normalized_name(getattr(inverter, "register_schema_name", "")) != persisted_snapshot.register_schema_name
+    ):
+        persisted_snapshot = None
+
     snapshot_profile_metadata, snapshot_register_schema_metadata = _resolve_snapshot_metadata(
         persisted_snapshot
     )

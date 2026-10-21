@@ -14,6 +14,35 @@ from ...support.download import sign_diagnostic_run_download_url
 class CoordinatorDiagnosticsMixin:
     """Serialize diagnostics against the coordinator runtime lock."""
 
+    async def async_check_cloud_modbus_profile(self, evidence: dict) -> dict:
+        """Check an alternate profile after learning rollback, without switching."""
+        from ..protocol_check import check_protocol_profiles, protocol_evidence
+
+        read = protocol_evidence(evidence)
+        if read is None:
+            raise ValueError("invalid_cloud_modbus_read")
+
+        async def _check() -> dict:
+            async with self._runtime_operation_lock:
+                blocker = await self.async_shadow_learning_start_blocker()
+                inverter = self.identified_inverter
+                transport = self._diagnostic_link_transport()
+                if (blocker or self._shutdown_complete
+                        or self._cloud_tool_preparation_task is not None
+                        or self._shadow_learning_process_running()
+                        or self._proxy_capture_process_running()
+                        or inverter is None
+                        or transport is None or not transport.connected):
+                    raise RuntimeError("protocol_check_unavailable")
+                result = await check_protocol_profiles(transport, read, self.data.runtime_values())
+                if not transport.connected or self.identified_inverter is not inverter:
+                    raise RuntimeError("protocol_check_connection_changed")
+                return result
+
+        return await self._diagnostic_flight.run(
+            _check, on_start=self._mark_diagnostic_active, on_finish=self._mark_diagnostic_idle,
+        )
+
     async def _async_cancel_diagnostic_run(self) -> None:
         """Cancel any in-flight diagnostic command run (called on unload)."""
 

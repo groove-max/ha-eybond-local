@@ -741,18 +741,19 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
             poll_interval=10.0, now_monotonic=500.0,
         )
 
-        # Fifth cycle: only the supported pair goes on the wire.
-        self.assertEqual(transport.commands, ["QPIGS", "QMOD"])
+        # Fifth cycle: only the supported telemetry pair plus one due settings
+        # read. Settings refresh has an independent bounded retry policy.
+        self.assertEqual(transport.commands, ["QPIGS", "QMOD", "QPIRI"])
         self.assertEqual(values["driver_unsupported_commands"], "Q1, QET, QPIWS")
 
-        # The set is permanent: no timer-based re-probe. An explicit re-check
+        # The telemetry set is permanent: no timer-based re-probe. An explicit re-check
         # (the diagnostic button) clears the cache and probes everything again.
         transport.commands.clear()
         await _read_values(driver,
             transport, inverter, runtime_state=runtime_state,
             poll_interval=10.0, now_monotonic=500.0 + 100_000.0,
         )
-        self.assertEqual(transport.commands, ["QPIGS", "QMOD"])
+        self.assertEqual(transport.commands, ["QPIGS", "QMOD", "QFLAG"])
 
         from custom_components.eybond_local.drivers.command_support import (
             clear_unsupported_commands,

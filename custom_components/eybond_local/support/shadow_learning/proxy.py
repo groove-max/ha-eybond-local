@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
 
 from ...collector.protocol import HEADER_SIZE, decode_header
+from ...collector.parameter_registry import COLLECTOR_PARAMETER_DEFINITIONS
+from ...payload.modbus import decode_read_request
 from ...collector.collector_wire import (
     parse_query_collector_response,
     parse_set_collector_response,
@@ -15,12 +18,54 @@ from ...collector.collector_wire import (
 from ..cloud_session_wire import consume_cloud_message
 from ..collector_cloud_proxy import JsonLineWriter
 from ..owned_worker import async_finish_owned_task
-from .backend import InProcessShadowLearningHandler, ShadowLearningSeed, utc_now_iso
+from .backend import (
+    InProcessShadowLearningHandler, ShadowLearningSeed, build_shadow_learning_preflight,
+    utc_now_iso,
+)
+from .protocol import resolve_shadow_learning_wire_adapter
 from .identity import async_verify_shadow_socket
+from .protocol_evidence import protocol_sample, read_protocols
 
 
 _COLLECTOR_FORWARD_FCODES = frozenset({1, 2, 3, 22, 23, 24, 31, 32, 50})
 _CLOUD_CORRELATED_RESPONSE_FCODES = frozenset({2, 3})
+_PRIVATE_COLLECTOR_PARAMETERS = frozenset(
+    definition.parameter for definition in COLLECTOR_PARAMETER_DEFINITIONS
+    if definition.sensitive_read
+)
+
+
+def _is_collector_metadata_query(frame: bytes) -> bool:
+    """FC2 carries parameter IDs only, never values or an inverter payload.
+
+    Preserve vendor-specific read IDs opaquely; they do not create mappings or
+    protocol proof. Credential reads and the system-action parameter stay out.
+    """
+    if not HEADER_SIZE < len(frame) <= HEADER_SIZE + 32:
+        return False
+    header = decode_header(frame[:HEADER_SIZE])
+    parameters = frame[HEADER_SIZE:]
+    return (
+        header.fcode == 2 and header.total_len == len(frame)
+        and header.devcode == 1 and header.devaddr in (1, 255)
+        and len(set(parameters)) == len(parameters)
+        and not set(parameters).intersection(_PRIVATE_COLLECTOR_PARAMETERS | {0, 29})
+    )
+
+
+def _is_collector_heartbeat_query(frame: bytes) -> bool:
+    """Recognize only FC1 clock/interval queries, never inverter writes."""
+    if len(frame) != HEADER_SIZE + 8:
+        return False
+    header = decode_header(frame[:HEADER_SIZE])
+    if header.fcode != 1 or header.total_len != len(frame):
+        return False
+    payload = frame[HEADER_SIZE:]
+    try:
+        datetime(2000 + payload[0], *payload[1:6])
+    except ValueError:
+        return False
+    return int.from_bytes(payload[6:], "big") > 0
 
 
 def route_status_indicates_control_ready(status: dict[str, Any]) -> bool:
@@ -36,7 +81,9 @@ def route_status_indicates_control_ready(status: dict[str, Any]) -> bool:
     ``running`` / ``upstream_error`` separately (the wait raises on them; the gate returns False).
     """
 
-    if not bool(status.get("collector_connected")):
+    if (not bool(status.get("collector_connected"))
+            or status.get("protocol_preparation_pending")
+            or status.get("protocol_preparation_error")):
         return False
     return bool(
         status.get("ready")
@@ -98,6 +145,11 @@ class InProcessFailClosedShadowProxyHandler:
         output_path: Path,
         expected_session_protocol: str = "",
     ) -> None:
+        if seed.prepare_native_pi30 and (
+            not build_shadow_learning_preflight(seed).can_start
+            or expected_session_protocol != "eybond_framed"
+        ):
+            raise ValueError("shadow_learning_invalid_pi30_preparation_route")
         self._upstream_host = str(upstream_host)
         self._upstream_port = int(upstream_port)
         self._output_path = Path(output_path)
@@ -113,8 +165,22 @@ class InProcessFailClosedShadowProxyHandler:
         self._last_error = ""
         self._expected_session_protocol = expected_session_protocol
         self._collector_pn = seed.collector_pn
+        self._prepare_native_pi30 = seed.prepare_native_pi30
+        self._inspect_cloud_protocol = seed.inspect_cloud_protocol
+        self._protocol_preparation_pending = seed.prepare_native_pi30 or seed.inspect_cloud_protocol
+        self._protocol_samples: list[dict] = []
+        self._protocol_preparation_error = ""
+        self._allow_pi30 = bool(
+            seed.observed_cloud_request
+            and build_shadow_learning_preflight(seed).can_start
+            and resolve_shadow_learning_wire_adapter(seed.observed_cloud_request).key == "pi30_ascii"
+        )
         self._identity_verified = False
         self._backend = InProcessShadowLearningHandler(seed=seed, output_path=output_path)
+        from .completion import CloudCommandCompletion
+        self.completion = CloudCommandCompletion(
+            entry_id=seed.entry_id, study_id=seed.session_id, collector_pn=seed.collector_pn,
+        )
 
     @property
     def running(self) -> bool:
@@ -152,6 +218,8 @@ class InProcessFailClosedShadowProxyHandler:
 
         return (
             self._running
+            and not self._protocol_preparation_pending
+            and not self._protocol_preparation_error
             and self._collector_connected
             and self._route_protocol_activity
             and self._upstream_connected
@@ -164,6 +232,11 @@ class InProcessFailClosedShadowProxyHandler:
             "running": self._running,
             "collector_connected": self._collector_connected,
             "collector_connection_sequence": self._collector_connection_sequence,
+            "completion_evidence": {
+                "confirmed_commands": len(self.completion.commands),
+                "pending": self.completion.active,
+                "blocked_reason": self.completion.reason,
+            },
             "collector_protocol_ingress": self._collector_protocol_ingress,
             "route_protocol_activity": self._route_protocol_activity,
             "upstream_connected": self._upstream_connected,
@@ -171,6 +244,19 @@ class InProcessFailClosedShadowProxyHandler:
             "upstream_error": self._last_error,
             "collector_identity_verified": self._identity_verified,
             "collector_identity_pn": self._collector_pn if self._identity_verified else "",
+            "protocol_preparation_pending": self._protocol_preparation_pending,
+            "protocol_preparation_error": self._protocol_preparation_error,
+            "cloud_protocol_evidence": (
+                self._backend.cloud_protocol_evidence.to_mapping()
+                if self._backend.cloud_protocol_evidence is not None and self._identity_verified else None
+            ),
+            "protocol_diagnostics": {"samples": list(self._protocol_samples),
+                                     "reason": self._protocol_preparation_error},
+            "cloud_modbus_read": (
+                self._backend.cloud_modbus_read.to_mapping()
+                if self._backend.cloud_modbus_read is not None and self._identity_verified
+                else None
+            ),
         }
 
     def observation_cursor(self) -> int:
@@ -226,6 +312,7 @@ class InProcessFailClosedShadowProxyHandler:
     async def stop(self) -> None:
         """Cancel active client tasks and close trace streams."""
 
+        self.completion.start_closing()
         self._running = False
         tasks = tuple(self._tasks)
         for task in tasks:
@@ -243,6 +330,14 @@ class InProcessFailClosedShadowProxyHandler:
         self._route_protocol_activity = False
         self._upstream_connected = False
         await self._backend.stop()
+        self.completion.closed = True
+        if self._writer is not None:
+            # Keep retry diagnostics even when an older study owns the hold.
+            # This summary is not a durable receipt or retirement authority.
+            await self._append_event("shadow_completion_summary", "shadow_proxy", {
+                **self.status()["completion_evidence"],
+                "complete": self.completion.completed_commands() is not None,
+            })
         output_handle = self._output_handle
         self._output_handle = None
         self._writer = None
@@ -271,10 +366,19 @@ class InProcessFailClosedShadowProxyHandler:
             self._tasks.add(current_task)
         self._identity_verified = False
         self._route_protocol_activity = False
+        self._backend.cloud_modbus_read = None
+        self._backend.cloud_protocol_evidence = None
+        self._protocol_samples.clear()
+        # A proof from the previous socket must not open the dispatch gate on
+        # a replacement connection. Keep the trace and captured observations.
+        self._protocol_preparation_pending = self._prepare_native_pi30 or self._inspect_cloud_protocol
+        self._protocol_preparation_error = ""
         try:
             await self._handle_client(collector_reader, collector_writer)
         finally:
             async def finish_client() -> None:
+                if not self.completion.closing and (self.completion.active or self.completion.commands):
+                    self.completion.invalidate()
                 self._identity_verified = False
                 self._collector_connected = False
                 self._collector_protocol_ingress = False
@@ -300,6 +404,7 @@ class InProcessFailClosedShadowProxyHandler:
         collector_peer = collector_writer.get_extra_info("peername") or ("", 0)
         remote = f"{collector_peer[0] or ''}:{collector_peer[1] or 0}"
         self._collector_connection_sequence += 1
+        self.completion.connection_opened(self._collector_connection_sequence)
         self._collector_connected = True
         self._collector_protocol_ingress = False
         self._upstream_connected = False
@@ -368,11 +473,15 @@ class InProcessFailClosedShadowProxyHandler:
                 await self._append_event(
                     "shadow_proxy_collector_chunk",
                     "collector_to_shadow_proxy",
-                    {"remote": remote, "chunk_hex": chunk.hex(), "chunk_len": len(chunk)},
+                    ({"remote": remote, "chunk_len": len(chunk)} if self._inspect_cloud_protocol
+                     else {"remote": remote, "chunk_hex": chunk.hex(), "chunk_len": len(chunk)}),
                 )
                 while True:
                     try:
-                        message = consume_cloud_message(collector_buffer)
+                        message = (
+                            consume_cloud_message(collector_buffer, allow_pi30=True)
+                            if self._allow_pi30 else consume_cloud_message(collector_buffer)
+                        )
                     except Exception as exc:
                         await self._append_event(
                             "shadow_proxy_parser_error",
@@ -380,7 +489,8 @@ class InProcessFailClosedShadowProxyHandler:
                             {
                                 "remote": remote,
                                 "error": f"{type(exc).__name__}:{exc}",
-                                "buffer_hex": bytes(collector_buffer).hex(),
+                                **({"buffer_length": len(collector_buffer)} if self._inspect_cloud_protocol
+                                   else {"buffer_hex": bytes(collector_buffer).hex()}),
                             },
                         )
                         raise
@@ -411,7 +521,7 @@ class InProcessFailClosedShadowProxyHandler:
                             {"remote": remote, "payload_hex": payload.hex()},
                         )
                         continue
-                    if kind == "ascii":
+                    if kind in ("ascii", "pi30"):
                         async with upstream_write_lock:
                             upstream_writer.write(payload)
                             await upstream_writer.drain()
@@ -425,6 +535,11 @@ class InProcessFailClosedShadowProxyHandler:
                         )
                         continue
                     header = decode_header(payload[:HEADER_SIZE])
+                    if header.fcode == 4 and self._identity_verified and len(self._protocol_samples) < 8:
+                        sample = protocol_sample(payload[HEADER_SIZE:], direction="collector_to_cloud", carrier="frame")
+                        sample.update(devcode=header.devcode, collector_addr=header.devaddr)
+                        self._protocol_samples.append(sample)
+                        await self._append_event("shadow_protocol_evidence", "collector_to_cloud", sample)
                     if header.fcode in _COLLECTOR_FORWARD_FCODES:
                         pending_requests[int(header.tid)] = _PendingCollectorRequest(
                             tid=int(header.tid),
@@ -469,26 +584,63 @@ class InProcessFailClosedShadowProxyHandler:
                 await self._append_event(
                     "shadow_proxy_cloud_chunk",
                     "cloud_to_shadow_proxy",
-                    {"remote": remote, "chunk_hex": chunk.hex(), "chunk_len": len(chunk)},
+                    ({"remote": remote, "chunk_len": len(chunk)} if self._inspect_cloud_protocol
+                     else {"remote": remote, "chunk_hex": chunk.hex(), "chunk_len": len(chunk)}),
                 )
                 while True:
                     try:
-                        message = consume_cloud_message(cloud_buffer)
+                        message = (
+                            consume_cloud_message(cloud_buffer, allow_pi30=True)
+                            if self._allow_pi30 else consume_cloud_message(cloud_buffer)
+                        )
                     except Exception as exc:
+                        if self._inspect_cloud_protocol and self._identity_verified:
+                            sample = protocol_sample(bytes(cloud_buffer), direction="cloud_to_collector", carrier="unframed")
+                            if len(self._protocol_samples) < 8:
+                                self._protocol_samples.append(sample)
+                            await self._append_event("shadow_protocol_evidence", "cloud_to_shadow", sample)
+                            self._protocol_preparation_error = "cloud_protocol_unrecognized"
                         await self._append_event(
                             "shadow_proxy_parser_error",
                             "cloud_to_collector",
                             {
                                 "remote": remote,
                                 "error": f"{type(exc).__name__}:{exc}",
-                                "buffer_hex": bytes(cloud_buffer).hex(),
+                                **({"buffer_length": len(cloud_buffer)} if self._inspect_cloud_protocol
+                                   else {"buffer_hex": bytes(cloud_buffer).hex()}),
                             },
                         )
                         raise
                     if message is None:
                         break
                     kind, payload = message
+                    completion_write = self.completion.request(
+                        payload, carrier=kind, protocol=self._backend._protocol_adapter.key,
+                    )
                     self._route_protocol_activity = True
+                    if self._identity_verified and kind in ("frame", "modbus", "ascii", "pi30"):
+                        evidence_payload = payload
+                        frame_header = decode_header(payload[:HEADER_SIZE]) if kind == "frame" else None
+                        if frame_header is None or frame_header.fcode == 4:
+                            if frame_header is not None:
+                                evidence_payload = payload[HEADER_SIZE:]
+                            sample = protocol_sample(evidence_payload, direction="cloud_to_collector", carrier=kind)
+                            if frame_header is not None:
+                                sample.update(devcode=frame_header.devcode, collector_addr=frame_header.devaddr)
+                            if len(self._protocol_samples) < 8 and sample not in self._protocol_samples:
+                                self._protocol_samples.append(sample)
+                                await self._append_event("shadow_protocol_evidence", "cloud_to_shadow", sample)
+                            if self._inspect_cloud_protocol and (
+                                    self._protocol_preparation_pending or read_protocols(evidence_payload)):
+                                result = (self._backend.confirm_cloud_protocol(payload)
+                                          if frame_header is not None else self._backend.confirm_raw_cloud_protocol(payload))
+                                if result == "ready":
+                                    self._protocol_preparation_pending = False
+                                else:
+                                    self._protocol_preparation_error = result
+                                    continue
+                            if self._protocol_preparation_error:
+                                continue
                     if kind == "at":
                         if self._backend.should_forward_cloud_at(payload):
                             # Identity/telemetry queries the shadow can't answer
@@ -517,6 +669,13 @@ class InProcessFailClosedShadowProxyHandler:
                         continue
 
                     if kind == "modbus":
+                        if self._protocol_preparation_pending:
+                            read = decode_read_request(payload)
+                            if (self._identity_verified and read is not None
+                                    and 1 <= read.slave_id <= 247 and 1 <= read.count <= 125
+                                    and read.address + read.count <= 65536):
+                                self._protocol_preparation_error = "cloud_payload_modbus_requires_register_seed"
+                            continue
                         # Bare Modbus RTU control/poll traffic: answer reads from
                         # the shadow bank and observe + NACK writes locally. It
                         # is never forwarded to the inverter.
@@ -525,18 +684,40 @@ class InProcessFailClosedShadowProxyHandler:
                             async with upstream_write_lock:
                                 upstream_writer.write(response)
                                 await upstream_writer.drain()
+                            if completion_write:
+                                self.completion.replied(response)
                         continue
 
-                    if kind == "ascii":
+                    if kind in ("ascii", "pi30"):
+                        if self._protocol_preparation_pending:
+                            # No wrapper route proof for bare commands yet.
+                            continue
                         response = await self._backend._handle_ascii_frame(payload, remote=remote)
                         if response is not None:
                             async with upstream_write_lock:
                                 upstream_writer.write(response)
                                 await upstream_writer.drain()
+                            if completion_write:
+                                self.completion.replied(response)
                         continue
 
                     header = decode_header(payload[:HEADER_SIZE])
                     pending = pending_requests.get(int(header.tid))
+                    heartbeat_query = _is_collector_heartbeat_query(payload)
+                    metadata_query = _is_collector_metadata_query(payload)
+                    if (self._allow_pi30 or self._prepare_native_pi30 or self._inspect_cloud_protocol) and self._identity_verified and (heartbeat_query or metadata_query):
+                        # Some legacy clouds speak first: the collector waits
+                        # for FC1 before registering its PN. This is collector
+                        # liveness, not proof of the inverter's PI30 dialect.
+                        async with collector_write_lock:
+                            collector_writer.write(payload)
+                            await collector_writer.drain()
+                        await self._append_event(
+                            ("shadow_proxy_forward_cloud_heartbeat" if heartbeat_query
+                             else "shadow_proxy_forward_cloud_metadata_query"), "cloud_to_collector",
+                            {"tid": header.tid, "fcode": header.fcode},
+                        )
+                        continue
                     if pending is not None:
                         allow_forward, reason = _is_allowlisted_correlated_response(
                             header=header,
@@ -573,6 +754,33 @@ class InProcessFailClosedShadowProxyHandler:
                             },
                         )
 
+                    if self._protocol_preparation_pending:
+                        result = (
+                            self._backend.confirm_pi30_cloud_read(payload)
+                            if self._identity_verified and not self._protocol_preparation_error
+                            else ""
+                        )
+                        if result == "ready":
+                            await self._append_event(
+                                "shadow_proxy_protocol_prepared", "cloud_to_shadow",
+                                {"protocol_adapter_key": "pi30_ascii",
+                                 "collector_connection_sequence": self._collector_connection_sequence,
+                                 "devcode": header.devcode, "devaddr": header.devaddr,
+                                 "request_hex": payload[HEADER_SIZE:].hex()},
+                            )
+                            self._protocol_preparation_pending = False
+                        else:
+                            if result:
+                                self._protocol_preparation_error = result
+                                await self._append_event(
+                                    "shadow_proxy_protocol_mismatch", "cloud_to_shadow",
+                                    {"reason": result,
+                                     "cloud_modbus_read": self.status()["cloud_modbus_read"]},
+                                )
+                            # All inverter requests stay intercepted during
+                            # preparation, including writes and wrong targets.
+                            continue
+
                     try:
                         response = await self._backend._handle_frame(payload, remote=remote)
                     except Exception as exc:
@@ -601,6 +809,8 @@ class InProcessFailClosedShadowProxyHandler:
                         async with upstream_write_lock:
                             upstream_writer.write(response)
                             await upstream_writer.drain()
+                        if completion_write:
+                            self.completion.replied(response)
 
         collector_task = asyncio.create_task(_collector_to_cloud())
         cloud_task = asyncio.create_task(_cloud_to_collector())
@@ -626,6 +836,8 @@ class InProcessFailClosedShadowProxyHandler:
                     if not task.done():
                         task.cancel()
                 await asyncio.gather(collector_task, cloud_task, return_exceptions=True)
+                if cloud_buffer:
+                    self.completion.invalidate("completion_unparsed_cloud_tail")
                 for writer in (collector_writer, upstream_writer):
                     writer.close()
                     try:

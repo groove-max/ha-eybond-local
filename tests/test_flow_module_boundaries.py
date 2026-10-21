@@ -38,6 +38,7 @@ OPTIONS_MODULES = {
     "flows/options/shadow_run.py": "ShadowLearningRunMixin",
     "flows/options/shadow_review.py": "ShadowLearningReviewMixin",
     "flows/options/shadow_runtime.py": "ShadowLearningRuntimeMixin",
+    "flows/options/shadow_protocol.py": "ShadowProtocolOptionsMixin",
     "flows/options/proxy.py": "ProxyCaptureOptionsMixin",
     "flows/options/diagnostics.py": "DiagnosticsOptionsMixin",
 }
@@ -396,6 +397,7 @@ class OptionsFlowDecompositionBoundaryTests(unittest.TestCase):
         "ShadowLearningRunMixin",
         "ShadowLearningReviewMixin",
         "ShadowLearningRuntimeMixin",
+        "ShadowProtocolOptionsMixin",
         "ProxyCaptureOptionsMixin",
         "DiagnosticsOptionsMixin",
         "OptionsFlowBase",

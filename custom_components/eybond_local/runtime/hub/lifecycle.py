@@ -543,6 +543,11 @@ class HubLifecycleMixin:
 
         return self._link_manager.shadow_learning_observation_cursor()
 
+    def shadow_learning_completion(self):
+        """Return this live route's command ledger to the lifecycle owner."""
+        getter = getattr(self._link_manager, "shadow_learning_completion", None)
+        return getter() if callable(getter) else None
+
     def shadow_learning_observations_since(
         self,
         cursor: int,

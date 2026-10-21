@@ -263,6 +263,43 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertIs(values["lcd_backlight_enabled"], False)
 
+    async def test_activated_control_reads_live_config_without_repeating_cached_values(self):
+        for fallback in (False, True):
+            with self.subTest(fallback=fallback):
+                transport = self._transport(fail_config_bulk=fallback)
+                transport._registers[5018] = 1
+                base = next(c for c in self.driver.write_capabilities if c.key == "output_source_priority")
+                learned = replace(base, key="learned_priority", read_key="", register=5018,
+                                  enum_map={0: "Utility", 1: "Solar", 2: "SBU"},
+                                  experimental=True, metadata_scope="device", write_function=6)
+                inverter = replace(self._inverter(), capabilities=self._inverter().capabilities + (learned,))
+                state = {}
+                first = await self.driver.async_read_values(transport, inverter, runtime_state=state,
+                    poll_interval=10, now_monotonic=100)
+                self.assertEqual(first.values[learned.key], "Solar")
+                second = await self.driver.async_read_values(transport, inverter, runtime_state=state,
+                    poll_interval=10, now_monotonic=101)
+                self.assertNotIn(learned.key, second.values)
+
+    async def test_activated_control_preserves_observed_write_function_and_readback(self):
+        for function in (6, 16):
+            with self.subTest(function=function):
+                transport = self._transport()
+                base = next(c for c in self.driver.write_capabilities if c.key == "output_source_priority")
+                learned = replace(base, key="learned_priority", read_key="", register=5018,
+                                  enum_map={0: "Utility", 1: "Solar", 2: "SBU"},
+                                  experimental=True, metadata_scope="device", write_function=function)
+                inverter = replace(self._inverter(), capabilities=self._inverter().capabilities + (learned,))
+                with patch.object(transport, "async_send_payload", wraps=transport.async_send_payload) as send:
+                    result = await self.driver.async_write_capability(transport, inverter, learned.key, "Solar")
+                self.assertEqual(result, "Solar")
+                frames = [call.args[0] for call in send.call_args_list]
+                self.assertEqual([frame[1] for frame in frames], [function, 3])
+                self.assertTrue(all(call.kwargs["route"].collector_addr == 5 for call in send.call_args_list))
+                values = await self.driver.async_read_values(transport, inverter, runtime_state={},
+                    poll_interval=10, now_monotonic=100)
+                self.assertEqual(values.values[learned.key], "Solar")
+
     async def test_write_enum_control_uses_config_state_route(self) -> None:
         transport = self._transport()
         inverter = self._inverter()

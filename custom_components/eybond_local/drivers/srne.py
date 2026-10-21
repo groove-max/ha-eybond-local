@@ -42,6 +42,8 @@ class SrneModbusDriver(InverterDriver):
     """
 
     key = "srne_modbus"
+    cloud_probe_codecs = ("modbus_rtu",)
+    cloud_learning_supported = True
     poll_policy = PollPolicy(min_auto_interval=5.0, max_auto_interval=90.0)
     name = "SRNE / Modbus"
 

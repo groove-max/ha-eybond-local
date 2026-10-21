@@ -11,6 +11,9 @@ import re
 
 _NUMBER = r"-?\d+(?:\.\d+)?"
 _RANGE = re.compile(rf"({_NUMBER})\s*(?:~|～|–|\bto\b|-)\s*({_NUMBER})", re.I)
+# Ambiguous/categorical lists remain exact mappings, with a finite request budget.
+# Unobserved choices are never synthesized by the overlay generator.
+MAX_LEARNING_CHOICE_VALUES = 32
 
 
 def decimal_value(value: object) -> Decimal | None:
@@ -22,6 +25,39 @@ def decimal_value(value: object) -> Decimal | None:
     except InvalidOperation:
         return None
     return number if number.is_finite() and abs(number) <= 1_000_000_000 else None
+
+
+def numeric_choice_learning_candidates(choices, *, current="") -> list[dict]:
+    """Sample quantitative provider choices, without deriving operating limits.
+
+    Labels must repeat the actual numeric value with one consistent unit. Codes
+    such as 0 -> 50Hz are enums, not quantities. Short integer lists stay enums;
+    fractional quantities need numeric encoding evidence even in short lists.
+    Only existing provider values are used, never interpolated probe values.
+    """
+    parsed = []
+    units = set()
+    for raw_value, label in choices:
+        value = decimal_value(raw_value)
+        match = re.fullmatch(rf"\s*({_NUMBER})\s*([A-Za-z%°/]+)\s*", str(label))
+        if value is None or match is None or decimal_value(match[1]) != value:
+            return []
+        units.add(match[2])
+        parsed.append((str(raw_value), value))
+    if len(units) != 1 or len({v for _, v in parsed}) < 2:
+        return []
+    if len(parsed) <= MAX_LEARNING_CHOICE_VALUES and all(v == v.to_integral_value() for _, v in parsed):
+        return []
+    start = next((item for item in parsed if item[1] == decimal_value(current)), parsed[0])
+    selected = [start]
+    for item in parsed:
+        if item[1] not in {v for _, v in selected}:
+            selected.append(item)
+        if len(selected) == 3:
+            break
+    evidence = {"kind": "number", "unit": units.pop(), "sample_source": "provider_choices"}
+    return [dict(value=raw, label="", source="numeric_probe", numeric_evidence=dict(evidence))
+            for raw, _ in selected]
 
 
 def numeric_learning_candidates(*, hint="", unit="", current="", fallback="1") -> list[dict]:

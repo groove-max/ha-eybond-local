@@ -165,18 +165,20 @@ class TranslationShapeTests(unittest.TestCase):
         """Consent covers routing, interception and the non-expiring cloud hold."""
 
         markers = {
-            "en": ("endpoint", "test commands", "capture and block", "stays local"),
+            "en": ("endpoint", "test commands", "blocks test commands", "completion receipts", "Otherwise"),
             "ru": (
                 "endpoint",
                 "тестовые команды",
-                "перехватить и заблокировать",
-                "остаётся локальным",
+                "заблокирует",
+                "подтверждении завершения",
+                "Иначе",
             ),
             "uk": (
                 "endpoint",
                 "тестові команди",
-                "перехопити й заблокувати",
-                "залишається локальним",
+                "заблокує",
+                "підтвердження завершення",
+                "Інакше",
             ),
         }
         for path in FLOW_TRANSLATION_FILES:

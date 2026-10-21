@@ -284,14 +284,32 @@ class LinkConnectionMixin:
 
         self._activation_session_id = expected
         try:
+            deadline = asyncio.get_running_loop().time() + max(0.0, float(timeout))
             await self._async_follow_owned_session_listener()
             self._apply_live_wire_to_transports()
             if self._claimed_session_id() != expected:
                 return False
             activated = await self._async_await_callback_session(
-                timeout=max(0.0, float(timeout)),
+                timeout=max(0.0, deadline - asyncio.get_running_loop().time()),
                 require_heartbeat=False,
             )
+            # The exact socket can be active before its listener inventory has
+            # published the routed state. Dropping our temporary pin then lets
+            # the ordinary selector pick the still-routed OLD same-PN socket.
+            # Wait within the original budget for selection to converge; never
+            # send a callback or perform a management read on that old socket.
+            while activated and self._domain_ownership_active():
+                registry = self._callback_ownership_registry
+                selected = registry.owned_session_location(self._callback_entry_id)
+                if getattr(selected, "session_id", "") == expected:
+                    break
+                if (
+                    registry.claimed_session_id(self._callback_entry_id) != expected
+                    or registry.session_handle_for_owned_session(self._callback_entry_id, expected) is None
+                    or asyncio.get_running_loop().time() >= deadline
+                ):
+                    return False
+                await asyncio.sleep(min(0.05, max(0.0, deadline - asyncio.get_running_loop().time())))
             return bool(
                 activated
                 and self.connected

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import asyncio
 from pathlib import Path
 from typing import Any, TextIO
@@ -17,7 +17,9 @@ from ...collector.protocol import (
 from ...const import LOCAL_METADATA_DIR
 from ...fixtures.utils import build_command_fixture_responses
 from ...payload.modbus import crc16_modbus
+from ...payload.pi30 import parse_response as parse_pi30_response, Pi30Error
 from ..collector_cloud_proxy import JsonLineWriter
+from ..cloud_session_wire import consume_cloud_message
 from . import (
     ShadowWriteObservation,
     coerce_optional_int as _maybe_int,
@@ -25,6 +27,8 @@ from . import (
     utc_now_iso,
 )
 from .protocol import resolve_shadow_learning_protocol_adapter
+from .pi30_protocol import Pi30ShadowLearningAdapter
+from .protocol_mismatch import CloudModbusRead
 from .read_evidence import ShadowReadRegisterEvidence, ShadowReadRoute
 
 
@@ -133,6 +137,51 @@ class ShadowLearningSeed:
     protocol_adapter_key: str = "modbus_rtu"
     write_response_mode: str = "exception"
     allow_ack_writes: bool = False
+    observed_cloud_request: bytes = field(default=b"", repr=False)
+    inverter_target: tuple[int, int] | None = None
+    prepare_native_pi30: bool = False
+    inspect_cloud_protocol: bool = False
+    inverter_device_addr: int | None = None
+
+
+def pi30_learning_target(inverter: Any) -> tuple[int, int] | None:
+    """Use the identified local inverter route, never a model-name heuristic."""
+    if getattr(inverter, "driver_key", None) != "pi30":
+        return None
+    target = getattr(inverter, "probe_target", None)
+    result = (getattr(target, "devcode", None), getattr(target, "collector_addr", None))
+    return result if _valid_pi30_target(result) else None
+
+
+def learning_probe_target(inverter: Any) -> tuple[int, int] | None:
+    """Actual local tunnel coordinates, independent of the selected driver."""
+    target = getattr(inverter, "probe_target", None)
+    result = (getattr(target, "devcode", None), getattr(target, "collector_addr", None))
+    return result if _valid_pi30_target(result) else None
+
+
+def _can_prepare_native_pi30(seed: ShadowLearningSeed) -> bool:
+    """Local data permits preparation, not a claim about the cloud wire format."""
+    if not seed.prepare_native_pi30:
+        return False
+    snapshot = seed.effective_metadata_snapshot
+    if not isinstance(snapshot, dict):
+        return False
+    owners = {
+        str(snapshot.get(key) or "").strip().lower()
+        for key in ("effective_owner_key", "driver_key", "protocol_family")
+    } - {""}
+    capture = seed.latest_support_evidence or {}
+    return (
+        seed.prepare_native_pi30
+        and seed.collector_cloud_family == "legacy_binary"
+        and not seed.observed_cloud_request
+        and not seed.register_bank
+        and bool(owners) and owners == {"pi30"}
+        and capture.get("capture_kind") == "pi30_ascii_dump"
+        and _valid_pi30_target(seed.inverter_target)
+        and Pi30ShadowLearningAdapter().has_command_seed(seed.command_responses)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +210,11 @@ def build_shadow_learning_seed(
     register_bank: dict[int, int] | None = None,
     write_response_mode: str = "exception",
     allow_ack_writes: bool = False,
+    observed_cloud_request: bytes = b"",
+    inverter_target: tuple[int, int] | None = None,
+    prepare_native_pi30: bool = False,
+    inspect_cloud_protocol: bool = False,
+    inverter_device_addr: int | None = None,
 ) -> tuple[ShadowLearningSeed, tuple[str, ...]]:
     """Build one normalized shadow-learning seed and return its preflight blockers."""
 
@@ -181,6 +235,7 @@ def build_shadow_learning_seed(
         normalized_snapshot,
         collector_cloud_family=normalized_cloud_family,
         raw_passthrough_frame_format=normalized_raw_frame_format,
+        observed_cloud_request=observed_cloud_request,
     )
     normalized_mode = "ack" if allow_ack_writes and str(write_response_mode or "").strip().lower() == "ack" else "exception"
     seed = ShadowLearningSeed(
@@ -201,7 +256,22 @@ def build_shadow_learning_seed(
         protocol_adapter_key=str(adapter.key),
         write_response_mode=normalized_mode,
         allow_ack_writes=bool(allow_ack_writes),
+        observed_cloud_request=observed_cloud_request,
+        inverter_target=inverter_target,
+        prepare_native_pi30=prepare_native_pi30,
+        inspect_cloud_protocol=inspect_cloud_protocol,
+        inverter_device_addr=inverter_device_addr,
     )
+    if _can_prepare_native_pi30(seed):
+        seed = replace(seed, protocol_adapter_key="pi30_pending_cloud_proof")
+    else:
+        seed = replace(seed, prepare_native_pi30=False)
+    if ((adapter.key == "pi30_ascii" or seed.prepare_native_pi30)
+            and "QID" not in build_command_fixture_responses(raw_capture or {})
+            and "QID" not in (command_responses or {})):
+        # AT identity can fall back to the collector PN; native QID asks for
+        # the INVERTER serial. Never synthesize that from the collector ID.
+        normalized_responses.pop("QID", None)
     preflight = build_shadow_learning_preflight(seed)
     return seed, preflight.blockers
 
@@ -224,10 +294,22 @@ def build_shadow_learning_preflight(seed: ShadowLearningSeed) -> ShadowLearningP
         seed.effective_metadata_snapshot,
         collector_cloud_family=seed.collector_cloud_family,
         raw_passthrough_frame_format=seed.raw_passthrough_frame_format,
+        observed_cloud_request=seed.observed_cloud_request,
     )
+    if seed.inspect_cloud_protocol and _valid_pi30_target(seed.inverter_target):
+        # Admission is for an intercepted, read-only protocol inspection only.
+        # The proxy keeps dispatch closed until a real read proves codec/seed.
+        return ShadowLearningPreflight(can_start=not blockers, blockers=tuple(blockers))
+    if _can_prepare_native_pi30(seed):
+        return ShadowLearningPreflight(can_start=not blockers, blockers=tuple(blockers))
     if not adapter.supported:
         blockers.append(adapter.blocker)
-    if adapter.key == "eybond_g_ascii":
+    if adapter.key == "pi30_ascii":
+        if not _valid_pi30_target(seed.inverter_target):
+            blockers.append("missing_inverter_target")
+        if not adapter.has_command_seed(seed.command_responses):
+            blockers.append("missing_command_seed")
+    elif adapter.key == "eybond_g_ascii":
         if not _has_g_ascii_command_seed(seed.command_responses):
             blockers.append("missing_command_seed")
     elif not seed.register_bank:
@@ -256,6 +338,7 @@ class InProcessShadowLearningHandler:
             seed.effective_metadata_snapshot,
             collector_cloud_family=seed.collector_cloud_family,
             raw_passthrough_frame_format=seed.raw_passthrough_frame_format,
+            observed_cloud_request=seed.observed_cloud_request,
         )
         self._write_observations: list[ShadowWriteObservation] = []
         self._observation_condition = asyncio.Condition()
@@ -268,6 +351,123 @@ class InProcessShadowLearningHandler:
         self._ascii_command_counts: dict[str, int] = {}
         self._ascii_field_samples: dict[str, list[str]] = {}
         self._read_event_count = 0
+        self.cloud_modbus_read: CloudModbusRead | None = None
+        self.cloud_protocol_evidence = None
+
+    def confirm_cloud_protocol(self, frame: bytes) -> str:
+        """Qualify a read against the owning driver's codec, never a brand."""
+        from ...drivers.registry import get_driver
+        from .protocol_evidence import CloudProtocolEvidence
+
+        evidence = CloudProtocolEvidence.from_frame(frame)
+        self.cloud_protocol_evidence = evidence
+        if evidence is None:
+            return "cloud_protocol_unrecognized"
+        self.cloud_modbus_read = CloudModbusRead.from_frame(frame)
+        if len(evidence.protocols) != 1:
+            return "cloud_protocol_ambiguous"
+        snapshot = self._seed.effective_metadata_snapshot
+        try:
+            driver = get_driver(str(snapshot.get("driver_key") or snapshot.get("effective_owner_key") or ""))
+        except KeyError:
+            return "cloud_protocol_local_driver_unknown"
+        codec = evidence.protocols[0]
+        if codec not in driver.cloud_probe_codecs:
+            return "cloud_protocol_mismatch"
+        if not driver.cloud_learning_supported:
+            return "cloud_protocol_learning_unsupported"
+        if (evidence.devcode, evidence.collector_addr) != self._seed.inverter_target:
+            # Same codec on another route is not proof this local seed belongs
+            # to it. Read-only compatibility can verify the new route instead.
+            return "cloud_protocol_route_mismatch"
+        if codec in {"modbus_rtu", "eybond_short_ascii"} and (
+                type(self._seed.inverter_device_addr) is not int
+                or evidence.target(codec).device_addr != self._seed.inverter_device_addr):
+            return "cloud_protocol_route_mismatch"
+        if codec == "pi30_ascii" and self._seed.prepare_native_pi30:
+            return self.confirm_pi30_cloud_read(frame) or "cloud_protocol_seed_missing"
+        adapter = resolve_shadow_learning_protocol_adapter(snapshot, observed_cloud_request=evidence.payload)
+        candidate = replace(self._seed, inspect_cloud_protocol=False, prepare_native_pi30=False,
+                            observed_cloud_request=evidence.payload, protocol_adapter_key=adapter.key)
+        if not adapter.supported or not build_shadow_learning_preflight(candidate).can_start:
+            return "cloud_protocol_seed_missing"
+        self._seed = candidate
+        self._protocol_adapter = adapter
+        return "ready"
+
+    def confirm_raw_cloud_protocol(self, payload: bytes) -> str:
+        """Qualify bare reads on the PN-verified socket against the local seed.
+
+        There is no EyeBond wrapper route to infer or export here. Require an
+        existing seed, matching driver codec and (for addressed codecs) unit.
+        This does not authorize profile probing on an invented tunnel route.
+        """
+        from ...drivers.registry import get_driver
+        from .protocol_evidence import read_protocols
+
+        codecs = read_protocols(payload)
+        if not codecs:
+            return "cloud_protocol_unrecognized"
+        if len(codecs) != 1:
+            return "cloud_protocol_ambiguous"
+        snapshot = self._seed.effective_metadata_snapshot
+        try:
+            driver = get_driver(str(snapshot.get("driver_key") or snapshot.get("effective_owner_key") or ""))
+        except KeyError:
+            return "cloud_protocol_local_driver_unknown"
+        codec, unit = next(iter(codecs.items()))
+        if codec not in driver.cloud_probe_codecs:
+            return "cloud_protocol_mismatch"
+        if not driver.cloud_learning_supported:
+            return "cloud_protocol_learning_unsupported"
+        if codec in {"modbus_rtu", "eybond_short_ascii"} and (
+                type(self._seed.inverter_device_addr) is not int
+                or unit != self._seed.inverter_device_addr):
+            return "cloud_protocol_route_mismatch"
+        # Native PI30 preparation still needs its independently verified wrapper
+        # and genuine read-response proof; do not bypass it with raw traffic.
+        if self._seed.prepare_native_pi30:
+            return "cloud_protocol_route_unavailable"
+        adapter = resolve_shadow_learning_protocol_adapter(snapshot, observed_cloud_request=payload)
+        candidate = replace(self._seed, inspect_cloud_protocol=False,
+                            observed_cloud_request=payload, protocol_adapter_key=adapter.key)
+        if not adapter.supported or not build_shadow_learning_preflight(candidate).can_start:
+            return "cloud_protocol_seed_missing"
+        self._seed, self._protocol_adapter = candidate, adapter
+        return "ready"
+
+    def confirm_pi30_cloud_read(self, frame: bytes) -> str:
+        """Adopt a proved native codec without replacing trace/observation owners.
+
+        The proxy must first verify PN on its current socket. This method checks
+        the independent inverter route, CRC and genuine local response. A write
+        alone can never activate learning.
+        """
+        if not self._seed.prepare_native_pi30 or len(frame) < HEADER_SIZE:
+            return ""
+        # The caller has verified this collector's PN. A DIFFERENT wrapper
+        # route can still prove a protocol mismatch, never PI30 readiness.
+        cloud_read = CloudModbusRead.from_frame(frame)
+        if cloud_read is not None:
+            self.cloud_modbus_read = cloud_read
+            return "cloud_payload_modbus_requires_register_seed"
+        header = decode_header(frame[:HEADER_SIZE])
+        if (header.fcode != FC_FORWARD_TO_DEVICE
+                or (header.devcode, header.devaddr) != self._seed.inverter_target):
+            return ""
+        payload = frame[HEADER_SIZE:]
+        adapter = Pi30ShadowLearningAdapter()
+        request = adapter.decode_read_request(payload)
+        if request is None:
+            return ""
+        reply = adapter.build_seeded_read_response(request, [], self._at_responses)
+        if parse_pi30_response(reply) in ("NAK", "NOA", "ERCRC", "ACK"):
+            return ""
+        self._seed = replace(
+            self._seed, observed_cloud_request=payload, protocol_adapter_key=adapter.key,
+        )
+        self._protocol_adapter = adapter
+        return "ready"
 
     @property
     def running(self) -> bool:
@@ -397,12 +597,20 @@ class InProcessShadowLearningHandler:
                 samples.append(int(value))
 
     def _record_ascii_read_observation(self, command: str, response_payload: bytes) -> None:
+        if self._protocol_adapter.key == "pi30_ascii":
+            try:
+                sample = parse_pi30_response(response_payload)
+            except Pi30Error:
+                return
+            if sample in ("NAK", "ACK", "NOA", "ERCRC"):
+                return
+        else:
+            sample = _normalize_ascii_response_sample(response_payload)
         self._read_event_count += 1
         normalized = str(command or "").strip().upper()
         if not normalized:
             return
         self._ascii_command_counts[normalized] = self._ascii_command_counts.get(normalized, 0) + 1
-        sample = _normalize_ascii_response_sample(response_payload)
         if not sample:
             return
         samples = self._ascii_field_samples.setdefault(normalized, [])
@@ -478,7 +686,7 @@ class InProcessShadowLearningHandler:
                     collector_cloud_profile_confidence=self._seed.collector_cloud_profile_confidence,
                     collector_callback_endpoint=self._seed.collector_callback_endpoint,
                     raw_passthrough_frame_format=self._seed.raw_passthrough_frame_format,
-                    protocol_adapter_key=self._protocol_adapter.key,
+                    protocol_adapter_key=self._seed.protocol_adapter_key,
                     write_response_mode=self._seed.write_response_mode,
                 ).to_json_dict(),
             }
@@ -592,6 +800,11 @@ class InProcessShadowLearningHandler:
     def _consume_next_message(self, buffer: bytearray) -> tuple[str, bytes] | None:
         if not buffer:
             return None
+        if self._protocol_adapter.key == "pi30_ascii":
+            message = consume_cloud_message(buffer, allow_pi30=True)
+            if message is not None and message[0] in ("pi30", "modbus"):
+                return "ascii", message[1]
+            return message
         if buffer.startswith(b"AT+"):
             newline = buffer.find(b"\n")
             if newline < 0:
@@ -665,6 +878,11 @@ class InProcessShadowLearningHandler:
     async def _handle_frame(self, frame: bytes, *, remote: str) -> bytes | None:
         header = decode_header(frame[:HEADER_SIZE])
         payload = frame[HEADER_SIZE:]
+        if self._protocol_adapter.key == "pi30_ascii":
+            if (header.fcode != FC_FORWARD_TO_DEVICE
+                    or not _valid_pi30_target(self._seed.inverter_target)
+                    or (header.devcode, header.devaddr) != self._seed.inverter_target):
+                return None
         read_request = self._protocol_adapter.decode_read_request(payload)
         if read_request is not None:
             values = self._read_register_values(read_request.address, read_request.count)
@@ -923,12 +1141,17 @@ class InProcessShadowLearningHandler:
         return response
 
     async def _handle_ascii_frame(self, frame: bytes, *, remote: str) -> bytes | None:
-        """Handle one bare G-ASCII command from the cloud.
+        """Handle one bare command for the session's proven ASCII dialect.
 
         Reads are answered from command-response seed data. Unknown commands and
         writes are NAK'd locally and never forwarded to the physical inverter.
         """
 
+        target = (None, None)
+        if self._protocol_adapter.key == "pi30_ascii":
+            if not _valid_pi30_target(self._seed.inverter_target):
+                return None
+            target = self._seed.inverter_target
         read_request = self._protocol_adapter.decode_read_request(frame)
         if read_request is not None:
             response = self._protocol_adapter.build_seeded_read_response(
@@ -968,8 +1191,8 @@ class InProcessShadowLearningHandler:
 
         observation = self._protocol_adapter.write_observation(
             frame=frame,
-            devcode=None,
-            devaddr=None,
+            devcode=target[0],
+            devaddr=target[1],
             timestamp=utc_now_iso(),
             source="shadow_learning",
         )
@@ -1135,6 +1358,12 @@ def _snapshot_is_valid(snapshot: dict[str, Any]) -> bool:
     # learning exists to serve.
     return bool(str(snapshot.get("register_schema_name") or "").strip())
 
+
+
+def _valid_pi30_target(target: tuple[int, int] | None) -> bool:
+    return (type(target) is tuple and len(target) == 2
+            and type(target[0]) is int and 0 <= target[0] <= 65535
+            and type(target[1]) is int and 0 <= target[1] <= 255)
 
 
 def _build_command_responses(
@@ -1314,6 +1543,7 @@ __all__ = [
     "ShadowLearningSessionManifest",
     "build_shadow_learning_preflight",
     "build_shadow_learning_seed",
+    "pi30_learning_target",
     "build_shadow_learning_trace_path",
     "shadow_learning_trace_root",
 ]

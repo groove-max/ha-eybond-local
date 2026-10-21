@@ -57,6 +57,27 @@ class ClaimIdentityTests(unittest.TestCase):
     def _registry(self, sessions=()):
         return CallbackSessionRegistry(sessions_source=lambda: tuple(sessions))
 
+    def test_exact_strong_claim_wins_equal_routes_on_different_listeners(self):
+        old = dict(_observed("old", FULL_PN, state="routed_framed", source="fc2_parameter_2"), listener_port=8899)
+        new = dict(_observed("new", FULL_PN, state="routed_framed", source="fc2_parameter_2"), listener_port=502)
+        for sessions in ([old, new], [new, old]):
+            registry = self._registry(sessions)
+            registry.claim("entry", collector_pn=FULL_PN, session_id="new")
+            self.assertEqual(registry.owned_session_location("entry").session_id, "new")
+        # A stale claim cannot revive a closed or mismatched socket.
+        registry = self._registry([new, old])
+        registry.claim("entry", collector_pn=FULL_PN, session_id="new")
+        for state in ("closed", "route_identity_mismatch"):
+            new["state"] = state
+            self.assertEqual(registry.owned_session_location("entry").session_id, "old")
+
+    def test_weak_claim_cannot_override_strong_owned_session(self):
+        weak = _observed("weak", FULL_PN, state="routed_framed", source="framed_heartbeat")
+        strong = _observed("strong", FULL_PN, state="routed_framed", source="fc2_parameter_2")
+        registry = self._registry([strong, weak])
+        registry.claim("entry", collector_pn=FULL_PN, session_id="weak")
+        self.assertEqual(registry.owned_session_location("entry").session_id, "strong")
+
     def test_creates_pn_only_claim_without_scanning_sessions(self) -> None:
         # A matching strong observed session exists, yet claim_identity binds
         # NO session id and does not enrich from the socket.

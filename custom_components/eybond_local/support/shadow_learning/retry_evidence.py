@@ -8,6 +8,25 @@ from collections import defaultdict
 from copy import deepcopy
 import json
 
+from .pi30_protocol import Pi30ShadowLearningAdapter
+
+
+def _native_pi30_write(wire: dict) -> str:
+    """Keep the whole command as a value, not as the register-like target."""
+    raw = wire.get("raw_payload_hex")
+    if type(raw) is not str or not 8 <= len(raw) <= 134:
+        return ""
+    try:
+        request = Pi30ShadowLearningAdapter().decode_write_request(bytes.fromhex(raw))
+    except ValueError:
+        return ""
+    if request is None or request.command != wire.get("command"):
+        return ""
+    if (type(wire.get("devcode")) is not int or not 0 <= wire["devcode"] <= 65535
+            or type(wire.get("devaddr")) is not int or not 0 <= wire["devaddr"] <= 255):
+        return ""
+    return request.command
+
 
 def qualify_retry_evidence(result: dict) -> dict:
     result = dict(result)
@@ -21,13 +40,20 @@ def qualify_retry_evidence(result: dict) -> dict:
     qualified, rejected = [], []
     for field, items in groups.items():
         targets, requested, observed = set(), set(), set()
+        native_valid = True
         for item in items:
             wire = item.get("observation", {})
-            targets.add(tuple(wire.get(k) for k in
-                ("protocol", "command", "function_code", "devcode", "devaddr", "unit", "register")))
+            target_keys = ("protocol", "command", "function_code", "devcode", "devaddr", "unit", "register")
+            if wire.get("protocol") == "pi30_ascii":
+                command = _native_pi30_write(wire)
+                native_valid = native_valid and bool(command)
+                target_keys = tuple(key for key in target_keys if key != "command")
+                observed.add(command)
+            else:
+                observed.add(json.dumps(wire.get("values") or wire.get("value", ""), sort_keys=True))
+            targets.add(tuple(wire.get(k) for k in target_keys))
             requested.add(str(item.get("requested_value", "")))
-            observed.add(json.dumps(wire.get("values") or wire.get("value", ""), sort_keys=True))
-        valid = (bool(field) and not extra_writes and field not in ambiguous
+        valid = (bool(field) and native_valid and not extra_writes and field not in ambiguous
                  and len(targets) == 1 and len(requested) >= 2 and len(observed) >= 2)
         if valid:
             qualified.extend(items)

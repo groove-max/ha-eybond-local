@@ -244,6 +244,7 @@
       "unit": "V",
       "device_class": "voltage",
       "state_class": "measurement",
+      "diagnostic": true,
       "live": false
     },
     {
@@ -262,6 +263,7 @@
       "unit": "V",
       "device_class": "voltage",
       "state_class": "measurement",
+      "diagnostic": true,
       "live": false
     },
     {
@@ -270,6 +272,7 @@
       "unit": "Hz",
       "device_class": "frequency",
       "state_class": "measurement",
+      "diagnostic": true,
       "live": false
     },
     {
@@ -298,6 +301,7 @@
       "unit": "W",
       "device_class": "power",
       "state_class": "measurement",
+      "diagnostic": true,
       "live": false
     },
     {
@@ -306,6 +310,7 @@
       "unit": "V",
       "device_class": "voltage",
       "state_class": "measurement",
+      "diagnostic": true,
       "live": false
     },
     {
@@ -314,6 +319,7 @@
       "unit": "V",
       "device_class": "voltage",
       "state_class": "measurement",
+      "diagnostic": true,
       "live": false
     },
     {
@@ -322,6 +328,7 @@
       "unit": "V",
       "device_class": "voltage",
       "state_class": "measurement",
+      "diagnostic": true,
       "live": false
     },
     {
@@ -330,6 +337,7 @@
       "unit": "V",
       "device_class": "voltage",
       "state_class": "measurement",
+      "diagnostic": true,
       "live": false
     },
     {
@@ -338,6 +346,7 @@
       "unit": "V",
       "device_class": "voltage",
       "state_class": "measurement",
+      "diagnostic": true,
       "live": false
     },
     {
@@ -346,6 +355,7 @@
       "unit": "V",
       "device_class": "voltage",
       "state_class": "measurement",
+      "diagnostic": true,
       "live": false
     },
     {
@@ -409,24 +419,21 @@
       "name": "Output Voltage",
       "unit": "V",
       "device_class": "voltage",
-      "state_class": "measurement",
-      "diagnostic": true
+      "state_class": "measurement"
     },
     {
       "key": "output_frequency",
       "name": "Output Frequency",
       "unit": "Hz",
       "device_class": "frequency",
-      "state_class": "measurement",
-      "diagnostic": true
+      "state_class": "measurement"
     },
     {
       "key": "output_apparent_power",
       "name": "Output Apparent Power",
       "unit": "VA",
       "icon": "mdi:flash-outline",
-      "state_class": "measurement",
-      "diagnostic": true
+      "state_class": "measurement"
     },
     {
       "key": "output_active_power",
@@ -457,24 +464,21 @@
       "name": "Battery Voltage",
       "unit": "V",
       "device_class": "voltage",
-      "state_class": "measurement",
-      "diagnostic": true
+      "state_class": "measurement"
     },
     {
       "key": "battery_charge_current",
       "name": "Battery Charge Current",
       "unit": "A",
       "device_class": "current",
-      "state_class": "measurement",
-      "diagnostic": true
+      "state_class": "measurement"
     },
     {
       "key": "battery_discharge_current",
       "name": "Battery Discharge Current",
       "unit": "A",
       "device_class": "current",
-      "state_class": "measurement",
-      "diagnostic": true
+      "state_class": "measurement"
     },
     {
       "key": "battery_percent",
@@ -489,8 +493,7 @@
       "name": "Inverter Temperature",
       "unit": "°C",
       "device_class": "temperature",
-      "state_class": "measurement",
-      "diagnostic": true
+      "state_class": "measurement"
     },
     {
       "key": "pv_input_current",
@@ -524,8 +527,7 @@
       "name": "PV Charging Power",
       "unit": "W",
       "device_class": "power",
-      "state_class": "measurement",
-      "diagnostic": true
+      "state_class": "measurement"
     },
     {
       "key": "battery_scc_voltage",

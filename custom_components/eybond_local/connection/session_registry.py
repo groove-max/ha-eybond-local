@@ -1241,7 +1241,8 @@ class CallbackSessionRegistry:
         if not pn:
             return None
         best: CallbackSession | None = None
-        best_rank: tuple[int, int, int] | None = None
+        best_rank: tuple[int, int, int, int] | None = None
+        claimed_sid = self.claimed_session_id(entry_id)
         for session in self._normalized_sessions():
             if not _pn_is_same_identity(session.collector_pn, pn):
                 continue
@@ -1260,10 +1261,15 @@ class CallbackSessionRegistry:
                 1 if raw_state in ("routed_framed", "routed_at_text", "claimed") else 0,
                 1 if session.has_strong_identity else 0,
                 len(session.collector_pn),
+                # Equal-quality strong sockets must honor the registry's exact
+                # claim. A recovery can leave the old callback alive while the
+                # new permanent connection is already routed on another port.
+                # Inventory order across listeners is NOT acceptance chronology.
+                1 if session.has_strong_identity and session.session_id == claimed_sid else 0,
             )
-            # Same tie rule as current_session_for_pn/session_handle_for_pn:
-            # later acceptance wins when identity, state and strength are
-            # otherwise equal.  Peer IP is deliberately not part of ranking.
+            # Unbound equal-quality candidates retain the existing inventory
+            # tie rule. Across listeners this order is not causal proof and
+            # cannot override the exact strong claim above. Peer IP is unused.
             if best_rank is None or rank >= best_rank:
                 best_rank = rank
                 best = session

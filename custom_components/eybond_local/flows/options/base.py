@@ -282,6 +282,7 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
             "learning",
             "waiting_for_collector",
             "connecting_upstream",
+            "waiting_for_cloud_protocol",
             "degraded",
             "restoring",
             "restore_failed",

@@ -97,3 +97,21 @@ async def test_receipt_survives_clear_and_is_in_support_bundle(recovery_context)
     assert diagnostics["shadow_learning_recovery_cached_record_present"] is False
     bundle = coordinator._build_support_bundle_payload(shadow_learning_recovery=diagnostics)
     assert bundle["runtime"]["metadata"]["shadow_learning_recovery_last_finalization_outcome"] == "endpoint_verified"
+
+
+async def test_foreign_legacy_journal_does_not_block_or_change_this_entry(recovery_context):
+    from custom_components.eybond_local.support.shadow_learning import session
+
+    coordinator, state = recovery_context
+    root = Path(coordinator.hass.config.config_dir)
+    foreign = replace(state, entry_id="other-entry", collector_pn="OTHER-COLLECTOR",
+                      route_owner_id="shadow_learning:foreign-held-run")
+    path = await coordinator.hass.async_add_executor_job(
+        lambda: session.save_shadow_learning_session_state(config_dir=root, state=foreign),
+    )
+    before = await coordinator.hass.async_add_executor_job(path.read_bytes)
+    coordinator._shadow_learning_session_state_loaded = False
+    assert await coordinator._async_active_shadow_learning_state(require_process=False) == state
+    await coordinator._async_save_shadow_learning_session_state(replace(state, status="restoring"))
+    await coordinator._async_clear_shadow_learning_session_state(outcome="explicit_discard")
+    assert await coordinator.hass.async_add_executor_job(path.read_bytes) == before

@@ -102,6 +102,7 @@ class Pi18Driver(InverterDriver):
     """Read-only PI18 family driver."""
 
     key = "pi18"
+    cloud_probe_codecs = ("pi18_ascii",)
     name = "PI18 / ASCII"
 
     @property

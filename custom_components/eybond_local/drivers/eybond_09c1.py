@@ -26,6 +26,7 @@ _READ_ERRORS = (Urtu09C1Error, ConnectionError, asyncio.TimeoutError)
 
 class Eybond09C1Driver(InverterDriver):
     key = "eybond_09c1"
+    cloud_probe_codecs = ("eybond_09c1",)
     name = "EyeBond 09C1 (read-only)"
     signature_timeout = 4.0
 

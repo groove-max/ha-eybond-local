@@ -17,6 +17,34 @@ The inverter may appear after the collector. A slow protocol or a Full scan can
 take more than one normal polling interval. **Poll Context** shows whether the
 integration is detecting an inverter, reading it, or only checking the collector.
 
+### PI30 sensor categories
+
+PI30 live battery voltage, charge/discharge currents, output voltage/frequency,
+apparent power, inverter temperature and PV charging power appear as ordinary
+sensors. Rated values and charging-threshold readbacks appear under diagnostics;
+the corresponding writable controls remain separate. Updating preserves entity
+IDs, history, custom names and manually disabled entities. Hidden raw aliases and
+internal bus/SCC diagnostics are unchanged.
+
+### PI30 settings changed outside Home Assistant
+
+Settings changed in the vendor app or on the inverter display are reread using
+`QPIRI` (priorities, charging thresholds and currents) and `QFLAG` (switch states).
+The first periodic check becomes due after one minute of runtime. Each group is
+then read no more often than once a minute, with at most one extra request per
+normal poll; a long polling interval can make updates take longer.
+
+These checks only read values and also run in Read-only mode. They follow live
+telemetry and are deferred when live reads fail or startup/control-readback work
+is active. Each request is limited to three seconds. A failed settings read keeps
+the last known values and is retried on a later settings cycle; it does not by
+itself discard working live telemetry. Writes from HA still request immediate
+confirmation rather than waiting for the periodic check.
+
+This refresh does not change the profile's command meanings or add missing
+controls. A firmware-specific mismatch between a numeric code and its displayed
+mode needs separate protocol or captured-command evidence.
+
 ### PI30 names shared by several brands
 
 Some inverters report a firmware identifier instead of their retail model.
