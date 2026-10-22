@@ -91,16 +91,26 @@ def main() -> None:
                 result.click()
                 page.wait_for_load_state("networkidle")
                 assert page.locator("main h1").count() == 1
-        page.emulate_media(color_scheme="dark")
         page.goto(BASE + "uk/", wait_until="networkidle")
+        # Test the real toggle: emulated system preference alone may leave the
+        # user's stored palette active, producing a false "dark" screenshot.
+        if page.locator("body").get_attribute("data-md-color-scheme") != "slate":
+            page.locator('label[for="__palette_1"]').click()
+        page.wait_for_function('document.body.dataset.mdColorScheme === "slate"')
+        assert page.locator('.language-switch a').first.evaluate(
+            'a => getComputedStyle(a).color') == 'rgb(108, 226, 198)'
         page.screenshot(path=str(screenshot_dir / "mobile-uk-dark.png"), full_page=True)
+        page.locator('.md-header__button[for="__drawer"]').click()
+        page.locator('.md-sidebar--primary a[href="./installation/"]').click()
+        page.wait_for_url(BASE + "uk/installation/")
+        assert page.locator("body").get_attribute("data-md-color-scheme") == "slate"
         assert not errors, errors
         assert not failed_assets, failed_assets
         context.close()
         browser.close()
         if server:
             server.shutdown()
-    print("Browser OK: desktop/mobile, images, contextual language switch and EN/UK search")
+    print("Browser OK: desktop/mobile, images, contextual language switch, EN/UK search, dark theme and mobile menu")
 
 
 if __name__ == "__main__":
