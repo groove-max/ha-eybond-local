@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
@@ -51,6 +51,9 @@ jobs:
           python tools/check_docs.py
       - name: Check mobile, search and language navigation
         run: |
+          # The runner's HTTP Azure apt mirror can stall each dependency fetch.
+          # Use the official HTTPS mirror while retaining all Playwright deps.
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
           python -m playwright install --with-deps chromium
           python tools/check_docs_browser.py
       - uses: actions/upload-artifact@v4
