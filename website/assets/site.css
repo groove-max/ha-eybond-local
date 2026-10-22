@@ -1,0 +1,21 @@
+:root { --md-primary-fg-color: #103a43; --md-accent-fg-color: #008774; }
+body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+.md-typeset { font-size: .82rem; line-height: 1.7; }
+.md-typeset h1 { font-weight: 750; letter-spacing: -.025em; color: var(--md-default-fg-color); }
+.md-typeset h2 { font-weight: 680; letter-spacing: -.015em; }
+.md-typeset img { max-width: 100%; height: auto; border-radius: .6rem; }
+.md-typeset blockquote { border-left-color: #008774; }
+.md-typeset a { text-underline-offset: .18em; }
+.md-typeset a:hover { text-decoration: underline; }
+.language-switch { display: flex; flex-wrap: wrap; gap: .8rem; align-items: center; margin: 0 0 1.2rem; font-size: .74rem; }
+.language-switch a { font-weight: 650; }
+.md-typeset table:not([class]) { font-size: .72rem; }
+.md-typeset td, .md-typeset th { overflow-wrap: anywhere; }
+.md-typeset .md-button { margin: .3rem .4rem .3rem 0; }
+.md-typeset hr { margin: 1.8rem 0; }
+.md-announce { font-size: .68rem; }
+[data-md-color-scheme="slate"] { --md-primary-fg-color: #123c44; --md-accent-fg-color: #6ce2c6; }
+@media (max-width: 600px) {
+  .md-typeset h1 { font-size: 1.7rem; }
+  .md-typeset .md-button { display: block; text-align: center; }
+}

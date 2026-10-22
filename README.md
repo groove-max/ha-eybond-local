@@ -1,400 +1,102 @@
-# EyeBond Local — local Home Assistant integration for SmartESS / SmartValue solar inverters
+# EyeBond Local for Home Assistant
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
-[![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://www.mozilla.org/en-US/MPL/2.0/)
+Local monitoring and supported controls for solar inverters with **EyeBond-compatible Wi-Fi collectors**, including devices used with **SmartESS, SmartValue and DESSMonitor**.
 
-[Українською](README.uk.md)
+[Українська](README.uk.md) · [Documentation](https://groove-max.github.io/ha-eybond-local/en/) · [Compatibility](docs/user/COMPATIBILITY.md) · [Get help](docs/user/SUPPORT_ARCHIVE.md)
+
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=groove-max&repository=ha-eybond-local&category=integration)
+[![Stable release](https://img.shields.io/github/v/release/groove-max/ha-eybond-local?label=stable)](https://github.com/groove-max/ha-eybond-local/releases/latest)
+[![Release including prereleases](https://img.shields.io/github/v/release/groove-max/ha-eybond-local?include_prereleases&label=including%20prereleases)](https://github.com/groove-max/ha-eybond-local/releases)
+[![Validate](https://github.com/groove-max/ha-eybond-local/actions/workflows/validate.yml/badge.svg)](https://github.com/groove-max/ha-eybond-local/actions/workflows/validate.yml)
+[![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
 
 [![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=groove-max&repository=ha-eybond-local&category=integration)
 
-> The **Open in HACS** button requires HACS to be installed. HACS is optional;
-> if you do not use it, follow the manual installation steps below.
+> HACS must already be installed. This is a **custom repository**, not a built-in Home Assistant integration. Manual installation is also available.
 
-> **Companion dashboard card:** [EyeBond Local Card](https://github.com/groove-max/ha-eybond-local-card) adds a ready-made Home Assistant dashboard with power flow and history charts.
-
-> **No factory collector?** [ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector) is a community firmware bridge for connecting supported inverters directly to EyeBond Local without a factory cloud logger.
-
-**EyeBond Local** brings local monitoring and control to Home Assistant for hybrid solar inverters that use EyeBond-compatible Wi-Fi collectors and appear in the SmartESS / SmartValue apps.
-
-Use it when your inverter already works in the SmartESS or SmartValue app and you want local LAN access from Home Assistant instead of depending only on the vendor cloud.
-
-It reads live inverter data over your local network. On supported models it can also expose safe controls such as charge settings, output mode, beeper settings, and model-specific switches.
-
-> **Note:** The integration is actively developed. Some inverters work fully, some work in read-only mode, and some need a Support Archive before support can be added.
-
-> **Known issue:** On some setups, vendor-cloud updates can pause while Home Assistant readings continue. This is under investigation; see [Known cloud telemetry issue](#known-cloud-telemetry-issue).
-
----
+![Collector and inverter devices in Home Assistant](docs/images/device-overview.png)
 
 ## Is this integration for my inverter?
 
-It may be a good fit if:
+Start with the **collector and protocol**, not just the inverter brand. Models sold as Anenji, PowMr, Sandisolar, MUST, Victor, Kevolt and others have different levels of support. An app name or a shared firmware identifier does not guarantee compatibility.
 
-- your inverter appears in the SmartESS or SmartValue app;
-- it connects through an external or built-in EyeBond-compatible Wi-Fi collector;
-- you want Home Assistant to read inverter data locally over your LAN;
-- you want PV, battery, load, grid and energy sensors in Home Assistant;
-- you want optional local controls on supported, verified models.
-
-People often look for this while searching for SmartESS Home Assistant, SmartValue
-Home Assistant, an EyeBond Wi-Fi collector integration, or brands such as Anenji,
-PowMr and Sandisolar — and for local solar inverter monitoring without the vendor
-cloud. See the full, always-current list in the
-[inverter model catalog](docs/generated/INVERTER_MODEL_CATALOG.generated.md).
-
----
+[Check compatibility](docs/user/COMPATIBILITY.md) and the [model-by-model evidence](docs/generated/INVERTER_MODEL_CATALOG.generated.md). An unlisted model may work through a supported protocol; unsupported hardware needs a Support Archive before we can confirm it.
 
 ## What it does
 
-- Finds collectors through a normal scan, an already connected session,
-  background discovery, or manual/remote setup.
-- Adds the verified collector first, then identifies the inverter safely on the
-  owned runtime connection.
-- Reads inverter, battery, PV, load, and grid data locally.
-- Creates normal Home Assistant sensors, numbers, selects, switches, and buttons.
-- Keeps the collector's vendor-cloud endpoint by default for use alongside Home
-  Assistant, or lets you point it at Home Assistant only — a reversible, explicit
-  action that is never done silently.
-- Lets you choose control access:
-  - **Read-only** — monitoring only.
-  - **Auto** — enable verified controls when the device match is confident.
-  - **Full Control** — expose available controls manually for advanced use.
-- Can manage supported collector Wi-Fi, restart, UART, and connection settings.
-- Can collect read-only cloud evidence or verify extra controls for a partially
-  supported device.
-- Can create a **Support Archive**, run developer-provided diagnostic commands,
-  and capture collector traffic when normal diagnostics are not enough.
-- Works with the optional [EyeBond Local Card](https://github.com/groove-max/ha-eybond-local-card) dashboard.
+- Reads PV, battery, load, grid, energy and operating-status data over your network.
+- Exposes confirmed local controls; available settings depend on model, firmware and control mode.
+- Discovers collectors locally or connects through explicitly configured routed networks.
+- Offers **Cloud + Home Assistant** and **Home Assistant only** on compatible collectors.
+- Helps investigate missing settings with **Shadow Learning / Write Controls**, where supported.
+- Provides collector diagnostics, Support Archives and developer-directed traffic capture.
+- Works with the optional [EyeBond Local Card](https://github.com/groove-max/ha-eybond-local-card).
 
----
-
-## Why local instead of the vendor cloud?
-
-EyeBond Local talks to supported collectors over your local network, so day-to-day
-monitoring does not depend on the vendor cloud being reachable. Updates arrive at
-local speed, and your inverter data stays inside your Home Assistant installation.
-
-On supported collectors you can keep the SmartESS or SmartValue app working at the
-same time, or explicitly point a collector at Home Assistant only. Home Assistant
-never silently redirects a collector — pointing it at Home Assistant and restoring
-its previous server are both explicit, reversible actions.
-
----
-
-## Supported hardware
-
-EyeBond Local is intended for inverters that use EyeBond-compatible Wi-Fi collectors, including some built-in Wi-Fi modules that behave the same way.
-
-Tested models include units sold as Anenji, PowMr, Sandisolar, LVYUAN, MUST and
-Yingfa, plus SMG-, PI18-, PI30- and SRNE-family protocol devices. Support level
-varies per model, and other brands on the same collectors may work too.
-
-The current model list is here:
-
-- [Inverter model catalog](docs/generated/INVERTER_MODEL_CATALOG.generated.md)
-
-After the collector is added, runtime detection reports what it identified and
-which support level is available:
-
-- **Supported** — normal monitoring and confirmed controls.
-- **Limited / partial** — monitoring works, but some controls or sensors may be missing.
-- **Read-only** — monitoring works, but controls are disabled.
-- **Unknown** — the collector or inverter needs a Support Archive for review.
-
-If your inverter is not listed, it may still work. Add it, create a Support Archive, and open a GitHub issue.
-
-The unreleased test code also includes a limited **EyeBond Short-ASCII family**
-profile for a protocol observed on some Anern and Maxinn units. It includes
-basic telemetry and optional BMS/rated readings where the device answers them.
-This identifies the protocol, not the commercial model. See its
-[available readings and limits](docs/user/RUNTIME_AND_INVERTER.md#eyebond-short-ascii-family).
-
-### No factory collector?
-
-If your inverter has no factory collector, you can use the community [ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector).
-
-It is a small ESP8266/ESP32-based bridge that connects directly to the inverter and works locally with this integration. Because it does not use a vendor cloud, only local Home Assistant features are available.
-
----
+Normal local readings do not require a cloud login. Keeping Cloud + Home Assistant enabled still lets the collector communicate with the vendor cloud. Learning and cloud evidence are separate, optional features.
 
 ## Installation
 
-### HACS installation
+**Choose a channel before downloading.** The current published 0.3 beta is **0.3.0-beta.5**; GitHub's “Latest release” link currently points to the older stable **0.1.53**. Newer fixes on `main` are not automatically part of beta.5. [Release channels and safe updates →](docs/user/INSTALLATION.md)
 
-1. Open **HACS → Integrations**.
-2. Click the menu → **Custom repositories**.
-3. Add `https://github.com/groove-max/ha-eybond-local` as an **Integration**.
-4. Find **EyeBond Local** and click **Download**.
-5. Restart Home Assistant.
-6. Go to **Settings → Devices & Services → Add Integration** and search for **EyeBond Local**.
-
-### Manual installation
-
-1. Download the archive from the [latest EyeBond Local release](https://github.com/groove-max/ha-eybond-local/releases/latest).
-2. Extract the archive and copy only its `custom_components/eybond_local/`
-   folder into `config/custom_components/`. The final path must be
-   `config/custom_components/eybond_local/manifest.json`, without another
-   repository or `custom_components` folder nested inside it.
+1. Add this repository to **HACS → Custom repositories**, category **Integration**.
+2. Download the intended published version. For a beta, enable prerelease versions in the download/version dialog if needed.
 3. Restart Home Assistant.
-4. Add **EyeBond Local** from **Settings → Devices & Services**.
+4. Open **Settings → Devices & Services → Add Integration → EyeBond Local**.
 
-Keep backup copies **outside** `config/custom_components/`. Renaming an old
-copy to `eybond_local_backup` inside that directory does not disable it:
-Home Assistant can discover its unchanged manifest and load the old code.
-Leave only the intended `eybond_local/` copy there, then fully restart Home
-Assistant; reloading the integration is not enough after replacing Python files.
+[Manual installation and rollback](docs/user/INSTALLATION.md) are available without HACS.
 
-### Testing the unreleased `main` branch
+### Testing the unreleased main branch
 
-Use this only when a maintainer asks you to test a fix that is not in a release
-yet. It does not update through HACS and may change before the next release.
+Only use a test build when you deliberately want unreleased changes, normally at a maintainer's request. Back up first, replace the complete integration directory and restart HA. Do not mix versions or leave backup copies inside `custom_components`. [Full test-build instructions](docs/user/INSTALLATION.md#testing-main).
 
-1. Back up your Home Assistant configuration.
-2. Download the current [`main` branch archive](https://github.com/groove-max/ha-eybond-local/archive/refs/heads/main.zip).
-3. Extract the archive. Inside `ha-eybond-local-main`, open `custom_components`.
-   Replace the existing `config/custom_components/eybond_local/` directory with
-   the complete **`eybond_local`** folder from there. Do not copy the outer
-   `ha-eybond-local-main` folder or mix files from two builds. Check that
-   `manifest.json` is directly inside `config/custom_components/eybond_local/`.
-   You do not need to remove the integration or its devices from Home Assistant.
-4. Restart Home Assistant and check the EyeBond Local entries.
-5. When reporting a result, include the Git commit shown on the repository page
-   and attach a new Support Archive.
-
-To return to a published build, reinstall the latest release through HACS or
-replace the directory with the complete directory from that release archive.
-
----
+Cloud Bridge 0.4 is separate development work, **not a feature of the published 0.3 beta or current 0.3 main build**.
 
 ## Setup
 
-The setup wizard identifies and adds the collector first. After the entry is
-created, runtime detection identifies the inverter and creates its entities.
-For a complete explanation of scan results, address confirmation, background
-discovery, and manual setup, see [Setup and Discovery](docs/user/SETUP_AND_DISCOVERY.md).
+1. Connect the collector to Wi-Fi/LAN where Home Assistant can reach it.
+2. Select the correct HA interface and scan.
+3. Add the identified collector; inverter detection runs afterward.
+4. Check live readings before changing settings.
 
-### 1. Put the collector on the same network
-
-If the collector is already on the same Wi-Fi/LAN as Home Assistant, continue.
-
-If it is not, use the vendor app, manual Wi-Fi setup, or Bluetooth Wi-Fi setup
-when your collector supports it.
-
-<p align="center"><img src="docs/images/setup-02-collector-network.png" alt="Collector network setup choice" width="480"></p>
-
-<p align="center"><img src="docs/images/setup-03-bluetooth-wifi.png" alt="Bluetooth Wi-Fi setup" width="480"></p>
-
-### 2. Scan for devices
-
-Choose the Home Assistant network interface and start a scan. One bounded scan
-combines broadcast replies, already connected collectors, and a local `/24`
-unicast fallback when broadcast discovery is not enough. On a larger network,
-use the correct subnet broadcast or enter a known collector address through
-advanced setup instead of expecting every address in a `/16` to be probed.
-For a routed subnet, **Add known collector IPs to scan** supplements local
-discovery with explicitly entered addresses. Use manual setup when the collector
-needs a different callback address or port behind NAT.
-
-<p align="center"><img src="docs/images/setup-02-scanning.png" alt="Scanning the local network" width="480"></p>
-
-If the scan finds nothing, run it again, choose a different Home Assistant
-interface, or use advanced setup to enter the collector address manually.
-
-<p align="center"><img src="docs/images/setup-04-scan-interface.png" alt="Advanced scan options" width="480"></p>
-
-<p align="center"><img src="docs/images/setup-05-scanning.png" alt="Scanning network" width="480"></p>
-
-### 3. Review the result
-
-The wizard can show collector candidates such as:
-
-- **Ready to set up** — the collector was identified and can be added.
-- **Needs confirmation** — the collector was identified through an incoming
-  connection, but its reachable address must be confirmed.
-- **Check address** — an address responded and can be probed directly.
-
-### 4. Confirm the collector and refresh mode
-
-Confirm the collector and choose how sensors should refresh. Home Assistant
-then creates the entry and detects the inverter on the owned runtime session.
-The inverter device may appear shortly after the collector device.
-
-Collector mode is managed later from **Collector connection and cloud**, after the
-integration has created the device and read its collector capabilities.
-
-Manual setup is available when automatic scanning is not practical.
-
-<p align="center"><img src="docs/images/setup-manual.png" alt="Manual setup" width="480"></p>
-
-> **Tip:** Auto-discovery works best when Home Assistant and the collector are on the same network.
-
----
+For routed networks, add known collector IPs to the scan or use manual setup with the correct advertised callback address. Broadcast does not normally cross routers. [First connection](docs/user/GETTING_STARTED.md) · [Detailed setup](docs/user/SETUP_AND_DISCOVERY.md) · [Remote / NAT setup](docs/user/REMOTE_SETUP.md).
 
 ## After setup
 
-EyeBond Local usually creates two Home Assistant devices:
+Expect separate **collector** and **inverter** devices. Start with **Auto** control mode; **Read-only** disables writes, while **Full Control** can expose untested settings and does not prove that they work on your device.
 
-- **Collector device** — Wi-Fi signal, network actions, connection settings, restart, support archive, and troubleshooting actions.
-- **Inverter device** — live sensors, energy totals, binary sensors, and supported controls.
-
-<p align="center"><img src="docs/images/device-overview.png" alt="Collector and inverter devices in Home Assistant" width="720"></p>
-
-The inverter device may include:
-
-- PV, load, battery, inverter, and grid sensors.
-- Energy totals for Home Assistant Energy Dashboard.
-- Alarms, fault states, and operating mode sensors.
-- Safe controls supported by your exact model.
-- Sensor refresh mode: **Automatic** lets the integration choose a safe interval
-  from device response time; **Manual** uses your fixed interval from `2` to
-  `3600` seconds.
-
-<p align="center"><img src="docs/images/inverter-sensors.png" alt="Inverter sensors after setup" width="320"></p>
-
-You can change the collector operating profile later from **Collector
-connection and cloud**. Inverter driver selection, control mode, and sensor
-refresh are under **Polling and inverter detection**.
-
-<p align="center"><img src="docs/images/settings.png" alt="EyeBond Local configuration menu" width="480"></p>
-
-In Automatic refresh mode, EyeBond Local keeps a small pause between polling
-cycles and applies protocol-specific limits. For example, fast Modbus devices
-can refresh more often than slower ASCII devices. In Manual mode, the
-diagnostic sensors **Poll Utilization**, **Poll Duration**, and **Recommended
-Poll Interval** show whether the chosen interval is realistic; if utilization
-stays high, increase the interval or switch back to Automatic.
-**Poll Context** shows whether the current cycle is reading the inverter,
-detecting an inverter, or only checking the collector, so long detection cycles
-are not confused with normal runtime polling.
-
-See [Runtime Detection and Entities](docs/user/RUNTIME_AND_INVERTER.md) for the
-driver selector, Fast versus Full protocol detection, multiple matches, control
-mode, and the difference between unavailable and disabled entities.
-
----
+Use automatic polling initially. See [sensors, controls and unavailable entities](docs/user/RUNTIME_AND_INVERTER.md).
 
 ## Device learning
 
-Some devices can be added in read-only or partial mode first. **Expand device
-support** can then collect extra evidence or check which additional
-settings and sensors your exact device supports.
+Missing a setting that exists in the cloud app? **Write Controls** can identify cloud commands and add locally confirmed controls when the workflow supports your device. It does not guarantee every setting or the full range of values.
 
-Use it when:
-
-- the integration offers it for your device;
-- monitoring works, but controls are missing;
-- a developer asks you to run it while adding support for your model.
-
-What to expect:
-
-1. Start **Configure → Expand device support**.
-2. Choose **Analyze device data** (recommended) or the advanced active-control
-   verification.
-3. When more than one compatible API is available, choose the exact cloud
-   source for this run.
-4. For active verification, confirm the local endpoint change, bounded cloud
-   test commands, their interception, and the continuing cloud outage.
-5. Sign in to the supported cloud account for this one session, if requested.
-6. Review the result. Read-only evidence does not add entities automatically;
-   only locally proven active results can be applied.
-
-The cloud password is not saved. Learned items apply only to this Home Assistant
-device until they are reviewed and added to the built-in catalog.
-
-In the current 0.3 test build, active learning restores the original connection
-automatically only with verified completion receipts for every sent command
-(using provider and wire evidence, not a protocol-name restriction). Otherwise the collector stays local,
-**including after a successful scan or a Home Assistant restart**. Local telemetry
-and supported controls remain available; cloud access then needs reviewed recovery. Do not start
-active learning if you need uninterrupted cloud access. Read-only analysis does
-not change the connection. This protection is not Cloud Bridge.
-
-If anything looks unsafe or unexpected, stop and create a Support Archive instead.
-
-For the full walkthrough, see [Device Learning](docs/user/DEVICE_LEARNING.md).
-
----
-
-## Getting help
-
-If the integration does not work as expected:
-
-1. Open the integration in **Settings → Devices & Services**.
-2. Click **Configure → Diagnostics and service tools**.
-3. Click **Create support archive**.
-4. Open a [GitHub issue](https://github.com/groove-max/ha-eybond-local/issues) and attach the ZIP.
-
-The Support Archive is the preferred way to report unsupported hardware, failed setup, missing sensors, or missing controls.
-
-For details, see [Support Archive](docs/user/SUPPORT_ARCHIVE.md).
-
-Use these issue templates:
-
-- **Bug Report** — something regressed on already-supported hardware.
-- **Support Archive / Hardware Diagnostics** — new hardware, failed setup, missing sensors, or missing controls.
-- **Device Contribution** — share a learned partial/unrecognized device (with its Support Archive) to get it added to the built-in catalog.
-- **Feature Request** — UX improvements or broader feature requests.
-
----
+Read-only analysis collects evidence; it does **not** automatically add controls. Active learning can interrupt cloud access and retain a protection hold after an uncertain command. Read the [learning guide and recovery precautions](docs/user/LEARNING.md) before starting.
 
 ## Troubleshooting
 
-| Problem | Try this |
-|---|---|
-| Auto-scan finds nothing | Retry the scan or choose a different Home Assistant network interface. If needed, follow [Setup and Discovery](docs/user/SETUP_AND_DISCOVERY.md) and use advanced setup with a known collector address. |
-| Bluetooth Wi-Fi setup is unavailable | Make sure Home Assistant has Bluetooth access near the collector. An ESPHome Bluetooth Proxy near the collector can help. |
-| Manual setup cannot verify the collector | Keep the setup flow open and retry with the collector reachable. For an inbound collector, enable background discovery and continue when its identified session appears. |
-| Only the collector device appears | Runtime detection has not identified the inverter yet. Check **Poll Context** and follow [Runtime Detection and Entities](docs/user/RUNTIME_AND_INVERTER.md); create a Support Archive if no driver binds. |
-| Sensors stay unavailable | Check that the collector and Home Assistant are on the same network and that the collector has stable Wi-Fi. |
-| Vendor app stopped showing live data | Check the connection profile: **Home Assistant only** intentionally disconnects the cloud. If you still use **Cloud + Home Assistant**, see the [known cloud telemetry issue](#known-cloud-telemetry-issue) below. |
-| Vendor app works, but Home Assistant says unavailable | The collector may have reconnected to its cloud faster than it reconnected locally. Wait a few minutes and check Wi-Fi stability. |
-| A setting changes back immediately | The inverter rejected the value or did not confirm it. Check diagnostics, avoid changing the same setting from the vendor app at the same time, and retry after the collector is stable. |
-| Remote setup is needed | Use [Remote / NAT setup guide](docs/user/REMOTE_SETUP.md). Prefer VPN over public port forwarding when possible. |
-| Controls are missing | Keep **Auto** mode for normal use. If monitoring works but controls are missing, run device learning if offered, or create a Support Archive. Use **Full Control** only if you understand the risk. |
-| An unconfigured collector connects later | Enable the persistent **EyeBond Local — Discovery** entry. It publishes identified, unconfigured collector sessions without creating a placeholder device. |
+[Connection, cloud and sensor troubleshooting](docs/user/TROUBLESHOOTING.md) covers common symptoms without resetting the device.
 
 ### Known cloud telemetry issue
 
-Some users report that, in **Cloud + Home Assistant**, the vendor app stops
-updating or shows the collector offline while local Home Assistant readings
-continue. Cloud updates may return on their own. This is a known issue under
-investigation; we have not yet confirmed its cause or a general fix.
+On some installations, vendor-cloud updates pause while HA readings continue. The cause and a general fix remain unconfirmed. This differs from intentional HA-only mode or a learning protection hold. Capture diagnostics during the outage before restarting, when practical. [What to check and report](docs/user/TROUBLESHOOTING.md#cloud-updates-stop).
 
-This is different from **Home Assistant only**, where cloud disconnection is
-intentional. Neither a longer polling interval nor a restart is a confirmed
-general fix for the intermittent problem.
+## Getting help
 
-If it happens, create a [Support Archive](docs/user/SUPPORT_ARCHIVE.md) during
-the outage, before restarting or switching modes if possible. Add it to
-[issue #13](https://github.com/groove-max/ha-eybond-local/issues/13) or your
-existing support issue, together with:
+Create a **Support Archive** from **Configure → Diagnostics and service tools**, then [open an issue](https://github.com/groove-max/ha-eybond-local/issues). Include your version/channel, model, firmware if known, symptom and time zone. Review attachments before posting; do not share account passwords.
 
-- the installed version and, for a manual test build, its commit;
-- when the problem started, your time zone, and the cloud's last data timestamp;
-- whether Home Assistant readings still change and when cloud updates resume.
+[Support Archive guide](docs/user/SUPPORT_ARCHIVE.md)
 
-You do not need to delete the integration or reset the collector to report this.
+## Companion projects
 
----
+- [EyeBond Local Card](https://github.com/groove-max/ha-eybond-local-card) — an optional dashboard, not required for the integration.
+- [ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector) — community collector firmware for supported wired inverters. It does not supply vendor-cloud features.
 
 ## Documentation
 
-- [Documentation index](docs/README.md)
-- [Setup and discovery](docs/user/SETUP_AND_DISCOVERY.md)
-- [Runtime detection and entities](docs/user/RUNTIME_AND_INVERTER.md)
-- [Kevolt / Deye-compatible advanced controls](docs/user/KEVOLT_DEYE_CONTROLS.md) — experimental opt-in settings for the documented 80 kW register map
-- [Collector management](docs/user/COLLECTOR_MANAGEMENT.md)
-- [Device learning](docs/user/DEVICE_LEARNING.md)
-- [Diagnostic commands](docs/user/DIAGNOSTIC_COMMANDS.md) — advanced, developer-directed scenarios
-- [Support Archive](docs/user/SUPPORT_ARCHIVE.md)
-- [Remote / NAT setup](docs/user/REMOTE_SETUP.md)
-- [Proxy capture](docs/user/PROXY_CAPTURE.md) — use this only when asked during support
-- [Inverter model catalog](docs/generated/INVERTER_MODEL_CATALOG.generated.md)
-- [Interface screenshots by version](docs/user/INTERFACE_SCREENSHOTS.md) — visual examples with notes about controls that moved
-- [Contributing](CONTRIBUTING.md)
+[Online documentation](https://groove-max.github.io/ha-eybond-local/en/) · [All repository guides](docs/README.md) · [Contributing](CONTRIBUTING.md)
 
----
+The guides describe current 0.3 development behavior; some fixes are newer than the last published beta. Check the installation channel before following instructions for a new feature.
 
 ## License
 
-Licensed under [MPL-2.0](LICENSE).
+[MPL-2.0](LICENSE). Community project; not affiliated with EyeBond, the cloud apps or inverter manufacturers.

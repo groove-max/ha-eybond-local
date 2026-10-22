@@ -1,0 +1,50 @@
+site_name: EyeBond Local
+repo_url: https://github.com/groove-max/ha-eybond-local
+repo_name: groove-max/ha-eybond-local
+edit_uri: ''
+copyright: >-
+  EyeBond Local · MPL-2.0 · Community project, not affiliated with inverter manufacturers ·
+  <a href="/ha-eybond-local/assets/ZENSICAL-LICENSE.txt">Theme: MIT</a>
+theme:
+  name: material
+  variant: modern
+  custom_dir: overrides
+  font: false
+  logo: assets/eybond.svg
+  favicon: assets/eybond.svg
+  features:
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: '(prefers-color-scheme: light)'
+      scheme: default
+      primary: custom
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Dark mode / Темна тема
+    - media: '(prefers-color-scheme: dark)'
+      scheme: slate
+      primary: custom
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Light mode / Світла тема
+markdown_extensions:
+  - tables
+  - fenced_code
+  - attr_list
+  - toc:
+      permalink: true
+extra_css:
+  - assets/site.css
+extra:
+  generator: false
+plugins:
+  - search
+validation:
+  links:
+    not_found: warn
+    anchors: warn

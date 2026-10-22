@@ -8,6 +8,27 @@ attach it to a GitHub issue.
 
 All commands assume the repository root as the current working directory.
 
+## Build the user documentation site
+
+The website uses a pinned Zensical build, with `website/pages.json` as the
+allowlist of public Markdown, images, routes and real translations. Model pages
+are views of `catalog/inverter_models/`; do not maintain a second model list.
+Only `build/docs/` is a publication artifact. Owner/account setup and private
+support materials are not website sources.
+
+```bash
+python3 -m pip install -r website/requirements.txt
+python3 -m unittest discover -s website -p 'test_*.py'
+python3 tools/build_docs.py
+python3 tools/check_docs.py
+```
+
+For browser verification, install `website/requirements-browser.txt`, run
+`python3 -m playwright install chromium`, then `python3 tools/check_docs_browser.py`.
+`--live` checks the deployed site; `--render-social` regenerates the social image
+from the tracked HTML/SVG source. Browser images stay in `build/docs-browser/`.
+The documentation workflow tests pull requests but deploys only from main.
+
 ## Validate the project
 
 Use the validation depth appropriate for the current change:

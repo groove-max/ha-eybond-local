@@ -1,0 +1,253 @@
+{
+  "site_url": "https://groove-max.github.io/ha-eybond-local/",
+  "repository": "https://github.com/groove-max/ha-eybond-local",
+  "languages": {
+    "en": "English",
+    "uk": "Українська"
+  },
+  "pages": [
+    {
+      "slug": "",
+      "en": {
+        "source": "README.md",
+        "label": "Overview",
+        "title": "Local SmartESS inverter monitoring for Home Assistant",
+        "description": "Connect EyeBond-compatible solar inverters to Home Assistant for local readings and supported controls. Check compatibility, installation and known limitations."
+      },
+      "uk": {
+        "source": "README.uk.md",
+        "label": "Огляд",
+        "title": "Локальний моніторинг інверторів SmartESS у Home Assistant",
+        "description": "Підключіть сумісний інвертор EyeBond до Home Assistant: локальні показання, підтримуване керування, сумісність, встановлення та відомі обмеження."
+      }
+    },
+    {
+      "slug": "installation",
+      "en": {
+        "source": "docs/user/INSTALLATION.md",
+        "label": "Install & update",
+        "title": "Install EyeBond Local with HACS or manually",
+        "description": "Choose stable, beta or a main test build; install, update and roll back EyeBond Local without mixing files or losing track of the installed version."
+      },
+      "uk": {
+        "source": "docs/user/INSTALLATION.uk.md",
+        "label": "Встановлення",
+        "title": "Встановлення EyeBond Local через HACS або вручну",
+        "description": "Оберіть стабільну версію, бету або main, встановіть чи оновіть EyeBond Local без змішування файлів і з можливістю повернення."
+      }
+    },
+    {
+      "slug": "getting-started",
+      "en": {
+        "source": "docs/user/GETTING_STARTED.md",
+        "label": "First connection",
+        "title": "Connect an EyeBond Wi-Fi collector to Home Assistant",
+        "description": "Discover your collector, verify the inverter readings and choose local/cloud operation. Learn when known IPs and callback routing are needed."
+      },
+      "uk": {
+        "source": "docs/user/GETTING_STARTED.uk.md",
+        "label": "Перше підключення",
+        "title": "Підключення Wi-Fi-колектора EyeBond до Home Assistant",
+        "description": "Знайдіть колектор, перевірте показання інвертора та оберіть режим з'єднання. Коли потрібні відомі IP та правильний маршрут callback."
+      }
+    },
+    {
+      "slug": "compatibility",
+      "en": {
+        "source": "docs/user/COMPATIBILITY.md",
+        "label": "Compatibility",
+        "title": "SmartESS, SmartValue and EyeBond inverter compatibility",
+        "description": "Check collector, inverter and firmware compatibility, confirmed readings, tested controls and partial support before installing EyeBond Local."
+      },
+      "uk": {
+        "source": "docs/user/COMPATIBILITY.uk.md",
+        "label": "Сумісність",
+        "title": "Сумісність інверторів SmartESS, SmartValue та EyeBond",
+        "description": "Перевірте колектор, модель і прошивку інвертора, підтверджені показання, контроли й обмеження перед встановленням EyeBond Local."
+      }
+    },
+    {
+      "slug": "learning",
+      "en": {
+        "source": "docs/user/LEARNING.md",
+        "label": "Missing controls / learning",
+        "title": "Shadow Learning and Write Controls for solar inverters",
+        "description": "Understand active learning versus read-only evidence, adding locally confirmed cloud controls, protocol differences and protected recovery."
+      },
+      "uk": {
+        "source": "docs/user/LEARNING.uk.md",
+        "label": "Контроли й навчання",
+        "title": "Shadow Learning і Write Controls для інверторів",
+        "description": "Активне навчання та read-only аналіз, додавання підтверджених хмарних контролів, різні протоколи й захищене відновлення."
+      }
+    },
+    {
+      "slug": "troubleshooting",
+      "en": {
+        "source": "docs/user/TROUBLESHOOTING.md",
+        "label": "Troubleshooting",
+        "title": "Fix EyeBond discovery, unavailable sensors and cloud update problems",
+        "description": "Diagnose collector callbacks, missing inverter readings, cloud telemetry pauses and rejected settings without unnecessary resets."
+      },
+      "uk": {
+        "source": "docs/user/TROUBLESHOOTING.uk.md",
+        "label": "Усунення проблем",
+        "title": "Пошук EyeBond, недоступні сенсори та зупинка хмарних оновлень",
+        "description": "Перевірте callback колектора, відсутні показання, зупинку хмарної телеметрії та відхилені налаштування без зайвих скидань."
+      }
+    },
+    {
+      "slug": "help",
+      "en": {
+        "source": "docs/user/HELP.md",
+        "label": "Get help",
+        "title": "Get inverter support with an EyeBond Support Archive",
+        "description": "Prepare a useful hardware or bug report with version, firmware, timestamps and a Support Archive. Keep passwords and remote-access details private."
+      },
+      "uk": {
+        "source": "docs/user/HELP.uk.md",
+        "label": "Допомога",
+        "title": "Допомога з інвертором і пакетом підтримки EyeBond",
+        "description": "Підготуйте звернення з версіями, прошивкою, часовими позначками й пакетом підтримки. Не публікуйте паролі або дані доступу."
+      }
+    },
+    {
+      "slug": "reference/setup",
+      "section": "reference",
+      "en": {
+        "source": "docs/user/SETUP_AND_DISCOVERY.md",
+        "label": "Discovery reference",
+        "title": "EyeBond collector discovery and manual setup reference",
+        "description": "Detailed collector-first setup, background discovery, known-IP scans, verified identity and manual connection options."
+      }
+    },
+    {
+      "slug": "reference/runtime",
+      "section": "reference",
+      "en": {
+        "source": "docs/user/RUNTIME_AND_INVERTER.md",
+        "label": "Sensors & controls",
+        "title": "EyeBond inverter sensors, polling and control modes",
+        "description": "Understand driver detection, Auto and Full Control, model-specific settings, unavailable entities and local polling."
+      }
+    },
+    {
+      "slug": "reference/collector",
+      "section": "reference",
+      "en": {
+        "source": "docs/user/COLLECTOR_MANAGEMENT.md",
+        "label": "Collector management",
+        "title": "Manage EyeBond Wi-Fi, restart and cloud connection settings",
+        "description": "Collector profiles, Wi-Fi settings, UART speed, restart and virtual ESP collectors, with explicit endpoint changes."
+      }
+    },
+    {
+      "slug": "reference/learning",
+      "section": "reference",
+      "en": {
+        "source": "docs/user/DEVICE_LEARNING.md",
+        "label": "Learning reference",
+        "title": "EyeBond device learning and protected recovery reference",
+        "description": "Detailed active learning, memory requirements, cloud-protocol matching, local readback, protection holds and recovery."
+      }
+    },
+    {
+      "slug": "reference/support",
+      "section": "reference",
+      "en": {
+        "source": "docs/user/SUPPORT_ARCHIVE.md",
+        "label": "Support Archive reference",
+        "title": "Create an EyeBond support and diagnostic archive",
+        "description": "Export identity, bounded diagnostics and optional cloud evidence for troubleshooting supported and unknown inverters."
+      }
+    },
+    {
+      "slug": "reference/remote",
+      "section": "reference",
+      "en": {
+        "source": "docs/user/REMOTE_SETUP.md",
+        "label": "Remote / NAT setup",
+        "title": "EyeBond collectors across routed networks, VPN and NAT",
+        "description": "Configure reachable discovery targets, advertised callback addresses and return routes for remote EyeBond collectors."
+      }
+    },
+    {
+      "slug": "reference/proxy",
+      "section": "reference",
+      "en": {
+        "source": "docs/user/PROXY_CAPTURE.md",
+        "label": "Proxy capture",
+        "title": "Record EyeBond collector cloud traffic for support",
+        "description": "Developer-directed temporary proxy capture, connection prerequisites, endpoint restoration and exporting evidence."
+      }
+    },
+    {
+      "slug": "reference/commands",
+      "section": "reference",
+      "en": {
+        "source": "docs/user/DIAGNOSTIC_COMMANDS.md",
+        "label": "Diagnostic commands",
+        "title": "Run developer-provided EyeBond diagnostic scenarios",
+        "description": "Use bounded diagnostic commands and share their results without guessing unsupported inverter writes."
+      }
+    },
+    {
+      "slug": "reference/kevolt",
+      "section": "reference",
+      "en": {
+        "source": "docs/user/KEVOLT_DEYE_CONTROLS.md",
+        "label": "Kevolt controls",
+        "title": "Kevolt and Deye-compatible experimental inverter controls",
+        "description": "Documented opt-in advanced controls, read-back expectations and excluded operations for the Kevolt support case."
+      }
+    },
+    {
+      "slug": "reference/screenshots",
+      "section": "reference",
+      "en": {
+        "source": "docs/user/INTERFACE_SCREENSHOTS.md",
+        "label": "Interface screenshots",
+        "title": "EyeBond Local interface screenshots and version differences",
+        "description": "Recognize setup, collector, inverter and diagnostic screens, including controls moved in newer versions."
+      }
+    },
+    {
+      "slug": "reference/catalog",
+      "section": "reference",
+      "en": {
+        "source": "docs/generated/INVERTER_MODEL_CATALOG.generated.md",
+        "label": "Full catalog evidence",
+        "title": "EyeBond inverter protocol and model evidence reference",
+        "description": "Detailed model validation, protocol variants, limitations and reviewed evidence behind the public EyeBond Local compatibility catalog."
+      }
+    }
+  ],
+  "assets": [
+    "device-overview.png",
+    "setup-03-detected-devices.png",
+    "collector-management.png",
+    "collector-wifi-settings.png",
+    "device-learning-credentials.png",
+    "device-learning-scanning.png",
+    "device-learning-start.png",
+    "diagnostics-service-tools.png",
+    "inverter-sensors.png",
+    "proxy-capture-result.png",
+    "proxy-capture-running.png",
+    "proxy-capture-settings.png",
+    "runtime-settings.png",
+    "sensors.png",
+    "settings.png",
+    "setup-01-welcome.png",
+    "setup-02-collector-network.png",
+    "setup-02-scanning.png",
+    "setup-03-bluetooth-wifi.png",
+    "setup-04-confirm.png",
+    "setup-04-scan-interface.png",
+    "setup-05-scanning.png",
+    "setup-06-detected-devices.png",
+    "setup-07-confirm.png",
+    "setup-manual.png",
+    "support-archive-create.png"
+  ]
+}

@@ -7,6 +7,21 @@ release work; they are not required to use the integration.
 
 ## User guides
 
+Start with the [online English](https://groove-max.github.io/ha-eybond-local/en/)
+or [Ukrainian](https://groove-max.github.io/ha-eybond-local/uk/) guide. The site
+publishes only selected user documentation; maintenance references remain here.
+
+### Essential guides / Основні посібники
+
+- Install and update: [English](user/INSTALLATION.md) · [Українська](user/INSTALLATION.uk.md)
+- First connection: [English](user/GETTING_STARTED.md) · [Українська](user/GETTING_STARTED.uk.md)
+- Compatibility: [English](user/COMPATIBILITY.md) · [Українська](user/COMPATIBILITY.uk.md)
+- Shadow Learning: [English](user/LEARNING.md) · [Українська](user/LEARNING.uk.md)
+- Troubleshooting: [English](user/TROUBLESHOOTING.md) · [Українська](user/TROUBLESHOOTING.uk.md)
+- Getting help: [English](user/HELP.md) · [Українська](user/HELP.uk.md)
+
+### Detailed references (English)
+
 - [Main README](../README.md) — installation, setup, connection settings, troubleshooting, and support flow
 - [Known cloud telemetry issue](../README.md#known-cloud-telemetry-issue) — cloud updates may pause while local readings continue; current status and useful support evidence
 - [Testing the unreleased main branch](../README.md#testing-the-unreleased-main-branch) — manual installation of a maintainer-requested test build

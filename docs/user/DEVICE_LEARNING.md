@@ -125,10 +125,12 @@ Check these first:
 - The collector has stable Wi-Fi.
 - For active learning, the collector uses the **Cloud + Home Assistant**
   connection profile, or an eligible protected retry offered by the wizard.
-  After the first test command, the collector stays on the verified local
-  Home Assistant endpoint, even when learning succeeds. Cloud telemetry and app
-  control remain disconnected pending reviewed recovery; accept this outage
-  before starting. A read-only metadata source does not change the endpoint.
+  After the first test command, restoration requires verified completion of
+  every sent command. If that cannot be confirmed, the collector stays on the
+  verified local Home Assistant endpoint even when learning finds controls.
+  Cloud telemetry and app control then remain disconnected pending reviewed
+  recovery; accept this possible outage before starting. A read-only metadata
+  source does not change the endpoint.
 - For active verification, Home Assistant can read live data from the inverter.
 - You know the cloud/app username and password for this device, if the learning
   flow asks for them.
@@ -149,7 +151,7 @@ If the inverter powers critical loads, run learning only when it is safe to reco
 7. If more than one compatible API is offered, choose the exact cloud source.
 8. For active verification, read and accept both notices covering the local
    endpoint change, bounded cloud test commands, local interception, and the
-   cloud outage that remains after learning.
+   possible cloud outage that can remain after learning.
 9. Enter the supported cloud/app credentials for this one session, if the flow
    asks for them.
 10. Wait for the check to finish. Progress can pause while the selected cloud

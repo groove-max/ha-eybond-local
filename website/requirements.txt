@@ -1,0 +1,4 @@
+zensical==0.0.71
+beautifulsoup4==4.15.0
+Markdown==3.11.2
+PyYAML==6.0.3

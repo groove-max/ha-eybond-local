@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block extrahead %}
+  {% if page.meta and page.meta.description %}
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="EyeBond Local">
+    <meta property="og:title" content="{{ page.meta.title }}">
+    <meta property="og:description" content="{{ page.meta.description }}">
+    <meta property="og:url" content="{{ page.canonical_url }}">
+    <meta property="og:locale" content="{{ page.meta.locale }}">
+    <meta property="og:image" content="{{ config.extra.public_url }}assets/social-preview.png">
+    <meta property="og:image:width" content="1280">
+    <meta property="og:image:height" content="640">
+    <meta property="og:image:alt" content="EyeBond Local — local inverter monitoring and control for Home Assistant">
+    <meta name="twitter:card" content="summary_large_image">
+    {# Language alternatives live in sitemap.xml. Zensical's built-in JS
+       interprets head alternates as site roots, not contextual page URLs. #}
+  {% else %}
+    <meta name="robots" content="noindex">
+  {% endif %}
+  {% if config.extra.google_site_verification %}
+    <meta name="google-site-verification" content="{{ config.extra.google_site_verification }}">
+  {% endif %}
+{% endblock %}
+{% block announce %}
+  {{ config.extra.version_notice }}
+{% endblock %}
+{% block content %}
+  <nav class="language-switch" aria-label="Language / Мова">
+    {% if page.meta %}
+      {% for alternate in page.meta.alternates %}
+        {% if alternate.lang != "x-default" %}
+          <a href="{{ alternate.url }}" hreflang="{{ alternate.lang }}" lang="{{ alternate.lang }}">{{ alternate.name }}</a>
+        {% endif %}
+      {% endfor %}
+      {% if page.meta.english_only %}
+        <span>English reference · <a href="{{ config.extra.public_url }}uk/">Український посібник</a></span>
+      {% endif %}
+    {% endif %}
+  </nav>
+  {{ super() }}
+{% endblock %}

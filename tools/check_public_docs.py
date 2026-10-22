@@ -24,6 +24,9 @@ ROOT_MARKDOWN = (
 
 DOCS_INDEX = REPO_ROOT / "docs" / "README.md"
 USER_GUIDE_MARKDOWN = (
+    *(REPO_ROOT / "docs" / "user" / f"{name}{language}.md"
+      for name in ("INSTALLATION", "GETTING_STARTED", "COMPATIBILITY", "LEARNING", "TROUBLESHOOTING", "HELP")
+      for language in ("", ".uk")),
     REPO_ROOT / "docs" / "user" / "COLLECTOR_MANAGEMENT.md",
     REPO_ROOT / "docs" / "user" / "DEVICE_LEARNING.md",
     REPO_ROOT / "docs" / "user" / "DIAGNOSTIC_COMMANDS.md",

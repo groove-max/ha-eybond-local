@@ -1,0 +1,80 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'README*.md'
+      - 'docs/**'
+      - 'catalog/inverter_models/**'
+      - 'website/**'
+      - 'tools/*docs*.py'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'README*.md'
+      - 'docs/**'
+      - 'catalog/inverter_models/**'
+      - 'website/**'
+      - 'tools/*docs*.py'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: documentation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: website/requirements.lock
+      - run: python -m pip install --require-hashes -r website/requirements.lock
+      - name: Test source routing and publication boundaries
+        run: python -m unittest discover -s website -p 'test_*.py' -v
+      - name: Check repository documentation
+        run: python tools/check_public_docs.py
+      - name: Build and validate the public site
+        env:
+          GOOGLE_SITE_VERIFICATION: ${{ vars.GOOGLE_SITE_VERIFICATION }}
+        run: |
+          python tools/build_docs.py
+          python tools/check_docs.py
+      - name: Check mobile, search and language navigation
+        run: |
+          python -m playwright install --with-deps chromium
+          python tools/check_docs_browser.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: documentation-browser-check
+          path: build/docs-browser/
+          if-no-files-found: ignore
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/docs
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish verified documentation
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -30,6 +30,26 @@ screens above, not additional setup stages.
 
 ## Settings and proxy controls
 
+### Earlier network setup screens
+
+These screens were previously embedded in the README. They illustrate network
+selection, Bluetooth provisioning and manual connection fields; follow the
+current [setup guide](SETUP_AND_DISCOVERY.md) for the exact sequence.
+
+![Collector network setup choice](../images/setup-02-collector-network.png)
+
+![Earlier Bluetooth Wi-Fi provisioning](../images/setup-03-bluetooth-wifi.png)
+
+![Earlier local discovery progress](../images/setup-02-scanning.png)
+
+![Earlier advanced interface selection](../images/setup-04-scan-interface.png)
+
+![Earlier scan progress with selected interface](../images/setup-05-scanning.png)
+
+![Manual callback and collector connection settings](../images/setup-manual.png)
+
+### Runtime and capture screens
+
 The following screens show capabilities that remain supported, although their
 navigation changed:
 
