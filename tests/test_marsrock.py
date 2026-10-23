@@ -216,6 +216,13 @@ class MarsRockDriverTests(unittest.IsolatedAsyncioTestCase):
             inverter = await driver.async_probe(transport, driver.probe_targets[0])
             entered, exited = asyncio.Event(), asyncio.Event()
             original = transport.async_send_payload
+            timeouts = []
+            real_timeout_at = asyncio.timeout_at
+
+            def track_timeout(deadline):
+                timeout = real_timeout_at(deadline)
+                timeouts.append(timeout)
+                return timeout
 
             async def stalled(payload, **kwargs):
                 if int.from_bytes(payload[2:4], "big") == 94:
@@ -227,19 +234,34 @@ class MarsRockDriverTests(unittest.IsolatedAsyncioTestCase):
                 return await original(payload, **kwargs)
 
             transport.async_send_payload = stalled
-            with patch("custom_components.eybond_local.drivers.marsrock.SUPPORT_READ_BUDGET_SECONDS",
-                       1 if cancel else 0.02):
+            with (
+                patch("custom_components.eybond_local.drivers.marsrock.SUPPORT_READ_BUDGET_SECONDS", 60),
+                patch("custom_components.eybond_local.drivers.support_diagnostics.asyncio.timeout_at",
+                      side_effect=track_timeout),
+            ):
                 task = asyncio.create_task(driver.async_capture_support_evidence(transport, inverter))
-                await asyncio.wait_for(entered.wait(), 1)
-                if cancel:
-                    task.cancel()
-                    with self.assertRaises(asyncio.CancelledError):
-                        await task
-                else:
-                    evidence = await asyncio.wait_for(task, 1)
-                    self.assertEqual(evidence["status"], "budget_exhausted")
-                    self.assertEqual(len(evidence["captured_ranges"]), 3)
-                    self.assertEqual(evidence["range_failures"][0]["error"], "diagnostic_budget_exhausted")
+                try:
+                    await asyncio.wait_for(entered.wait(), 5)
+                    self.assertEqual(len(timeouts), 4)
+                    if cancel:
+                        task.cancel()
+                        with self.assertRaises(asyncio.CancelledError):
+                            await task
+                        self.assertFalse(timeouts[-1].expired())
+                    else:
+                        # Expire the real timeout only AFTER the target read
+                        # starts. A 20 ms wall-clock budget could expire during
+                        # an earlier read on a busy CI runner instead.
+                        timeouts[-1].reschedule(asyncio.get_running_loop().time())
+                        evidence = await asyncio.wait_for(task, 5)
+                        self.assertTrue(timeouts[-1].expired())
+                        self.assertEqual(evidence["status"], "budget_exhausted")
+                        self.assertEqual(len(evidence["captured_ranges"]), 3)
+                        self.assertEqual(evidence["range_failures"][0]["error"], "diagnostic_budget_exhausted")
+                finally:
+                    if not task.done():
+                        task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
             self.assertTrue(exited.is_set())
             self.assertTrue(all(int.from_bytes(p[2:4], "big") < 151 for p in transport.calls))
 
