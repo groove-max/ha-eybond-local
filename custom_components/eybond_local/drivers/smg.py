@@ -69,7 +69,7 @@ from .catalog_identity import (
     catalog_match_from_resolution,
     probe_indicates_link_down,
 )
-from .probe_evidence import DriverProbeEvidence
+from .probe_evidence import DriverProbeEvidence, ProbeActionFailure, ProbeReadSession
 
 
 _SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
@@ -78,6 +78,7 @@ _SMG_FAMILY_FALLBACK_PROFILE_NAME = "modbus_smg/family_fallback.json"
 
 def _runtime_validation_no_match_evidence(
     probe: CatalogIdentityProbe,
+    failures: tuple[ProbeActionFailure, ...] = (),
 ) -> DriverProbeEvidence:
     """Explain a resolved identity whose selected surface did not validate."""
 
@@ -93,7 +94,10 @@ def _runtime_validation_no_match_evidence(
         resolution=(resolution.resolution if resolution is not None else ""),
         candidate_keys=(resolution.candidate_keys if resolution is not None else ()),
         executed_actions=probe.probe_action_keys,
-        failed_actions=probe.failed_probe_action_keys,
+        failed_actions=tuple(dict.fromkeys((
+            *probe.failed_probe_action_keys, *(failure.action_key for failure in failures),
+        ))),
+        action_failures=failures,
     )
 
 
@@ -307,11 +311,21 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
                 )
             return DriverProbeAttempt(inverter=None)
 
-        detected = await self._async_probe_with_catalog(
-            session,
-            target,
-            catalog_probe,
-        )
+        runtime_session = ProbeReadSession(session, prefix="modbus_smg.runtime")
+        try:
+            detected = await self._async_probe_with_catalog(
+                runtime_session,
+                target,
+                catalog_probe,
+            )
+        except Exception as exc:
+            # Late optional metadata reads already abort this probe on a
+            # transport failure. Retain its location without retrying it or
+            # proceeding to another binding after that exception.
+            if not runtime_session.failed_with(exc):
+                raise
+            runtime_session.retain_failure()
+            detected = None
         if detected is not None:
             return DriverProbeAttempt(inverter=detected)
         no_match_evidence = (
@@ -321,7 +335,7 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
         )
         if type(no_match_evidence) is not DriverProbeEvidence:
             no_match_evidence = _runtime_validation_no_match_evidence(
-                catalog_probe
+                catalog_probe, tuple(runtime_session.failures.values()),
             )
         return DriverProbeAttempt(
             inverter=None,
@@ -484,10 +498,14 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
             config_values.update(await _read_optional_specs(session, schema.spec_set("aux_config")))
             rated_power = await _read_rated_power(session, schema)
         except Exception:
+            if isinstance(session, ProbeReadSession):
+                session.retain_failure()
             return None
 
         probe_policy = runtime_probe or _runtime_probe_policy_for_binding(binding)
         if not _is_valid_smg_probe(config_values, probe_policy, rated_power=rated_power):
+            if isinstance(session, ProbeReadSession):
+                session.retain_failure()
             return None
 
         details = dict(config_values)

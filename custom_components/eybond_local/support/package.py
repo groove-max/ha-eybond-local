@@ -18,6 +18,7 @@ from ..const import (
     LOCAL_SUPPORT_PACKAGES_DIR,
 )
 from .masking import mask_numeric_identifiers
+from .redaction import sanitize_support_payload
 from .shadow_learning.review_model import build_control_discovery_evidence
 
 
@@ -36,18 +37,6 @@ _SHADOW_OVERLAY_SCHEMA_MEMBER = f"{_SHADOW_ARCHIVE_ROOT}/generated_overlay_schem
 _SHADOW_ACTIVATION_MANIFEST_MEMBER = f"{_SHADOW_ARCHIVE_ROOT}/activation_manifest.json"
 _SHADOW_CONTROL_DISCOVERY_MEMBER = f"{_SHADOW_ARCHIVE_ROOT}/control_discovery.json"
 _DEVICE_SCOPED_OVERLAY_ACTIVATION_OPTION_KEY = "device_scoped_overlay_activation"
-
-_SENSITIVE_FIELD_PARTS = ("password", "secret", "token", "authorization")
-_SENSITIVE_FIELD_NAMES = {
-    "account",
-    "login",
-    "uid",
-    "user",
-    "user_name",
-    "username",
-    "usr",
-}
-
 
 @dataclass(frozen=True, slots=True)
 class SupportPackageExportResult:
@@ -128,7 +117,8 @@ def export_support_package(
                 "capture evidence, an anonymized replay fixture, and any "
                 "matching cloud evidence exported into the HA config dir. Long "
                 "numeric identifiers (collector PN, serial numbers) are masked "
-                "in every member."
+                "in every member. Structured credentials and cloud account fields "
+                "are removed at export, including from saved cloud evidence."
             ),
         },
         "archive_members": {
@@ -222,7 +212,7 @@ def export_support_package(
             if isinstance(payload, str) and member_name.endswith(".jsonl"):
                 payload = _mask_jsonl_text(payload)
             else:
-                payload = mask_numeric_identifiers(payload)
+                payload = mask_numeric_identifiers(_sanitize_payload(payload))
             if member_name == "manifest.json":
                 # The archive's own filename carries a compact timestamp that
                 # the identifier mask would star out, leaving the manifest
@@ -718,8 +708,8 @@ def _mask_jsonl_text(text: str) -> str:
     """Mask identifiers per parsed JSONL record, preserving numeric fields.
 
     Numbers stay numbers (epoch timestamps, register words); only strings
-    inside each record are masked. A line that fails to parse falls back to
-    plain-text masking rather than passing through unmasked.
+    inside each record are masked after credential removal. Malformed records
+    are replaced: plain-text identifier masking cannot safely remove secrets.
     """
 
     masked_lines: list[str] = []
@@ -731,11 +721,11 @@ def _mask_jsonl_text(text: str) -> str:
         try:
             record = json.loads(stripped)
         except ValueError:
-            masked_lines.append(mask_numeric_identifiers(line))
+            masked_lines.append('{"kind":"redacted_invalid_jsonl_record"}')
             continue
         masked_lines.append(
             json.dumps(
-                mask_numeric_identifiers(record),
+                mask_numeric_identifiers(_sanitize_payload(record)),
                 ensure_ascii=False,
                 separators=(",", ":"),
                 sort_keys=True,
@@ -792,19 +782,7 @@ def _overlay_review_model(payload: dict[str, Any] | None) -> dict[str, Any] | No
 
 
 def _sanitize_payload(value: Any) -> Any:
-    if isinstance(value, dict):
-        sanitized: dict[str, Any] = {}
-        for key, item in value.items():
-            normalized_key = str(key or "").lower()
-            if normalized_key in _SENSITIVE_FIELD_NAMES or any(
-                part in normalized_key for part in _SENSITIVE_FIELD_PARTS
-            ):
-                continue
-            sanitized[str(key)] = _sanitize_payload(item)
-        return sanitized
-    if isinstance(value, list):
-        return [_sanitize_payload(item) for item in value]
-    return value
+    return sanitize_support_payload(value)
 
 
 def sanitize_shadow_learning_artifact_value(value: Any) -> Any:

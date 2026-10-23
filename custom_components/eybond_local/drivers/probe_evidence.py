@@ -8,7 +8,9 @@ re-validates its serialized projection before exposing it in diagnostics.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
+from typing import Protocol
 
 
 _EVIDENCE_KINDS = frozenset({"catalog_identity"})
@@ -22,7 +24,7 @@ _EVIDENCE_STATUSES = frozenset(
 )
 _RESOLUTIONS = frozenset({"", "unresolved", "exact", "family"})
 _ACTION_FAILURE_REASONS = frozenset(
-    {"timeout", "modbus_exception", "read_error"}
+    {"timeout", "modbus_exception", "read_error", "disconnected"}
 )
 
 
@@ -54,7 +56,7 @@ def _normalized_identifiers(
 
 @dataclass(frozen=True, slots=True)
 class ProbeActionFailure:
-    """One sanitized failure of a catalog identity action."""
+    """One sanitized failure of an identity or runtime admission read."""
 
     action_key: str
     reason: str
@@ -83,6 +85,67 @@ class ProbeActionFailure:
         if self.exception_code is not None:
             result["exception_code"] = self.exception_code
         return result
+
+
+def probe_action_failure(action_key: str, error: BaseException | None) -> ProbeActionFailure:
+    """Classify a read failure without retaining its message, values or address."""
+
+    message = str(error or "")
+    if message.startswith("exception_code:"):
+        try:
+            code = int(message.removeprefix("exception_code:"), 10)
+        except ValueError:
+            code = 0
+        if 1 <= code <= 0xFF:
+            return ProbeActionFailure(action_key, "modbus_exception", code)
+    if isinstance(error, asyncio.TimeoutError) or message == "request_timeout":
+        return ProbeActionFailure(action_key, "timeout")
+    if isinstance(error, ConnectionError):
+        return ProbeActionFailure(action_key, "disconnected")
+    return ProbeActionFailure(action_key, "read_error")
+
+
+class _HoldingRegisterReader(Protocol):
+    async def read_holding(self, address: int, count: int) -> list[int]: ...
+
+
+class ProbeReadSession:
+    """Observe existing reads without adding requests, retries or shared state.
+
+    Only failures explicitly retained by the probe owner are exported. An
+    optional illegal-address reply that the driver tolerates is not a failure
+    of admission. The action key contains only protocol/range, never payloads.
+    """
+
+    def __init__(self, session: _HoldingRegisterReader, *, prefix: str) -> None:
+        _normalized_identifier(prefix, field="probe_prefix")
+        self._session = session
+        self._prefix = prefix
+        self.last_failure: ProbeActionFailure | None = None
+        self.failures: dict[str, ProbeActionFailure] = {}
+        self._last_error: Exception | None = None
+
+    async def read_holding(self, address: int, count: int) -> list[int]:
+        self.last_failure = None
+        self._last_error = None
+        try:
+            return await self._session.read_holding(address, count)
+        except Exception as exc:
+            self._last_error = exc
+            self.last_failure = probe_action_failure(
+                f"{self._prefix}.read_holding.{address}.{count}", exc,
+            )
+            raise
+
+    def failed_with(self, error: Exception) -> bool:
+        """Do not attribute a later decode error to a tolerated optional read."""
+
+        return self._last_error is error
+
+    def retain_failure(self) -> None:
+        failure = self.last_failure
+        if failure is not None and len(self.failures) < 32:
+            self.failures[failure.action_key] = failure
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,4 +271,6 @@ __all__ = [
     "DriverProbeEvidence",
     "DriverProbeNoMatchError",
     "ProbeActionFailure",
+    "ProbeReadSession",
+    "probe_action_failure",
 ]

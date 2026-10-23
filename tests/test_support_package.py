@@ -637,7 +637,7 @@ class SupportPackageTests(unittest.TestCase):
         self.assertEqual(record["ts"], 1751600000.123)
         self.assertEqual(record["register"], 12345678901)
         self.assertEqual(record["pn"], "E5000*********0001")
-        self.assertEqual(second, "not-json 9263******0001")
+        self.assertEqual(json.loads(second), {"kind": "redacted_invalid_jsonl_record"})
         self.assertTrue(masked.endswith("\n"))
 
     def test_resolves_authenticated_download_path_for_latest_archive(self) -> None:

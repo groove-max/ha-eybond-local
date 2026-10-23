@@ -28,7 +28,7 @@ from ..metadata.detection_evidence import (
     build_descriptor_decision_report_from_catalog_identity_probe,
 )
 from .catalog_probe import async_walk_detection_dag
-from .probe_evidence import DriverProbeEvidence, ProbeActionFailure
+from .probe_evidence import DriverProbeEvidence, ProbeActionFailure, probe_action_failure
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +192,7 @@ async def async_probe_catalog_identity_attempt(
                 last_error = exc
         if values is None:
             action_failures.append(
-                _probe_action_failure(action.key, last_error)
+                probe_action_failure(action.key, last_error)
             )
             logger.debug(
                 "Catalog identity action failed action=%s error=%s",
@@ -491,30 +491,6 @@ def _optional_int(value: object) -> int | None:
     if value is None:
         return None
     return int(value)
-
-
-def _probe_action_failure(
-    action_key: str,
-    error: BaseException | None,
-) -> ProbeActionFailure:
-    """Classify one failed identity read without retaining exception text."""
-
-    message = str(error or "")
-    if message.startswith("exception_code:"):
-        raw_code = message.removeprefix("exception_code:")
-        try:
-            exception_code = int(raw_code, 10)
-        except ValueError:
-            exception_code = 0
-        if 1 <= exception_code <= 0xFF:
-            return ProbeActionFailure(
-                action_key=action_key,
-                reason="modbus_exception",
-                exception_code=exception_code,
-            )
-    if isinstance(error, asyncio.TimeoutError) or message == "request_timeout":
-        return ProbeActionFailure(action_key=action_key, reason="timeout")
-    return ProbeActionFailure(action_key=action_key, reason="read_error")
 
 
 def _catalog_no_match_evidence(

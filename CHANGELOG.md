@@ -9,6 +9,13 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Remove structured cloud credentials and account fields at the final support
+  ZIP boundary, including old saved evidence and JSONL records (#66). Keep
+  numeric register data and protocol signatures; source files remain unchanged.
+- Retain the failing SMG register range and a sanitized failure reason when
+  runtime detection fails after recognizing a model (#66). No additional reads,
+  retries, automatic profile changes or relaxed validation are introduced.
+
 - Do not report a synthetic zero for unmeasured PV-to-grid power (#62).
   Derived energy becomes unavailable during missing power readings, retains
   counters across reloads/restarts, and resumes without integrating the gap.

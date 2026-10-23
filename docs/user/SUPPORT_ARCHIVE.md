@@ -92,6 +92,14 @@ This adds at most 15 seconds of read-only diagnostics and stops early if
 communication fails. The archive keeps both the original failure and the extra
 results. It does not change normal polling or automatically add missing sensors.
 
+For **SMG/Anenji** devices, the runtime probe log also records which existing
+register read prevented detection after the model was recognized, when that
+failure is available. It distinguishes a timeout, a disconnected transport,
+an explicit Modbus exception and another read error, without copying raw
+exception text. This diagnostic does not add reads or retries, change the
+selected map, or bypass validation. A model recognized from its identity words
+alone is not proof that the rest of the device can be read successfully.
+
 For **Hopewind String (Protocol 0237)**, the test build also checks whether two
 documented power-control setting groups can be read. For **MUST PV3300**, if all
 three AC current registers in the combined block are zero, it reads them
@@ -137,9 +145,15 @@ cloud account.
 
 The archive is intended for sharing with the maintainer in a GitHub issue.
 
-Credentials, access tokens, full collector identifiers, and long serial-like
-identifiers are removed or masked by the exporter. The archive can still
-contain private network addresses, device behavior, live readings, and other
+Structured credential and cloud-account fields (including session tokens,
+secrets, usernames and account IDs) are removed at the final ZIP export boundary,
+including from previously saved cloud evidence. Full collector identifiers and
+long serial-like identifiers are masked. This does not modify saved source
+files, active sessions, or previously created ZIPs: create a new archive after
+updating to get the current export protections.
+
+Arbitrary wire bytes and free-form text cannot be guaranteed anonymous. The
+archive can still contain private network addresses, device behavior, live readings, and other
 technical context needed to reproduce the problem. Review it before posting it
 publicly, and do not add extra screenshots or files containing passwords or
 vendor-account details.

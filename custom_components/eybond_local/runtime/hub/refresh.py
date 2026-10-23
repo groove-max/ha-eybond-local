@@ -168,7 +168,7 @@ def _sanitize_probe_diagnostic(value: object) -> dict[str, object] | None:
                 or action != action.strip()
                 or len(action) > 128
                 or type(reason) is not str
-                or reason not in {"timeout", "modbus_exception", "read_error"}
+                or reason not in {"timeout", "modbus_exception", "read_error", "disconnected"}
             ):
                 return None
             sanitized_failure: dict[str, object] = {
