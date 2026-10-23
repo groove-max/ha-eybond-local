@@ -859,7 +859,7 @@ def _compute_eybond_g_ascii_battery_power(
     return None
 
 
-def _compute_flow_split(values: dict[str, Any]) -> dict[str, float] | None:
+def _compute_flow_split(values: dict[str, Any]) -> dict[str, float | None] | None:
     load = _non_negative_numeric(values.get("output_power"))
     pv = _non_negative_numeric(values.get("pv_power"))
     battery_power = _numeric(values.get("battery_power"))
@@ -871,7 +871,7 @@ def _compute_flow_split(values: dict[str, Any]) -> dict[str, float] | None:
     grid_present = _grid_present(values)
     grid_power = _numeric(values.get("grid_power"))
     grid_import = max(0.0, grid_power) if grid_power is not None else None
-    grid_export = max(0.0, -grid_power) if grid_power is not None else 0.0
+    grid_export = max(0.0, -grid_power) if grid_power is not None else None
     pv_charging_power = _non_negative_numeric(values.get("pv_charging_power"))
     pv_export_power = _non_negative_numeric(values.get("solar_feed_to_grid_power"))
 
@@ -1001,12 +1001,18 @@ def _compute_flow_split(values: dict[str, Any]) -> dict[str, float] | None:
         grid_to_battery = 0.0
 
     desired_pv_to_grid = pv_export_power if pv_export_power is not None else grid_export
-    pv_to_grid = min(pv_remaining, max(0.0, desired_pv_to_grid))
+    # Missing export metering is not a measured zero. In particular, unused
+    # PV budget is not proof of export (losses, topology and sampling differ).
+    # Keep the other useful flow estimates even when this one is unknown.
+    pv_to_grid = (
+        min(pv_remaining, max(0.0, desired_pv_to_grid))
+        if desired_pv_to_grid is not None else None
+    )
 
     return {
         "pv_to_home": round(pv_to_home, 4),
         "pv_to_battery": round(pv_to_battery, 4),
-        "pv_to_grid": round(pv_to_grid, 4),
+        "pv_to_grid": round(pv_to_grid, 4) if pv_to_grid is not None else None,
         "battery_to_home": round(battery_to_home, 4),
         "grid_to_home": round(grid_to_home, 4),
         "grid_to_battery": round(grid_to_battery, 4),

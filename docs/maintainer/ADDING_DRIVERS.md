@@ -2,6 +2,85 @@
 
 This project is designed to grow through transport-aware payload drivers plus declarative metadata, not through hardcoded model logic inside Home Assistant entities.
 
+### MarsRock grid-tie evidence boundary
+
+`marsrock_grid_tie` is a manually selected read-only map, not a SUN-family
+autodetection rule. Its sanitized replay fixture contains three complete RTU
+sweeps from issue #43. The private serial was replaced and CRCs recomputed;
+there are no customer addresses or collector identifiers in the fixture.
+
+The older EyeBond **Modbus RTU V1.0**, pages 10–13, is available through the
+[document mirror](https://www.der-kanal-homepage.de/dokumente-sun-1000-gtil)
+([PDF](https://drive.google.com/file/d/1Y-eMtkEnyZEeSydIqO6yG1zwy03szFsp/view)).
+Its SHA256 is `6c7631c15e39762b21e93d870a220da10653957ca559adaf7bf1b7bf62bdea8e`.
+This is not a firmware-specific certification; use only the corroborated fields:
+
+| Zero-based registers | Interpretation | Evidence boundary |
+| --- | --- | --- |
+| 70 | Grid voltage /10 V | Three exact cloud-record matches |
+| 109 | DC input voltage /10 V | Three exact cloud-record matches |
+| 86, 87 | Generation power /10 W | Protocol/cloud value; instantaneous LCD equivalence unproven |
+| 63, 64 | Total generated energy /10 kWh | Document and cloud total agree |
+
+Each wire word is big-endian; U32 quantities put the **low word first**.
+Do not byte-swap the entire register bank: the observed header `2, 256, 1`
+differs from the document, while the ASCII serial and measured fields already
+decode correctly. That header plus the full ten-character ASCII serial is an
+admission check for this explicitly selected map, not unique retail identity.
+Other zero-filled fields may be unsupported, so frequency, temperature and
+status are not exposed. The observed setting at register 43 also does not match
+the documented boolean encoding: there are no write controls or active learning.
+
+Normal polling reads only FC03/slave 1, registers 59–124; identity probing adds
+registers 0–19. The usual EyeBond Modbus tunnel `(1, 255)` is a local transport
+candidate, **not a devcode proven by the raw cloud capture**. `ModbusSession`
+delegates raw versus framed routing to the link adapter. Decoder replay and
+HA lifecycle tests do not replace the owner's local-polling confirmation.
+
+The four qualified fields are a minimum, not a declared firmware limit.
+The native-RS232 [GTIL2-SmartSolar reader](https://github.com/anhtuanbkfet/GTIL2-SmartSolar/blob/main/src/SunGTIL-ESP/GfSun2000.cpp)
+has optional temperature (94), limiter power (99) and output power (107) fields.
+Their encodings conflict with V1.0: 107 is reserved there, 94 has an offset,
+and 99 uses a different scale. Its basic-mode temperature fallback is not a
+measurement. Registers 60 (daily/resettable energy) and 110 (DC current) are
+other candidates; no one of these fields is yet qualified for WAL Ver6.1.
+
+Support capture compares individual FC03 reads of those five words with the
+59–124 baseline, then samples history at 151/count10, 271/count7, 305/count2,
+331/count2 and 451/count5. The whole fixed plan has a 25-second budget, one-second
+spacing and no writes. Only Modbus illegal-address exceptions allow continuing;
+other errors stop, retaining successful observations. Cancellation propagates.
+`read_attempts` keeps UTC request times and monotonic offsets separately from
+the unchanged `captured_ranges`/`range_failures` row format. These times are
+not inverter measurement timestamps and sequential differences do not prove a
+block-read bug. Zero does not prove unsupported. History samples are raw and do
+not imply the whole historical area exists or contains valid dates.
+
+`raw_capture.json` retains all successful ranges, failures and unverified
+candidate comparisons. `fixture_ranges` retains only the original identity/live
+blocks: later point reads must not silently overwrite a baseline or seed runtime
+decoding. The comparison is collected only after a driver is bound; it does not
+expand auto-detection or the generic failed-identification scan.
+The fixture declares ASCII serial registers 3–7 for pseudonymization; the
+anonymized replay preserves the qualified header and all measurement words.
+
+Do not substitute the [ESPHome internal-display UART map](https://esphome.io/components/sun_gtil2/)
+or Trucki add-on map for the factory EyeBond serial interface.
+
+### Missing export measurements and retained energy
+
+Missing export power must remain unknown. Unallocated PV is not a meter, and
+an export-enable flag is not evidence that current export is zero. Explicit
+zero readings and an absent grid remain distinct from a missing measurement.
+Other estimated flows may still be available when PV-to-grid is unknown.
+
+Derived-energy entities retain accumulated totals in HA's `ExtraStoredData`,
+because HA omits custom state attributes while an entity is unavailable. Old
+numeric states remain restorable. Missing/disconnected samples reset the
+integration baseline; recovery never interpolates across that gap. A daily
+counter still observes its local-calendar rollover. Entity IDs and Recorder
+history are not rewritten and previously unmeasured energy is not fabricated.
+
 ### Cloud protocol compatibility contract
 
 Declare `cloud_probe_codecs` on the driver for read grammars it actually supports.

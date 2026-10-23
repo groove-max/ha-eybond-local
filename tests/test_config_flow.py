@@ -5002,6 +5002,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "PI18",
                 "EyeBond Short-ASCII",
                 "EyeBond 09C1",
+                "MarsRock мережевий (вручну; лише читання)",
             ],
         )
 
@@ -5165,6 +5166,42 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         # ...but it is NOT recovery: no contract is minted.
         self.assertNotIn("recovery_contract", result["data"])
+
+    async def test_manual_entry_preserves_explicit_driver_without_inverter_identity(self) -> None:
+        # Manual-only maps must survive collector-first admission; selecting a
+        # driver is still not proof that an inverter of that type is present.
+        for hint in ("auto", "marsrock_grid_tie", "pi30"):
+            with self.subTest(hint=hint):
+                flow = self._make_flow()
+                flow._manual_config = {
+                    "server_ip": "192.168.1.50", "collector_ip": "",
+                    "driver_hint": hint, "tcp_port": 18899, "udp_port": 58899,
+                    "discovery_target": "", "discovery_interval": 3,
+                    "heartbeat_interval": 60,
+                }
+                flow._manual_result = OnboardingResult(
+                    connection_mode="manual", next_action="create_entry",
+                )
+                flow._manual_chosen_strategy = CONNECTION_STRATEGY_INBOUND
+                flow._callback_continuation._certified_pn = "V001020SYN62344022"
+                result = await flow.async_step_manual_save()
+                self.assertEqual(result["type"], "create_entry")
+                self.assertEqual(result["data"]["driver_hint"], hint)
+                self.assertFalse(result["data"].get("detected_driver"))
+                self.assertFalse(result["data"].get("detected_serial"))
+                self.assertEqual(result["data"]["detection_confidence"], "none")
+                self.assertNotIn("recovery_contract", result["data"])
+
+    def test_scan_preview_cannot_select_a_manual_only_driver(self) -> None:
+        from custom_components.eybond_local.flows.config.result_model import (
+            _apply_collector_first_entry_semantics,
+        )
+        data = {"driver_hint": "marsrock_grid_tie", "detected_driver": "marsrock_grid_tie",
+                "detected_serial": "9900000043", "detection_confidence": "high"}
+        _apply_collector_first_entry_semantics(data)
+        self.assertEqual(data["driver_hint"], "auto")
+        self.assertFalse(data.get("detected_driver"))
+        self.assertFalse(data.get("detected_serial"))
 
     async def test_callback_verification_unconfirmed_creates_no_normal_entry(self) -> None:
         # Item 5: a callback verification was in play (a passive-discovery

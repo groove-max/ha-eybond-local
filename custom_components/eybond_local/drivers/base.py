@@ -63,6 +63,9 @@ class InverterDriver(ABC):
     # independent of read-only profile detection and still needs live seed data.
     cloud_probe_codecs: tuple[str, ...] = ()
     cloud_learning_supported: bool = False
+    # Some documented maps overlap without a distinguishing identity read.
+    # They remain available by explicit selection, never by a plausible scan.
+    auto_detection_supported: bool = True
 
     # A driver with a single, model-independent timing envelope just sets this
     # class attribute (e.g. ``poll_policy = PI30_POLL_POLICY`` in pi30.py). A

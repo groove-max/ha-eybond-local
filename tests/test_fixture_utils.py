@@ -17,6 +17,26 @@ from custom_components.eybond_local.fixtures.utils import (
 
 
 class FixtureUtilsTests(unittest.TestCase):
+    def test_declared_serial_ranges_supplement_legacy_defaults(self):
+        words = [ord("1") * 257] * 5
+        fixture = {
+            "serial_ranges": [{"start": 3, "count": 5}],
+            "ranges": [{"start": 3, "values": words},
+                       {"start": 186, "values": words},
+                       {"start": 70, "values": [2300]}],
+        }
+        anonymized = anonymize_fixture_json(fixture)
+        self.assertNotEqual(anonymized["ranges"][0]["values"], words)
+        self.assertNotEqual(anonymized["ranges"][1]["values"], words)
+        self.assertEqual(anonymized["ranges"][2], fixture["ranges"][2])
+        self.assertEqual(fixture["ranges"][0]["values"], words)
+
+    def test_invalid_declared_serial_ranges_cannot_be_marked_anonymized(self):
+        for row in (None, {}, {"start": True, "count": 1}, {"start": 0, "count": 0},
+                    {"start": -1, "count": 5}, {"start": 65535, "count": 2}):
+            with self.assertRaisesRegex(ValueError, "invalid_fixture_serial_range"):
+                anonymize_fixture_json({"serial_ranges": [row]})
+
     def test_build_command_fixture_responses_keeps_responses_and_nak_failures(self) -> None:
         command_responses = build_command_fixture_responses(
             {

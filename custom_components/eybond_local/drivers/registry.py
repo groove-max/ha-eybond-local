@@ -33,6 +33,7 @@ from ..models import (
 from ..poll_policy import DEFAULT_POLL_POLICY, PollPolicy
 from .base import InverterDriver
 from .modbus_catalog import ModbusCatalogDriver
+from .marsrock import MarsRockDriver
 from .must import MustPvPh18Driver
 from .pi18 import Pi18Driver
 from .pi30 import Pi30Driver
@@ -57,6 +58,7 @@ _DRIVERS: tuple[InverterDriver, ...] = (
     Pi18Driver(),
     EybondShortAsciiDriver(),
     Eybond09C1Driver(),
+    MarsRockDriver(),
 )
 
 _EXPERIMENTAL_REPLAY_DRIVERS: tuple[InverterDriver, ...] = ()
@@ -122,7 +124,7 @@ def iter_drivers(driver_hint: str) -> tuple[InverterDriver, ...]:
 
     if driver_hint != DRIVER_HINT_AUTO:
         return tuple(driver for driver in _DRIVERS if driver.key == driver_hint)
-    return _DRIVERS
+    return tuple(driver for driver in _DRIVERS if driver.auto_detection_supported)
 
 
 def get_driver(driver_key: str) -> InverterDriver:

@@ -7,6 +7,41 @@ integration is running.
 
 ## Before you start
 
+### MarsRock grid-tie: limited manual read profile
+
+The **MarsRock grid-tie (manual; read-only)** driver (`marsrock_grid_tie`)
+is available for the captured SUN-style register map, not every MarsRock or
+SUN-branded inverter. Select it explicitly in the driver's settings; automatic
+detection deliberately does not select it. Keep your existing collector entry.
+
+It exposes grid voltage, DC input voltage, protocol-reported generation power
+and total generated energy. Generation is not household load; DC input is not
+assumed to be solar (the tested capture comes from a wind installation).
+The power value is not yet established as an instantaneous LCD reading.
+Temperature, frequency, status flags and controls are not qualified and are
+not exposed just because their registers return zeros. Full Control does not
+add controls to this read-only map; active learning is not enabled for it.
+
+The decoder has been tested against captured cloud RTU replies. This does not
+prove the collector's local callback tunnel works: the existing transport
+adapter uses the standard Modbus tunnel, or raw Modbus on an AT session.
+If explicit selection still leaves the inverter unidentified, collect a support
+archive rather than changing endpoint, UART settings or trying other write maps.
+Field testing is still needed before calling this profile hardware-confirmed.
+
+For an identified inverter, creating a support archive also performs a bounded
+read-only comparison of five candidate registers (60, 94, 99, 107 and 110) and
+small samples of documented energy/fault history. It takes up to 25 seconds,
+with one-second pauses between planned reads. Regular polling waits for this
+capture; no settings or collector endpoint are changed. An illegal-address reply
+is recorded and skipped; a timeout or other communication error stops the plan.
+The archive keeps zero, missing and failed reads distinct. These observations
+do not enable sensors or controls automatically. When sharing the archive,
+include the approximate capture time, LCD temperature/power and whether the
+inverter was generating. There is no need to force generation or change settings.
+
+### Network prerequisites
+
 - Put the collector on Wi-Fi or Ethernet where Home Assistant can reach it.
 - Keep the collector powered and connected to the inverter.
 - If possible, use a Home Assistant network interface on the same subnet.

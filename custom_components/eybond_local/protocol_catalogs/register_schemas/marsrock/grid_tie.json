@@ -1,0 +1,26 @@
+{
+  "schema_key": "marsrock_grid_tie",
+  "title": "MarsRock grid-tie — four qualified read-only fields",
+  "driver_key": "marsrock_grid_tie",
+  "protocol_family": "marsrock_grid_tie",
+  "blocks": [
+    { "key": "serial", "start": 0, "count": 20 },
+    { "key": "live", "start": 59, "count": 66 },
+    { "key": "status", "start": 0, "count": 0 },
+    { "key": "config", "start": 0, "count": 0 }
+  ],
+  "spec_sets": {
+    "runtime": [
+      { "key": "grid_voltage", "register": 70, "divisor": 10 },
+      { "key": "dc_input_voltage", "register": 109, "divisor": 10 },
+      { "key": "generation_power", "register": 86, "word_count": 2, "combine": "u32_low_first", "divisor": 10 },
+      { "key": "generation_energy_total", "register": 63, "word_count": 2, "combine": "u32_low_first", "divisor": 10 }
+    ]
+  },
+  "measurement_descriptions": [
+    { "key": "grid_voltage", "name": "Grid Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement" },
+    { "key": "dc_input_voltage", "name": "DC Input Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement" },
+    { "key": "generation_power", "name": "Generation Power (Protocol)", "unit": "W", "device_class": "power", "state_class": "measurement" },
+    { "key": "generation_energy_total", "name": "Total Generated Energy (Protocol)", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing" }
+  ]
+}

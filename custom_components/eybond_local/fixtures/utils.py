@@ -56,7 +56,18 @@ def anonymize_fixture_json(
             collector["collector_pn"] = _mask_text_by_shape(str(collector_pn))
             redactions.append({"field": "collector.collector_pn", "kind": "pseudonymized"})
 
-    for start, count in serial_ranges:
+    # Extra driver-owned serial locations supplement the legacy defaults.
+    # This metadata only redacts fixtures; it never authorizes transport I/O.
+    declared_ranges = []
+    for row in anonymized.get("serial_ranges", []):
+        if not isinstance(row, dict):
+            raise ValueError("invalid_fixture_serial_range")
+        start, count = row.get("start"), row.get("count")
+        if (type(start) is not int or type(count) is not int
+                or start < 0 or count < 1 or start + count > 65536):
+            raise ValueError("invalid_fixture_serial_range")
+        declared_ranges.append((start, count))
+    for start, count in dict.fromkeys((*serial_ranges, *declared_ranges)):
         changed = _anonymize_range(anonymized, start=start, count=count)
         if changed:
             redactions.append(

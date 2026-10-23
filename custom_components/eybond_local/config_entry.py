@@ -594,7 +594,10 @@ class EntryCommitFlowMixin:
         collector_pn = ""
         detected_model = ""
         detected_serial = ""
-        driver_hint = DRIVER_HINT_AUTO
+        # A manual choice constrains later runtime probing; it is not proof of
+        # an inverter identity. Do not discard it at collector-only admission,
+        # especially for maps deliberately excluded from automatic detection.
+        driver_hint = str(user_input.get(CONF_DRIVER_HINT) or DRIVER_HINT_AUTO)
         connection_mode = "manual"
 
         if result is not None:
@@ -683,7 +686,7 @@ class EntryCommitFlowMixin:
         _apply_smartess_detection_metadata(data, result)
         _apply_collector_cloud_family_metadata(data, result)
         _apply_confirmed_session_protocol_evidence(data, result)
-        _apply_collector_first_entry_semantics(data)
+        _apply_collector_first_entry_semantics(data, driver_hint=driver_hint)
         detection_strategy = user_input.get(
             CONF_DRIVER_DETECTION_STRATEGY,
             DEFAULT_DRIVER_DETECTION_STRATEGY,

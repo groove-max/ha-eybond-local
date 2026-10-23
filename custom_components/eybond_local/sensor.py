@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import isfinite
 from typing import Any
@@ -15,7 +16,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
@@ -419,6 +420,31 @@ class EybondValueSensor(CoordinatorEntity[EybondLocalCoordinator], SensorEntity)
         self.async_write_ha_state()
 
 
+@dataclass(frozen=True)
+class _EnergyRestoreData(ExtraStoredData):
+    """Persist counters independently of HA's unavailable state/attributes."""
+
+    accumulated_kwh: float | None
+    period_key: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"accumulated_kwh": self.accumulated_kwh, "period_key": self.period_key}
+
+
+def _restored_energy_total(last_state, extra: dict[str, Any]) -> float | None:
+    """Prefer retained storage; support numeric states from older versions."""
+    value = extra.get("accumulated_kwh")
+    if value is None and last_state is not None:
+        value = last_state.state
+    if isinstance(value, bool):
+        return None
+    try:
+        total = float(value)
+    except (TypeError, ValueError):
+        return None
+    return total if isfinite(total) and total >= 0 else None
+
+
 class EybondDerivedEnergySensor(
     RestoreEntity,
     CoordinatorEntity[EybondLocalCoordinator],
@@ -441,6 +467,7 @@ class EybondDerivedEnergySensor(
         self._description = description
         self._accumulator = EnergyAccumulator()
         self._native_value: float | None = None
+        self._power_available = False
 
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{description.key}"
         self._attr_name = description.name
@@ -452,11 +479,9 @@ class EybondDerivedEnergySensor(
 
         await super().async_added_to_hass()
         last_state = await self.async_get_last_state()
-        if last_state is None or last_state.state in {"unknown", "unavailable"}:
-            return
-        try:
-            restored_total = float(last_state.state)
-        except (TypeError, ValueError):
+        last_extra = await self.async_get_last_extra_data()
+        restored_total = _restored_energy_total(last_state, last_extra.as_dict() if last_extra else {})
+        if restored_total is None:
             return
         self._accumulator.total_kwh = restored_total
         self._native_value = self._accumulator.total_kwh
@@ -467,28 +492,34 @@ class EybondDerivedEnergySensor(
 
     @property
     def available(self) -> bool:
-        return self._native_value is not None
+        return self._power_available and self._native_value is not None
 
     @property
     def native_value(self) -> float | None:
         return self._native_value
 
+    @property
+    def extra_restore_state_data(self) -> ExtraStoredData:
+        return _EnergyRestoreData(self._native_value)
+
     @callback
     def _handle_coordinator_update(self) -> None:
         snapshot = self.coordinator.data
+        self._power_available = False
         if not snapshot.connected:
             self._accumulator.reset_sample()
             self.async_write_ha_state()
             return
 
         power_w = compute_derived_power(snapshot.runtime_values(), self._description)
-        if power_w is None:
+        if power_w is None or not isfinite(power_w):
             self._accumulator.reset_sample()
             self.async_write_ha_state()
             return
 
         now = datetime.now(timezone.utc)
         self._native_value = self._accumulator.accumulate(power_w, now)
+        self._power_available = True
         self.async_write_ha_state()
 
 
@@ -516,6 +547,7 @@ class EybondDerivedEnergyCycleSensor(
         self._source_description = source_description
         self._accumulator = CyclingEnergyAccumulator(cycle=description.cycle)
         self._native_value: float | None = None
+        self._power_available = False
 
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{description.key}"
         self._attr_name = description.name
@@ -528,15 +560,15 @@ class EybondDerivedEnergyCycleSensor(
         await super().async_added_to_hass()
         now = dt_util.now()
         last_state = await self.async_get_last_state()
-        if last_state is None or last_state.state in {"unknown", "unavailable"}:
+        last_extra = await self.async_get_last_extra_data()
+        extra = last_extra.as_dict() if last_extra else {}
+        restored_total = _restored_energy_total(last_state, extra)
+        if restored_total is None:
             self._accumulator.restore(total_kwh=0.0, period_key="", now=now)
             self._native_value = self._accumulator.total_kwh
             return
-        try:
-            restored_total = float(last_state.state)
-        except (TypeError, ValueError):
-            restored_total = 0.0
-        period_key = str(last_state.attributes.get("period_key", ""))
+        period_key = str(extra.get("period_key", "") if last_extra else
+                         (last_state.attributes.get("period_key", "") if last_state else ""))
         self._accumulator.restore(total_kwh=restored_total, period_key=period_key, now=now)
         self._native_value = self._accumulator.total_kwh
 
@@ -546,11 +578,15 @@ class EybondDerivedEnergyCycleSensor(
 
     @property
     def available(self) -> bool:
-        return self._native_value is not None
+        return self._power_available and self._native_value is not None
 
     @property
     def native_value(self) -> float | None:
         return self._native_value
+
+    @property
+    def extra_restore_state_data(self) -> ExtraStoredData:
+        return _EnergyRestoreData(self._native_value, self._accumulator.period_key)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -563,6 +599,7 @@ class EybondDerivedEnergyCycleSensor(
     @callback
     def _handle_coordinator_update(self) -> None:
         snapshot = self.coordinator.data
+        self._power_available = False
         if not snapshot.connected:
             self._accumulator.reset_sample()
             self.async_write_ha_state()
@@ -572,11 +609,12 @@ class EybondDerivedEnergyCycleSensor(
             snapshot.runtime_values(),
             self._source_description,
         )
-        if power_w is None:
+        if power_w is None or not isfinite(power_w):
             self._accumulator.reset_sample()
             self.async_write_ha_state()
             return
 
         now = dt_util.now()
         self._native_value = self._accumulator.accumulate(power_w, now)
+        self._power_available = True
         self.async_write_ha_state()

@@ -185,7 +185,9 @@ def _apply_smartess_detection_metadata(
             data[config_key] = value
 
 
-def _apply_collector_first_entry_semantics(data: dict[str, Any]) -> None:
+def _apply_collector_first_entry_semantics(
+    data: dict[str, Any], *, driver_hint: str = DRIVER_HINT_AUTO,
+) -> None:
     """Make a new normal entry authoritative only for its collector.
 
     Scan-time inverter matches are previews collected before the entry owns the
@@ -195,7 +197,9 @@ def _apply_collector_first_entry_semantics(data: dict[str, Any]) -> None:
     existing identity writer.
     """
 
-    data[CONF_DRIVER_HINT] = DRIVER_HINT_AUTO
+    # Only an explicit user choice may constrain detection. Scan-time previews
+    # still use the default auto and never become durable inverter facts.
+    data[CONF_DRIVER_HINT] = driver_hint
     _clear_runtime_inverter_facts(data)
 
 

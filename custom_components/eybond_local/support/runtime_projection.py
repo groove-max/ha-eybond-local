@@ -130,6 +130,8 @@ def build_support_fixture(
     }
     if ranges:
         fixture["ranges"] = ranges
+        if "fixture_serial_ranges" in raw_capture:
+            fixture["serial_ranges"] = [dict(row) for row in raw_capture["fixture_serial_ranges"]]
     if command_responses:
         fixture["command_responses"] = command_responses
     return fixture

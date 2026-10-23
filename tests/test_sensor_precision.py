@@ -82,6 +82,7 @@ def _install_sensor_stubs() -> None:
     entity.EntityCategory = EntityCategory
     entity_platform.AddEntitiesCallback = AddEntitiesCallback
     restore_state.RestoreEntity = RestoreEntity
+    restore_state.ExtraStoredData = type("ExtraStoredData", (), {})
     update_coordinator.CoordinatorEntity = CoordinatorEntity
     dt.now = lambda: None
     util.dt = dt

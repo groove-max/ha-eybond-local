@@ -9,6 +9,16 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Do not report a synthetic zero for unmeasured PV-to-grid power (#62).
+  Derived energy becomes unavailable during missing power readings, retains
+  counters across reloads/restarts, and resumes without integrating the gap.
+- Add an explicitly selected, read-only MarsRock grid-tie map (#43): grid and
+  DC voltage, protocol generation power and total generated energy. Qualified
+  from captured RTU replies and documentation; local polling needs field testing.
+  No generic SUN autodetection, padded temperature/frequency values or controls.
+  Support archives add bounded, paced candidate point reads and small raw
+  history samples, without changing runtime sensors or enabling writes.
+
 - Learning accepts driver-declared split tunnel routes only after matching
   successful seed reads from the same bound inverter (#62). SmartESS 0925's
   configuration route no longer rejects its independently captured data route;
