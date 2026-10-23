@@ -95,6 +95,12 @@ class TransportModuleBoundaryTests(unittest.TestCase):
         self.assertCountEqual(owners, [("common.py", "CollectorTransport"),
                                        ("shared_framed.py", "SharedEybondTransport")])
         definitions = [item for item in definitions if item != handoff_extension]
+        for extension, count in (
+            (("FunctionDef", "create_diagnostic_transport"), 2),
+            (("FunctionDef", "unread"), 1),
+        ):
+            self.assertEqual(definitions.count(extension), count)
+            definitions = [item for item in definitions if item != extension]
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()

@@ -29,6 +29,7 @@ class UnsupportedDriverError(DiagnosticTargetError):
 
 # Single source of truth for the command/driver compatibility matrix.
 DIAGNOSTIC_SUPPORTED_KINDS: dict[str, frozenset[str]] = {
+    "modbus": frozenset({"read", "write", "write_bit"}),
     "modbus_smg": frozenset({"read", "write", "write_bit"}),
     "pi30": frozenset({"ascii"}),
     "pi18": frozenset({"ascii"}),
@@ -74,6 +75,14 @@ class ModbusDiagnosticTarget:
 
     async def read_holding(self, register: int, count: int) -> list[int]:
         return await self._session.read_holding(register, count)
+
+    async def read_input(self, register: int, count: int) -> list[int]:
+        return await self._session.read_input(register, count)
+
+    async def write_single(self, register: int, value: int) -> None:
+        echoed = await self._session.write_single_holding(register, value)
+        if echoed != value:
+            raise DiagnosticTargetError("write_single_echo_mismatch")
 
     async def write_holding(self, register: int, values: list[int]) -> None:
         await self._session.write_holding(register, list(values))
@@ -158,14 +167,17 @@ def build_diagnostic_target(
     driver_key: str,
     transport: PayloadLinkTransport,
     target: ProbeTarget,
+    *,
+    retry_reads: bool = True,
 ):
     """Build the diagnostic target adapter for one driver (no transport I/O)."""
 
-    if driver_key == "modbus_smg":
+    if driver_key in {"modbus", "modbus_smg"}:
         session = ModbusSession(
             transport,
             route=target.link_route,
             slave_id=target.payload_address,
+            retry_reads=retry_reads,
         )
         return ModbusDiagnosticTarget(driver_key, session)
     if driver_key == "pi30":

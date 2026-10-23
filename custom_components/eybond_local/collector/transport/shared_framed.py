@@ -21,6 +21,13 @@ from .listener import (
 class SharedEybondTransport:
     """One per-entry transport facade backed by a shared TCP listener."""
 
+    def create_diagnostic_transport(self, wire: str, *, timeout: float):
+        """Pin an explicit diagnostic override without changing runtime mode."""
+        from .diagnostic import BoundDiagnosticTransport
+
+        getter = lambda: self._connection(create_placeholder=False)
+        return BoundDiagnosticTransport(getter(), getter, wire=wire, timeout=timeout)
+
     def __init__(
         self,
         *,

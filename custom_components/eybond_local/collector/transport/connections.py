@@ -34,6 +34,7 @@ from ..protocol import (
     parse_heartbeat_pn,
 )
 from .auxiliary_session import AuxiliaryReadSession
+from .diagnostic_modbus import DiagnosticModbusSession
 from .send_ownership import SocketSendOwner, finish_request_future
 from .binary_framing import (
     BinaryFramingError, BinaryGrammar, async_read_binary_frame,
@@ -117,6 +118,7 @@ class _CollectorConnection:
         self._session_identity_callback: Callable[[str, str, str], None] | None = None
         self._run_epoch = 0
         self._auxiliary_session = AuxiliaryReadSession()
+        self._diagnostic_modbus = DiagnosticModbusSession()
 
     @property
     def connected(self) -> bool:
@@ -393,6 +395,7 @@ class _CollectorConnection:
         self._last_heartbeat_monotonic = None
         self._last_liveness_monotonic = None
         self._auxiliary_session = AuxiliaryReadSession()
+        self._diagnostic_modbus = DiagnosticModbusSession()
         self._reader = reader
         self._writer = writer
         self._session_id = str(session_id or "").strip()
@@ -505,6 +508,7 @@ class _CollectorConnection:
         if not isinstance(reader, _PrefixedAsyncReader):
             reader = _PrefixedAsyncReader(reader)
         auxiliary = self._auxiliary_session
+        diagnostic = self._diagnostic_modbus
         read = auxiliary.read
         try:
             while not auxiliary.closed:
@@ -513,6 +517,8 @@ class _CollectorConnection:
                 auxiliary.at_boundary = False
                 frame_started = asyncio.get_running_loop().time()
                 auxiliary_claim = auxiliary.claim
+                if await diagnostic.consume(reader, first, auxiliary):
+                    continue
                 try:
                     prefix = await read(asyncio.wait_for(
                         reader.read_framed_prefix(first),
@@ -665,6 +671,7 @@ class _CollectorConnection:
                     payload.hex(),
                 )
         except BinaryFramingError as exc:
+            diagnostic.close(str(exc))
             self._collector.last_disconnect_reason = str(exc)
             logger.warning("Closing collector binary session remote=%s reason=%s",
                            self._collector.remote_ip, exc)
@@ -715,6 +722,7 @@ class _CollectorConnection:
         self._reader_task = None
         writer = self._writer
         self._auxiliary_session.close()
+        self._diagnostic_modbus.close()
         self._reader = None
         self._writer = None
         self._connected.clear()
@@ -802,6 +810,7 @@ class _CollectorAtConnection:
         self._mixed_frame_observed = False
         self._run_epoch = 0
         self._auxiliary_session = AuxiliaryReadSession()
+        self._diagnostic_modbus = DiagnosticModbusSession()
 
     @property
     def connected(self) -> bool:
@@ -1001,6 +1010,7 @@ class _CollectorAtConnection:
         devcode: int,
         collector_addr: int,
         request_timeout: float,
+        learn_wire: bool = True,
     ) -> bytes:
         """Forward one inverter payload as FC=4 on this exact AT socket."""
 
@@ -1011,9 +1021,10 @@ class _CollectorAtConnection:
             devcode=devcode,
             collector_addr=collector_addr,
             request_timeout=request_timeout,
+            learn_wire=learn_wire,
         )
         owner.check_reply(self)
-        if response:
+        if response and learn_wire:
             self._collector.inverter_forward_mode = "eybond_fc4"
         return response
 
@@ -1025,6 +1036,7 @@ class _CollectorAtConnection:
         devcode: int,
         collector_addr: int,
         request_timeout: float,
+        learn_wire: bool = True,
     ) -> tuple[EybondHeader, bytes]:
         """Send one TID-correlated EyeBond frame on the AT-primary stream."""
 
@@ -1051,7 +1063,8 @@ class _CollectorAtConnection:
                 await self._async_write(frame, owner=owner)
                 response = await asyncio.wait_for(future, timeout=request_timeout)
                 owner.check_reply(self)
-                self._mixed_frame_observed = True
+                if learn_wire:
+                    self._mixed_frame_observed = True
                 return response
             finally:
                 if self._pending_framed_response.get(tid) is future:
@@ -1191,6 +1204,7 @@ class _CollectorAtConnection:
         self._collector.connection_count += 1
         self._collector.last_disconnect_reason = ""
         self._auxiliary_session = AuxiliaryReadSession()
+        self._diagnostic_modbus = DiagnosticModbusSession()
         self._reader = reader
         self._writer = writer
         self._session_id = str(session_id or "").strip()
@@ -1253,6 +1267,7 @@ class _CollectorAtConnection:
         read = auxiliary.read
         try:
             buffered_prefix = b""
+            diagnostic = self._diagnostic_modbus
             while not auxiliary.closed:
                 auxiliary.at_boundary = not buffered_prefix
                 if buffered_prefix:
@@ -1264,6 +1279,8 @@ class _CollectorAtConnection:
                 auxiliary.at_boundary = False
                 frame_started = asyncio.get_running_loop().time()
                 auxiliary_claim = auxiliary.claim
+                if not buffered_prefix and await diagnostic.consume(reader, first, auxiliary):
+                    continue
                 if first == b"A":
                     tail = reader.readexactly(2)
                     prefix = first + await read(
@@ -1463,6 +1480,7 @@ class _CollectorAtConnection:
                 line = prefix + await read(reader.readuntil(b"\n"))
                 self._handle_at_response_line(line)
         except BinaryFramingError as exc:
+            diagnostic.close(str(exc))
             self._collector.last_disconnect_reason = str(exc)
             logger.warning("Closing collector binary session remote=%s reason=%s",
                            self._collector.remote_ip, exc)
@@ -1596,6 +1614,7 @@ class _CollectorAtConnection:
         self._reader_task = None
         writer = self._writer
         self._auxiliary_session.close()
+        self._diagnostic_modbus.close()
         self._reader = None
         self._writer = None
         self._connected.clear()

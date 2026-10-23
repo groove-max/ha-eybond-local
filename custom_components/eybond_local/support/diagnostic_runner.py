@@ -15,6 +15,7 @@ whole scenario has been validated.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -40,6 +41,7 @@ from .diagnostic_targets import (
     has_diagnostic_target,
     supported_kinds_for_driver,
 )
+from .diagnostic_wire import DiagnosticTraceTransport
 
 
 class DiagnosticRunError(Exception):
@@ -98,6 +100,7 @@ class _PreparedRun:
     target: object
     stop_on_error: bool
     operation_timeout: float | None
+    transport: DiagnosticTraceTransport
 
 
 # --- Resolution -----------------------------------------------------------
@@ -156,6 +159,10 @@ def _resolve_probe_target(
     devcode = pick("devcode", directives.devcode)
     collector_addr = pick("collector_addr", directives.collector_addr)
     device_addr = pick("device_addr", directives.device_addr)
+    if directives.wire == "raw_modbus":
+        # A raw payload has a slave id, but no EyeBond envelope addresses.
+        devcode = 0 if devcode is None else devcode
+        collector_addr = 0 if collector_addr is None else collector_addr
 
     for name, value in (
         ("devcode", devcode),
@@ -199,7 +206,7 @@ def _check_route_wire_limits(
             f"collector_addr must be between 0 and {_EYBOND_COLLECTOR_ADDR_MAX}",
             line=directive_lines.get("collector_addr"),
         )
-    if driver_key == "modbus_smg" and device_addr > _MODBUS_DEVICE_ADDR_MAX:
+    if driver_key in {"modbus", "modbus_smg"} and device_addr > _MODBUS_DEVICE_ADDR_MAX:
         raise ScenarioError(
             f"device_addr must be between 0 and {_MODBUS_DEVICE_ADDR_MAX} "
             "for driver 'modbus_smg'",
@@ -224,7 +231,7 @@ def _check_command_wire_limits(
     commands: tuple[Command, ...],
     driver_key: str,
 ) -> None:
-    if driver_key != "modbus_smg":
+    if driver_key not in {"modbus", "modbus_smg"}:
         return
     for command in commands:
         if isinstance(command, ReadCommand):
@@ -281,8 +288,6 @@ def _prepare(text: str, context: DiagnosticRuntimeContext) -> _PreparedRun:
     _check_command_wire_limits(scenario.commands, driver_key)
     _check_write_confirmation(scenario.commands, context.confirm_write)
 
-    target = build_diagnostic_target(driver_key, context.transport, probe_target)
-
     if not context.is_connected():
         raise DiagnosticRunError("collector_not_connected")
 
@@ -296,6 +301,28 @@ def _prepare(text: str, context: DiagnosticRuntimeContext) -> _PreparedRun:
         if scenario.directives.operation_timeout is not None
         else context.default_operation_timeout
     )
+    if operation_timeout is not None and (
+        not math.isfinite(operation_timeout) or operation_timeout <= 0
+    ):
+        raise ScenarioError("operation_timeout must be finite and positive")
+    wire = scenario.directives.wire
+    if wire == "raw_modbus":
+        if driver_key not in {"modbus", "modbus_smg"}:
+            raise ScenarioError("raw_modbus requires driver modbus or modbus_smg")
+        if not 1 <= probe_target.device_addr <= 247:
+            raise ScenarioError("raw_modbus device_addr must be between 1 and 247 (no broadcast)")
+    if wire != "auto":
+        operation_timeout = operation_timeout or 10.0
+        if operation_timeout > 120:
+            raise ScenarioError("explicit wire operation_timeout must not exceed 120 seconds")
+    try:
+        transport = DiagnosticTraceTransport(context.transport, wire=wire,
+                                             timeout=operation_timeout or 10.0)
+    except (ConnectionError, TypeError, ValueError) as exc:
+        raise ScenarioError(str(exc)) from exc
+    target = build_diagnostic_target(
+        driver_key, transport, probe_target, retry_reads=wire == "auto",
+    )
     return _PreparedRun(
         commands=scenario.commands,
         driver_key=driver_key,
@@ -304,6 +331,7 @@ def _prepare(text: str, context: DiagnosticRuntimeContext) -> _PreparedRun:
         target=target,
         stop_on_error=stop_on_error,
         operation_timeout=operation_timeout,
+        transport=transport,
     )
 
 
@@ -324,11 +352,14 @@ async def _execute_command(
     """Return (request, response) dicts for one command, raising on failure."""
 
     if isinstance(command, ReadCommand):
+        read = target.read_input if command.function == 4 else target.read_holding
         words = await _maybe_timeout(
-            target.read_holding(command.register, command.count), timeout
+            read(command.register, command.count), timeout
         )
         decimal, hexwords, ascii_repr = _format_words(words)
         request = {"register": command.register, "count": command.count}
+        if command.function == 4:
+            request["function"] = 4
         response = {
             "register": command.register,
             "count": command.count,
@@ -339,14 +370,18 @@ async def _execute_command(
         return request, response
 
     if isinstance(command, WriteCommand):
+        operation = (target.write_single(command.register, command.values[0])
+                     if command.single else target.write_holding(command.register, list(command.values)))
         await _maybe_timeout(
-            target.write_holding(command.register, list(command.values)), timeout
+            operation, timeout
         )
         request = {
             "register": command.register,
             "values": list(command.values),
             "count": len(command.values),
         }
+        if command.single:
+            request["function"] = 6
         return request, {"register": command.register, "written": len(command.values)}
 
     if isinstance(command, WriteBitCommand):
@@ -391,6 +426,7 @@ async def _execute(prepared: _PreparedRun) -> tuple[list[dict], bool]:
     results: list[dict] = []
     success = True
     for command in prepared.commands:
+        prepared.transport.line = command.line
         start = time.monotonic()
         step: dict = {
             "line": command.line,
@@ -438,6 +474,7 @@ def _format_words(words: list[int]) -> tuple[list[int], list[str], str | None]:
 def _render_text(prepared: _PreparedRun, results: list[dict]) -> str:
     lines: list[str] = []
     lines.append(f"driver: {prepared.driver_key} ({prepared.driver_source})")
+    lines.append(f"wire: {prepared.transport.wire}")
     pt = prepared.probe_target
     lines.append(
         f"route: devcode={pt.devcode} collector_addr={pt.collector_addr} "
@@ -500,6 +537,9 @@ def _build_context(prepared: _PreparedRun, context: DiagnosticRuntimeContext) ->
         },
         "catalog_detection": context.catalog_detection or {},
         "runtime_debug": context.runtime_debug or {},
+        "requested_wire": prepared.transport.wire,
+        "wire_events": list(prepared.transport.events),
+        "wire_events_dropped": prepared.transport.dropped_events,
     }
 
 

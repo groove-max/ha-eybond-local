@@ -589,7 +589,7 @@
           "diagnostic_result": "Result"
         },
         "data_description": {
-          "diagnostic_commands": "Paste the complete multiline scenario, including driver or address overrides when provided.",
+          "diagnostic_commands": "Paste the complete multiline scenario, including driver, address and wire overrides when provided. wire auto/fc4/raw_modbus applies only to this run. The downloadable JSON includes request/reply bytes.",
           "diagnostic_stop_on_error": "Disable this only when later commands should still run after a failed command.",
           "diagnostic_confirm_write": "Required for register writes and all free-form ASCII commands because an arbitrary ASCII command may change device settings.",
           "diagnostic_publish_download_copy": "Creates a short-lived signed link to the redacted result. Leave disabled unless you intend to download or share it.",

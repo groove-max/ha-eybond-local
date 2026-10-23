@@ -246,9 +246,12 @@ run_diagnostic_commands:
     commands:
       name: Commands
       description: >-
-        Multi-line diagnostic scenario. Directives (driver, devcode,
+        Multi-line diagnostic scenario. Directives (driver, wire, devcode,
         collector_addr, device_addr, stop_on_error, operation_timeout) must come
-        before the first command (read, write, write_bit, ascii, sleep).
+        before the first command (read, read_input, write, write_single,
+        write_bit, ascii, sleep). wire accepts auto, fc4 or raw_modbus;
+        driver modbus is model-independent. Explicit wire overrides do not
+        change permanent settings and make no automatic retries.
       required: true
       example: |
         driver modbus_smg

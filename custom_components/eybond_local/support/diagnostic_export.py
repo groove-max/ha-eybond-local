@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..const import LOCAL_DIAGNOSTIC_RUNS_DIR, LOCAL_METADATA_DIR
+from ..payload.modbus import decode_read_request
 from .diagnostic_runner import DiagnosticRunResult
 from .masking import (
     _NUMERIC_IDENTIFIER_RE,
@@ -69,6 +70,25 @@ def build_shareable_payload(result: DiagnosticRunResult) -> dict:
     context = dict(payload.get("context") or {})
     context.pop("entry_id", None)
     payload["context"] = context
+    # Do this BEFORE generic masking: serial scrubbing can change CRC bytes.
+    # The new byte trace must not re-expose an identity range hidden below.
+    events = []
+    for item in context.get("wire_events") or []:
+        event = dict(item)
+        try:
+            request = decode_read_request(bytes.fromhex(event.get("request_hex", "")))
+        except (TypeError, ValueError):
+            request = None
+        if request is not None and (
+            request.address <= _SMG_SERIAL_REGISTER_END
+            and request.address + request.count > _SMG_SERIAL_REGISTER_START
+        ):
+            for key in ("response_hex", "received_fragment_hex"):
+                if key in event:
+                    event[key] = "REDACTED_IDENTITY_RANGE"
+        events.append(event)
+    if "wire_events" in context:
+        context["wire_events"] = events
     payload = anonymize_proxy_trace_line(payload)
     payload = _mask_numeric_identifiers(payload)
     _redact_known_identity_registers(payload)

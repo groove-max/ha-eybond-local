@@ -9,6 +9,14 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Extend Diagnostic Commands with run-scoped `wire auto/fc4/raw_modbus`, a
+  model-independent Modbus codec, input-register reads (FC04), single-register
+  writes (FC06), and bounded request/reply evidence in the redacted download.
+  Explicit overrides stay on one physical session, do not negotiate or change
+  endpoint/UART/profile settings, and retain mandatory write confirmation.
+  Uncertain bare-RTU exchanges close only their owned socket; no automatic
+  retries or fallback writes. Existing `auto` routing remains unchanged.
+
 - Remove structured cloud credentials and account fields at the final support
   ZIP boundary, including old saved evidence and JSONL records (#66). Keep
   numeric register data and protocol signatures; source files remain unchanged.

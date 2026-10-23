@@ -20,6 +20,17 @@ from .listener import (
 class SharedCollectorAtTransport:
     """One per-entry plain-AT transport facade backed by the shared TCP listener."""
 
+    def create_diagnostic_transport(self, wire: str, *, timeout: float):
+        """Bypass negotiation only for this diagnostic scenario/socket."""
+        from .diagnostic import BoundDiagnosticTransport
+
+        getter = lambda: self._at_connection(create_placeholder=False)
+        if not self._uses_at_text_session():
+            framed = self._framed_connection(create_placeholder=False)
+            if framed is not None and framed.connected:
+                getter = lambda: self._framed_connection(create_placeholder=False)
+        return BoundDiagnosticTransport(getter(), getter, wire=wire, timeout=timeout)
+
     def __init__(
         self,
         *,

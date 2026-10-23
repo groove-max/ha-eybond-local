@@ -435,6 +435,10 @@ class _PrefixedAsyncReader:
         self._reader = reader
         self._buffer = bytearray(initial_bytes)
 
+    def unread(self, data: bytes) -> None:
+        """Return bounded lookahead to the SAME reader at a protocol boundary."""
+        self._buffer[:0] = data
+
     async def readexactly(self, size: int) -> bytes:
         if size <= 0:
             return b""

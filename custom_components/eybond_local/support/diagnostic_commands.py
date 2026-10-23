@@ -11,6 +11,7 @@ same :class:`ScenarioError` type so every error renders as ``line N: message``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 
 REGISTER_MIN = 0
@@ -55,6 +56,7 @@ class Command:
 class ReadCommand(Command):
     register: int = 0
     count: int = 1
+    function: int = 3
 
     @property
     def kind(self) -> str:
@@ -69,6 +71,7 @@ class ReadCommand(Command):
 class WriteCommand(Command):
     register: int = 0
     values: tuple[int, ...] = ()
+    single: bool = False
 
     @property
     def kind(self) -> str:
@@ -129,6 +132,7 @@ class Directives:
     device_addr: int | None = None
     stop_on_error: bool | None = None
     operation_timeout: float | None = None
+    wire: str = "auto"
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,9 +150,10 @@ DIRECTIVE_KEYWORDS = frozenset(
         "device_addr",
         "stop_on_error",
         "operation_timeout",
+        "wire",
     }
 )
-COMMAND_KEYWORDS = frozenset({"read", "write", "write_bit", "ascii", "sleep"})
+COMMAND_KEYWORDS = frozenset({"read", "read_input", "write", "write_single", "write_bit", "ascii", "sleep"})
 
 
 # --- Token helpers --------------------------------------------------------
@@ -186,6 +191,12 @@ def _apply_directive(
     *,
     line: int,
 ) -> None:
+    if keyword == "wire":
+        _require_args(args, 1, line=line, usage="wire <auto|fc4|raw_modbus>")
+        if args[0] not in {"auto", "fc4", "raw_modbus"}:
+            raise ScenarioError("wire must be auto, fc4 or raw_modbus", line=line)
+        builder["wire"] = args[0]
+        return
     if keyword == "driver":
         _require_args(args, 1, line=line, usage="driver <driver_key>")
         builder["driver"] = args[0]
@@ -207,7 +218,7 @@ def _apply_directive(
     if keyword == "operation_timeout":
         _require_args(args, 1, line=line, usage="operation_timeout <seconds>")
         seconds = _parse_float(args[0], line=line, label="operation_timeout")
-        if seconds <= 0:
+        if not math.isfinite(seconds) or seconds <= 0:
             raise ScenarioError("operation_timeout must be positive", line=line)
         builder["operation_timeout"] = seconds
         return
@@ -225,7 +236,7 @@ def _parse_command(
     source: str,
     ascii_remainder: str,
 ) -> Command:
-    if keyword == "read":
+    if keyword in {"read", "read_input"}:
         if len(args) not in (1, 2):
             raise ScenarioError("expected read <register> [count]", line=line)
         register = _parse_int(args[0], line=line, label="register")
@@ -233,9 +244,12 @@ def _parse_command(
         count = _parse_int(args[1], line=line, label="count") if len(args) == 2 else 1
         if count < 1:
             raise ScenarioError("read count must be positive", line=line)
-        return ReadCommand(line=line, source=source, register=register, count=count)
+        return ReadCommand(line=line, source=source, register=register, count=count,
+                           function=4 if keyword == "read_input" else 3)
 
-    if keyword == "write":
+    if keyword in {"write", "write_single"}:
+        if keyword == "write_single":
+            _require_args(args, 2, line=line, usage="write_single <register> <value>")
         if len(args) < 2:
             raise ScenarioError("expected write <register> <value> [value ...]", line=line)
         register = _parse_int(args[0], line=line, label="register")
@@ -249,7 +263,8 @@ def _parse_command(
                 )
             values.append(value)
         return WriteCommand(
-            line=line, source=source, register=register, values=tuple(values)
+            line=line, source=source, register=register, values=tuple(values),
+            single=keyword == "write_single",
         )
 
     if keyword == "write_bit":
@@ -349,6 +364,7 @@ def parse_scenario(text: str) -> ParsedScenario:
         raise ScenarioError(f"unknown command '{keyword}'", line=index)
 
     directives = Directives(
+        wire=directive_builder.get("wire", "auto"),  # type: ignore[arg-type]
         driver=directive_builder.get("driver"),  # type: ignore[arg-type]
         devcode=directive_builder.get("devcode"),  # type: ignore[arg-type]
         collector_addr=directive_builder.get("collector_addr"),  # type: ignore[arg-type]

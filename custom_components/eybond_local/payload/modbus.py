@@ -364,6 +364,7 @@ class ModbusSession:
         devcode: int | None = None,
         collector_addr: int | None = None,
         slave_id: int,
+        retry_reads: bool = True,
     ) -> None:
         self._transport = transport
         if route is None:
@@ -375,6 +376,7 @@ class ModbusSession:
             )
         self._route = route
         self._slave_id = slave_id
+        self._retry_reads = retry_reads
 
     def _selected_route(self) -> LinkRoute:
         """Resolve the logical Modbus target through the active link adapter.
@@ -410,7 +412,7 @@ class ModbusSession:
                 )
             except asyncio.TimeoutError as exc:
                 last_error = ModbusError("request_timeout")
-                if attempt == 0:
+                if attempt == 0 and self._retry_reads:
                     await asyncio.sleep(0.15)
                     continue
                 raise last_error from exc
@@ -423,7 +425,7 @@ class ModbusSession:
                 )
             except ModbusError as exc:
                 last_error = exc
-                if attempt == 0 and _is_retryable_read_error(exc):
+                if attempt == 0 and self._retry_reads and _is_retryable_read_error(exc):
                     await asyncio.sleep(0.15)
                     continue
                 raise
