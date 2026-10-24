@@ -9,6 +9,13 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Include per-exchange socket progress and FC4 transaction IDs in explicit
+  Diagnostic Commands exports (#43). Distinguish lock waits, write/drain errors
+  and response waits without changing routing, retries or timeouts. Local
+  socket writes and empty replies are not reported as successful inverter
+  commands; an unsent timeout no longer includes a previous raw reply fragment.
+  Shareable results retain the same identity redaction.
+
 - Avoid duplicate select entities when first inverter identification reloads
   a collector-only entry (#66). Preserve controls discovered later on an
   already identified inverter, existing entity IDs and read-only behavior.

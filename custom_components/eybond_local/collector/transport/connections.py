@@ -36,6 +36,7 @@ from ..protocol import (
 from .auxiliary_session import AuxiliaryReadSession
 from .diagnostic_modbus import DiagnosticModbusSession
 from .send_ownership import SocketSendOwner, finish_request_future
+from .request_trace import SocketRequestTrace
 from .binary_framing import (
     BinaryFramingError, BinaryGrammar, async_read_binary_frame,
 )
@@ -227,13 +228,18 @@ class _CollectorConnection:
         devcode: int = 0,
         collector_addr: int = 1,
         request_timeout: float,
+        trace: SocketRequestTrace | None = None,
     ) -> tuple[EybondHeader, bytes]:
         owner = SocketSendOwner.capture(self)
 
+        if trace is not None:
+            trace.phase = "waiting_request_lock"
         async with self._request_lock:
             owner.check(self)
 
             tid = self._tid.next()
+            if trace is not None:
+                trace.tid = tid
             frame = build_collector_request(
                 tid,
                 payload,
@@ -250,7 +256,7 @@ class _CollectorConnection:
                 self._pending_parameter[tid] = payload[0]
 
             try:
-                await self._async_write(frame, owner=owner)
+                await self._async_write(frame, owner=owner, trace=trace)
                 logger.debug(
                     "TX collector remote=%s tid=%d fc=%d devcode=0x%04X devaddr=0x%02X payload=%s",
                     self._collector.remote_ip,
@@ -262,6 +268,9 @@ class _CollectorConnection:
                 )
                 response = await asyncio.wait_for(future, timeout=request_timeout)
                 owner.check_reply(self)
+                if trace is not None:
+                    trace.phase = "response_received"
+                    trace.response_received = True
                 return response
             finally:
                 if self._pending.get(tid) is future:
@@ -440,15 +449,29 @@ class _CollectorConnection:
         except Exception as exc:
             logger.debug("Heartbeat loop stopped for %s: %s", self._collector.remote_ip, exc)
 
-    async def _async_write(self, frame: bytes, *, owner: SocketSendOwner | None = None) -> None:
+    async def _async_write(
+        self, frame: bytes, *, owner: SocketSendOwner | None = None,
+        trace: SocketRequestTrace | None = None,
+    ) -> None:
         owner = owner or SocketSendOwner.capture(self)
+        if trace is not None:
+            trace.phase = "waiting_write_lock"
         async with self._write_lock:
             owner.check(self)
             writer = owner.writer
+            if trace is not None:
+                trace.phase = "writing"
+                trace.write_started = True
             writer.write(frame)
+            if trace is not None:
+                trace.write_returned = True
+                trace.phase = "draining"
             try:
                 await asyncio.wait_for(writer.drain(), timeout=self._write_timeout)
                 owner.check_reply(self)
+                if trace is not None:
+                    trace.drain_completed = True
+                    trace.phase = "waiting_response"
             except asyncio.TimeoutError as exc:
                 owner.check_reply(self)
                 raise ConnectionError("collector_write_timeout") from exc
@@ -1011,6 +1034,7 @@ class _CollectorAtConnection:
         collector_addr: int,
         request_timeout: float,
         learn_wire: bool = True,
+        trace: SocketRequestTrace | None = None,
     ) -> bytes:
         """Forward one inverter payload as FC=4 on this exact AT socket."""
 
@@ -1022,6 +1046,7 @@ class _CollectorAtConnection:
             collector_addr=collector_addr,
             request_timeout=request_timeout,
             learn_wire=learn_wire,
+            trace=trace,
         )
         owner.check_reply(self)
         if response and learn_wire:
@@ -1037,15 +1062,20 @@ class _CollectorAtConnection:
         collector_addr: int,
         request_timeout: float,
         learn_wire: bool = True,
+        trace: SocketRequestTrace | None = None,
     ) -> tuple[EybondHeader, bytes]:
         """Send one TID-correlated EyeBond frame on the AT-primary stream."""
 
         owner = SocketSendOwner.capture(self)
 
+        if trace is not None:
+            trace.phase = "waiting_request_lock"
         async with self._request_lock:
             owner.check(self)
 
             tid = self._tid.next()
+            if trace is not None:
+                trace.tid = tid
             frame = build_collector_request(
                 tid,
                 payload,
@@ -1060,9 +1090,12 @@ class _CollectorAtConnection:
             if (fcode == FC_QUERY_COLLECTOR and len(payload) == 1) or (fcode == FC_SET_COLLECTOR and payload):
                 self._pending_framed_parameter[tid] = payload[0]
             try:
-                await self._async_write(frame, owner=owner)
+                await self._async_write(frame, owner=owner, trace=trace)
                 response = await asyncio.wait_for(future, timeout=request_timeout)
                 owner.check_reply(self)
+                if trace is not None:
+                    trace.phase = "response_received"
+                    trace.response_received = True
                 if learn_wire:
                     self._mixed_frame_observed = True
                 return response
@@ -1244,15 +1277,29 @@ class _CollectorAtConnection:
     async def disconnect(self) -> None:
         await self._disconnect(reason="manual_disconnect")
 
-    async def _async_write(self, payload: bytes, *, owner: SocketSendOwner | None = None) -> None:
+    async def _async_write(
+        self, payload: bytes, *, owner: SocketSendOwner | None = None,
+        trace: SocketRequestTrace | None = None,
+    ) -> None:
         owner = owner or SocketSendOwner.capture(self)
+        if trace is not None:
+            trace.phase = "waiting_write_lock"
         async with self._write_lock:
             owner.check(self)
             writer = owner.writer
+            if trace is not None:
+                trace.phase = "writing"
+                trace.write_started = True
             writer.write(payload)
+            if trace is not None:
+                trace.write_returned = True
+                trace.phase = "draining"
             try:
                 await asyncio.wait_for(writer.drain(), timeout=self._write_timeout)
                 owner.check_reply(self)
+                if trace is not None:
+                    trace.drain_completed = True
+                    trace.phase = "waiting_response"
             except asyncio.TimeoutError as exc:
                 owner.check_reply(self)
                 raise ConnectionError("collector_write_timeout") from exc

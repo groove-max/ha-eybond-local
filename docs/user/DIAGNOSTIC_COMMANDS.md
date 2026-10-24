@@ -121,8 +121,25 @@ The JSON result also includes the requested wire format and a bounded payload
 trace: command line, route, request/reply bytes, sizes, timing and errors. The
 trace stores at most 128 exchanges and 512 bytes per direction per exchange;
 truncation and omitted exchanges are reported. These are payload bytes, not a
-packet capture (EyeBond headers/TIDs are not included). For `auto`, the requested
+packet capture (the complete EyeBond header is not included). For `auto`, the requested
 mode alone does not prove which wire format the transport ultimately used.
+
+Explicit `fc4` and `raw_modbus` exchanges also include `transport_progress`:
+the last local transport phase, whether `writer.write()` started/returned,
+whether `drain()` completed on the owned connection, and whether a correlated
+response was returned to the diagnostic operation.
+FC4 includes its transaction ID (`tid`) once allocated, for comparison with
+debug logs. This distinguishes a timeout waiting for a request/write lock from
+a request written to the local socket while awaiting a response. Each exchange
+has its own snapshot; cancellation and errors retain the last observed phase.
+
+These fields are **not** a device-execution acknowledgement: `write_returned`
+and `drain_completed` do not prove delivery to the collector or inverter.
+`response_received` can be true for an empty or malformed FC4 payload; the
+command's result still reports the decoding failure. A reply with an old TID
+does not complete a newer request. These fields do not count unrelated or
+buffered inbound traffic. Missing progress in an older export or an
+unsupported transport is unknown, not proof that no bytes were sent.
 
 If **Create shareable download link** is enabled, EyeBond Local creates a
 redacted copy and a short-lived signed download URL. The URL is scoped to the

@@ -16,6 +16,7 @@ from ...payload.modbus import crc16_modbus, decode_read_request, decode_write_re
 from ..protocol import decode_header
 from .binary_framing import BinaryFramingError, runtime_eybond_header_error
 from .send_ownership import SocketSendOwner, finish_request_future
+from .request_trace import SocketRequestTrace
 
 
 @dataclass(frozen=True)
@@ -108,7 +109,10 @@ class DiagnosticModbusSession:
         claim.future.set_result(prefix)
         return True
 
-    async def send(self, connection, owner: SocketSendOwner, payload: bytes, timeout: float) -> bytes:
+    async def send(
+        self, connection, owner: SocketSendOwner, payload: bytes, timeout: float,
+        *, trace: SocketRequestTrace | None = None,
+    ) -> bytes:
         """Read OR write once, under the existing socket request/write locks."""
         read = decode_read_request(payload)
         write = decode_write_request(payload)
@@ -118,7 +122,11 @@ class DiagnosticModbusSession:
             raise ValueError("diagnostic_request_timeout_invalid")
         reader_task = connection._reader_task
         guard = connection._auxiliary_session
+        if trace is not None:
+            trace.phase = "waiting_request_lock"
         async with connection._request_lock:
+            if trace is not None:
+                trace.phase = "checking_reader"
             owner.check(connection)
             if self.closed:
                 raise ConnectionError("collector_session_changed")
@@ -131,18 +139,32 @@ class DiagnosticModbusSession:
             self.failure_reason = ""
             sent = False
             try:
+                if trace is not None:
+                    trace.phase = "waiting_write_lock"
                 async with connection._write_lock:
                     owner.check(connection)
                     if guard.enabled or not guard.at_boundary:
                         raise ConnectionError("diagnostic_reader_busy")
                     self.claim = claim
                     sent = True
+                    if trace is not None:
+                        trace.phase = "writing"
+                        trace.write_started = True
                     owner.writer.write(payload)
+                    if trace is not None:
+                        trace.write_returned = True
+                        trace.phase = "draining"
                     await asyncio.wait_for(owner.writer.drain(), connection._write_timeout)
+                    if trace is not None:
+                        trace.drain_completed = True
+                        trace.phase = "waiting_response"
                 response = await asyncio.wait_for(future, max(
                     0.001, claim.deadline - asyncio.get_running_loop().time(),
                 ))
                 owner.check_reply(connection)
+                if trace is not None:
+                    trace.phase = "response_received"
+                    trace.response_received = True
                 return response
             except BaseException:
                 if sent:

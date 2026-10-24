@@ -149,6 +149,139 @@ class DiagnosticWireTests(unittest.IsolatedAsyncioTestCase):
                 if at:
                     self.assertFalse(connection.mixed_frame_observed)
 
+    async def test_timeout_trace_distinguishes_unsent_request_from_silent_peer(self):
+        for at in (False, True):
+            for wire in ("raw_modbus", "fc4"):
+                for lock_name in ("_request_lock", "_write_lock", None):
+                    with self.subTest(at=at, wire=wire, lock=lock_name):
+                        async with stream(at=at, mode=wire, reply=False) as (transport, connection, peer):
+                            lock = getattr(connection, lock_name) if lock_name else None
+                            if lock is not None:
+                                await lock.acquire()
+                            try:
+                                result = await run_scenario(scenario(wire=wire), context(transport))
+                            finally:
+                                if lock is not None:
+                                    lock.release()
+                            self.assertFalse(result.success)
+                            event = result.context["wire_events"][0]
+                            progress = event["transport_progress"]
+                            self.assertEqual(progress["phase"], {
+                                "_request_lock": "waiting_request_lock",
+                                "_write_lock": "waiting_write_lock",
+                                None: "waiting_response",
+                            }[lock_name])
+                            self.assertEqual(progress["write_returned"], lock is None)
+                            self.assertEqual(progress["drain_completed"], lock is None)
+                            self.assertFalse(progress["response_received"])
+                            self.assertEqual(len(peer.requests), int(lock is None))
+                            self.assertEqual("tid" in progress, wire == "fc4" and lock_name != "_request_lock")
+                            # An unsent cancellation must not retire a healthy socket.
+                            self.assertEqual(peer.closed, wire == "raw_modbus" and lock is None)
+
+    async def test_success_trace_is_per_exchange_and_shareable(self):
+        for at in (False, True):
+            for wire in ("raw_modbus", "fc4"):
+                async with stream(at=at, mode=wire) as (transport, _, peer):
+                    result = await run_scenario(scenario("read 354\nread 354", wire=wire), context(transport))
+                    self.assertTrue(result.success, result.output)
+                    events = result.context["wire_events"]
+                    for event in events:
+                        progress = event["transport_progress"]
+                        self.assertEqual(progress["phase"], "response_received")
+                        self.assertTrue(progress["write_returned"])
+                        self.assertTrue(progress["drain_completed"])
+                        self.assertTrue(progress["response_received"])
+                    if wire == "fc4":
+                        self.assertNotEqual(events[0]["transport_progress"]["tid"], events[1]["transport_progress"]["tid"])
+                    share = build_shareable_payload(result)
+                    self.assertEqual(share["context"]["wire_events"], events)
+                    self.assertEqual(len(peer.requests), 2)
+
+    async def test_trace_does_not_claim_a_drained_write_after_write_failure(self):
+        for at in (False, True):
+            for wire in ("raw_modbus", "fc4"):
+                for failure in ("write", "drain"):
+                    with self.subTest(at=at, wire=wire, failure=failure):
+                        async with stream(at=at, mode=wire, reply=False) as (transport, _, peer):
+                            # Heartbeat is outside this run; finish its initial drain first.
+                            await asyncio.sleep(0)
+                            await asyncio.sleep(0)
+                            with patch.object(peer, failure, side_effect=OSError("synthetic stream failure")):
+                                result = await run_scenario(scenario(wire=wire), context(transport))
+                            self.assertFalse(result.success)
+                            progress = result.context["wire_events"][0]["transport_progress"]
+                            self.assertTrue(progress["write_started"])
+                            self.assertEqual(progress["write_returned"], failure == "drain")
+                            self.assertFalse(progress["drain_completed"])
+                            self.assertFalse(progress["response_received"])
+
+    async def test_unsent_timeout_does_not_export_a_previous_raw_reply(self):
+        for at in (False, True):
+            async with stream(at=at) as (transport, connection, peer):
+                first = await run_scenario(scenario("read 354"), context(transport))
+                self.assertTrue(first.success)
+                self.assertTrue(connection._diagnostic_modbus.received)
+                async with connection._request_lock:
+                    blocked = await run_scenario(scenario("read 355"), context(transport))
+                self.assertFalse(blocked.success)
+                event = blocked.context["wire_events"][0]
+                self.assertNotIn("received_fragment_hex", event)
+                self.assertEqual(event["transport_progress"]["phase"], "waiting_request_lock")
+                self.assertEqual(len(peer.requests), 1)
+                self.assertFalse(peer.closed)
+
+    async def test_empty_fc4_reply_is_transport_evidence_not_valid_inverter_data(self):
+        for at in (False, True):
+            async with stream(at=at, mode="fc4", reply=False) as (transport, connection, peer):
+                original_write = peer.write
+
+                def empty_reply(wire):
+                    original_write(wire)
+                    header = decode_header(wire[:8])
+                    if header.fcode == 4:
+                        peer.reader.feed_data(build_collector_request(
+                            header.tid, b"", devcode=header.devcode,
+                            collector_addr=header.devaddr, fcode=4,
+                        ))
+
+                with patch.object(peer, "write", side_effect=empty_reply):
+                    result = await run_scenario(scenario(wire="fc4"), context(transport))
+                self.assertFalse(result.success)
+                self.assertEqual(result.results[0]["error"], "response_too_short")
+                event = result.context["wire_events"][0]
+                self.assertEqual(event["response_size"], 0)
+                self.assertTrue(event["transport_progress"]["response_received"])
+                self.assertEqual(len(peer.requests), 1)
+                self.assertTrue(connection.connected)
+
+    async def test_old_empty_fc4_reply_does_not_complete_a_current_request(self):
+        for at in (False, True):
+            async with stream(at=at, mode="fc4", reply=False) as (transport, connection, peer):
+                original_write = peer.write
+
+                def stale_reply(wire):
+                    original_write(wire)
+                    header = decode_header(wire[:8])
+                    if header.fcode == 4:
+                        peer.reader.feed_data(build_collector_request(
+                            (header.tid - 1) & 0xFFFF, b"", devcode=header.devcode,
+                            collector_addr=header.devaddr, fcode=4,
+                        ))
+
+                with patch.object(peer, "write", side_effect=stale_reply):
+                    result = await run_scenario(scenario(wire="fc4"), context(transport))
+                self.assertFalse(result.success)
+                progress = result.context["wire_events"][0]["transport_progress"]
+                self.assertEqual(progress["phase"], "waiting_response")
+                self.assertTrue(progress["drain_completed"])
+                self.assertFalse(progress["response_received"])
+                self.assertTrue(connection.connected)
+                peer.reply = True
+                recovered = await run_scenario(scenario(wire="fc4"), context(transport))
+                self.assertTrue(recovered.success, recovered.output)
+                self.assertTrue(recovered.context["wire_events"][0]["transport_progress"]["response_received"])
+
     async def test_at_facade_pins_its_negotiated_framed_owner(self):
         async with stream(mode="fc4") as (_, connection, peer):
             facade = SharedCollectorAtTransport(host="127.0.0.1", port=8899,

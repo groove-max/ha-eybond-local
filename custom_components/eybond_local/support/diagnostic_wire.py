@@ -62,6 +62,9 @@ class DiagnosticTraceTransport:
                 raise ConnectionError("diagnostic_request_timeout") from exc
             raise
         finally:
+            progress = getattr(self._transport, "diagnostic_transport_progress", None)
+            if isinstance(progress, dict) and progress:
+                event["transport_progress"] = dict(progress)
             event["duration_ms"] = int((time.monotonic() - started) * 1000)
             if len(self.events) < 128:
                 self.events.append(event)
