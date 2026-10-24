@@ -14,8 +14,9 @@ from synthetic import SYNTHETIC_COLLECTOR_IP, SYNTHETIC_COLLECTOR_PN, SYNTHETIC_
 
 @pytest.mark.parametrize("mode", ["read_only", "auto", "full"])
 @pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.parametrize("initially_unknown", [False, True])
 async def test_advertised_currents_survive_setup_reload_without_writes(
-    hass, fake_runtime, monkeypatch, mode, deferred,
+    hass, fake_runtime, monkeypatch, caplog, mode, deferred, initially_unknown,
 ):
     from conftest import FakeRuntimeManager
 
@@ -41,9 +42,11 @@ async def test_advertised_currents_survive_setup_reload_without_writes(
             cap for cap in inverter.capabilities if cap.key not in current_keys
         ))
 
+    inverter_ready = not initially_unknown
+
     async def refresh(self, *, poll_interval=None):
         return RuntimeSnapshot(
-            connected=True, inverter=inverter,
+            connected=True, inverter=inverter if inverter_ready else None,
             collector=CollectorInfo(remote_ip=SYNTHETIC_COLLECTOR_IP, collector_pn=SYNTHETIC_COLLECTOR_PN),
             values={**observed_values, "runtime_detection_status": "autodetected_high_confidence"},
         )
@@ -80,8 +83,21 @@ async def test_advertised_currents_survive_setup_reload_without_writes(
         }},
     )
     entry.add_to_hass(hass)
+    if initially_unknown:
+        hass.config_entries.async_update_entry(
+            entry,
+            data={k: v for k, v in entry.data.items() if k not in (
+                "detected_driver", "detected_model", "detected_serial", "detection_confidence",
+            )},
+            options={k: v for k, v in entry.options.items() if k != "effective_metadata_snapshot"},
+        )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
+    if initially_unknown:
+        inverter_ready = True
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        assert "does not generate unique IDs" not in caplog.text
     registry = er.async_get(hass)
     for key in current_keys:
         sensor_id = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{key}")

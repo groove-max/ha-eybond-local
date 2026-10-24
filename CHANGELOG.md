@@ -9,6 +9,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Avoid duplicate select entities when first inverter identification reloads
+  a collector-only entry (#66). Preserve controls discovered later on an
+  already identified inverter, existing entity IDs and read-only behavior.
+  This does not change probe timeouts, retry policy or collector settings.
+
 - Extend Diagnostic Commands with run-scoped `wire auto/fc4/raw_modbus`, a
   model-independent Modbus codec, input-register reads (FC04), single-register
   writes (FC06), and bounded request/reply evidence in the redacted download.

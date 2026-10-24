@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 from helpers.homeassistant_stubs import ensure_module, ensure_package
 
@@ -189,6 +190,30 @@ class RuntimeSettingSelectGenericPathTests(unittest.TestCase):
     CP2A removed only the operation-mode-specific branches; these tests pin the
     remaining generic control-mode path so that removal did not break it.
     """
+
+    def test_late_identity_waits_for_platform_reload_before_adding_controls(self):
+        async def run():
+            coordinator = _CoordinatorStub()
+            coordinator.can_expose_capability = lambda cap: True
+            coordinator.capability_enabled_by_default = lambda cap: True
+            entry = types.SimpleNamespace(
+                data={}, options={}, runtime_data=coordinator, async_on_unload=[].append,
+            )
+            entities = []
+            with patch("custom_components.eybond_local.select.entity_setup_context", return_value=(None, None, False)):
+                await async_setup_entry(None, entry, entities.extend)
+            coordinator.identified_inverter = types.SimpleNamespace(capabilities=(
+                types.SimpleNamespace(key="source_priority", value_kind="enum",
+                    enum_value_map={0: "Utility", 1: "Solar"},
+                    display_name="Source priority", enum_options=("Utility", "Solar")),
+            ))
+            # Initial inverter detection already owns a full platform reload.
+            # The old, collector-only generation must not queue controls just
+            # before that reload creates the same IDs on the inverter device.
+            for listener in tuple(coordinator.listeners):
+                listener()
+            self.assertEqual(entities, [])
+        asyncio.run(run())
 
     def _control_mode_entity(self, coordinator) -> EybondRuntimeSettingSelect:
         return EybondRuntimeSettingSelect(

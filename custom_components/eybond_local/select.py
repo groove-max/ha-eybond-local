@@ -122,6 +122,11 @@ async def async_setup_entry(
             ],
         ]
     )
+    if not has_inverter_identity:
+        # First identification already schedules a full platform reload. Do
+        # not enqueue controls from this collector-only generation while the
+        # replacement platform is creating the same IDs for the inverter.
+        return
     # Some protocol controls are qualified from device-advertised choices only
     # after the startup snapshot has built the platforms. Add newly confirmed
     # enum surfaces without reloading the entry (which would lose that live
