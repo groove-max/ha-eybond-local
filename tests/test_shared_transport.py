@@ -2616,6 +2616,12 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNone(claimed_by_runtime)
+        for protocol in ("at_text", "eybond_framed"):
+            self.assertEqual(await listener.async_identify_pending_session(
+                pending.session_id, session_protocol=protocol,
+            ), "")
+        self.assertIs(pending.sniff_task, sniff)
+        self.assertFalse(sniff.done())
         self.assertEqual(bytes(writer.buffer), b"")
         claimed_by_proxy = await listener.pop_pending_socket_for_transparent_route(
             token

@@ -9,6 +9,14 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Retain bounded, payload-free identity-query progress in collector diagnostics
+  and support packages after a silent connection closes (#56). Distinguish
+  local write/drain completion, bytes read, timeouts and peer closure; do not
+  treat these observations as proof of remote receipt or a verified identity.
+  Avoid queries on already closed or proxy-reserved sockets, and require a
+  complete bounded AT identity line without consuming the following payload.
+  No new probe retries, protocol guesses or endpoint/UART writes are introduced.
+
 - Include per-exchange socket progress and FC4 transaction IDs in explicit
   Diagnostic Commands exports (#43). Distinguish lock waits, write/drain errors
   and response waits without changing routing, retries or timeouts. Local

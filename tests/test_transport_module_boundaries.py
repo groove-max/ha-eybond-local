@@ -95,12 +95,41 @@ class TransportModuleBoundaryTests(unittest.TestCase):
         self.assertCountEqual(owners, [("common.py", "CollectorTransport"),
                                        ("shared_framed.py", "SharedEybondTransport")])
         definitions = [item for item in definitions if item != handoff_extension]
+        at_line_extension = ("AsyncFunctionDef", "read_at_line")
+        self.assertEqual(definitions.count(at_line_extension), 1)
+        listener_class = next(
+            node for node in _tree(_TRANSPORT / "listener.py").body
+            if isinstance(node, ast.ClassDef) and node.name == "_SharedEybondListener"
+        )
+        identity_reader = next(
+            node for node in listener_class.body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_read_identity_probe_response"
+        )
+        self.assertEqual(sum(
+            isinstance(node, ast.AsyncFunctionDef) and node.name == "read_at_line"
+            for node in ast.walk(identity_reader)
+        ), 1)
+        definitions = [item for item in definitions if item != at_line_extension]
         for extension, count in (
             (("FunctionDef", "create_diagnostic_transport"), 2),
             (("FunctionDef", "unread"), 1),
         ):
             self.assertEqual(definitions.count(extension), count)
             definitions = [item for item in definitions if item != extension]
+        # Exact-socket diagnostic exchange plus its reader observer. Keep the
+        # original decomposition digest unchanged, and qualify both new owners.
+        progress_exchange = ("AsyncFunctionDef", "_exchange_identity_probe")
+        self.assertEqual(definitions.count(progress_exchange), 1)
+        self.assertEqual(sum(
+            isinstance(node, ast.AsyncFunctionDef) and node.name == progress_exchange[1]
+            for node in listener_class.body
+        ), 1)
+        definitions.remove(progress_exchange)
+        self.assertEqual(sum(
+            isinstance(node, ast.AsyncFunctionDef) and node.name == "read"
+            for node in identity_reader.body
+        ), 1)
+        definitions.remove(("AsyncFunctionDef", "read"))
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()

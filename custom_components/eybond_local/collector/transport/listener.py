@@ -21,6 +21,7 @@ from ..identity_probe import (
     identity_probe_kinds,
     parse_identity_probe_response,
 )
+from ..identity_probe_progress import IdentityProbeProgress
 from ..protocol import HEADER_SIZE, decode_header
 from .common import (
     CollectorListenerBindError,
@@ -84,6 +85,7 @@ class _CollectorSessionInventoryEntry:
     collector_identity_sources: set[str] = field(default_factory=set)
     observed_protocol_shapes: set[str] = field(default_factory=set)
     close_reason: str = ""
+    identity_probes: list[IdentityProbeProgress] = field(default_factory=list)
 
     def diagnostics(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -111,6 +113,8 @@ class _CollectorSessionInventoryEntry:
             )
         if self.close_reason:
             result["close_reason"] = self.close_reason
+        if self.identity_probes:
+            result["identity_probes"] = [probe.diagnostics() for probe in self.identity_probes]
         return result
 
 
@@ -1236,10 +1240,17 @@ class _SharedEybondListener:
             pending = self._select_pending_socket_by_session_id(session_id)
             if pending is None:
                 return ""
+            if self._reserved_for_transparent_route(pending):
+                # An explicit manual identity probe must not inject bytes into
+                # a socket reserved for cloud capture/shadow learning.
+                return ""
             pending_pn = ""
             try:
                 await self._pause_pending_sniff(pending)
-                if not self._pending_socket_still_registered(pending):
+                if (
+                    not self._pending_socket_still_registered(pending)
+                    or self._reserved_for_transparent_route(pending)
+                ):
                     return ""
                 pending_pn = await self._identify_pending_socket_for_route(
                     pending,
@@ -2115,15 +2126,89 @@ class _SharedEybondListener:
 
         self._mark_session_state(pending.session_id, f"probing_identity_{session_protocol}")
         try:
-            pending.writer.write(request.payload)
-            await asyncio.wait_for(pending.writer.drain(), timeout=1.5)
-            return await asyncio.wait_for(pending.reader.read(64), timeout=1.5)
+            response, _, _ = await self._exchange_identity_probe(
+                pending, request, initial_read=True,
+            )
+            return response
         except asyncio.TimeoutError:
             self._mark_session_state(pending.session_id, "identity_probe_timeout")
             return b""
         except Exception:
             self._mark_session_state(pending.session_id, "identity_probe_failed")
             return b""
+
+    async def _exchange_identity_probe(
+        self,
+        pending: _PendingCollectorSocket,
+        request: IdentityProbeRequest,
+        *,
+        initial_read: bool = False,
+    ) -> tuple[bytes, str, str]:
+        """Keep bounded, exact-socket evidence after its lifecycle state changes.
+
+        Both the initial known-wire query and explicit onboarding use this path.
+        It adds no retries, protocol guesses, payload logging or timeout changes.
+        Counters for ordinary raw inverter requests do not describe these queries.
+        """
+
+        progress = IdentityProbeProgress(request.session_protocol, request.probe_kind)
+        entry = self._session_inventory.get(pending.session_id)
+        if entry is not None:
+            entry.identity_probes.append(progress)
+            del entry.identity_probes[:-4]
+        started = monotonic()
+        try:
+            if pending.reader.at_eof() or pending.writer.is_closing():
+                progress.peer_eof = pending.reader.at_eof()
+                progress.outcome = "closed_before_write"
+                return b"", "", ""
+            progress.phase = "writing"
+            progress.write_started = True
+            pending.writer.write(request.payload)
+            progress.write_returned = True
+            progress.phase = "draining"
+            await asyncio.wait_for(pending.writer.drain(), timeout=1.5)
+            progress.drain_completed = True
+            progress.phase = "waiting_response"
+            if initial_read:
+                response = await asyncio.wait_for(pending.reader.read(64), timeout=1.5)
+                progress.response_bytes += len(response)
+                progress.peer_eof = not response
+                result = response, "", ""
+            else:
+                result = await self._read_identity_probe_response(
+                    pending, request, timeout=1.5, progress=progress,
+                )
+            if result[1]:
+                progress.outcome = "identity_received"
+            elif progress.peer_eof:
+                progress.outcome = "peer_closed"
+            else:
+                progress.outcome = "response_received" if initial_read else "unrecognized_response"
+            if result[0]:
+                progress.phase = "response_received"
+            return result
+        except asyncio.CancelledError:
+            progress.outcome = "cancelled"
+            raise
+        except asyncio.TimeoutError:
+            progress.outcome = "timeout"
+            raise
+        except asyncio.IncompleteReadError:
+            progress.outcome = "peer_closed"
+            raise
+        except (ConnectionError, OSError):
+            progress.outcome = "io_error"
+            raise
+        except Exception:
+            progress.outcome = "error"
+            raise
+        finally:
+            progress.duration_ms = max(0, round((monotonic() - started) * 1000))
+            logger.debug(
+                "Collector identity probe listener_port=%s session=%s progress=%s",
+                self._port, pending.session_id, progress.diagnostics(),
+            )
 
     async def _identify_pending_socket_for_route(
         self,
@@ -2177,10 +2262,8 @@ class _SharedEybondListener:
                 pending.session_id, f"probing_route_identity_{request.probe_kind}",
             )
             try:
-                pending.writer.write(request.payload)
-                await asyncio.wait_for(pending.writer.drain(), timeout=1.5)
-                response, collector_pn, source = await self._read_identity_probe_response(
-                    pending, request, timeout=1.5,
+                response, collector_pn, source = await self._exchange_identity_probe(
+                    pending, request,
                 )
             except asyncio.TimeoutError:
                 self._mark_session_state(pending.session_id, "route_identity_probe_timeout")
@@ -2192,6 +2275,8 @@ class _SharedEybondListener:
                 self._mark_session_first_bytes(pending.session_id, response)
                 self._mark_session_identity(pending.session_id, collector_pn, source)
                 return collector_pn
+            if pending.reader.at_eof() or pending.writer.is_closing():
+                return weak_pn
         # The upgrade produced nothing usable: never LOSE the weak identity.
         return weak_pn
 
@@ -2201,6 +2286,7 @@ class _SharedEybondListener:
         request: IdentityProbeRequest,
         *,
         timeout: float,
+        progress: IdentityProbeProgress | None = None,
     ) -> tuple[bytes, str, str]:
         """Read one correlated response while preserving useful observations.
 
@@ -2210,13 +2296,47 @@ class _SharedEybondListener:
         expires.  AT remains line-oriented and uses its existing bounded read.
         """
 
+        async def read(size: int, *, exactly: bool = False) -> bytes:
+            try:
+                chunk = await (
+                    pending.reader.readexactly(size) if exactly else pending.reader.read(size)
+                )
+            except asyncio.IncompleteReadError as exc:
+                if progress is not None:
+                    progress.response_bytes += len(exc.partial)
+                    progress.peer_eof = True
+                raise
+            if progress is not None:
+                progress.response_bytes += len(chunk)
+                if size and not chunk:
+                    progress.peer_eof = True
+            return chunk
+
         if request.session_protocol == "at_text":
-            response = await asyncio.wait_for(
-                pending.reader.read(128),
-                timeout=max(0.0, float(timeout)),
+            async def read_at_line() -> tuple[bytes, str, str]:
+                # A TCP read is not an AT message boundary. In particular a
+                # partial PN can already pass the syntax validator, but must
+                # never be promoted to a strong identity. Read bounded complete
+                # lines; leave bytes AFTER the reply in the stream for its owner.
+                response = bytearray()
+                line = bytearray()
+                while len(response) < 512:
+                    byte = await read(1)
+                    if not byte:
+                        break
+                    response.extend(byte)
+                    line.extend(byte)
+                    if byte == b"\n":
+                        pn, source = parse_identity_probe_response(request, bytes(line))
+                        if pn:
+                            return bytes(response), pn, source
+                        # Ignore a blank line or query echo, within ONE deadline.
+                        line.clear()
+                return bytes(response), "", ""
+
+            return await asyncio.wait_for(
+                read_at_line(), timeout=max(0.0, float(timeout)),
             )
-            pn, source = parse_identity_probe_response(request, response)
-            return response, pn, source
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max(0.0, float(timeout))
@@ -2225,7 +2345,7 @@ class _SharedEybondListener:
             if remaining <= 0:
                 raise asyncio.TimeoutError
             header_bytes = await asyncio.wait_for(
-                pending.reader.readexactly(HEADER_SIZE),
+                read(HEADER_SIZE, exactly=True),
                 timeout=remaining,
             )
             try:
@@ -2238,7 +2358,7 @@ class _SharedEybondListener:
             if remaining <= 0:
                 raise asyncio.TimeoutError
             payload = await asyncio.wait_for(
-                pending.reader.readexactly(header.payload_len),
+                read(header.payload_len, exactly=True),
                 timeout=remaining,
             )
             frame = header_bytes + payload

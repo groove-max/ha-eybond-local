@@ -11,6 +11,9 @@ from custom_components.eybond_local.drivers.probe_evidence import ProbeReadSessi
 from custom_components.eybond_local.models import ProbeTarget
 from custom_components.eybond_local.payload.modbus import crc16_modbus, decode_read_request
 from custom_components.eybond_local.runtime.hub.refresh import _sanitize_probe_diagnostic
+from custom_components.eybond_local.runtime.driver_detection import (
+    DriverSweepNoMatch, async_detect_inverter,
+)
 
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures/anenji_6200_issue66_registers.json").read_text())
@@ -49,6 +52,27 @@ class Replay:
 
 
 class SmgProbeReadEvidenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_smg_selection_avoids_foreign_signatures_and_binds_catalog(self):
+        replay = Replay()
+        with patch(
+            "custom_components.eybond_local.runtime.driver_detection._async_probe_driver_signature",
+            side_effect=AssertionError("Explicit SMG must not send ASCII signatures"),
+        ) as signature:
+            context = await async_detect_inverter(replay, driver_hint="modbus_smg")
+        signature.assert_not_called()
+        self.assertEqual(context.inverter.model_name, "Anenji 6200")
+        self.assertEqual(context.driver.key, "modbus_smg")
+        self.assertEqual(replay.requests[0], (171, 1))
+
+    async def test_explicit_smg_selection_keeps_identity_validation(self):
+        replay = Replay(fail_at=171, error=TimeoutError())
+        with self.assertRaises(DriverSweepNoMatch) as caught:
+            await async_detect_inverter(replay, driver_hint="modbus_smg")
+        self.assertEqual(replay.requests, [(171, 1), (171, 1), (184, 1)])
+        self.assertEqual(len(caught.exception.probe_log), 1)
+        self.assertEqual(caught.exception.probe_log[0]["driver"], "modbus_smg")
+        self.assertEqual(caught.exception.probe_log[0]["diagnostic"]["status"], "partial_identity")
+
     async def test_existing_anenji_catalog_binds_supplied_baseline(self):
         replay = Replay()
         attempt = await SmgModbusDriver().async_probe_with_evidence(replay, TARGET)

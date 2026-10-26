@@ -27,13 +27,24 @@ async def test_saved_cloud_credentials_removed_without_losing_probe_evidence(
         layout_code=1, model_code=0x3700, resolution="exact", candidate_keys=("anenji_6200",),
         failed_actions=(action,), action_failures=(ProbeActionFailure(action, "timeout"),),
     ).as_public_dict()
+    # A query on an unowned/now-closed socket is not an ordinary inverter raw
+    # request. Its diagnostic result must survive the real support download.
+    identity_probe = {
+        "protocol": "at_text", "probe_kind": "at_dtupn",
+        "phase": "waiting_response", "outcome": "timeout",
+        "write_started": True, "write_returned": True, "drain_completed": True,
+        "response_bytes": 7, "peer_eof": False, "duration_ms": 1501,
+    }
 
     async def refresh(self, *, poll_interval=None):
         return RuntimeSnapshot(
             connected=True,
             collector=CollectorInfo(remote_ip=SYNTHETIC_COLLECTOR_IP, collector_pn=SYNTHETIC_COLLECTOR_PN),
             inverter=None,
-            values={"runtime_inverter_probe_log": [{
+            values={"collector_callback_session_inventory": [{
+                "session_id": "synthetic-closed-session", "state": "parked_peer_closed",
+                "first_bytes_len": 0, "identity_probes": [dict(identity_probe)],
+            }], "runtime_inverter_probe_log": [{
                 "driver": "modbus_smg", "elapsed_ms": 5000, "outcome": "no_match",
                 "saw_response": True, "diagnostic": deepcopy(evidence),
             }]},
@@ -90,6 +101,7 @@ async def test_saved_cloud_credentials_removed_without_losing_probe_evidence(
             assert exported == {"payload": {"session": {}, "words": [14080, 1, 6200]}}
             bundle = json.loads(archive.read("support_bundle.json"))
             assert bundle["runtime"]["values"]["runtime_inverter_probe_log"][0]["diagnostic"] == evidence
+            assert bundle["runtime"]["values"]["collector_callback_session_inventory"][0]["identity_probes"] == [identity_probe]
         previous_signature = url.split("authSig=", 1)[1]
 
     assert await hass.async_add_executor_job(source.read_text) == original
