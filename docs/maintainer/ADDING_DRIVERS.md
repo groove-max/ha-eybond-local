@@ -429,6 +429,22 @@ The Python driver should remain the place for:
 - derived procedural runtime logic
 - actual write-command encoding
 
+### Model-specific write rejection advice
+
+A capability may declare `write_rejection_hint` (plain documentation text) and
+`write_rejection_context` (related capability keys in the same profile). Keep
+model/manual-specific rules in the exact model overlay, with their operating
+conditions and document reference. These are advice, not additional validation,
+dynamic UI bounds, proof of write support or permission to adjust other settings.
+
+The protocol driver opts into this advice through `include_profile_hint` on its
+error verdict; currently Modbus exception 03 does so. The hub renders it only
+after rejection, retaining the original error and cause. Related numeric values
+come only from fresh driver telemetry in the pre-write refresh, within a 30-second
+refresh-plus-write window. Offline/error snapshots, carried values and reconnects
+cannot supply current numbers. No extra reads, writes or rejection retries are
+introduced. The original protocol error remains authoritative about what is known.
+
 ### Bounded support-only register checks
 
 When a document gives setting addresses but their readback behavior is not yet

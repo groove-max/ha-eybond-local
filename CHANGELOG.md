@@ -9,6 +9,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Explain rejected OP1 SOC writes on the exact Sandisolar SD 11KP48V WIFI
+  profile using the owner's manual dependency (BMS-linked lithium mode).
+  Include the requested value and a recent grid-SOC reading when available;
+  never substitute cached/offline readings, infer the exact rejection cause,
+  change UI limits, retry the rejected write or adjust other protection settings.
+
 - Retain bounded, payload-free identity-query progress in collector diagnostics
   and support packages after a silent connection closes (#56). Distinguish
   local write/drain completion, bytes read, timeouts and peer closure; do not

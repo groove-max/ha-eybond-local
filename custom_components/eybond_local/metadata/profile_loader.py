@@ -270,6 +270,7 @@ def _parse_capability(
     capability_templates: Mapping[str, Mapping[str, Any]],
 ) -> WriteCapability:
     resolved_raw = _resolve_capability_raw(raw, capability_defaults, capability_templates)
+    rejection_hint, rejection_context = _parse_write_rejection_hint(resolved_raw)
     learned_provenance = resolved_raw.get("learned_provenance")
     learned_scope = ""
     if isinstance(learned_provenance, Mapping):
@@ -343,7 +344,24 @@ def _parse_capability(
         learned_control_aliases=_parse_learned_control_aliases(
             resolved_raw.get("learned_control_aliases", [])
         ),
+        write_rejection_hint=rejection_hint,
+        write_rejection_context=rejection_context,
     )
+
+
+def _parse_write_rejection_hint(raw: Mapping[str, Any]) -> tuple[str, tuple[str, ...]]:
+    """Load advisory text and explicit related capability keys, not formulas."""
+    hint = raw.get("write_rejection_hint", "")
+    keys = raw.get("write_rejection_context", [])
+    if type(hint) is not str or hint != hint.strip():
+        raise ValueError("invalid_write_rejection_hint")
+    if type(keys) is not list or any(
+        type(key) is not str or not key or key != key.strip() for key in keys
+    ) or len(set(keys)) != len(keys):
+        raise ValueError("invalid_write_rejection_context")
+    if keys and not hint:
+        raise ValueError("write_rejection_context_requires_hint")
+    return hint, tuple(keys)
 
 
 def _parse_learned_control_aliases(raw: Any) -> tuple[str, ...]:
@@ -714,6 +732,10 @@ def _validate_profile(profile: DriverProfileMetadata) -> None:
     }
 
     for capability in profile.capabilities:
+        if any(key not in capability_keys for key in capability.write_rejection_context):
+            raise ValueError(
+                f"profile:{profile.key}:unknown_write_rejection_context:{capability.key}"
+            )
         if capability.group not in group_keys:
             raise ValueError(
                 f"profile:{profile.key}:unknown_group_for_capability:"

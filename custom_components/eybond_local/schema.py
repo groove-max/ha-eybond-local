@@ -336,6 +336,8 @@ def serialize_capability(
         ),
         "change_summary": capability.change_summary,
         "unsafe_while_running": capability.unsafe_while_running,
+        "write_rejection_hint": capability.write_rejection_hint,
+        "write_rejection_context": list(capability.write_rejection_context),
         "tested": capability.tested,
         "validation_state": capability.validation_state,
         "support_tier": capability.resolved_support_tier,

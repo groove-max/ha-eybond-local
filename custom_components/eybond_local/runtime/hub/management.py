@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ...collector.management import CollectorManagementTransportError
 from ...const import CONF_PI30_FLAG_COMMAND_CASE
+from ..write_rejection import with_write_rejection_hint
 from .common import (
     ADAPTER_COLLECTOR_AT_COMMANDS,
     CollectorEndpointWriteResult,
@@ -40,6 +41,11 @@ class HubManagementMixin:
             if self._driver is None or self._inverter is None:
                 raise RuntimeError(detect_error or "no_supported_driver_matched")
 
+        hint_refresh_started = (
+            monotonic()
+            if self._inverter.get_capability(capability_key).write_rejection_hint
+            else None
+        )
         snapshot = await self.async_refresh()
         capability = self._inverter.get_capability(capability_key)
         runtime_values = snapshot.runtime_values()
@@ -84,6 +90,17 @@ class HubManagementMixin:
                     operating_mode=runtime_values.get("operating_mode"),
                 )
                 if classification.user_error is not None:
+                    if classification.include_profile_hint and capability.write_rejection_hint:
+                        raise with_write_rejection_hint(
+                            classification.user_error,
+                            capability,
+                            requested_value=value,
+                            snapshot=snapshot,
+                            observation_age_seconds=(
+                                monotonic() - hint_refresh_started
+                                if attempt == 0 and hint_refresh_started is not None else None
+                            ),
+                        ) from exc
                     raise classification.user_error from exc
                 if classification.blocker is not None:
                     logger.warning(

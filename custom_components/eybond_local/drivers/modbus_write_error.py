@@ -154,7 +154,7 @@ def classify_modbus_write_error(
 
     user_error = _user_error_from_exception_code(capability, exception_code)
     if user_error is not None:
-        return WriteErrorClassification(user_error=user_error)
+        return WriteErrorClassification(user_error=user_error, include_profile_hint=True)
 
     blocker = _blocker_from_exception_code(
         capability,

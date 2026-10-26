@@ -29,6 +29,9 @@ class WriteErrorClassification:
 
     blocker: CapabilityBlocker | None = None
     user_error: Exception | None = None
+    # The protocol driver decides whether model documentation is relevant.
+    # Rendering it does not change the verdict or create a persistent blocker.
+    include_profile_hint: bool = False
 
     @property
     def is_empty(self) -> bool:

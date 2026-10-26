@@ -11,6 +11,11 @@
   },
   "capabilities": [
     {
+      "key": "op1_offgrid_soc_protection_value",
+      "write_rejection_hint": "For lithium batteries communicating with the BMS, this model's manual (F2, programs 05/07/08, page 19) specifies that OP1 Off-Grid SOC Protection (07) must be at least 1 percentage point below Low DC Protection SOC in Grid Mode (05), no higher than 95%, and no lower than the OP2 cut-off SOC (08). Check these related protection settings; the rejection alone does not confirm which condition failed. Do not change other protection thresholds automatically.",
+      "write_rejection_context": ["low_dc_protection_soc_grid_mode"]
+    },
+    {
       "key": "secondary_output_priority",
       "tested": true,
       "provenance": "verified",

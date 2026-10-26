@@ -248,6 +248,10 @@ class WriteCapability:
     # Explicit legacy learned keys for a reviewed builtin promotion. These are
     # presentation aliases, never permission to change a write contract.
     learned_control_aliases: tuple[str, ...] = ()
+    # Model documentation shown only after a driver-classified rejection.
+    # Advisory text, never a validator, dynamic bound or write permission.
+    write_rejection_hint: str = ""
+    write_rejection_context: tuple[str, ...] = ()
 
     @property
     def value_key(self) -> str:
