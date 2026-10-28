@@ -80,6 +80,12 @@ class AsciiLineSession:
         self._route: LinkRoute = route
         self._payload_family = str(payload_family or "").strip()
 
+    @property
+    def connected(self) -> bool:
+        """Expose the link's connection state without owning its recovery."""
+
+        return self._transport.connected
+
     async def request(self, command: str) -> str:
         """Send one ASCII command and return the decoded payload."""
 

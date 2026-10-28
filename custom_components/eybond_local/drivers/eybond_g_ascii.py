@@ -4,8 +4,10 @@ from __future__ import annotations
 
 
 import asyncio
+from copy import deepcopy
 from functools import lru_cache
 import json
+import math
 from pathlib import Path
 import time
 from typing import Any
@@ -609,6 +611,85 @@ def _support_response_kind(parsed_payload: str) -> str:
     return "fields" if parse_space_fields(text) else "text"
 
 
+def _g_ascii_core_payload_usable(command: str, payload: str) -> bool:
+    """Require a mode or at least one decoded core voltage, not an ACK/string."""
+
+    if command == "GMOD":
+        return payload.strip().upper() in _OPERATING_MODE_BY_CODE
+    indices = {"GPDAT0": (5, 7, 9, 12), "GPV": (0, 1)}.get(command, ())
+    fields = parse_space_fields(payload)
+    for index in indices:
+        try:
+            if math.isfinite(float(fields[index])):
+                return True
+        except (IndexError, ValueError):
+            continue
+    return False
+
+
+class _GAsciiRuntimePoll:
+    """Stop a silent batch, but allow unsupported optional reads on a live link.
+
+    Three consecutive request timeouts trigger one previously answered core
+    query. This is not a new transport or a reconnect: normal route matching,
+    request timeouts and hub recovery remain authoritative. Probe/support
+    captures do not use this runtime-only guard.
+    """
+
+    def __init__(self, session: AsciiLineSession, values: dict[str, Any]) -> None:
+        self._session = session
+        self._values = values
+        self._timeouts = 0
+        self._core_command = ""
+
+    def _check_connected(self, *, after_request: bool = False) -> None:
+        # Minimal replay sessions may not expose a physical link state.
+        if getattr(self._session, "connected", None) is False:
+            raise ConnectionError(
+                "collector_disconnected" if after_request else "collector_not_connected"
+            )
+
+    def require_core_reply(self) -> None:
+        if not self._core_command:
+            raise AsciiLineError(
+                "request_timeout" if self._timeouts else "g_ascii_core_unavailable"
+            )
+
+    async def request(self, command: str) -> str:
+        self._check_connected()
+        try:
+            payload = await self._session.request(command)
+        except (AsciiLineError, TimeoutError) as exc:
+            self._check_connected(after_request=True)
+            if isinstance(exc, TimeoutError) or str(exc) == "request_timeout":
+                self._timeouts += 1
+            else:
+                # NAK/NOA and malformed replies are not a silent transport.
+                self._timeouts = 0
+            raise
+        self._check_connected(after_request=True)
+        self._timeouts = 0
+        if _g_ascii_core_payload_usable(command, payload):
+            self._core_command = command
+        return payload
+
+    async def async_check_liveness(self) -> None:
+        self._check_connected()
+        if self._timeouts < 3:
+            return
+        self.require_core_reply()
+        # Record the actual extra transaction, not its duration against the
+        # next optional command. Do not turn this check into a measurement.
+        payload = await _optional_request(self._session, self._values, self._core_command)
+        self._check_connected(after_request=True)
+        if not _g_ascii_core_payload_usable(self._core_command, payload):
+            raise AsciiLineError("request_timeout")
+        self._timeouts = 0
+
+    def last_transport_timing(self) -> dict[str, int]:
+        return _last_ascii_transport_timing(self._session)
+
+
 async def _async_collect_eybond_g_ascii_values(
     session: AsciiLineSession,
     *,
@@ -620,16 +701,20 @@ async def _async_collect_eybond_g_ascii_values(
 ) -> dict[str, Any]:
     del poll_interval
     values: dict[str, Any] = {}
-    state = runtime_state if runtime_state is not None else {}
     now = time.monotonic() if now_monotonic is None else float(now_monotonic)
 
-    await _async_collect_eybond_g_ascii_core_values(session, values)
-
     if probe:
+        await _async_collect_eybond_g_ascii_core_values(session, values)
         return values
 
-    # The core commands answered (no exception): this cycle's optional-command
-    # failures are command-specific evidence, not a link-wide outage.
+    session = _GAsciiRuntimePoll(session, values)
+    await _async_collect_eybond_g_ascii_core_values(session, values)
+    session.require_core_reply()
+
+    # Optional-command strikes/readback suppression belong only to a completed
+    # live cycle. A timeout, disconnect or cancellation must not leave pending
+    # evidence (including hidden-control state) in the next refresh.
+    state = deepcopy(runtime_state) if runtime_state is not None else {}
     record_command_success(state, "__g_ascii_core__")
 
     await _async_collect_eybond_g_ascii_offline_fingerprint_values(session, values)
@@ -660,6 +745,7 @@ async def _async_collect_eybond_g_ascii_values(
         now_monotonic=now,
         deferred=True,
     )
+    await session.async_check_liveness()
     values["eybond_g_ascii_runtime_polled_groups"] = (
         "core, fingerprint, secondary, readbacks"
         if capabilities
@@ -667,6 +753,9 @@ async def _async_collect_eybond_g_ascii_values(
     )
 
     commit_cycle_failures(state)
+    if runtime_state is not None:
+        runtime_state.clear()
+        runtime_state.update(state)
 
     return values
 
@@ -1413,19 +1502,26 @@ async def _optional_request(
     # dedicated suppression mechanism and calls without it.
     if runtime_state is not None and command_skipped_as_unsupported(runtime_state, command):
         return ""
+    if isinstance(session, _GAsciiRuntimePoll):
+        await session.async_check_liveness()
     started = time.monotonic()
     status = "ok"
     error = ""
     payload = ""
     try:
         payload = await session.request(command)
-        record_command_success(runtime_state, command)
+        if payload:
+            record_command_success(runtime_state, command)
         return payload
     except (AsciiLineError, KeyError, TimeoutError) as exc:
         status = "error"
         error = str(exc) or exc.__class__.__name__
         record_command_failure(runtime_state, command)
         return ""
+    except ConnectionError as exc:
+        status = "error"
+        error = str(exc) or exc.__class__.__name__
+        raise
     finally:
         _record_g_ascii_runtime_command_timing(
             values,

@@ -9,6 +9,14 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Bound silent EyeBond G-ASCII runtime polls (#70): stop after unanswered core
+  reads, and recheck an already answered core query after three consecutive
+  optional-command timeouts. Preserve partial reads on a responsive inverter;
+  disconnected links stop immediately. Interrupted cycles do not blacklist
+  commands or hide controls based on outage evidence. Existing same-session
+  retry and collector recovery policies remain unchanged. This fixes excessive
+  polling after lost replies, not the unconfirmed cause of cloud outages.
+
 - Explain rejected OP1 SOC writes on the exact Sandisolar SD 11KP48V WIFI
   profile using the owner's manual dependency (BMS-linked lithium mode).
   Include the requested value and a recent grid-SOC reading when available;
