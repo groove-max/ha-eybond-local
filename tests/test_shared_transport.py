@@ -3275,7 +3275,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             await connection.disconnect()
             run_task.cancel()
 
-    async def test_at_primary_session_falls_back_to_fc4_and_pins_exact_socket(self) -> None:
+    async def test_at_primary_rtu_read_tries_fc4_first_and_pins_exact_socket(self) -> None:
         reader = asyncio.StreamReader()
         writer = _FakeWriter()
         connection = _CollectorAtConnection(
@@ -3321,39 +3321,25 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
             deadline = monotonic() + 1.0
-            while len(writer.buffer) < len(request) + HEADER_SIZE + len(request):
+            while len(writer.buffer) < HEADER_SIZE + len(request):
                 if monotonic() >= deadline:
-                    self.fail(f"FC4 fallback was not written: {writer.buffer.hex()}")
+                    self.fail("FC4 read was not written")
                 await asyncio.sleep(0.005)
-
-            # The legacy raw attempt remains first for compatibility. Its
-            # timeout does not itself mint a capability; the exact FC4 reply does.
-            self.assertEqual(bytes(writer.buffer[: len(request)]), request)
-            framed = bytes(writer.buffer[len(request) :])
+            framed = bytes(writer.buffer)
             header = decode_header(framed[:HEADER_SIZE])
             self.assertEqual(header.fcode, 4)
             self.assertEqual(framed[HEADER_SIZE:], request)
-
             response = bytearray((1, 3, 12, 1, 4))
             response.extend(b"2407260015")
             response.extend(crc16_modbus(response).to_bytes(2, "little"))
-            reader.feed_data(
-                build_collector_request(
-                    header.tid,
-                    bytes(response),
-                    devcode=header.devcode,
-                    collector_addr=header.devaddr,
-                    fcode=4,
-                )
-            )
-
+            reader.feed_data(build_collector_request(
+                header.tid, bytes(response), devcode=header.devcode,
+                collector_addr=header.devaddr, fcode=4,
+            ))
             self.assertEqual(await query_task, bytes(response))
-            self.assertEqual(
-                connection.collector_info.inverter_forward_mode,
-                "eybond_fc4",
-            )
+            self.assertEqual(connection.collector_info.inverter_forward_mode, "eybond_fc4")
             with patch.object(transport, "_at_connection", return_value=connection):
-                self.assertIs(
+                self.assertEqual(
                     transport.select_payload_route(
                         logical_route,
                         payload_family="modbus_rtu",

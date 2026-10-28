@@ -1,6 +1,7 @@
-"""Explicit, socket-scoped Modbus diagnostics on an existing mixed stream.
+"""Request-bound RTU replies and explicit diagnostics on a mixed stream.
 
-Never inferred by discovery, never a permanent wire/profile selection. The
+The decoder is shared with typed runtime raw Modbus requests; diagnostic
+dispatch is never inferred by discovery or a permanent wire/profile choice. The
 normal reader remains the ONLY reader. An uncertain transaction fences its
 physical socket because RTU has no transaction id with which to reject a late
 reply. No endpoint, UART/bootstrap or reconnect command is sent here.
@@ -32,7 +33,7 @@ def _could_be_eybond(prefix: bytes) -> bool:
     Short RTU replies (5/7 bytes) are admitted by the explicitly requested
     raw grammar, exact slave/function/length and CRC. Reading an eighth byte
     would consume the NEXT message or deadlock a legitimate short reply.
-    This is diagnostic opt-in, never an automatic wire-detection heuristic.
+    This requires a dispatched, typed request, never a wire-detection heuristic.
     """
     if len(prefix) >= 8:
         return not runtime_eybond_header_error(decode_header(prefix[:8]))
@@ -42,11 +43,22 @@ def _could_be_eybond(prefix: bytes) -> bool:
 class DiagnosticModbusSession:
     """Lifetime belongs to one run() generation, not to a reusable facade."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self, *, strict_write_echo: bool = True,
+        reason_prefix: str = "diagnostic_raw",
+    ) -> None:
         self.claim: ModbusDiagnosticClaim | None = None
         self.closed = False
         self.received = b""
         self.failure_reason = ""
+        # Runtime raw RTU shares this request-bound decoder, but legacy FC06
+        # acknowledgements may return a status value instead of the written one.
+        # Explicit diagnostics retain their stricter echo requirement.
+        self.strict_write_echo = strict_write_echo
+        self.reason_prefix = reason_prefix
+
+    def _error(self, reason: str) -> BinaryFramingError:
+        return BinaryFramingError(f"{self.reason_prefix}_{reason}")
 
     def close(self, reason: str = "") -> None:
         self.closed = True
@@ -68,13 +80,13 @@ class DiagnosticModbusSession:
         async def take(size):
             remaining = claim.deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
-                raise BinaryFramingError("diagnostic_raw_frame_timeout")
+                raise self._error("frame_timeout")
             try:
                 data = await guard.read(asyncio.wait_for(reader.readexactly(size), remaining))
             except asyncio.TimeoutError as exc:
-                raise BinaryFramingError("diagnostic_raw_frame_timeout") from exc
+                raise self._error("frame_timeout") from exc
             if self.closed or self.claim is not claim or claim.future.done():
-                raise BinaryFramingError("diagnostic_raw_response_unowned")
+                raise self._error("response_unowned")
             return data
 
         function = await take(1)
@@ -97,15 +109,16 @@ class DiagnosticModbusSession:
         prefix += await take(min(size, 8) - len(prefix))
         self.received = prefix
         if _could_be_eybond(prefix):
-            raise BinaryFramingError("diagnostic_raw_eybond_ambiguous")
+            raise self._error("eybond_ambiguous")
         if len(prefix) < size:
             prefix += await take(size - len(prefix))
         self.received = prefix
         if crc16_modbus(prefix[:-2]) != int.from_bytes(prefix[-2:], "little"):
-            raise BinaryFramingError("diagnostic_raw_crc_mismatch")
+            raise self._error("crc_mismatch")
         if not function[0] & 0x80 and function[0] in (6, 16):
-            if prefix[:6] != request[:6]:
-                raise BinaryFramingError("diagnostic_raw_write_echo_mismatch")
+            echo_size = 4 if function[0] == 6 and not self.strict_write_echo else 6
+            if prefix[:echo_size] != request[:echo_size]:
+                raise self._error("write_echo_mismatch")
         claim.future.set_result(prefix)
         return True
 

@@ -9,6 +9,16 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Keep raw Modbus replies owned by one request and physical collector session
+  (#46). Validate complete replies before recording success, retain mixed AT /
+  EyeBond traffic, and close the original socket after an uncertain dispatched
+  RTU request so late fragments cannot complete a newer request or crash its
+  reader. Unknown mixed-stream RTU reads try correlated FC4 before raw RTU;
+  known raw routes and PI ASCII retain their order. Do not retry an uncertain
+  RTU request through FC4 or move a fallback to a replacement socket. This
+  fixes response handling after timeouts, not the cause of earlier TCP resets
+  or an unconfirmed collector Wi-Fi/cloud outage.
+
 - Bound silent EyeBond G-ASCII runtime polls (#70): stop after unanswered core
   reads, and recheck an already answered core query after three consecutive
   optional-command timeouts. Preserve partial reads on a responsive inverter;

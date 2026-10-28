@@ -14,6 +14,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 from test_collector_auxiliary_session import _Writer, _wait, _query, _reply
 from custom_components.eybond_local.collector.transport.common import _PrefixedAsyncReader
 from custom_components.eybond_local.collector.protocol import build_collector_request
+from custom_components.eybond_local.payload.modbus import build_read_request
 from custom_components.eybond_local.collector.transport.connections import (
     _CollectorAtConnection, _CollectorConnection,
 )
@@ -400,7 +401,7 @@ class CollectorSendOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 self.addCleanup(release.set)
                 method = "readexactly" if protocol else "readuntil"
                 original = getattr(_PrefixedAsyncReader, method)
-                request = b"\x01\x03" if protocol else b"QPI\r"
+                request = build_read_request(1, 0, 1) if protocol else b"QPI\r"
                 old_reply = b"\x01\x03\x02\x00\x01\x79\x84" if protocol else b"(PI30\r"
                 new_reply = b"\x01\x03\x02\x00\x02\x39\x85" if protocol else b"(PI18\r"
 
@@ -433,7 +434,10 @@ class CollectorSendOwnershipTests(unittest.IsolatedAsyncioTestCase):
                     _, new_reader, writer, _ = await self.open("at", connection)
                     query = self.task(send())
                     await _wait(lambda: bool(writer.writes))
-                    future = connection._pending_raw_response
+                    future = (
+                        connection._runtime_modbus.claim.future
+                        if protocol else connection._pending_raw_response
+                    )
                     release.set()
                     await asyncio.wait_for(asyncio.gather(reader_task, return_exceptions=True), 1)
                     self.assertFalse(future.done())

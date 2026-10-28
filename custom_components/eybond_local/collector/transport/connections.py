@@ -19,6 +19,7 @@ from ..cloud_family import (
 )
 from ...collector_identity import reconcile_pn
 from ...models import CollectorInfo
+from ...payload.modbus import decode_read_request, decode_write_request
 from ..protocol import (
     EybondHeader,
     FC_FORWARD_TO_DEVICE,
@@ -34,7 +35,7 @@ from ..protocol import (
     parse_heartbeat_pn,
 )
 from .auxiliary_session import AuxiliaryReadSession
-from .diagnostic_modbus import DiagnosticModbusSession
+from .diagnostic_modbus import DiagnosticModbusSession, ModbusDiagnosticClaim
 from .send_ownership import SocketSendOwner, finish_request_future
 from .request_trace import SocketRequestTrace
 from .binary_framing import (
@@ -63,30 +64,6 @@ logger = logging.getLogger(__name__)
 # reader task and swallowing later valid responses on the same TCP socket.
 _FRAMED_HEADER_COMPLETION_TIMEOUT = 2.0
 _FRAMED_PAYLOAD_COMPLETION_TIMEOUT = 5.0
-
-
-def _modbus_rtu_response_length(prefix: bytes) -> int | None:
-    """Return the complete RTU response length for a three-byte prefix.
-
-    This is framing only; ``ModbusSession`` remains the authority that validates
-    slave id, function, payload length and CRC.  The parser is enabled solely
-    while a typed ``raw_serial/modbus_rtu`` request is pending, so arbitrary AT
-    or mixed EyeBond traffic can never be reclassified as Modbus.
-    """
-
-    if len(prefix) < 3:
-        return None
-    function = prefix[1]
-    if function & 0x80:
-        return 5
-    if function in (0x03, 0x04):
-        byte_count = prefix[2]
-        if byte_count > 250:
-            return None
-        return 3 + byte_count + 2
-    if function in (0x06, 0x10):
-        return 8
-    return None
 
 
 class _CollectorConnection:
@@ -834,6 +811,9 @@ class _CollectorAtConnection:
         self._run_epoch = 0
         self._auxiliary_session = AuxiliaryReadSession()
         self._diagnostic_modbus = DiagnosticModbusSession()
+        self._runtime_modbus = DiagnosticModbusSession(
+            strict_write_echo=False, reason_prefix="raw_modbus",
+        )
 
     @property
     def connected(self) -> bool:
@@ -922,11 +902,23 @@ class _CollectorAtConnection:
         """
 
         owner = SocketSendOwner.capture(self)
+        is_modbus = str(payload_protocol or "").strip().lower() == "modbus_rtu"
+        # Pin all physical-session state before any await, including bootstrap
+        # and pacing. Old cleanup must never cancel a replacement reader.
+        runtime_modbus = self._runtime_modbus
+        guard = self._auxiliary_session
+        reader_task = self._reader_task
 
         async with self._request_lock:
             owner.check(self)
             if self._auxiliary_session.enabled:
                 raise ConnectionError("auxiliary_session_raw_route_conflict")
+            if (
+                is_modbus
+                and decode_read_request(payload) is None
+                and decode_write_request(payload) is None
+            ):
+                raise ValueError("raw_modbus_request_invalid")
             total_started = asyncio.get_running_loop().time()
             await self._async_bootstrap_raw_passthrough_locked(
                 request_timeout=min(float(request_timeout), 2.0),
@@ -935,8 +927,20 @@ class _CollectorAtConnection:
             owner.check(self)
             loop = asyncio.get_running_loop()
             future: asyncio.Future[bytes] = loop.create_future()
-            self._pending_raw_response = future
-            self._pending_raw_protocol = str(payload_protocol or "").strip().lower()
+            if not is_modbus:
+                self._pending_raw_response = future
+                self._pending_raw_protocol = str(payload_protocol or "").strip().lower()
+            trace = SocketRequestTrace() if is_modbus else None
+
+            def claim_modbus() -> None:
+                # Called under the write lock, immediately before dispatch.
+                # Neither queued nor paced requests may claim incoming bytes.
+                runtime_modbus.claim = ModbusDiagnosticClaim(
+                    bytes(payload), future,
+                    loop.time() + self._write_timeout + request_timeout,
+                )
+
+            completed = False
             self._collector.raw_request_count += 1
             self._collector.raw_last_request_hex = payload.hex()
             self._collector.raw_last_request_ascii = _short_ascii(payload)
@@ -952,12 +956,16 @@ class _CollectorAtConnection:
                 spacing_wait_ms = await self._async_wait_raw_passthrough_spacing_locked()
                 owner.check(self)
                 response_started = asyncio.get_running_loop().time()
-                await self._async_write(payload, owner=owner)
+                await self._async_write(
+                    payload, owner=owner, trace=trace,
+                    before_write=claim_modbus if is_modbus else None,
+                )
                 self._raw_passthrough_last_write_monotonic = (
                     asyncio.get_running_loop().time()
                 )
                 response = await asyncio.wait_for(future, timeout=request_timeout)
                 owner.check_reply(self)
+                completed = True
                 finished = asyncio.get_running_loop().time()
                 self._collector.raw_response_count += 1
                 self._collector.inverter_forward_mode = "raw_serial"
@@ -995,6 +1003,25 @@ class _CollectorAtConnection:
                 )
                 raise
             finally:
+                if is_modbus:
+                    if not completed and trace is not None and trace.write_started:
+                        # RTU has no transaction ID. Once dispatched, an
+                        # uncertain reply cannot safely be reused by any later
+                        # request. Fence synchronously before releasing the lock.
+                        if (
+                            self._writer is owner.writer
+                            and self._run_epoch == owner.epoch
+                            and not self._collector.last_disconnect_reason
+                        ):
+                            self._collector.last_disconnect_reason = "raw_modbus_request_unresolved"
+                        runtime_modbus.close()
+                        guard.close()
+                        owner.writer.close()
+                        if reader_task is not None:
+                            reader_task.cancel()
+                    claim = runtime_modbus.claim
+                    if claim is not None and claim.future is future:
+                        runtime_modbus.claim = None
                 if self._pending_raw_response is future:
                     self._pending_raw_response = None
                     self._pending_raw_protocol = ""
@@ -1238,6 +1265,9 @@ class _CollectorAtConnection:
         self._collector.last_disconnect_reason = ""
         self._auxiliary_session = AuxiliaryReadSession()
         self._diagnostic_modbus = DiagnosticModbusSession()
+        self._runtime_modbus = DiagnosticModbusSession(
+            strict_write_echo=False, reason_prefix="raw_modbus",
+        )
         self._reader = reader
         self._writer = writer
         self._session_id = str(session_id or "").strip()
@@ -1280,6 +1310,7 @@ class _CollectorAtConnection:
     async def _async_write(
         self, payload: bytes, *, owner: SocketSendOwner | None = None,
         trace: SocketRequestTrace | None = None,
+        before_write: Callable[[], None] | None = None,
     ) -> None:
         owner = owner or SocketSendOwner.capture(self)
         if trace is not None:
@@ -1287,6 +1318,8 @@ class _CollectorAtConnection:
         async with self._write_lock:
             owner.check(self)
             writer = owner.writer
+            if before_write is not None:
+                before_write()
             if trace is not None:
                 trace.phase = "writing"
                 trace.write_started = True
@@ -1315,6 +1348,7 @@ class _CollectorAtConnection:
         try:
             buffered_prefix = b""
             diagnostic = self._diagnostic_modbus
+            runtime_modbus = self._runtime_modbus
             while not auxiliary.closed:
                 auxiliary.at_boundary = not buffered_prefix
                 if buffered_prefix:
@@ -1327,6 +1361,9 @@ class _CollectorAtConnection:
                 frame_started = asyncio.get_running_loop().time()
                 auxiliary_claim = auxiliary.claim
                 if not buffered_prefix and await diagnostic.consume(reader, first, auxiliary):
+                    continue
+                if not buffered_prefix and await runtime_modbus.consume(reader, first, auxiliary):
+                    self._collector.raw_last_parser = "raw_modbus_rtu"
                     continue
                 if first == b"A":
                     tail = reader.readexactly(2)
@@ -1342,29 +1379,6 @@ class _CollectorAtConnection:
                     buffered_prefix = prefix + buffered_prefix
 
                 raw_future = self._pending_raw_response
-                raw_protocol = self._pending_raw_protocol
-                if (
-                    raw_future is not None
-                    and not raw_future.done()
-                    and raw_protocol == "modbus_rtu"
-                ):
-                    prefix = buffered_prefix or first
-                    buffered_prefix = b""
-                    if len(prefix) < 3:
-                        prefix += await read(reader.readexactly(3 - len(prefix)))
-                    frame_length = _modbus_rtu_response_length(prefix[:3])
-                    if frame_length is None or len(prefix) > frame_length:
-                        self._record_unhandled_raw_fragment(
-                            prefix,
-                            parser="raw_modbus_rtu_prefix_invalid",
-                        )
-                        continue
-                    frame = prefix
-                    if len(frame) < frame_length:
-                        frame += await read(reader.readexactly(frame_length - len(frame)))
-                    self._collector.raw_last_parser = "raw_modbus_rtu"
-                    raw_future.set_result(frame)
-                    continue
 
                 if (
                     raw_future is not None
@@ -1528,6 +1542,7 @@ class _CollectorAtConnection:
                 self._handle_at_response_line(line)
         except BinaryFramingError as exc:
             diagnostic.close(str(exc))
+            runtime_modbus.close(str(exc))
             self._collector.last_disconnect_reason = str(exc)
             logger.warning("Closing collector binary session remote=%s reason=%s",
                            self._collector.remote_ip, exc)
@@ -1662,6 +1677,7 @@ class _CollectorAtConnection:
         writer = self._writer
         self._auxiliary_session.close()
         self._diagnostic_modbus.close()
+        self._runtime_modbus.close()
         self._reader = None
         self._writer = None
         self._connected.clear()

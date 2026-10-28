@@ -8,9 +8,11 @@ from typing import Any
 from ..at import CollectorAtResponse
 from ...link_models import AtMixedLinkRoute, EybondLinkRoute, LinkRoute, RawSerialLinkRoute
 from ...models import CollectorInfo
+from ...payload.modbus import decode_read_request
 from ..protocol import EybondHeader
 from .common import _bounded_write_timeout, _copy_collector_info
 from .connections import _CollectorAtConnection, _CollectorConnection
+from .send_ownership import SocketSendOwner
 from .listener import (
     _SharedEybondListener,
     _acquire_shared_at_listener,
@@ -509,11 +511,19 @@ class SharedCollectorAtTransport:
         if type(route) is not AtMixedLinkRoute:
             raise TypeError(f"unsupported_link_route:{getattr(route, 'family', '')}")
 
-        if connection.mixed_frame_observed:
+        owner = SocketSendOwner.capture(connection)
+        modbus_read = (
+            str(route.protocol or "").strip().lower() == "modbus_rtu"
+            and decode_read_request(payload) is not None
+        )
+        if connection.mixed_frame_observed or modbus_read:
             # A positive framed collector reply on this exact physical session
             # is stronger ordering evidence than the AT-primary wire shape.
             # It does not by itself pin FC4: only the correlated FC4 response
             # below does. Raw remains the timeout fallback for hybrid bridges.
+            # For an unproven RTU read, try the correlated grammar first:
+            # raw-first cannot safely fall back after an uncertain RTU reply.
+            # Known raw routes and PI ASCII keep their existing dispatch order.
             try:
                 return await connection.async_send_framed_inverter_payload(
                     payload,
@@ -522,6 +532,7 @@ class SharedCollectorAtTransport:
                     request_timeout=request_timeout,
                 )
             except asyncio.TimeoutError:
+                owner.check(connection)
                 return await connection.async_send_raw_payload(
                     payload,
                     request_timeout=request_timeout,
@@ -535,9 +546,15 @@ class SharedCollectorAtTransport:
                 payload_protocol=route.protocol,
             )
         except asyncio.TimeoutError:
+            if str(route.protocol or "").strip().lower() == "modbus_rtu":
+                # An uncorrelated RTU reply may still arrive. The sender has
+                # retired that socket; do not retry or migrate the request to
+                # a replacement session (especially for write commands).
+                raise
             # A timeout is negative evidence for this request only, not a
             # durable capability. The FC4 result below must still positively
             # confirm itself through the exact TID on this physical socket.
+            owner.check(connection)
             return await connection.async_send_framed_inverter_payload(
                 payload,
                 devcode=route.devcode,
