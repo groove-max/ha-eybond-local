@@ -21,7 +21,7 @@ from custom_components.eybond_local.collector.transport import (
 )
 from custom_components.eybond_local.drivers.marsrock import MarsRockDriver
 from custom_components.eybond_local.link_models import RawSerialLinkRoute
-from custom_components.eybond_local.payload.modbus import ModbusError, decode_read_request
+from custom_components.eybond_local.payload.modbus import decode_read_request
 from custom_components.eybond_local.runtime.driver_detection import async_detect_inverter
 
 
@@ -138,7 +138,7 @@ class MarsRockTransportTests(unittest.IsolatedAsyncioTestCase):
                 read = await context.driver.async_read_values(transport, context.inverter)
                 self.assertEqual(read.values["grid_voltage"], grid)
                 self.assertEqual(len(read.values), 4)
-            self.assertEqual([mode for mode, _ in replay.requests], ["raw"] * 5)
+            self.assertEqual([mode for mode, _ in replay.requests], ["fc4"] + ["raw"] * 5)
             self.assertEqual(connection.collector_info.raw_response_count, 5)
             self.assertEqual(connection.collector_info.inverter_forward_mode, "raw_serial")
 
@@ -186,11 +186,15 @@ class MarsRockTransportTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(replay.requests), 2)
 
     async def test_corrupt_raw_crc_never_becomes_an_inverter_or_fresh_values(self):
-        async with replay_stream() as (transport, _, replay):
+        async with replay_stream() as (transport, connection, replay):
             driver = MarsRockDriver()
             inverter = await driver.async_probe(transport, driver.probe_targets[0])
             self.assertIsNotNone(inverter)
+            successes = connection.collector_info.raw_response_count
             replay.corrupt_crc = True
-            with self.assertRaises(ModbusError):
+            with self.assertRaises(ConnectionError):
                 await driver.async_read_values(transport, inverter)
+            self.assertFalse(connection.connected)
+            self.assertEqual(connection.collector_info.raw_response_count, successes)
+            self.assertEqual(connection.collector_info.last_disconnect_reason, "raw_modbus_crc_mismatch")
             self.assertIsNone(await driver.async_probe(transport, driver.probe_targets[0]))

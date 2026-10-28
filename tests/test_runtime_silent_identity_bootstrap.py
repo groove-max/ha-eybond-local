@@ -52,7 +52,7 @@ from custom_components.eybond_local.drivers.catalog_identity import (
     async_probe_catalog_identity,
 )
 from custom_components.eybond_local.models import ProbeTarget
-from custom_components.eybond_local.payload.modbus import ModbusSession, crc16_modbus
+from custom_components.eybond_local.payload.modbus import ModbusSession, crc16_modbus, decode_read_request
 from fake_collector import FakeCollectorService
 from fake_collector_lib import (
     CollectorProfile,
@@ -236,6 +236,7 @@ class _SilentAtModbusCollector(_SilentAtCollector):
         super().__init__(pn)
         self._registers = dict(registers)
         self.modbus_queries = 0
+        self.fc4_queries = 0
 
     async def _serve(self) -> None:
         assert self._reader is not None
@@ -260,6 +261,15 @@ class _SilentAtModbusCollector(_SilentAtCollector):
                     continue
 
                 request = first + await self._reader.readexactly(7)
+                if decode_read_request(request) is None:
+                    # A raw-only simulated collector ignores a complete FC4
+                    # attempt. Never manufacture a reply to an invalid RTU
+                    # request by treating a framed header as register fields.
+                    header = decode_header(request)
+                    assert header.fcode == 4
+                    await self._reader.readexactly(header.payload_len)
+                    self.fc4_queries += 1
+                    continue
                 function = request[1]
                 address = int.from_bytes(request[2:4], "big")
                 count = int.from_bytes(request[4:6], "big")
@@ -806,6 +816,7 @@ class Issue13RuntimeRegressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(identity.layout_code, 4)
             self.assertEqual(identity.model_code, 32768)
             self.assertEqual(collector.modbus_queries, 2)
+            self.assertEqual(collector.fc4_queries, 1)
         finally:
             await collector.stop()
             await runtime.async_stop()

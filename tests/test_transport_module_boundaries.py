@@ -130,6 +130,15 @@ class TransportModuleBoundaryTests(unittest.TestCase):
             for node in identity_reader.body
         ), 1)
         definitions.remove(("AsyncFunctionDef", "read"))
+        # The runtime length-only RTU parser was retired in favor of the
+        # request-bound diagnostic decoder. Its sole replacement here is the
+        # atomic dispatch claim; keep the historical decomposition digest.
+        retired = ("FunctionDef", "_modbus_rtu_response_length")
+        dispatch_claim = ("FunctionDef", "claim_modbus")
+        self.assertNotIn(retired, definitions)
+        self.assertEqual(definitions.count(dispatch_claim), 1)
+        definitions.remove(dispatch_claim)
+        definitions.append(retired)
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()
