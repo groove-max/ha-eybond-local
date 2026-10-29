@@ -134,6 +134,8 @@ async def async_setup_entry(
     added_keys = {capability.key for capability in exposable_capabilities}
 
     def add_live_capabilities() -> None:
+        if not coordinator.can_add_live_entities:
+            return
         inverter = coordinator.identified_inverter
         if inverter is None:
             return

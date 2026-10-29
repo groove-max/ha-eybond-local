@@ -17,6 +17,26 @@ _COMPONENT_SETUP_RELOAD_WAITERS_KEY = "component_setup_reload_waiters"
 class CoordinatorEntityReloadMixin:
     """Coordinate one HA entry reload after runtime metadata changes."""
 
+    @property
+    def can_add_live_entities(self) -> bool:
+        """Allow dynamic additions only from this entry's current generation.
+
+        Metadata persistence requests a reload before coordinator listeners run.
+        An old listener must not enqueue entities after HA has begun unloading
+        its platform: those entities can survive the reset and retain a stopped
+        runtime while the replacement platform rejects their duplicate IDs.
+        """
+
+        return (
+            not self._shutdown_complete
+            and not self._entity_platform_reload_requested
+            and not self._entity_platform_reload_dispatched
+            and getattr(self.config_entry, "runtime_data", None) is self
+            and self.config_entry.state in {
+                ConfigEntryState.SETUP_IN_PROGRESS, ConfigEntryState.LOADED,
+            }
+        )
+
     def mark_entity_platforms_initialized(
         self,
         *,

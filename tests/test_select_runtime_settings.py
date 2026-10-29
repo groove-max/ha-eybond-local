@@ -98,6 +98,7 @@ class _CoordinatorStub:
         self.calls: list[tuple[str, str]] = []
         self.identified_inverter = None
         self.listeners = []
+        self.can_add_live_entities = True
 
     def async_add_listener(self, listener):
         self.listeners.append(listener)

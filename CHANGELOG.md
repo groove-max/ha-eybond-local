@@ -9,6 +9,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Keep dynamically discovered selects on the current config-entry generation
+  during metadata reloads (#72). Retiring platforms must not add controls that
+  retain a stopped runtime and reject writes while fresh sensors keep working.
+  Preserve stable entity IDs, read-only policy and live PI30 control discovery;
+  collector connection checks and heartbeat timeouts are unchanged.
+
 - Give persistently overloaded manual polling measured recovery time without
   changing the saved interval or switching to Automatic. Expose the temporary
   backoff in polling diagnostics and restore the target after recovery.
