@@ -160,9 +160,15 @@ class GenericPreparationPumpTests(unittest.IsolatedAsyncioTestCase):
         await self._exchange(build_read_request(5, 300, 1), "", raw=True,
                              next_read=build_read_request(6, 300, 1))
 
-    async def _exchange(self, payload, error, raw=False, next_read=None):
+    async def test_evidence_sample_is_not_completed_protocol_preparation(self):
+        await self._exchange(b"F\r", "cloud_protocol_ambiguous", pause_evidence=True)
+        await self._exchange(build_read_request(5, 300, 1), "", pause_evidence=True)
+
+    async def _exchange(self, payload, error, raw=False, next_read=None, pause_evidence=False):
         connections = asyncio.Queue()
         release = asyncio.Event()
+        evidence_started = asyncio.Event()
+        evidence_release = asyncio.Event()
 
         async def cloud(reader, writer):
             await connections.put((reader, writer))
@@ -175,6 +181,16 @@ class GenericPreparationPumpTests(unittest.IsolatedAsyncioTestCase):
             handler = InProcessFailClosedShadowProxyHandler(seed=seed(), upstream_host="127.0.0.1",
                 upstream_port=cloud_server.sockets[0].getsockname()[1], output_path=Path(directory) / "trace.jsonl",
                 expected_session_protocol="eybond_framed")
+            if pause_evidence:
+                append_event = handler._append_event
+
+                async def delayed_evidence(event, direction, details):
+                    if event == "shadow_protocol_evidence":
+                        evidence_started.set()
+                        await evidence_release.wait()
+                    await append_event(event, direction, details)
+
+                handler._append_event = delayed_evidence
             await handler.start()
             server = await asyncio.start_server(handler.handle_client, "127.0.0.1", 0)
             try:
@@ -188,10 +204,21 @@ class GenericPreparationPumpTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(route_status_indicates_control_write_ready(handler.status()))
                     cloud_writer.write(packet[5:])
                     await cloud_writer.drain()
-                    for _ in range(100):
-                        if handler.status()["protocol_diagnostics"]["samples"]:
-                            break
-                        await asyncio.sleep(.005)
+                    if pause_evidence:
+                        await asyncio.wait_for(evidence_started.wait(), 1)
+                        self.assertTrue(handler.status()["protocol_diagnostics"]["samples"])
+                        self.assertTrue(handler.status()["protocol_preparation_pending"])
+                        self.assertFalse(route_status_indicates_control_write_ready(handler.status()))
+                        evidence_release.set()
+                    # Recording a sample yields before protocol classification.
+                    # Wait for its outcome, not the earlier diagnostics update.
+                    async with asyncio.timeout(2):
+                        while True:
+                            status = handler.status()
+                            if status["protocol_preparation_error"] or not status["protocol_preparation_pending"]:
+                                break
+                            await asyncio.sleep(.005)
+                    self.assertTrue(handler.status()["protocol_diagnostics"]["samples"])
                     self.assertEqual(handler.status()["protocol_preparation_error"], error)
                     self.assertEqual(route_status_indicates_control_write_ready(handler.status()), not bool(error))
                     self.assertNotIn("not-for-support", json.dumps(handler.status()))
@@ -212,6 +239,7 @@ class GenericPreparationPumpTests(unittest.IsolatedAsyncioTestCase):
                     writer.close()
                     await writer.wait_closed()
             finally:
+                evidence_release.set()
                 release.set()
                 server.close()
                 cloud_server.close()
