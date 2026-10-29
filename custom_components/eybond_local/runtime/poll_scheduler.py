@@ -26,6 +26,7 @@ class PollDecision:
     policy_max_interval: float
     observed_duration: float
     sample_count: int
+    manual_backoff_active: bool = False
 
 
 def normalize_poll_mode(value: object) -> str:
@@ -82,7 +83,8 @@ class PollScheduler:
     """Choose the effective start-to-start poll interval.
 
     The scheduler never mutates user options.  In manual mode it reports
-    diagnostics around the configured interval.  In auto mode it adapts the
+    diagnostics around the configured interval and gives persistently
+    overloaded successful polls measured recovery headroom. In auto mode it adapts the
     effective interval from recent successful cycle durations.
     """
 
@@ -98,6 +100,9 @@ class PollScheduler:
         self._manual_interval = self._clamp_manual_interval(manual_interval)
         self._effective_interval = self._initial_effective_interval()
         self._durations: list[float] = []
+        self._manual_overruns = 0
+        self._manual_healthy = 0
+        self._manual_backoff = False
         self._last_decision = self._build_decision(observed_duration=0.0)
 
     @property
@@ -129,6 +134,7 @@ class PollScheduler:
     ) -> None:
         """Update scheduler configuration while preserving observations."""
 
+        previous_config = (self._policy, self._mode, self._manual_interval)
         if policy is not None:
             self._policy = policy
         if mode is not None:
@@ -138,7 +144,10 @@ class PollScheduler:
         else:
             self._manual_interval = self._clamp_manual_interval(self._manual_interval)
         self._effective_interval = self._clamp_effective(self._effective_interval)
-        if self._mode == POLL_MODE_MANUAL:
+        if previous_config != (self._policy, self._mode, self._manual_interval):
+            self._manual_overruns = self._manual_healthy = 0
+            self._manual_backoff = False
+        if self._mode == POLL_MODE_MANUAL and not self._manual_backoff:
             self._effective_interval = self._manual_interval
         elif self._effective_interval <= 0.0:
             self._effective_interval = self._initial_effective_interval()
@@ -179,7 +188,27 @@ class PollScheduler:
             else:
                 self._effective_interval = self._clamp_effective(self._effective_interval)
         else:
-            self._effective_interval = self._manual_interval
+            if success and duration > 0:
+                if duration >= self._manual_interval:
+                    self._manual_overruns += 1
+                    self._manual_healthy = 0
+                    if self._manual_overruns >= 3:
+                        self._manual_backoff = True
+                else:
+                    self._manual_overruns = 0
+                    self._manual_healthy += 1
+                    if self._manual_healthy >= 3:
+                        self._manual_backoff = False
+                # Use this clean cycle's cost, not a reconnect or an old
+                # startup/settings outlier. No protocol-specific floor.
+                if not self._manual_backoff:
+                    self._effective_interval = self._manual_interval
+                elif duration >= self._manual_interval:
+                    self._effective_interval = max(self._manual_interval, self._clamp_manual_interval(
+                        math.ceil(duration * max(1.0, self._policy.safety_factor))
+                    ))
+            else:
+                self._manual_overruns = self._manual_healthy = 0
         self._last_decision = self._build_decision(
             observed_duration=observed,
             last_duration=duration,
@@ -277,4 +306,5 @@ class PollScheduler:
             policy_max_interval=self._policy.max_auto_interval,
             observed_duration=observed_duration,
             sample_count=len(self._durations),
+            manual_backoff_active=self._mode == POLL_MODE_MANUAL and self._manual_backoff,
         )

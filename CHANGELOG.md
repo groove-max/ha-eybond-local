@@ -9,6 +9,16 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Give persistently overloaded manual polling measured recovery time without
+  changing the saved interval or switching to Automatic. Expose the temporary
+  backoff in polling diagnostics and restore the target after recovery.
+- Spread G-ASCII setting reads over periodic, oldest-due groups while retaining
+  live telemetry every cycle and observing changes made on the inverter or in
+  the cloud. Local writes require immediate fresh readback, not just an ACK or
+  cached value. Avoid duplicate shared setting queries and misleading raw-only
+  timing counters on framed connections. This reduces repeated polling work;
+  it does not establish or fix the cause of intermittent cloud outages (#70).
+
 - Keep raw Modbus replies owned by one request and physical collector session
   (#46). Validate complete replies before recording success, retain mixed AT /
   EyeBond traffic, and close the original socket after an uncertain dispatched

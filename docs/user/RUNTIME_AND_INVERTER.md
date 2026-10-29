@@ -121,7 +121,11 @@ You can return to **Auto** later to run detection again.
 - **Automatic** lets EyeBond Local choose a safe start-to-start interval from
   real device response time and protocol limits.
 - **Manual** uses the interval you enter. It does not make a slow device answer
-  faster.
+  faster. If three consecutive successful cycles take at least that long, the
+  runtime temporarily allows recovery time based on the measured cycle cost
+  (normally 30%). Your saved interval and Manual mode do not change. Three
+  successful cycles shorter than your target clear this backoff. Failed or
+  recovery cycles do not trigger it; a single long settings sweep does not either.
 
 Useful diagnostics:
 
@@ -133,6 +137,28 @@ Useful diagnostics:
 If utilization remains high, use Automatic mode or increase the manual
 interval. Occasional long cycles during detection or reconnect recovery are not
 the same as continuously overloaded polling.
+
+The support archive reports `collector_poll_manual_backoff_active` alongside
+the configured, current and next intervals. Automatic mode remains the
+recommended choice for continuous adjustment.
+
+### G-ASCII: periodic settings and external changes
+
+Live measurements, including commands that combine telemetry and settings,
+remain in every poll. Static firmware/rating queries are no longer repeated
+every cycle; the clock is read periodically. After the initial settings
+snapshot, at most four due setting groups are read per cycle, oldest first.
+A group becomes due again after 60 seconds. This is not a promise that every
+setting updates within exactly 60 seconds: a large control list, a slow poll
+or a failed connection can delay the remaining groups. Read age, pending group
+count and overdue time are included in the support archive.
+
+This applies to built-in and supported learned controls, including read-only
+installations. Changes made in the cloud or on the inverter panel are still
+picked up by periodic reads; settings are not cached indefinitely. Local writes
+bypass this schedule for fresh, targeted confirmation. An ACK or a retained
+value does not prove a successful change. Skipped settings retain their last
+known values without being reported as freshly measured.
 
 ### PI30: a missed reply during polling
 

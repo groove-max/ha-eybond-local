@@ -387,6 +387,9 @@ class CoordinatorPollingMixin:
                 "collector_poll_mode": (
                     decision.mode if decision is not None else self._configured_poll_mode()
                 ),
+                "collector_poll_manual_backoff_active": bool(
+                    decision is not None and decision.manual_backoff_active
+                ),
                 "collector_poll_policy_driver_key": getattr(
                     self,
                     "_poll_scheduler_driver_key",

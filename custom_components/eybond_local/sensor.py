@@ -65,6 +65,11 @@ _FLOAT_PRECISION_DEVICE_CLASSES = {
 _MAX_STATE_LENGTH = 255
 _CAPABILITY_LIST_SENSORS = {"write_capabilities", "blocked_write_capabilities"}
 _SUMMARY_ATTRIBUTE_MAP: dict[str, tuple[tuple[str, str], ...]] = {
+    "collector_poll_current_interval_seconds": (
+        ("manual_backoff_active", "collector_poll_manual_backoff_active"),
+        ("configured_interval_seconds", "collector_poll_interval_configured_seconds"),
+        ("next_interval_seconds", "collector_poll_next_interval_seconds"),
+    ),
     "operational_state": (
         ("site_mode", "site_mode_state"),
         ("power_flow", "power_flow_summary"),

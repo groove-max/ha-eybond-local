@@ -137,12 +137,12 @@
       },
       "confirm_poll_interval": {
         "title": "Manual refresh interval",
-        "description": "Manual refresh mode uses the exact interval below.",
+        "description": "Manual refresh mode uses the target interval below; sustained overload temporarily adds recovery time without changing your setting.",
         "data": {
           "poll_interval": "Poll interval"
         },
         "data_description": {
-          "poll_interval": "Manual mode only. This is the target start-to-start refresh interval. If the device needs longer to answer, EyeBond Local will warn about high poll utilization; use Automatic mode to let the integration choose a safe interval."
+          "poll_interval": "Manual mode only. Target interval between starts of polls. After three successful cycles that take longer than this target, EyeBond Local temporarily adds measured recovery time. Your setting is preserved; normal timing resumes after three faster cycles. Automatic mode adapts continuously."
         }
       },
       "smartess_cloud_assist": {
@@ -522,7 +522,7 @@
           "driver_hint": "Keep Auto for normal operation, or choose a specific driver. Saving a changed value starts a new identification on this collector.",
           "driver_detection_strategy": "Used when the driver is Auto. Fast mode stops at the first reliable match; full scan checks all supported drivers and can report several compatible results. Saving a changed mode starts a new identification.",
           "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
-          "poll_interval": "Manual mode only. This is the target start-to-start refresh interval. If the device needs longer to answer, EyeBond Local will warn about high poll utilization; use Automatic mode to let the integration choose a safe interval.",
+          "poll_interval": "Manual mode only. Target interval between starts of polls. After three successful cycles that take longer than this target, EyeBond Local temporarily adds measured recovery time. Your setting is preserved; normal timing resumes after three faster cycles. Automatic mode adapts continuously.",
           "control_mode": "Auto enables tested controls when detection confidence is high. Read-only disables all controls. Full enables everything.",
           "pi30_flag_command_case": "Keep Profile default unless instructed. Changes only PE/PD flag letters (including buzzer and backlight), not the inverter profile. Saving sends no write commands; applies to your next switch action."
         },
@@ -559,12 +559,12 @@
       },
       "runtime_poll_interval": {
         "title": "Manual refresh interval",
-        "description": "Manual refresh mode uses the exact interval below.",
+        "description": "Manual refresh mode uses the target interval below; sustained overload temporarily adds recovery time without changing your setting.",
         "data": {
           "poll_interval": "Poll interval"
         },
         "data_description": {
-          "poll_interval": "Manual mode only. This is the target start-to-start refresh interval. If the device needs longer to answer, EyeBond Local will warn about high poll utilization; use Automatic mode to let the integration choose a safe interval."
+          "poll_interval": "Manual mode only. Target interval between starts of polls. After three successful cycles that take longer than this target, EyeBond Local temporarily adds measured recovery time. Your setting is preserved; normal timing resumes after three faster cycles. Automatic mode adapts continuously."
         }
       },
       "diagnostics": {

@@ -497,7 +497,7 @@ class EybondGAsciiDriverTests(unittest.TestCase):
 
         self.assertEqual(values["battery_current"], 14.7)
 
-    def test_runtime_poll_reads_full_g_ascii_runtime_set_every_cycle(self) -> None:
+    def test_runtime_poll_keeps_live_reads_but_paces_identity_and_clock(self) -> None:
         responses = {
             "GMOD": "B",
             "GPDAT0": (
@@ -582,13 +582,14 @@ class EybondGAsciiDriverTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(session.commands, expected_commands[:-1])
+        self.assertEqual(session.commands, [command for command in expected_commands[:-1]
+                                          if command not in {"F", "SVFW", "DATE??????", "TIME??????"}])
         self.assertEqual(
             second["eybond_g_ascii_runtime_polled_groups"],
-            "core, fingerprint, secondary",
+            "core, secondary",
         )
         self.assertEqual(second["eybond_g_ascii_gbms_skipped_reason"], "recent_timeout")
-        self.assertEqual(second["rated_output_voltage"], 220.0)
+        self.assertNotIn("rated_output_voltage", second)
         self.assertEqual(second["output_energy_today"], 0.46)
 
     def test_gmod_operating_mode_codes_follow_protocol_document(self) -> None:
@@ -1071,7 +1072,7 @@ class EybondGAsciiDriverTests(unittest.TestCase):
 
         self.assertEqual(session.commands, ["PBL1"])
         self.assertIs(written, True)
-        self.assertIs(inverter.details["learned_lcd_backlight"], True)
+        self.assertNotIn("learned_lcd_backlight", inverter.details)
 
     def test_learned_command_capability_can_use_exact_command_map(self) -> None:
         session = _FakeEybondGAsciiSession({"OPR00": "ACK"})
@@ -1112,10 +1113,7 @@ class EybondGAsciiDriverTests(unittest.TestCase):
 
         self.assertEqual(session.commands, ["OPR00"])
         self.assertEqual(written, "Mains output is preferred")
-        self.assertEqual(
-            inverter.details["learned_output_priority"],
-            "Mains output is preferred",
-        )
+        self.assertNotIn("learned_output_priority", inverter.details)
 
     def test_gootu_profile_writes_captured_charging_priority_commands(self) -> None:
         profile = load_driver_profile(
@@ -1352,9 +1350,9 @@ class EybondGAsciiDriverTests(unittest.TestCase):
                 _async_collect_eybond_g_ascii_values(
                     session,
                     probe=False,
-                    capabilities=profile.capabilities,
+                    capabilities=(profile.get_capability("max_charging_current_setting"),),
                     runtime_state=runtime_state,
-                    now_monotonic=1000.0 + index,
+                    now_monotonic=1000.0 + 60 * index,
                 )
             )
             self.assertIn("CHGC???", session.commands)
@@ -1371,7 +1369,7 @@ class EybondGAsciiDriverTests(unittest.TestCase):
                 probe=False,
                 capabilities=profile.capabilities,
                 runtime_state=runtime_state,
-                now_monotonic=1004.0,
+                now_monotonic=1124.0,
             )
         )
         self.assertNotIn("CHGC???", session.commands)

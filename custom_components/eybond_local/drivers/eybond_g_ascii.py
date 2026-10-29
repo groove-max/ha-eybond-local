@@ -49,6 +49,7 @@ from .command_support import (
     unsupported_command_diagnostics,
 )
 from .read_result import DriverReadMode, DriverReadResult
+from .read_cadence import PeriodicReadCadence
 from .catalog_probe import catalog_model_name
 
 
@@ -107,6 +108,26 @@ _G_ASCII_SETTINGS_BY_READ_KEY: dict[str, GAsciiSettingDefinition] = {
     for definition in G_ASCII_SETTINGS_BY_VALUECLOUD_FIELD.values()
     if definition.read_key
 }
+
+_SETTINGS_CADENCE_KEY = "eybond_g_ascii_settings_cadence"
+_PENDING_READBACK_KEY = "eybond_g_ascii_pending_readbacks"
+_SETTINGS_GROUPS_PER_POLL = 4
+
+
+def _bind_runtime_state(runtime_state: dict[str, Any] | None, inverter: DetectedInverter) -> None:
+    if runtime_state is None:
+        return
+    owner = runtime_state.get("eybond_g_ascii_owner")
+    if owner is not None and owner != id(inverter):
+        runtime_state.clear()
+    runtime_state["eybond_g_ascii_owner"] = id(inverter)
+
+
+def _readback_group(capability: WriteCapability) -> str:
+    definition = _G_ASCII_SETTINGS_BY_READ_KEY.get(capability.read_key)
+    if definition is None:
+        return ""
+    return definition.read_command or definition.readback_kind
 
 
 @lru_cache(maxsize=1)
@@ -285,6 +306,7 @@ class EybondGAsciiDriver(InverterDriver):
         poll_interval: float | None = None,
         now_monotonic: float | None = None,
     ) -> DriverReadResult:
+        _bind_runtime_state(runtime_state, inverter)
         values = await _async_collect_eybond_g_ascii_values(
             self._session(transport, inverter.probe_target),
             probe=False,
@@ -293,6 +315,7 @@ class EybondGAsciiDriver(InverterDriver):
             poll_interval=poll_interval,
             now_monotonic=now_monotonic,
         )
+        removed = frozenset(values.pop("eybond_g_ascii_readback_missing_keys", ()))
         diagnostics = _take_g_ascii_driver_diagnostics(values)
         diagnostics.update(unsupported_command_diagnostics(runtime_state))
         # G-ASCII is intrinsically partial: optional/fingerprint/BMS/readback
@@ -302,6 +325,7 @@ class EybondGAsciiDriver(InverterDriver):
         return DriverReadResult(
             values=values,
             mode=DriverReadMode.DELTA,
+            removed_keys=removed,
             diagnostics=diagnostics,
         )
 
@@ -338,14 +362,19 @@ class EybondGAsciiDriver(InverterDriver):
         command = command_map.get(raw_value)
         if not command:
             command = f"{command_prefix}{_format_command_value(capability, raw_value)}"
+        _bind_runtime_state(runtime_state, inverter)
+        if runtime_state is not None:
+            # Dispatch may time out after the device accepted a write. Two
+            # fresh readbacks (the hub's confirmation passes), never a resend.
+            runtime_state.setdefault(_PENDING_READBACK_KEY, {})[capability.read_key] = {
+                "keys": (capability.value_key, capability.key), "remaining": 2,
+            }
         response = await self._session(transport, inverter.probe_target).request(command)
         if response != "ACK":
             raise RuntimeError(f"unexpected_write_response:{capability.key}:{response}")
 
         written_value = _decode_capability_value(capability, raw_value)
-        inverter.details[capability.value_key] = written_value
-        if capability.key != capability.value_key:
-            inverter.details[capability.key] = written_value
+        # ACK is not a measurement. The post-write refresh must decode it.
         return written_value
 
     def _session(self, transport, target: ProbeTarget) -> AsciiLineSession:
@@ -699,7 +728,7 @@ async def _async_collect_eybond_g_ascii_values(
     poll_interval: float | None = None,
     now_monotonic: float | None = None,
 ) -> dict[str, Any]:
-    del poll_interval
+    del poll_interval  # Cadence is monotonic, never a count of user intervals.
     values: dict[str, Any] = {}
     now = time.monotonic() if now_monotonic is None else float(now_monotonic)
 
@@ -707,6 +736,7 @@ async def _async_collect_eybond_g_ascii_values(
         await _async_collect_eybond_g_ascii_core_values(session, values)
         return values
 
+    owner = runtime_state.get("eybond_g_ascii_owner") if runtime_state is not None else None
     session = _GAsciiRuntimePoll(session, values)
     await _async_collect_eybond_g_ascii_core_values(session, values)
     session.require_core_reply()
@@ -717,16 +747,37 @@ async def _async_collect_eybond_g_ascii_values(
     state = deepcopy(runtime_state) if runtime_state is not None else {}
     record_command_success(state, "__g_ascii_core__")
 
-    await _async_collect_eybond_g_ascii_offline_fingerprint_values(session, values)
+    fingerprint_due = state.get("eybond_g_ascii_fingerprint_due", 0.0)
+    fingerprint_polled = now >= fingerprint_due
+    if fingerprint_polled:
+        await _async_collect_eybond_g_ascii_offline_fingerprint_values(session, values)
+        # Static identity is not telemetry. Missing/unsupported fingerprints
+        # get a paced retry; a reload/rebind clears this driver-owned state.
+        complete = all(key in values for key in (
+            "rated_output_voltage", "eybond_g_ascii_software_version",
+        ))
+        state["eybond_g_ascii_fingerprint_due"] = now + (3600.0 if complete else 60.0)
+    clock_polled = now >= state.get("eybond_g_ascii_clock_due", 0.0)
     await _async_collect_eybond_g_ascii_secondary_values(
         session,
         values,
         runtime_state=state,
+        read_clock=clock_polled,
     )
+    if clock_polled:
+        state["eybond_g_ascii_clock_due"] = now + 60.0
+    groups = tuple(dict.fromkeys(
+        group for cap in capabilities if (group := _readback_group(cap))
+    ))
+    pending = state.get(_PENDING_READBACK_KEY, {})
+    forced = {_readback_group(cap) for cap in capabilities if cap.read_key in pending}
+    cadence = PeriodicReadCadence(state.setdefault(_SETTINGS_CADENCE_KEY, {}), now=now)
+    selected = cadence.select(groups, limit=_SETTINGS_GROUPS_PER_POLL, forced=forced)
+    selected_capabilities = tuple(cap for cap in capabilities if _readback_group(cap) in selected)
     await _async_collect_g_ascii_capability_readbacks(
         session,
         values,
-        capabilities,
+        selected_capabilities,
         runtime_state=state,
         now_monotonic=now,
         deferred=False,
@@ -740,20 +791,44 @@ async def _async_collect_eybond_g_ascii_values(
     await _async_collect_g_ascii_capability_readbacks(
         session,
         values,
-        capabilities,
+        selected_capabilities,
         runtime_state=state,
         now_monotonic=now,
         deferred=True,
     )
     await session.async_check_liveness()
-    values["eybond_g_ascii_runtime_polled_groups"] = (
-        "core, fingerprint, secondary, readbacks"
-        if capabilities
-        else "core, fingerprint, secondary"
+    for group in selected:
+        caps = [cap for cap in selected_capabilities if _readback_group(cap) == group]
+        cadence.attempted(group, success=all(cap.value_key in values for cap in caps))
+    # Visibility evidence remains authoritative even between scheduled reads.
+    for cap in capabilities:
+        group = _readback_group(cap)
+        commands = ("TE?", "TD?") if group == "feature_flag" else (
+            ("V???", "HV?") if group == "output_voltage" else (group,)
+        )
+        for command in commands:
+            if _readback_command_is_suppressed(state, command):
+                _mark_readback_capabilities_hidden(values, (cap,), command)
+    _publish_suppressed_readback_commands(values, state)
+    missing = set()
+    for key, item in tuple(pending.items()):
+        missing.update(set(item["keys"]) - values.keys())
+        item["remaining"] -= 1
+        if item["remaining"] <= 0:
+            pending.pop(key)
+    values["eybond_g_ascii_readback_missing_keys"] = sorted(missing)
+    values["eybond_g_ascii_settings_cadence"] = cadence.finish(groups)
+    values["eybond_g_ascii_settings_cadence"]["selected_groups"] = sorted(selected)
+    values["eybond_g_ascii_settings_cadence"]["groups_per_poll"] = _SETTINGS_GROUPS_PER_POLL
+    values["eybond_g_ascii_runtime_polled_groups"] = ", ".join(
+        ["core"] + (["fingerprint"] if fingerprint_polled else []) + ["secondary"]
+        + (["readbacks"] if selected_capabilities else [])
     )
 
     commit_cycle_failures(state)
     if runtime_state is not None:
+        if runtime_state.get("eybond_g_ascii_owner") != owner:
+            raise ConnectionError("g_ascii_binding_changed_during_poll")
         runtime_state.clear()
         runtime_state.update(state)
 
@@ -771,6 +846,7 @@ def _take_g_ascii_driver_diagnostics(values: dict[str, Any]) -> dict[str, Any]:
         "eybond_g_ascii_gbms_skipped_reason",
         "eybond_g_ascii_gbms_retry_after_s",
         "eybond_g_ascii_suppressed_readback_commands",
+        "eybond_g_ascii_settings_cadence",
     }
     prefixes = (
         "capability_hidden_reason_",
@@ -789,6 +865,7 @@ async def _async_collect_eybond_g_ascii_secondary_values(
     values: dict[str, Any],
     *,
     runtime_state: dict[str, Any] | None = None,
+    read_clock: bool = True,
 ) -> None:
     gtmp = await _optional_request(session, values, "GTMP", runtime_state=runtime_state)
     if gtmp:
@@ -911,6 +988,8 @@ async def _async_collect_eybond_g_ascii_secondary_values(
         fields = parse_space_fields(tcqn)
         _set_float(values, "equalization_elapsed_hours", fields, 0)
 
+    if not read_clock:
+        return
     date = await _optional_request(session, values, "DATE??????", runtime_state=runtime_state)
     if date:
         fields = parse_space_fields(date)
@@ -939,6 +1018,13 @@ async def _async_collect_eybond_g_ascii_bms_values(
     """
 
     bms_state = _bms_communication_readback_state(values)
+    if bms_state is not None:
+        runtime_state["eybond_g_ascii_bms_enabled"] = {"enabled": bms_state, "observed": now_monotonic}
+    else:
+        # Routing hint only: do not republish a cached selector as a fresh
+        # setting. Periodic TE?/TD? reads still observe external changes.
+        hint = runtime_state.get("eybond_g_ascii_bms_enabled", {})
+        bms_state = hint.get("enabled") if now_monotonic - hint.get("observed", 0) < 60 else None
     if bms_state is False:
         values["g_ascii_bms_available"] = False
         values["eybond_g_ascii_gbms_skipped_reason"] = "bms_communication_disabled"
@@ -1036,9 +1122,8 @@ async def _async_collect_g_ascii_capability_readbacks(
     for read_key in by_read_key:
         definition = _G_ASCII_SETTINGS_BY_READ_KEY[read_key]
         if definition.readback_kind in {"enum_command", "numeric_command"} and definition.read_command:
-            command_responses.setdefault(
-                definition.read_command,
-                await _capability_readback_request(
+            if definition.read_command not in command_responses:
+                command_responses[definition.read_command] = await _capability_readback_request(
                     session,
                     values,
                     definition.read_command,
@@ -1048,8 +1133,7 @@ async def _async_collect_g_ascii_capability_readbacks(
                         by_read_key,
                         definition.read_command,
                     ),
-                ),
-            )
+                )
         elif definition.readback_kind == "feature_flag":
             needs_feature_flags = True
         elif definition.readback_kind == "output_voltage":

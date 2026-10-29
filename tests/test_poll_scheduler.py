@@ -27,6 +27,41 @@ SMG_MODBUS_POLL_POLICY = PollPolicy(min_auto_interval=3.0, max_auto_interval=60.
 
 
 class PollSchedulerTests(unittest.TestCase):
+    def test_manual_sustained_overrun_adds_headroom_without_changing_option(self):
+        scheduler = PollScheduler(manual_interval=10)
+        self.assertEqual(scheduler.observe(26).effective_interval, 10)
+        self.assertEqual(scheduler.observe(26).effective_interval, 10)
+        decision = scheduler.observe(26)
+        self.assertTrue(decision.manual_backoff_active)
+        self.assertEqual(decision.effective_interval, 34)
+        self.assertEqual(decision.manual_interval, 10)
+        self.assertEqual(decision.mode, POLL_MODE_MANUAL)
+        # Coordinator configures from unchanged options before every poll.
+        scheduler.configure(manual_interval=10, mode=POLL_MODE_MANUAL)
+        self.assertEqual(scheduler.current_interval(), 34)
+        self.assertEqual(scheduler.observe(26).effective_interval, 34)
+        self.assertEqual(scheduler.observe(600, success=False).effective_interval, 34)
+        for _ in range(3):
+            decision = scheduler.observe(5)
+        self.assertFalse(decision.manual_backoff_active)
+        self.assertEqual(decision.effective_interval, 10)
+
+    def test_manual_failed_cycles_and_single_slow_settings_sweeps_do_not_trigger(self):
+        scheduler = PollScheduler(manual_interval=10)
+        for duration, success in ((26, True), (100, False), (26, True), (4, True)) * 4:
+            decision = scheduler.observe(duration, success=success)
+            self.assertFalse(decision.manual_backoff_active)
+            self.assertEqual(decision.effective_interval, 10)
+
+    def test_manual_option_change_resets_guard_and_long_cost_is_not_auto_capped(self):
+        scheduler = PollScheduler(manual_interval=10)
+        for _ in range(3):
+            decision = scheduler.observe(200)
+        self.assertEqual(decision.effective_interval, 260)
+        scheduler.configure(manual_interval=300)
+        self.assertEqual(scheduler.current_interval(), 300)
+        self.assertFalse(scheduler.last_decision.manual_backoff_active)
+
     def test_manual_keeps_configured_interval_and_reports_recommendation(self) -> None:
         scheduler = PollScheduler(
             policy=ASCII_POLL_POLICY,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
-from ..link_models import EybondLinkRoute, LinkRoute
+from ..link_models import EybondLinkRoute, LinkRoute, RawSerialLinkRoute
 from ..link_transport import PayloadLinkTransport, async_send_payload, select_payload_route
 
 
@@ -78,6 +78,7 @@ class AsciiLineSession:
                 collector_addr=collector_addr,
             )
         self._route: LinkRoute = route
+        self._last_route: LinkRoute | None = None
         self._payload_family = str(payload_family or "").strip()
 
     @property
@@ -99,11 +100,13 @@ class AsciiLineSession:
         """Send one ASCII command and return the raw response frame."""
 
         try:
+            self._last_route = None
             route = select_payload_route(
                 self._transport,
                 self._route,
                 payload_family=self._payload_family,
             )
+            self._last_route = route
             response = await async_send_payload(
                 self._transport,
                 build_ascii_line_request(command),
@@ -117,6 +120,11 @@ class AsciiLineSession:
     def last_transport_timing(self) -> dict[str, int]:
         """Return timing metrics from transports that expose raw passthrough data."""
 
+        # These counters describe raw serial only, not an FC=4 request. In a
+        # framed session their default zeros (or old raw values) are not timing
+        # evidence. The caller still records the full request wall-clock.
+        if not isinstance(self._last_route, RawSerialLinkRoute):
+            return {}
         collector = getattr(self._transport, "collector_info", None)
         if collector is None:
             return {}
