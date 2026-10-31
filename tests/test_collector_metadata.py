@@ -41,8 +41,13 @@ from custom_components.eybond_local.collector.metadata_result import (  # noqa: 
     OUTCOME_TRANSPORT_ERROR,
     CollectorMetadataChannelReadResult,
 )
+from custom_components.eybond_local.collector.parameter_registry import (  # noqa: E402
+    FramedMetadataReadCursor,
+    RUNTIME_COLLECTOR_PARAMETERS,
+)
 from custom_components.eybond_local.runtime.collector_metadata import (  # noqa: E402
     STATUS_CACHED,
+    STATUS_RETRY_WAIT,
     STATUS_COMMAND_ERROR,
     STATUS_EMPTY,
     STATUS_FRESH,
@@ -196,6 +201,71 @@ class AtReaderOutcomeTests(unittest.TestCase):
         self.assertEqual(result.values.get("collector_pn"), "E123")
 
 class FramedReaderOutcomeTests(unittest.TestCase):
+    def test_silent_sweeps_are_bounded_and_eventually_retry_every_parameter(self) -> None:
+        async def _run():
+            parameters = [item.parameter for item in RUNTIME_COLLECTOR_PARAMETERS]
+            transport = _FramedTransport({}, raise_on={p: TimeoutError() for p in parameters})
+            cursor = FramedMetadataReadCursor()
+            batches = []
+            while True:
+                before = len(transport.queries)
+                result = await async_read_framed_metadata(transport, cursor=cursor)
+                batches.append(result)
+                self.assertLessEqual(len(transport.queries) - before, 2)
+                self.assertEqual(result.outcome, OUTCOME_TRANSPORT_ERROR)
+                self.assertTrue(result.timed_out)
+                self.assertFalse(result.unsupported_semantic_fields)
+                self.assertFalse(result.is_strike)
+                if not cursor.next_index:
+                    break
+                self.assertLess(len(batches), len(parameters))
+            self.assertEqual(transport.queries, parameters)
+            await async_read_framed_metadata(transport, cursor=cursor)
+            self.assertEqual(transport.queries[-2:], parameters[:2])
+        asyncio.run(_run())
+
+    def test_partial_timeout_sweep_resumes_without_starving_later_fields(self) -> None:
+        async def _run():
+            transport = _FramedTransport(
+                {2: b"\x00\x02Q0000000000001", 6: b"\x00\x066.0"},
+                raise_on={4: TimeoutError(), 5: TimeoutError()},
+            )
+            cursor = FramedMetadataReadCursor()
+            first = await async_read_framed_metadata(transport, cursor=cursor)
+            self.assertEqual(transport.queries, [2, 4, 5])
+            self.assertGreater(first.deferred_commands, 0)
+            self.assertEqual(first.values, {"collector_pn": "Q0000000000001"})
+            second = await async_read_framed_metadata(transport, cursor=cursor)
+            self.assertEqual(transport.queries[3], 6)
+            self.assertEqual(second.values["collector_hardware_version"], "6.0")
+            self.assertEqual(second.outcome, OUTCOME_PARTIAL)
+            self.assertEqual(cursor.next_index, 0)
+            self.assertFalse(second.deferred_commands)
+        asyncio.run(_run())
+
+    def test_explicit_unsupported_responses_do_not_spend_timeout_budget(self) -> None:
+        transport = _FramedTransport({55: b"\x00\x37-60"})
+        result = asyncio.run(async_read_framed_metadata(transport))
+        self.assertEqual(len(transport.queries), len(RUNTIME_COLLECTOR_PARAMETERS))
+        self.assertEqual(result.values["collector_signal_strength"], -60)
+        self.assertEqual(result.outcome, OUTCOME_SUCCESS)
+        self.assertFalse(result.timed_out)
+
+    def test_disconnect_stops_immediately_and_cancellation_keeps_cursor(self) -> None:
+        for error in (OSError("gone"), EOFError(), asyncio.CancelledError()):
+            with self.subTest(error=type(error).__name__):
+                cursor = FramedMetadataReadCursor(next_index=1)
+                transport = _FramedTransport({}, raise_on={4: error})
+                if isinstance(error, asyncio.CancelledError):
+                    with self.assertRaises(asyncio.CancelledError):
+                        asyncio.run(async_read_framed_metadata(transport, cursor=cursor))
+                    self.assertEqual(cursor.next_index, 1)
+                else:
+                    result = asyncio.run(async_read_framed_metadata(transport, cursor=cursor))
+                    self.assertEqual(result.outcome, OUTCOME_TRANSPORT_ERROR)
+                    self.assertEqual(cursor.next_index, 2)
+                self.assertEqual(transport.queries, [4])
+
     def test_delivery_failure_is_transport_error(self) -> None:
         transport = _FramedTransport({}, raise_on={2: OSError("down"), 5: OSError("down")})
         result = asyncio.run(async_read_framed_metadata(transport))
@@ -303,6 +373,95 @@ class MetadataHealthModelTests(unittest.TestCase):
 
 
 class CadenceAndMergeTests(unittest.TestCase):
+    def test_failed_sweep_cooldown_starts_at_completion_even_without_cache(self) -> None:
+        async def _run():
+            clock = [100.0]
+            calls = []
+            service = CollectorMetadataService()
+            service._now = lambda: clock[0]
+
+            async def _slow_failure():
+                calls.append(clock[0])
+                clock[0] += 40
+                return CollectorMetadataChannelReadResult.transport_error("TimeoutError")
+
+            routes = _routeset(framed=_framed_route(_slow_failure))
+            failed = await service.async_refresh(routes, poll_interval=10)
+            self.assertEqual(failed.channel_status[FRAMED_METADATA_CHANNEL], STATUS_TRANSPORT_ERROR)
+            clock[0] = 169
+            waiting = await service.async_refresh(routes, poll_interval=10)
+            self.assertEqual(calls, [100])
+            self.assertEqual(waiting.channel_status[FRAMED_METADATA_CHANNEL], STATUS_RETRY_WAIT)
+            self.assertFalse(waiting.fresh)
+            self.assertFalse(waiting.used_cached_channels)
+            clock[0] = 170
+            await service.async_refresh(routes, poll_interval=10)
+            self.assertEqual(calls, [100, 170])
+        asyncio.run(_run())
+
+    def test_issue70_partial_loss_retains_cache_and_resumes_after_cooldown(self) -> None:
+        async def _run():
+            clock = [100.0]
+            service = CollectorMetadataService()
+            service._now = lambda: clock[0]
+            service.framed_values = {"collector_ssid": "Lab"}
+            transport = _FramedTransport(
+                {2: b"\x00\x02Q0000000000001", 6: b"\x00\x066.0"},
+                raise_on={4: TimeoutError(), 5: TimeoutError()},
+            )
+            routes = build_collector_metadata_routes(framed_transport=transport, generation=1)
+            first = await service.async_refresh(routes, poll_interval=10)
+            self.assertEqual(first.partial_channels, (FRAMED_METADATA_CHANNEL,))
+            self.assertEqual(first.merged_values["collector_ssid"], "Lab")
+            self.assertEqual(transport.queries, [2, 4, 5])
+            await service.async_refresh(routes, poll_interval=10)
+            self.assertEqual(transport.queries, [2, 4, 5])
+            clock[0] = 130
+            second = await service.async_refresh(routes, poll_interval=10)
+            self.assertEqual(second.merged_values["collector_pn"], "Q0000000000001")
+            self.assertEqual(second.merged_values["collector_hardware_version"], "6.0")
+            # Explicit unsupported reply on resumed parameter 41 removes its old cache.
+            self.assertNotIn("collector_ssid", second.merged_values)
+            self.assertFalse(service.dead_channels())
+        asyncio.run(_run())
+
+    def test_new_generation_and_explicit_liveness_bypass_failure_cooldown(self) -> None:
+        async def _run():
+            calls = []
+            service = CollectorMetadataService()
+            service._now = lambda: 100.0
+            routes = _routeset(generation=1, framed=_framed_route(
+                _reader(outcome=OUTCOME_TRANSPORT_ERROR, calls=calls)))
+            await service.async_refresh(routes, poll_interval=10)
+            await service.async_refresh(routes, poll_interval=10)
+            self.assertEqual(len(calls), 1)
+            await service.async_refresh(routes, poll_interval=10, force_liveness=True)
+            self.assertEqual(len(calls), 2)
+            routes = _routeset(generation=2, framed=routes.framed)
+            await service.async_refresh(routes, poll_interval=10)
+            self.assertEqual(len(calls), 3)
+            service.invalidate()
+            await service.async_refresh(routes, poll_interval=10)
+            self.assertEqual(len(calls), 4)
+        asyncio.run(_run())
+
+    def test_partial_blank_clears_only_observed_fields(self) -> None:
+        async def _run():
+            service = CollectorMetadataService()
+            service.framed_values = {"collector_ssid": "old", "version": "keep"}
+
+            async def _partial():
+                return CollectorMetadataChannelReadResult(
+                    values={"collector_pn": "Q0000000000001"},
+                    outcome=OUTCOME_PARTIAL,
+                    observed_semantic_fields=frozenset({"collector_pn", "collector_ssid"}),
+                )
+
+            result = await service.async_refresh(_routeset(framed=_framed_route(_partial)), poll_interval=10)
+            self.assertNotIn("collector_ssid", result.merged_values)
+            self.assertEqual(result.merged_values["version"], "keep")
+        asyncio.run(_run())
+
     def test_framed_cadence_skips_within_interval(self) -> None:
         async def _run():
             calls = []
@@ -479,6 +638,50 @@ class DeadChannelTests(unittest.TestCase):
 
 
 class GenerationGuardTests(unittest.TestCase):
+    def test_failed_obsolete_reader_does_not_throttle_new_session(self) -> None:
+        async def _run():
+            generation = [1]
+            service = CollectorMetadataService(generation_provider=lambda: generation[0])
+            service._now = lambda: 100.0
+
+            async def _old_failure():
+                generation[0] = 2
+                raise TimeoutError()
+
+            old = await service.async_refresh(
+                _routeset(generation=1, framed=_framed_route(_old_failure)),
+                poll_interval=10,
+            )
+            self.assertEqual(old.channel_status[FRAMED_METADATA_CHANNEL], STATUS_STALE_GENERATION)
+            self.assertIsNone(service._framed_last_attempt)
+            new = await service.async_refresh(
+                _routeset(generation=2, framed=_framed_route(_reader({"version": "new"}))),
+                poll_interval=10,
+            )
+            self.assertEqual(new.merged_values, {"version": "new"})
+            self.assertTrue(new.fresh)
+        asyncio.run(_run())
+
+    def test_stale_unsupported_result_does_not_change_field_ownership(self) -> None:
+        async def _run():
+            generation = [1]
+            service = CollectorMetadataService(generation_provider=lambda: generation[0])
+            service.framed_values = {"collector_ssid": "keep"}
+
+            async def _old_result():
+                generation[0] = 2
+                return CollectorMetadataChannelReadResult(
+                    outcome=OUTCOME_EMPTY,
+                    unsupported_semantic_fields=frozenset({"collector_ssid"}),
+                )
+
+            result = await service.async_refresh(
+                _routeset(generation=1, framed=_framed_route(_old_result)), poll_interval=10,
+            )
+            self.assertEqual(result.merged_values["collector_ssid"], "keep")
+            self.assertFalse(service._framed_unsupported_semantic_fields)
+        asyncio.run(_run())
+
     def test_stale_generation_postflight_discards_result(self) -> None:
         async def _run():
             generation = {"value": 1}

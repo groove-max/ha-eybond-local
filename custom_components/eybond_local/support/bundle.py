@@ -330,6 +330,7 @@ def _build_diagnostics_split(
                 "collector_metadata_channel_duration_ms",
                 "collector_metadata_channel_errors",
                 "collector_metadata_channel_commands",
+                "collector_metadata_channel_deferred_commands",
                 "collector_metadata_channel_failures",
                 "collector_metadata_partial_channels",
                 "collector_metadata_effective_exclusions",

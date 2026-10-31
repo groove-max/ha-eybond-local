@@ -10,6 +10,7 @@ from .common import (
     CollectorTransport,
     ConfirmedWireBinding,
     DiscoveryAnnouncer,
+    FramedMetadataReadCursor,
     InProcessFailClosedShadowProxyHandler,
     InProcessProxyCaptureHandler,
     RouteLease,
@@ -138,6 +139,9 @@ class EybondRuntimeLinkManager(
         # replaced session.  The token contains only registry-owned session
         # identity/location -- never peer IP, endpoint, or collector type.
         self._owned_session_generation = 0
+        self._framed_metadata_cursor_state: (
+            tuple[int, str, FramedMetadataReadCursor] | None
+        ) = None
         self._owned_session_fingerprint: tuple[str, int] = ("", 0)
         # Socket ownership and wire confirmation are related but distinct
         # lifecycle transitions.  A newly accepted socket first appears as

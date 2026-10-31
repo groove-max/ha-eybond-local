@@ -19,6 +19,7 @@ from ...collector.cloud_family import (
 from ...collector.discovery import DiscoveryAnnouncer, async_send_callback_trigger
 from ...collector.metadata import (
     CollectorMetadataRouteSet,
+    FramedMetadataReadCursor,
     build_collector_metadata_routes,
 )
 from ...connection.confirmed_session_protocol import ConfirmedSessionProtocolEvidence

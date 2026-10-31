@@ -46,6 +46,7 @@ from .metadata_result import (
 )
 from .parameter_registry import (
     COLLECTOR_PARAMETER_DEFINITION_BY_ID,
+    FramedMetadataReadCursor,
     RUNTIME_COLLECTOR_SEMANTIC_FIELDS,
     read_runtime_collector_values,
 )
@@ -98,6 +99,7 @@ async def async_read_framed_metadata(
     transport: object,
     *,
     excluded_semantic_fields: frozenset[str] = frozenset(),
+    cursor: FramedMetadataReadCursor | None = None,
 ) -> CollectorMetadataChannelReadResult:
     """Read the FC=2 read-only collector metadata sweep over the neutral wire.
 
@@ -109,6 +111,7 @@ async def async_read_framed_metadata(
     return await read_runtime_collector_values(
         CollectorWireManagementSession(transport),
         excluded_semantic_fields=excluded_semantic_fields,
+        cursor=cursor,
     )
 
 
@@ -290,6 +293,7 @@ def build_collector_metadata_routes(
     at_provenance: str = "",
     bootstrap_provenance: str = "",
     at_capability_confirmed: bool = False,
+    framed_read_cursor: FramedMetadataReadCursor | None = None,
 ) -> CollectorMetadataRouteSet:
     """Bind owned transports to metadata channels.
 
@@ -333,10 +337,16 @@ def build_collector_metadata_routes(
     )
 
     if framed_transport is not None:
+        read_cursor = (
+            framed_read_cursor
+            if framed_read_cursor is not None
+            else FramedMetadataReadCursor()
+        )
         framed_reader_for_exclusions = (
             lambda excluded, t=framed_transport: async_read_framed_metadata(
                 t,
                 excluded_semantic_fields=excluded,
+                cursor=read_cursor,
             )
         )
         framed_route = CollectorMetadataRoute(
@@ -344,6 +354,7 @@ def build_collector_metadata_routes(
             reader=lambda t=framed_transport, excluded=framed_excluded_fields: async_read_framed_metadata(
                 t,
                 excluded_semantic_fields=excluded,
+                cursor=read_cursor,
             ),
             provenance=framed_provenance or provenance,
             session_id=session_id,

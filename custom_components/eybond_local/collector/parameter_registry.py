@@ -33,6 +33,21 @@ _FRAMED_TRANSPORT_FAILURES = (
     asyncio.LimitOverrunError,
 )
 
+# Bound silence within one sweep; a timeout is NOT an unsupported parameter.
+_MAX_SWEEP_TIMEOUTS = 2
+
+
+@dataclass
+class FramedMetadataReadCursor:
+    """Resume a bounded read sweep on the same owned physical session.
+
+    Progress is not a capability verdict. A later pass revisits every parameter,
+    including timed-out ones. The route authority replaces this object when the
+    owned session changes, so an old reader cannot advance a new session's plan.
+    """
+
+    next_index: int = 0
+
 
 class CollectorMetadataQuerySession(Protocol):
     """Minimal provider-neutral FC=2 read contract used by metadata polling."""
@@ -209,6 +224,7 @@ async def read_runtime_collector_values(
     *,
     parameters: tuple[CollectorParameterDefinition, ...] = RUNTIME_COLLECTOR_PARAMETERS,
     excluded_semantic_fields: frozenset[str] = frozenset(),
+    cursor: FramedMetadataReadCursor | None = None,
 ) -> CollectorMetadataChannelReadResult:
     """Read the FC=2 read-only collector metadata set with a structured outcome.
 
@@ -220,6 +236,11 @@ async def read_runtime_collector_values(
       failure;
     * some parameters answered with metadata + a delivery/command error ->
       ``partial``; all clean with metadata -> ``success``; none -> ``empty``.
+
+    At most two response timeouts are spent per invocation; a hard disconnect
+    stops immediately. The owned-session cursor resumes unattempted parameters
+    on the next scheduled read, then wraps for retry. A continuation publishes
+    partial metadata even when all of its remaining commands answer.
     """
 
     values: dict[str, object] = {}
@@ -230,7 +251,14 @@ async def read_runtime_collector_values(
     command_failed = False
     safe_code = ""
     unsupported_semantic_fields: set[str] = set()
-    for definition in parameters:
+    observed_semantic_fields: set[str] = set()
+    timeouts = 0
+    start_index = cursor.next_index if cursor is not None else 0
+    if not 0 <= start_index < len(parameters):
+        start_index = 0
+    next_index = 0
+    for index in range(start_index, len(parameters)):
+        definition = parameters[index]
         if definition.sensitive_read:
             continue
         if definition.decode is None:
@@ -248,6 +276,11 @@ async def read_runtime_collector_values(
             transport_failed = True
             failed += 1
             safe_code = safe_code or type(exc).__name__
+            if isinstance(exc, TimeoutError):
+                timeouts += 1
+            if not isinstance(exc, TimeoutError) or timeouts >= _MAX_SWEEP_TIMEOUTS:
+                next_index = index + 1 if index + 1 < len(parameters) else 0
+                break
             continue
         except CollectorWireError as exc:  # malformed / unparseable response
             command_failed = True
@@ -277,11 +310,16 @@ async def read_runtime_collector_values(
             failed += 1
             safe_code = safe_code or str(exc).split(":", 1)[0]
             continue
+        observed_semantic_fields.update(
+            definition.semantic_fields - excluded_semantic_fields
+        )
         if decoded:
             merge_collector_signal_values(values, decoded)
             successful += 1
     has_metadata = successful > 0
-    if has_metadata and not (transport_failed or command_failed):
+    if cursor is not None:
+        cursor.next_index = next_index
+    if has_metadata and not (transport_failed or command_failed or start_index):
         outcome = OUTCOME_SUCCESS
     elif has_metadata:
         outcome = OUTCOME_PARTIAL
@@ -298,5 +336,19 @@ async def read_runtime_collector_values(
         attempted_commands=attempted,
         successful_commands=successful,
         failed_commands=failed,
+        timed_out=bool(timeouts),
         unsupported_semantic_fields=frozenset(unsupported_semantic_fields),
+        observed_semantic_fields=frozenset(observed_semantic_fields),
+        deferred_commands=(
+            sum(
+                not item.sensitive_read
+                and item.decode is not None
+                and not (
+                    item.semantic_fields
+                    and item.semantic_fields.issubset(excluded_semantic_fields)
+                )
+                for item in parameters[next_index:]
+            )
+            if next_index else 0
+        ),
     )

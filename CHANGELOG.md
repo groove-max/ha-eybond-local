@@ -9,6 +9,15 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Bound FC2 collector-metadata reads after lost replies (#70): stop a sweep
+  after two response timeouts, resume deferred parameters on the same owned
+  session, and wait between attempts even when no metadata was obtained.
+  Keep previously observed fields during partial reads without treating
+  timeouts as unsupported parameters or cached data as a new observation.
+  Reset continuation on a new session and expose deferred-read counts in
+  support diagnostics. This reduces work after a failure; it does not establish
+  the cause of the collector's intermittent local connection loss.
+
 - Keep dynamically discovered selects on the current config-entry generation
   during metadata reloads (#72). Retiring platforms must not add controls that
   retain a stopped runtime and reject writes while fresh sensors keep working.

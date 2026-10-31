@@ -56,6 +56,7 @@ from .metadata_health import CollectorMetadataHealth
 # Channel status codes surfaced in diagnostics (safe, typed -- never payloads).
 STATUS_FRESH = "fresh"
 STATUS_CACHED = "cached"
+STATUS_RETRY_WAIT = "retry_wait"
 STATUS_EMPTY = "empty"
 STATUS_TRANSPORT_ERROR = "transport_error"
 STATUS_COMMAND_ERROR = "command_error"
@@ -102,6 +103,7 @@ class CollectorMetadataService:
         self._framed_values: dict[str, object] = {}
         self._at_values: dict[str, object] = {}
         self._framed_last_refresh = 0.0
+        self._framed_last_attempt: float | None = None
         self._framed_bootstrap_last_attempt = 0.0
         self._at_last_refresh = 0.0
         self._at_last_attempt = 0.0
@@ -191,6 +193,7 @@ class CollectorMetadataService:
         self._framed_values.clear()
         self._at_values.clear()
         self._framed_last_refresh = 0.0
+        self._framed_last_attempt = None
         self._framed_bootstrap_last_attempt = 0.0
         self._at_last_refresh = 0.0
         self._at_last_attempt = 0.0
@@ -298,6 +301,7 @@ class CollectorMetadataService:
             # Capability/field ownership is scoped to one physical session
             # generation. A reconnect renegotiates from the declared defaults.
             self._semantic_binding_generation = start_generation
+            self._framed_last_attempt = None
             self._at_owned_semantic_fields.clear()
             self._framed_unsupported_semantic_fields.clear()
 
@@ -352,16 +356,24 @@ class CollectorMetadataService:
                 or not self._framed_values
                 or now - self._framed_last_refresh >= refresh_interval
             )
-            if due:
+            attempt_due = (
+                self._framed_last_attempt is None
+                or now - self._framed_last_attempt >= refresh_interval
+            )
+            if due and (force_fc or attempt_due):
                 result, status, ms = await self._run_channel(
                     routes.framed,
                     start_generation,
                     excluded_semantic_fields=framed_exclusions,
                 )
                 framed_ms = max(framed_ms, ms)
-                self._framed_unsupported_semantic_fields.update(
-                    result.unsupported_semantic_fields
-                )
+                if status != STATUS_STALE_GENERATION:
+                    # Count from completion, not start: a slow failed sweep must
+                    # not consume its own cooldown and immediately repeat.
+                    self._framed_last_attempt = self._now()
+                    self._framed_unsupported_semantic_fields.update(
+                        result.unsupported_semantic_fields
+                    )
                 fallback_fields = (
                     self._framed_unsupported_semantic_fields
                     & routes.at.excluded_semantic_fields
@@ -379,13 +391,29 @@ class CollectorMetadataService:
                         routes.at.excluded_semantic_fields
                         - frozenset(self._at_owned_semantic_fields)
                     )
+                if status in (STATUS_FRESH, STATUS_EMPTY):
+                    # Unread fields remain last-known, not fresh observations.
+                    # Explicit blank/unsupported replies, unlike timeouts,
+                    # may remove a formerly cached value.
+                    for field in (
+                        result.observed_semantic_fields
+                        | result.unsupported_semantic_fields
+                    ):
+                        self._framed_values.pop(field, None)
                 if status == STATUS_FRESH:
-                    self._framed_values = dict(result.values)
+                    if result.outcome == OUTCOME_PARTIAL:
+                        self._framed_values.update(result.values)
+                    else:
+                        self._framed_values = dict(result.values)
                     self._framed_last_refresh = now
                     fresh_channels.append(FRAMED_METADATA_CHANNEL)
                     if result.outcome == OUTCOME_PARTIAL:
                         partial_channels.append(FRAMED_METADATA_CHANNEL)
                 self._record_channel(FRAMED_METADATA_CHANNEL, result, status)
+            elif due:
+                self._channel_status[FRAMED_METADATA_CHANNEL] = STATUS_RETRY_WAIT
+                if self._framed_values:
+                    used_cached.append(FRAMED_METADATA_CHANNEL)
             else:
                 self._mark_cached(FRAMED_METADATA_CHANNEL, used_cached)
 
@@ -576,7 +604,9 @@ class CollectorMetadataService:
             ms = self._elapsed_ms(started)
             return (
                 CollectorMetadataChannelReadResult.transport_error(type(exc).__name__),
-                STATUS_TRANSPORT_ERROR,
+                STATUS_STALE_GENERATION
+                if self._generation_advanced(start_generation)
+                else STATUS_TRANSPORT_ERROR,
                 ms,
             )
         ms = self._elapsed_ms(started)
@@ -665,6 +695,7 @@ class CollectorMetadataService:
                         "attempted_commands": (result.attempted_commands if result else 0),
                         "successful_commands": (result.successful_commands if result else 0),
                         "failed_commands": (result.failed_commands if result else 0),
+                        "deferred_commands": (result.deferred_commands if result else 0),
                         "partial": bool(result and result.outcome == OUTCOME_PARTIAL),
                         "timed_out": bool(result and result.timed_out),
                         "consecutive_failures": self._health.failure_count(route.channel_id),

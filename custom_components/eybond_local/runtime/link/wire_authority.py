@@ -11,6 +11,7 @@ from .common import (
     CollectorTransport,
     ConfirmedSessionProtocolEvidence,
     ConfirmedWireBinding,
+    FramedMetadataReadCursor,
     SessionHandle,
     _RUNTIME_SESSION_ENTRY_KEY,
     asyncio,
@@ -463,6 +464,11 @@ class LinkWireAuthorityMixin:
             if provenance == "unavailable":
                 provenance = "bootstrap_claimable"
 
+        cursor_state = self._framed_metadata_cursor_state
+        if cursor_state is None or cursor_state[:2] != (generation, session_id):
+            cursor_state = (generation, session_id, FramedMetadataReadCursor())
+            self._framed_metadata_cursor_state = cursor_state
+
         return build_collector_metadata_routes(
             framed_transport=framed_transport,
             at_transport=at_transport,
@@ -475,6 +481,7 @@ class LinkWireAuthorityMixin:
             # the peer IP.
             identity=str(self._collector_pn or "").strip(),
             at_capability_confirmed=at_capability_confirmed,
+            framed_read_cursor=cursor_state[2],
         )
 
     @property

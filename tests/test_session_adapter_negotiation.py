@@ -134,6 +134,7 @@ def _bare_link(
     link._runtime_claim_pn = None
     link._confirmed_wire_binding = None
     link._owned_session_generation = 0
+    link._framed_metadata_cursor_state = None
     link._session_registry = CallbackSessionRegistry(
         sessions_source=link._iter_observed_sessions,
     )
@@ -1770,6 +1771,26 @@ class CollectorManagementAdapterSelectionTests(unittest.TestCase):
 
 class CollectorMetadataRouteAuthorityTests(unittest.TestCase):
     """The metadata-route facade is decided by trusted session evidence only."""
+
+    def test_metadata_cursor_survives_route_rebuild_but_not_session_change(self) -> None:
+        link = _bare_link(
+            collector_pn=FULL_PN, collector_ip="", persisted_protocol="",
+            sessions=[_observed("s1", FULL_PN, state="routed_framed",
+                                source="framed_heartbeat")],
+        )
+        link.collector_metadata_routes()
+        old_cursor = link._framed_metadata_cursor_state[2]
+        old_cursor.next_index = 3
+        link.collector_metadata_routes()
+        self.assertIs(link._framed_metadata_cursor_state[2], old_cursor)
+        self.assertEqual(link._framed_metadata_cursor_state[2].next_index, 3)
+        link._owned_session_generation += 1
+        link.collector_metadata_routes()
+        new_cursor = link._framed_metadata_cursor_state[2]
+        self.assertIsNot(new_cursor, old_cursor)
+        self.assertEqual(new_cursor.next_index, 0)
+        old_cursor.next_index = 9  # completion from an obsolete route
+        self.assertEqual(new_cursor.next_index, 0)
 
     def test_framed_live_session_routes_framed_metadata_only(self) -> None:
         link = _bare_link(

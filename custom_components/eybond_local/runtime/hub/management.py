@@ -376,6 +376,13 @@ class HubManagementMixin:
         ]
         if commands:
             values["collector_metadata_channel_commands"] = _join(commands)
+        deferred = [
+            f"{r['channel_id']}={r.get('deferred_commands', 0)}"
+            for r in routes
+            if r.get("channel_id") and r.get("deferred_commands")
+        ]
+        if deferred:
+            values["collector_metadata_channel_deferred_commands"] = _join(deferred)
         failures = [
             f"{r['channel_id']}={r.get('consecutive_failures', 0)}"
             for r in routes

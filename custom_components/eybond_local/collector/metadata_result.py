@@ -57,6 +57,10 @@ class CollectorMetadataChannelReadResult:
     failed_commands: int = 0
     timed_out: bool = False
     unsupported_semantic_fields: frozenset[str] = frozenset()
+    # Fields answered successfully, including blank values. A partial reader
+    # may clear these from cache without discarding unrelated unread fields.
+    observed_semantic_fields: frozenset[str] = frozenset()
+    deferred_commands: int = 0
 
     @property
     def has_values(self) -> bool:

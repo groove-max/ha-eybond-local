@@ -4529,6 +4529,7 @@ class CollectorDevcodeDiagnosticsTests(unittest.TestCase):
             "routes": [
                 {
                     "channel_id": "collector:fc_metadata",
+                    "deferred_commands": 10,
                     "effective_excluded_semantic_fields": ["collector_ssid"],
                     "unsupported_semantic_fields": ["collector_ssid"],
                 },
@@ -4554,6 +4555,10 @@ class CollectorDevcodeDiagnosticsTests(unittest.TestCase):
 
         hub._apply_collector_metadata_diagnostics(values)
 
+        self.assertEqual(
+            values["collector_metadata_channel_deferred_commands"],
+            "collector:fc_metadata=10",
+        )
         self.assertEqual(
             values["collector_metadata_effective_exclusions"],
             "collector:fc_metadata=collector_ssid, "
