@@ -354,6 +354,7 @@ class _CollectorConnection:
         writer: asyncio.StreamWriter,
         *,
         initial_bytes: bytes = b"",
+        initial_liveness_monotonic: float | None = None,
         session_id: str = "",
         session_identity_callback: Callable[[str, str, str], None] | None = None,
         session_closed_callback: Callable[[str, object], None] | None = None,
@@ -379,7 +380,12 @@ class _CollectorConnection:
         self._collector.connection_count += 1
         self._collector.last_disconnect_reason = ""
         self._last_heartbeat_monotonic = None
-        self._last_liveness_monotonic = None
+        # The shared listener may already have completed an identity request on
+        # this physical socket. Its correlated reply is transport liveness, not
+        # an FC1 heartbeat; replaying its bytes cannot correlate it a second time
+        # after the runtime's request table is created. Never inherit the old
+        # connection's timestamp or replace the supplied observation time by now.
+        self._last_liveness_monotonic = initial_liveness_monotonic
         self._auxiliary_session = AuxiliaryReadSession()
         self._diagnostic_modbus = DiagnosticModbusSession()
         self._reader = reader

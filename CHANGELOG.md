@@ -9,6 +9,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Preserve a successful, correlated collector identity reply as liveness when
+  its exact socket moves from the shared listener to the framed runtime (#66).
+  FC2-only reconnects no longer lose this evidence while waiting for an FC1
+  heartbeat. Keep its original age, do not manufacture heartbeat freshness,
+  and do not transfer evidence from an old socket or unmatched response.
+
 - Keep the required SmartESS 0925 live telemetry block in normal polling (#59).
   Failed reads no longer permanently disable it as an unsupported optional
   command. Remove previously saved live-block skips automatically, including

@@ -68,6 +68,7 @@ class _PendingCollectorSocket:
     remote_port: int | None = None
     sniff_task: asyncio.Task[None] | None = None
     initial_bytes: bytes = b""
+    identity_liveness_monotonic: float | None = None
     parked: bool = False
 
 
@@ -2037,6 +2038,7 @@ class _SharedEybondListener:
                 pending.reader,
                 pending.writer,
                 initial_bytes=initial_bytes,
+                initial_liveness_monotonic=pending.identity_liveness_monotonic,
                 session_id=pending.session_id,
                 session_identity_callback=self._mark_session_identity,
                 session_closed_callback=self._mark_socket_session_closed,
@@ -2187,6 +2189,14 @@ class _SharedEybondListener:
                 progress.outcome = "response_received" if initial_read else "unrecognized_response"
             if result[0]:
                 progress.phase = "response_received"
+                # Identity observations can also be unsolicited. Only a complete
+                # response correlated to THIS probe is liveness evidence that
+                # can cross the pending -> framed-runtime handoff. Preserve its
+                # original time: activating a long-parked socket cannot renew it.
+                if request.session_protocol == "eybond_framed":
+                    correlated_pn, _ = parse_identity_probe_response(request, result[0])
+                    if correlated_pn:
+                        pending.identity_liveness_monotonic = monotonic()
             return result
         except asyncio.CancelledError:
             progress.outcome = "cancelled"
@@ -2611,6 +2621,7 @@ class _SharedEybondListener:
             pending.reader,
             pending.writer,
             initial_bytes=chunk,
+            initial_liveness_monotonic=pending.identity_liveness_monotonic,
             session_id=pending.session_id,
             session_identity_callback=self._mark_session_identity,
             session_closed_callback=self._mark_socket_session_closed,

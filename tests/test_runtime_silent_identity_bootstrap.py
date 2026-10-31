@@ -20,6 +20,9 @@ if str(HELPERS_DIR) not in sys.path:
 from custom_components.eybond_local.connection.session_registry import (
     CallbackSessionRegistry,
 )
+from custom_components.eybond_local.connection.confirmed_session_protocol import (
+    ConfirmedSessionProtocolEvidence,
+)
 from custom_components.eybond_local.connection.spec_factory import (
     build_connection_spec,
 )
@@ -287,7 +290,87 @@ class _SilentAtModbusCollector(_SilentAtCollector):
             return
 
 
+class _Fc2OnlyCollector(_SilentFramedFc1Collector):
+    """Identify over FC2, answer FC4, but never send an FC1 heartbeat."""
+
+    async def _serve(self) -> None:
+        assert self._reader is not None
+        assert self._writer is not None
+        try:
+            while True:
+                header = decode_header(await self._reader.readexactly(HEADER_SIZE))
+                payload = await self._reader.readexactly(header.payload_len)
+                if header.fcode == FC_HEARTBEAT:
+                    self.fc1_queries += 1
+                    continue
+                self.other_queries += 1
+                if header.fcode == 2 and payload == b"\x02":
+                    response = b"\x00\x02" + self._pn.encode("ascii")
+                elif header.fcode == 4:
+                    response = b"inverter-reply"
+                else:
+                    continue
+                self._writer.write(encode_header(
+                    header.tid, 0x0102, HEADER_SIZE + len(response),
+                    0xFF, header.fcode,
+                ) + response)
+                await self._writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionResetError, OSError):
+            return
+
+
 class RuntimeSilentIdentityBootstrapTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fc2_identity_handoff_proves_liveness_without_heartbeat(self):
+        """#66: the listener's successful identity read must survive activation."""
+        port = _free_port()
+        evidence = ConfirmedSessionProtocolEvidence.from_record({
+            "collector_confirmed_session_protocol": "eybond_framed",
+            "collector_confirmed_session_protocol_pn": FULL_PN,
+            "collector_confirmed_session_protocol_source": "live_session",
+        }, entry_pn=FULL_PN)
+        manager = self._manager(
+            port=port, challenge="eybond_framed", confirmed_evidence=evidence,
+        )
+        await manager.async_start()
+        self.addAsyncCleanup(manager.async_stop)
+        listener = await _acquire_shared_listener("0.0.0.0", port)
+        self.addAsyncCleanup(
+            _release_shared_listener, listener,
+            close_pending=True, close_payload=True, close_at=True,
+        )
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(
+            {**row, "listener_port": port}
+            for row in listener.discovered_collector_sessions()
+        ))
+        registry.claim("issue66-fc2-entry", collector_pn=FULL_PN)
+        manager.set_callback_ownership(registry, "issue66-fc2-entry")
+        previous_session_id = ""
+        for _ in range(2):
+            collector = _Fc2OnlyCollector(FULL_PN)
+            self.addAsyncCleanup(collector.stop)
+            await collector.connect(port)
+            await asyncio.sleep(.35)
+            with patch.object(manager, "_send_callback_trigger", new=AsyncMock()) as trigger:
+                self.assertTrue(await manager.async_try_connect(timeout=2))
+                trigger.reset_mock()
+                self.assertTrue(await manager.async_try_connect(
+                    timeout=.3, require_heartbeat=True,
+                ))
+                trigger.assert_not_awaited()
+            self.assertNotEqual(manager._claimed_session_id(), previous_session_id)
+            previous_session_id = manager._claimed_session_id()
+            self.assertFalse(manager.collector_info.heartbeat_fresh)
+            self.assertEqual(collector.other_queries, 1)  # Only listener FC2.
+            self.assertEqual(await manager._transport.async_send_forward(
+                b"read-only-test", devcode=1, collector_addr=255,
+            ), b"inverter-reply")
+            await collector.stop()
+            deadline = asyncio.get_running_loop().time() + 2
+            while any(row["session_id"] == previous_session_id
+                      for row in listener.discovered_collector_sessions()):
+                self.assertLess(asyncio.get_running_loop().time(), deadline)
+                await asyncio.sleep(.01)
+
     async def test_strong_passive_session_from_different_ip_is_adopted_without_udp(self):
         """Issue #66 shape: full PN, working FC2/FC4, stale configured peer IP."""
         await self._exercise_different_peer_recovery(arrive_during_trigger=False)
@@ -387,12 +470,14 @@ class RuntimeSilentIdentityBootstrapTests(unittest.IsolatedAsyncioTestCase):
         port: int,
         challenge: str = "at_text",
         collector_pn: str = FULL_PN,
+        confirmed_evidence=None,
     ):
         return EybondRuntimeLinkManager(
             server_ip="127.0.0.1",
             collector_ip="127.0.0.1",
             collector_pn=collector_pn,
             collector_identity_challenge_protocol=challenge,
+            confirmed_session_protocol_evidence=confirmed_evidence,
             tcp_port=port,
             udp_port=58899,
             discovery_target="127.0.0.1",

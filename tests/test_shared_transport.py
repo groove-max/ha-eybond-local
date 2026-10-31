@@ -30,6 +30,7 @@ from custom_components.eybond_local.collector.transport import (
     _parse_fc2_collector_pn,
 )
 from custom_components.eybond_local.collector.at import CollectorAtResponse
+from custom_components.eybond_local.collector.identity_probe import build_identity_probe_request
 from custom_components.eybond_local.collector.protocol import (
     HEADER_SIZE,
     build_collector_request,
@@ -94,6 +95,76 @@ async def _wait_for_writer_buffer(writer: _FakeWriter, expected: bytes) -> None:
 
 
 class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pending_identity_liveness_is_correlated_and_keeps_original_age(self):
+        """#66: exact-socket probe evidence survives both fresh and parked handoff."""
+        pn = "E50000200000000001"
+        request = build_identity_probe_request("eybond_framed")
+        self.assertIsNotNone(request)
+        cases = (
+            ("fresh", 1, 2, b"\x00\x02" + pn.encode(), 0, True),
+            ("expired", 1, 2, b"\x00\x02" + pn.encode(), 180, False),
+            ("wrong_tid", 2, 2, b"\x00\x02" + pn.encode(), 0, False),
+            ("wrong_function", 1, 4, b"\x00\x02" + pn.encode(), 0, False),
+            ("wrong_parameter", 1, 2, b"\x00\x05" + pn.encode(), 0, False),
+            ("invalid_identity", 1, 2, b"\x00\x02!", 0, False),
+        )
+        for name, tid, function, payload, age, live in cases:
+            with self.subTest(case=name):
+                listener = _SharedEybondListener(host="127.0.0.1", port=0)
+                reader, writer = asyncio.StreamReader(), _FakeWriter()
+                frame = build_collector_request(
+                    tid, payload, devcode=0x0102, collector_addr=255, fcode=function,
+                )
+                reader.feed_data(frame)
+                pending = _PendingCollectorSocket(
+                    remote_ip="127.0.0.1", reader=reader, writer=writer,
+                    session_id=f"test-{name}",
+                )
+                observed_at = monotonic() - age
+                with patch(
+                    "custom_components.eybond_local.collector.transport.listener.monotonic",
+                    return_value=observed_at,
+                ):
+                    await listener._exchange_identity_probe(pending, request, initial_read=True)
+                self.assertEqual(bytes(writer.buffer), request.payload)
+                if name in ("fresh", "expired"):
+                    self.assertEqual(pending.identity_liveness_monotonic, observed_at)
+                else:
+                    self.assertIsNone(pending.identity_liveness_monotonic)
+                pending.initial_bytes = frame
+                connection = await listener.activate_pending_connection(
+                    pending, collector_ip="127.0.0.1", collector_pn=pn,
+                    heartbeat_interval=60, write_timeout=.5,
+                )
+                try:
+                    self.assertEqual(await connection.wait_until_liveness(.02), live)
+                    self.assertFalse(connection.collector_info.heartbeat_fresh)
+                    self.assertEqual(
+                        connection._last_liveness_monotonic,
+                        pending.identity_liveness_monotonic,
+                    )
+                finally:
+                    await connection.disconnect()
+
+    async def test_new_socket_does_not_inherit_previous_connection_liveness(self):
+        connection = _CollectorConnection(
+            remote_ip_hint="127.0.0.1", heartbeat_interval=60, write_timeout=.5,
+        )
+        connection._last_liveness_monotonic = monotonic()
+        task = asyncio.create_task(connection.run(
+            asyncio.StreamReader(), _FakeWriter(), session_id="replacement",
+        ))
+        try:
+            self.assertTrue(await connection.wait_until_connected(.5))
+            self.assertFalse(await connection.wait_until_liveness(.02))
+            self.assertIsNone(connection._last_liveness_monotonic)
+        finally:
+            await connection.disconnect()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
     def test_scanner_control_payload_is_not_a_heartbeat_identity(self) -> None:
         scanner_payload = b"\x13\x03\x13\x02+/,"
         frame = build_collector_request(
