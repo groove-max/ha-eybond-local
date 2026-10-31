@@ -782,7 +782,7 @@ class CoordinatorPollingMixin:
         if not isinstance(values, dict):
             return
         raw = values.get("driver_unsupported_commands")
-        if not isinstance(raw, str) or not raw.strip():
+        if not isinstance(raw, str):
             return
         commands = sorted(
             command.strip()
@@ -791,6 +791,8 @@ class CoordinatorPollingMixin:
         )
         stored = self.config_entry.options.get(_UNSUPPORTED_COMMANDS_OPTION_KEY)
         stored_version = self.config_entry.options.get(_UNSUPPORTED_COMMANDS_OPTION_VERSION_KEY)
+        if not commands and stored is None:
+            return
         if (
             stored_version == _UNSUPPORTED_COMMANDS_OPTION_VERSION
             and isinstance(stored, (list, tuple))

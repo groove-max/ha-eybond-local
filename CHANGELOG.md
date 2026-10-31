@@ -9,6 +9,13 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Keep the required SmartESS 0925 live telemetry block in normal polling (#59).
+  Failed reads no longer permanently disable it as an unsupported optional
+  command. Remove previously saved live-block skips automatically, including
+  a live-only saved set, without clearing unrelated optional-command evidence.
+  Failed cycles retain last-good readings as carried data, not fresh telemetry;
+  recovered reads update normally without reloading the integration.
+
 - Bound FC2 collector-metadata reads after lost replies (#70): stop a sweep
   after two response timeouts, resume deferred parameters on the same owned
   session, and wait between attempts even when no metadata was obtained.

@@ -18,7 +18,7 @@ from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
     DriverReadResult,
 )
 from custom_components.eybond_local.drivers.smartess_local import SmartEssLocalDriver  # noqa: E402
-from custom_components.eybond_local.drivers.command_support import seed_unsupported_commands  # noqa: E402
+from custom_components.eybond_local.drivers.command_support import seed_unsupported_commands, unsupported_commands  # noqa: E402
 from custom_components.eybond_local.metadata.register_schema_loader import load_register_schema  # noqa: E402
 from custom_components.eybond_local.fixtures.transport import FixtureTransport, FixtureTransportError  # noqa: E402
 from custom_components.eybond_local.models import DetectedInverter, ProbeTarget, RegisterValueSpec  # noqa: E402
@@ -450,6 +450,81 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn((5001, 33), reads)
             self.assertEqual(reads.count((5004, 1)), 1)
             self.assertIs(result.values["lcd_backlight_enabled"], bool(backlight))
+
+    async def test_persisted_live_skip_cannot_disable_required_telemetry(self) -> None:
+        """Issue #59: a saved negative cache must not freeze the only live block."""
+        transport = self._transport()
+        reads = _record_reads(transport)
+        state = {}
+        seed_unsupported_commands(state, ["block:live", "register:5004"])
+        for now, soc, pv, charging in ((100, 75, 3442, 44), (110, 80, 3493, 39)):
+            transport._registers.update({
+                4507: _wire_word(soc), 4505: _wire_word(pv), 4508: _wire_word(charging),
+            })
+            reads.clear()
+            result = await self.driver.async_read_values(
+                transport, self._inverter(), runtime_state=state,
+                poll_interval=10, now_monotonic=now,
+            )
+            self.assertEqual(reads.count((4501, 14)), 1)
+            self.assertEqual(result.values["battery_capacity"], soc)
+            self.assertEqual(result.values["pv_input_power"], pv)
+            self.assertEqual(result.values["charging_current"], charging)
+            self.assertEqual(unsupported_commands(state), ("register:5004",))
+
+    async def test_live_timeouts_do_not_become_persistent_unsupported_evidence(self) -> None:
+        transport = self._transport()
+        original = transport._handle_read_holding
+        attempts = []
+        failing = True
+
+        def flaky(payload):
+            address = int.from_bytes(payload[2:4], "big")
+            if address == 4501:
+                attempts.append(address)
+                if failing:
+                    raise TimeoutError("temporary live-read timeout")
+            return original(payload)
+
+        transport._handle_read_holding = flaky
+        state = {}
+        # Other blocks answer each time, which used to commit four strikes.
+        for now in (100, 200, 300, 400, 500):
+            result = await self.driver.async_read_values(
+                transport, self._inverter(), runtime_state=state,
+                poll_interval=10, now_monotonic=now,
+            )
+            self.assertNotIn("battery_capacity", result.values)
+            self.assertNotIn("block:live", unsupported_commands(state))
+        # Each failed read retains the existing single Modbus retry.
+        self.assertEqual(len(attempts), 10)
+        failing = False
+        recovered = await self.driver.async_read_values(
+            transport, self._inverter(), runtime_state=state,
+            poll_interval=10, now_monotonic=600,
+        )
+        self.assertEqual(recovered.values["battery_capacity"], 78)
+        self.assertEqual(len(attempts), 11)
+
+    async def test_invalid_live_skip_is_cleared_even_when_live_read_still_fails(self) -> None:
+        transport = self._transport()
+        original = transport._handle_read_holding
+
+        def flaky(payload):
+            if int.from_bytes(payload[2:4], "big") == 4501:
+                raise TimeoutError("still offline")
+            return original(payload)
+
+        transport._handle_read_holding = flaky
+        state = {}
+        seed_unsupported_commands(state, ["block:live"])
+        result = await self.driver.async_read_values(
+            transport, self._inverter(), runtime_state=state,
+            poll_interval=10, now_monotonic=100,
+        )
+        self.assertEqual(unsupported_commands(state), ())
+        self.assertEqual(result.diagnostics["driver_unsupported_commands"], "")
+        self.assertNotIn("battery_capacity", result.values)
 
     async def test_failed_fallback_is_not_fresh_and_retry_is_paced(self) -> None:
         transport = self._transport(fail_config_bulk=True)

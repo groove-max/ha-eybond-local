@@ -26,6 +26,7 @@ from custom_components.eybond_local.connection.spec_factory import (
 from custom_components.eybond_local.collector.discovery import (
     async_send_callback_trigger,
 )
+from custom_components.eybond_local.collector.session_identity_reader import SessionPinnedIdentityReader
 from custom_components.eybond_local.collector.protocol import (
     FC_HEARTBEAT,
     HEADER_SIZE,
@@ -287,6 +288,78 @@ class _SilentAtModbusCollector(_SilentAtCollector):
 
 
 class RuntimeSilentIdentityBootstrapTests(unittest.IsolatedAsyncioTestCase):
+    async def test_strong_passive_session_from_different_ip_is_adopted_without_udp(self):
+        """Issue #66 shape: full PN, working FC2/FC4, stale configured peer IP."""
+        await self._exercise_different_peer_recovery(arrive_during_trigger=False)
+
+    async def test_session_from_different_ip_recovers_even_if_udp_send_fails(self):
+        await self._exercise_different_peer_recovery(arrive_during_trigger=True)
+
+    async def _exercise_different_peer_recovery(self, *, arrive_during_trigger):
+        port = _free_port()
+        listener = await _acquire_shared_listener("0.0.0.0", port)
+        self.addAsyncCleanup(
+            _release_shared_listener, listener,
+            close_pending=True, close_payload=True, close_at=True,
+        )
+        manager = self._manager(port=port, challenge="eybond_framed")
+        registry = CallbackSessionRegistry(sessions_source=lambda: tuple(
+            {**row, "listener_port": port}
+            for row in listener.discovered_collector_sessions()
+        ))
+        registry.claim("issue66-entry", collector_pn=FULL_PN)
+        manager.set_callback_ownership(registry, "issue66-entry")
+        await manager.async_start()
+        self.addAsyncCleanup(manager.async_stop)
+        scenario = resolve_scenario(
+            preset="modbus_smg_readonly", profile=CollectorProfile(pn=FULL_PN),
+        )
+        collector = FakeCollectorService(
+            listen_ip="127.0.0.1", udp_port=_free_udp_port(),
+            tcp_bind_ip="127.0.0.2", heartbeat_interval=30,
+            connect_timeout=2, udp_reply="rsp>server=1;", scenario=scenario,
+        )
+        self.addAsyncCleanup(collector.stop)
+        session_id = ""
+        if not arrive_during_trigger:
+            await collector._ensure_reverse_tcp("127.0.0.1", port)
+            deadline = asyncio.get_running_loop().time() + 2
+            while not listener.discovered_collector_sessions():
+                self.assertLess(asyncio.get_running_loop().time(), deadline)
+                await asyncio.sleep(0.02)
+            session_id = listener.discovered_collector_sessions()[0]["session_id"]
+            pn, source = await SessionPinnedIdentityReader(host="0.0.0.0").async_read_full_pn(
+                session_id=session_id, session_protocol="eybond_framed", listener_port=port,
+            )
+            self.assertEqual((pn, source), (FULL_PN, "fc2_parameter_2"))
+
+        async def failed_trigger(**kwargs):
+            if arrive_during_trigger:
+                # The inbound connection is independent of whether sending to
+                # the stale configured UDP target succeeds.
+                await collector._ensure_reverse_tcp("127.0.0.1", port)
+            raise OSError(101, "Network unreachable")
+
+        with patch(
+            "custom_components.eybond_local.runtime.link.callback.async_send_callback_trigger",
+            new=AsyncMock(side_effect=failed_trigger),
+        ) as trigger:
+            self.assertTrue(await manager.async_try_connect(timeout=2))
+        self.assertEqual(trigger.await_count, int(arrive_during_trigger))
+        if session_id:
+            self.assertEqual(manager._claimed_session_id(), session_id)
+        self.assertEqual(manager.session_handle.collector_pn, FULL_PN)
+        self.assertIn("fc2_parameter_2", manager.session_handle.identity_sources)
+        self.assertEqual(manager.collector_info.remote_ip, "127.0.0.2")
+        self.assertEqual(manager._collector_ip, "127.0.0.1")
+        session = ModbusSession(
+            manager._transport, devcode=1, collector_addr=scenario.collector_addr,
+            slave_id=scenario.device_addr,
+        )
+        self.assertEqual(
+            await session.read_holding(338, 1), [scenario.modbus_registers[338]],
+        )
+
     async def test_silent_fc1_short_heartbeat_upgrades_on_same_socket(self) -> None:
         """A late short heartbeat proves the dialect, not the full identity."""
         port = _free_port()

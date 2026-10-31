@@ -14,6 +14,7 @@ from custom_components.eybond_local.drivers.command_support import (  # noqa: E4
     clear_unsupported_commands,
     command_skipped_as_unsupported,
     commit_cycle_failures,
+    forget_command_failures,
     record_command_failure,
     record_command_success,
     seed_unsupported_commands,
@@ -23,6 +24,29 @@ from custom_components.eybond_local.drivers.command_support import (  # noqa: E4
 
 
 class CommandSupportCacheTests(unittest.TestCase):
+    def test_forgetting_required_skip_does_not_manufacture_success(self) -> None:
+        state = {}
+        seed_unsupported_commands(state, ["block:live", "optional"])
+        record_command_failure(state, "block:live")
+        record_command_failure(state, "another")
+        forget_command_failures(state, "block:live")
+        commit_cycle_failures(state)
+        self.assertEqual(unsupported_commands(state), ("optional",))
+        self.assertNotIn("another", state["driver_unsupported_commands"])
+
+    def test_forgetting_removes_pending_failures_but_keeps_real_success(self) -> None:
+        state = {}
+        record_command_success(state, "working")
+        record_command_failure(state, "block:live")
+        record_command_failure(state, "optional")
+        forget_command_failures(state, "block:live")
+        commit_cycle_failures(state)
+        self.assertEqual(state["driver_unsupported_commands"], {"optional": 1})
+        forget_command_failures(None, "block:live")
+        empty = {}
+        forget_command_failures(empty, "block:live")
+        self.assertEqual(empty, {})
+
     def test_failures_commit_only_when_cycle_had_a_success(self) -> None:
         state: dict[str, object] = {}
 

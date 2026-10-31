@@ -10662,6 +10662,47 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         self.assertNotIn("driver_unsupported_commands_version", entry.options)
         self.assertIn(("clear", None), runtime_calls)
 
+    def test_explicit_empty_unsupported_set_clears_saved_skip_without_reload(self) -> None:
+        coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
+        entry = types.SimpleNamespace(entry_id="entry-1", options={
+            "driver_unsupported_commands": ["block:live"],
+            "driver_unsupported_commands_version": 2,
+            "poll_interval": 30,
+        })
+        updates = []
+
+        def update(config_entry, **kwargs):
+            updates.append(kwargs)
+            config_entry.options = dict(kwargs["options"])
+
+        coordinator.config_entry = entry
+        coordinator.hass = types.SimpleNamespace(
+            config_entries=types.SimpleNamespace(async_update_entry=update),
+        )
+        coordinator._suppress_entry_reload_count = 0
+        calls = []
+        coordinator._runtime = types.SimpleNamespace(
+            set_persistent_unsupported_commands=lambda commands: calls.append(commands),
+        )
+        for values in ({}, {"driver_unsupported_commands": None}):
+            coordinator._maybe_persist_unsupported_commands(self.RuntimeSnapshot(
+                values=values, connected=True, inverter=object(),
+            ))
+        self.assertEqual(updates, [])
+        snapshot = self.RuntimeSnapshot(
+            values={"driver_unsupported_commands": ""}, connected=True, inverter=object(),
+        )
+        coordinator._maybe_persist_unsupported_commands(snapshot)
+        self.assertEqual(entry.options["driver_unsupported_commands"], [])
+        self.assertEqual(entry.options["poll_interval"], 30)
+        self.assertEqual(calls, [()])
+        self.assertEqual(len(updates), 1)
+        coordinator._maybe_persist_unsupported_commands(snapshot)
+        self.assertEqual(len(updates), 1)
+        entry.options = {}
+        coordinator._maybe_persist_unsupported_commands(snapshot)
+        self.assertEqual(len(updates), 1)
+
     def test_collector_connection_watcher_refreshes_only_when_not_bound(self) -> None:
         coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
         coordinator._shutdown_complete = False

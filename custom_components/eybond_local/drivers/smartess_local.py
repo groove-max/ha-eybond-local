@@ -30,6 +30,7 @@ from .modbus_write_error import ModbusWriteErrorMixin
 from .command_support import (
     command_skipped_as_unsupported,
     commit_cycle_failures,
+    forget_command_failures,
     record_command_failure,
     record_command_success,
     unsupported_command_diagnostics,
@@ -47,7 +48,10 @@ _SMARTESS_0925_PROBE_TARGETS: tuple[ProbeTarget, ...] = (
     ProbeTarget(devcode=0x0005, collector_addr=0x05, device_addr=0x05),
 )
 
-_FAST_BLOCKS = frozenset({"live"})
+# Detection requires this block. Silence is a failed live read, not permission
+# to disable the sole telemetry source permanently as an optional command.
+_REQUIRED_BLOCKS = frozenset({"live"})
+_FAST_BLOCKS = _REQUIRED_BLOCKS
 _MEDIUM_BLOCKS = frozenset({"config_state"})
 _SLOW_BLOCKS = frozenset({"rating", "status", "serial", "energy", "config", "time_settings"})
 _SMARTESS_0925_DATA_COLLECTOR_ADDR = 0xFF
@@ -276,6 +280,9 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
             ):
                 continue
             block_cache_key = f"block:{block.key}"
+            required = block.key in _REQUIRED_BLOCKS
+            if required:
+                forget_command_failures(runtime_state, block_cache_key)
             words = None
             if not command_skipped_as_unsupported(runtime_state, block_cache_key):
                 session = self._session(
@@ -288,7 +295,8 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
                         await _timed_read(session, block_cache_key, block.start, block.count),
                     )
                 except Exception:
-                    record_command_failure(runtime_state, block_cache_key)
+                    if not required:
+                        record_command_failure(runtime_state, block_cache_key)
             if words is None:
                 # Pace attempts, including failures, independently of bulk
                 # success. Cached values are not permission to skip supported
@@ -342,6 +350,10 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
         _apply_capability_read_back(cycle_values, capabilities, cycle_registers)
         commit_cycle_failures(runtime_state)
         diagnostics = unsupported_command_diagnostics(runtime_state)
+        # Explicit empty evidence lets the coordinator remove an obsolete
+        # persisted live-only skip. Missing diagnostics must not clear other
+        # drivers' saved state during partial/unavailable refreshes.
+        diagnostics.setdefault("driver_unsupported_commands", "")
         if request_timings:
             slowest = sorted(request_timings, key=lambda item: -item[1])[:5]
             diagnostics["driver_slow_requests"] = ", ".join(

@@ -70,6 +70,27 @@ def record_command_success(
         table.pop(cache_key, None)
 
 
+def forget_command_failures(
+    runtime_state: dict[str, Any] | None,
+    cache_key: str,
+) -> None:
+    """Drop obsolete negative evidence without claiming a successful read.
+
+    Required telemetry must not inherit a persisted optional-command skip.
+    Also discard staged failures so a later commit cannot reinstate that skip.
+    Other commands and the cycle's real success evidence remain unchanged.
+    """
+
+    if runtime_state is None:
+        return
+    table = runtime_state.get(UNSUPPORTED_COMMANDS_STATE_KEY)
+    if table is not None:
+        table.pop(cache_key, None)
+    pending = runtime_state.get(_PENDING_FAILURES_KEY)
+    if pending is not None:
+        runtime_state[_PENDING_FAILURES_KEY] = [key for key in pending if key != cache_key]
+
+
 def commit_cycle_failures(runtime_state: dict[str, Any] | None) -> None:
     """Apply staged failures when the cycle proved the device link works."""
 
