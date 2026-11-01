@@ -4,6 +4,7 @@ from dataclasses import FrozenInstanceError, asdict, replace
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import struct
 import sys
 import unittest
@@ -108,13 +109,40 @@ class MpptRuntimeTests(unittest.TestCase):
                 parse_mppt_runtime(value)
 
     def test_semantics_do_not_relax_ambiguous_transport_grammar(self):
-        frame = runtime_frame(voltage=1085, power=4)
-        # Offline explicit assumption can inspect 40 W. It is NOT evidence that
-        # this packet can be safely split out of a mixed live stream.
-        self.assertEqual(parse_mppt_runtime(frame).pv_power_w, 40)
+        # PV ~113.1 V / 20 W: legal EyeBond header AND AABB/0200.
+        frame = runtime_frame(voltage=1131, power=2)
+        self.assertEqual(parse_mppt_runtime(frame).pv_voltage_v, 113.1)
+        self.assertEqual(parse_mppt_runtime(frame).pv_power_w, 20)
+        # Offline explicit AABB assumption can inspect the sample. Without a
+        # claim, MIXED must still fail-close — checksum is not ownership.
         decoder = BinaryFrameDecoder(BinaryGrammar.MIXED, started_at=0, timeout=1)
         with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
             decoder.feed(frame.wire, now=0)
+        # Matching outstanding claim selects AABB; bad checksum still rejects.
+        owned = BinaryFrameDecoder(
+            BinaryGrammar.MIXED, started_at=0, timeout=1,
+            auxiliary_claim=SimpleNamespace(subtype=b"\x02\x00"),
+        )
+        self.assertEqual(owned.feed(frame.wire, now=0), 21)
+        self.assertEqual(
+            parse_mppt_runtime(owned.finish(now=0)).pv_power_w, 20,
+        )
+        bad = frame.wire[:-1] + bytes([frame.wire[-1] ^ 1])
+        bad_decoder = BinaryFrameDecoder(
+            BinaryGrammar.MIXED, started_at=0, timeout=1,
+            auxiliary_claim=SimpleNamespace(subtype=b"\x02\x00"),
+        )
+        with self.assertRaisesRegex(BinaryFramingError, "aabb_checksum_invalid"):
+            bad_decoder.feed(bad, now=0)
+        # 0202 claim must not accept a 0200 colliding reply as its answer.
+        mismatched = BinaryFrameDecoder(
+            BinaryGrammar.MIXED, started_at=0, timeout=1,
+            auxiliary_claim=SimpleNamespace(subtype=b"\x02\x02"),
+        )
+        with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
+            mismatched.feed(frame.wire, now=0)
+        with self.assertRaises(ValueError):
+            parse_mppt_runtime(runtime_frame(subtype=0x0202))
 
     def test_all_tcp_splits_of_explicit_aabb_frame_keep_semantics(self):
         frame = runtime_frame()

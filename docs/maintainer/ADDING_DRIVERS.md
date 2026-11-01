@@ -161,14 +161,15 @@ Only the request present at the start of a frame can receive that frame.
 Cancellation or timeout after sending closes that exact socket, since these
 replies have no transaction identifier. Reconnection starts a new owner.
 
-Integrity or boundary failures close the session. In particular, a valid
-EyeBond frame with transaction ID `0xAABB` can overlap the auxiliary grammar:
-neither a valid checksum nor an absent waiter resolves that ambiguity. The
-current foundation refuses such a frame; it does **not** guarantee auxiliary
-availability for every possible payload. Driver-level admission, truthful
-model/field semantics and optional-data expiry remain separate work before
-user-facing support. Normal connections keep their existing grammar until an
-explicit auxiliary read is requested.
+Integrity or boundary failures close the session. EyeBond and AABB can overlap
+on the first eight bytes. A checksum-valid AABB reply is accepted only when
+the outstanding auxiliary claim matches that subtype. No claim, or a subtype
+mismatch, stays ambiguous and closes the session. The reject rules are in
+[SHORT_ASCII_MIXED_SOCKET.md](SHORT_ASCII_MIXED_SOCKET.md). The foundation
+does not guarantee auxiliary availability for every possible payload.
+Driver-level admission, truthful model/field semantics and optional-data
+expiry remain separate work before user-facing support. Normal connections
+keep their existing grammar until an explicit auxiliary read is requested.
 
 Ordinary framed, AT-management and raw-payload sends also pin their physical
 writer and run epoch before waiting for request/write locks. `SocketSendOwner`
