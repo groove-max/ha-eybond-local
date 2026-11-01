@@ -49,11 +49,30 @@
     {"key": "mppt_error_code", "name": "MPPT Error Code", "diagnostic": true, "enabled_default": true},
     {"key": "mppt_error", "name": "MPPT Error", "diagnostic": true, "enabled_default": true},
     {"key": "short_ascii_optional_status", "name": "Optional Read Status", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_poll_attempts", "name": "MPPT Poll Attempts", "state_class": "total_increasing", "diagnostic": true, "enabled_default": false, "icon": "mdi:counter"},
+    {"key": "mppt_poll_ok", "name": "MPPT Poll OK", "state_class": "total_increasing", "diagnostic": true, "enabled_default": false, "icon": "mdi:check-circle-outline"},
+    {"key": "mppt_poll_fail", "name": "MPPT Poll Fail", "state_class": "total_increasing", "diagnostic": true, "enabled_default": false, "icon": "mdi:close-circle-outline"},
+    {"key": "mppt_fail_reason", "name": "MPPT Fail Reason", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_fail_timeout", "name": "MPPT Fail Timeout", "state_class": "total_increasing", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_fail_connection", "name": "MPPT Fail Connection", "state_class": "total_increasing", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_fail_decode", "name": "MPPT Fail Decode", "state_class": "total_increasing", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_retry_recovered", "name": "MPPT Retry Recovered", "state_class": "total_increasing", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_not_admitted", "name": "MPPT Not Admitted Cycles", "state_class": "total_increasing", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_consecutive_failures", "name": "MPPT Consecutive Failures", "state_class": "measurement", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_due_this_cycle", "name": "MPPT Due This Cycle", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_skipped_prefer_fc4", "name": "MPPT Skipped Prefer FC4", "state_class": "total_increasing", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_forced_anti_starve", "name": "MPPT Forced Anti Starve", "state_class": "total_increasing", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_last_success_age_s", "name": "MPPT Last Success Age", "unit": "s", "state_class": "measurement", "diagnostic": true, "enabled_default": false, "icon": "mdi:timer-outline"},
+    {"key": "aux_fence_reason", "name": "Aux Fence Reason", "diagnostic": true, "enabled_default": false},
+    {"key": "aux_last_error", "name": "Aux Last Error", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_fail_disconnect_count", "name": "MPPT Fail At Disconnect Count", "state_class": "measurement", "diagnostic": true, "enabled_default": false},
+    {"key": "mppt_fail_disconnect_reason", "name": "MPPT Fail Disconnect Reason", "diagnostic": true, "enabled_default": false},
     {"key": "short_ascii_rb_age_seconds", "name": "BMS Sample Age", "unit": "s", "diagnostic": true, "enabled_default": false},
     {"key": "short_ascii_f_age_seconds", "name": "Rated Values Sample Age", "unit": "s", "diagnostic": true, "enabled_default": false}
   ],
   "binary_sensor_descriptions": [
     {"key": "ups_fault", "name": "UPS Fault", "device_class": "problem", "diagnostic": true, "enabled_default": true},
+    {"key": "aux_connected", "name": "Aux Connected", "diagnostic": true, "enabled_default": false},
     {"key": "grid_available", "name": "Grid Available", "device_class": "power"},
     {"key": "short_ascii_mains_input_connected", "name": "Mains Input Connected", "diagnostic": true},
     {"key": "battery_low", "name": "Battery Low", "device_class": "battery"},
@@ -73,6 +92,7 @@
     "battery_power is measured pack DC watts: BMS V \u00d7 (Icharge \u2212 Idischarge), positive while charging. It must not replace load_percent.",
     "RB zero voltage plus zero SOC withdraws all BMS measurements, including trailing retained fields.",
     "Optional MPPT/PV entities come from the documented auxiliary 0200 runtime read only (not tip harvest, not settings 0202). Stock installs do not poll 0200 until config-entry option admit_short_ascii_mppt is true (enabled_default false only hides entities). Live PV/MPPT measurements stay disabled by default; mppt_error_code and mppt_error are quiet diagnostic sensors (enabled_default true, no WARNING spam). Distinct owners: pv_* = PV array; mppt_battery_voltage \u2260 BMS/reference voltage; mppt_temperature \u2260 inverter/BMS temps; dc_load_current \u2260 AC load. Live-qualify with Support Archive before claiming device support; family identity only \u2014 no retail Anern model claim. Controls remain absent.",
-    "Quiet Q1 fault diagnostics: q1_error_code / q1_error (19B4 trailer errcode) and ups_fault (Q1 flag bit1) are diagnostic sensors with enabled_default true \u2014 entity state only, no per-poll WARNING spam."
+    "Quiet Q1 fault diagnostics: q1_error_code / q1_error (19B4 trailer errcode) and ups_fault (Q1 flag bit1) are diagnostic sensors with enabled_default true \u2014 entity state only, no per-poll WARNING spam.",
+    "MPPT poll counters (attempts, fail class, prefer-FC4 skips, anti-starve forces, aux fence) are quiet diagnostics with enabled_default false."
   ]
 }
