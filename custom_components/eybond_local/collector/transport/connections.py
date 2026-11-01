@@ -615,6 +615,7 @@ class _CollectorConnection:
                         # (that forms false-legal headers such as ff0000ff04aabb02).
                         # payload_too_large stays a header check — never
                         # readexactly of that huge length.
+                        discarded_header_hex = header_bytes.hex()
                         try:
                             header_bytes = await read(asyncio.wait_for(
                                 reader.readexactly(HEADER_SIZE),
@@ -642,10 +643,11 @@ class _CollectorConnection:
                             self._collector.last_disconnect_reason = header_error
                             logger.warning(
                                 "Closing collector session after malformed frame header "
-                                "remote=%s reason=%s header=%s tid=%d devcode=0x%04X "
-                                "devaddr=0x%02X fc=%d payload=%d",
+                                "remote=%s reason=%s discarded=%s header=%s tid=%d "
+                                "devcode=0x%04X devaddr=0x%02X fc=%d payload=%d",
                                 self._collector.remote_ip,
                                 header_error,
+                                discarded_header_hex,
                                 header_bytes.hex(),
                                 header.tid,
                                 header.devcode,
@@ -654,6 +656,15 @@ class _CollectorConnection:
                                 header.payload_len,
                             )
                             return
+                        logger.warning(
+                            "Discarded illegal EyeBond header remote=%s discarded=%s "
+                            "next_tid=%d next_fc=%d next_payload=%d",
+                            self._collector.remote_ip,
+                            discarded_header_hex,
+                            header.tid,
+                            header.fcode,
+                            header.payload_len,
+                        )
                     payload = b""
                     if header.payload_len > 0:
                         try:

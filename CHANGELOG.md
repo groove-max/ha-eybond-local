@@ -387,7 +387,21 @@ the GitHub release body should be rendered from the matching version section her
   installs do not poll until admitted). Live PV/MPPT measurement sensors stay
   **disabled by default**. Quiet fault diagnostics `q1_error_code`, `q1_error`,
   `ups_fault`, `mppt_error_code`, and `mppt_error` are `enabled_default: true`
-  (entity state only — no per-poll WARNING spam).
+  (entity state only — no per-poll WARNING spam). When an outstanding `0200`
+  claim matches an EyeBond/AABB overlap, the reply is read as AABB and must
+  still pass the checksum. A framing kill poisons further `0200` polls for
+  120 s. A soft miss omits live PV keys and publishes labelled
+  `*_held_estimate` mirrors for the 60 s MPPT TTL.
+
+- An illegal EyeBond header is dropped once as a whole 8-byte window and the
+  next header is read fresh. A second illegal header still closes the session.
+  The discard logs `Discarded illegal EyeBond header` with the dropped hex and
+  the next header's tid, function code, and payload length.
+
+- A collector that redials without sending bytes, and that this listener
+  already owns as a framed payload peer, enters the framed session and receives
+  a heartbeat. An AT owner on the same IP still waits for identity bytes. That
+  adopt logs `Adopting silent framed redial remote=`.
 
 ### Fixed
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from enum import Enum
+import logging
 import math
 from typing import Protocol
 
@@ -20,6 +21,8 @@ from ..protocol import (
     FC_TRIGGER_QUERY_REAL_TIME, FC_SET_DEVICE_REG, FC_TRIGGER_QUERY_HISTORY,
 )
 
+
+logger = logging.getLogger(__name__)
 
 AABB_MAGIC = b"\xaa\xbb"
 AABB_FRAME_SIZE = 21
@@ -159,6 +162,7 @@ class BinaryFrameDecoder:
         self._error = ""
         self._result: BinaryFrame | None = None
         self._illegal_header_discarded = False
+        self._discarded_header_hex = ""
 
     @property
     def buffered_size(self) -> int:
@@ -204,6 +208,13 @@ class BinaryFrameDecoder:
 
         if self._illegal_header_discarded:
             self._fail(reason)
+        discarded = bytes(self._buffer[:HEADER_SIZE])
+        self._discarded_header_hex = discarded.hex()
+        logger.warning(
+            "Discarded illegal EyeBond header hex=%s reason=%s",
+            self._discarded_header_hex,
+            reason,
+        )
         del self._buffer[:HEADER_SIZE]
         self._illegal_header_discarded = True
         self._header = None
@@ -220,6 +231,21 @@ class BinaryFrameDecoder:
         self._discard_illegal_header(header_error)
         return True
 
+    def _note_discard_recovered(self, header: EybondHeader) -> None:
+        """One WARNING so a live log can prove the discard landed on a real frame."""
+
+        if not self._illegal_header_discarded:
+            return
+        logger.warning(
+            "Illegal EyeBond header discard recovered discarded=%s "
+            "next_tid=%d next_devcode=0x%04X next_fc=%d next_payload=%d",
+            self._discarded_header_hex,
+            header.tid,
+            header.devcode,
+            header.fcode,
+            header.payload_len,
+        )
+
     def _select_boundary(self, *, follow_buffered: int) -> None:
         wire = bytes(self._buffer)
         header = decode_header(wire)
@@ -234,6 +260,7 @@ class BinaryFrameDecoder:
             self._kind = BinaryGrammar.EYBOND
             self._header = header
             self._size = header.total_len
+            self._note_discard_recovered(header)
         elif self._grammar is BinaryGrammar.AABB:
             # Integrity is checked once the entire bounded21-byte reply arrives.
             self._kind = BinaryGrammar.AABB
@@ -244,6 +271,11 @@ class BinaryFrameDecoder:
                 # Outstanding claim subtype matches: choose AABB, then validate.
                 self._kind = BinaryGrammar.AABB
                 self._size = AABB_FRAME_SIZE
+                if self._illegal_header_discarded:
+                    logger.warning(
+                        "Illegal EyeBond header discard recovered discarded=%s next=aabb",
+                        self._discarded_header_hex,
+                    )
             else:
                 # No claim or subtype mismatch: fail-close. Do not read a
                 # speculative longer EyeBond tail.
@@ -252,6 +284,7 @@ class BinaryFrameDecoder:
             self._kind = BinaryGrammar.EYBOND
             self._header = header
             self._size = header.total_len
+            self._note_discard_recovered(header)
         elif wire.startswith(AABB_MAGIC):
             self._kind = BinaryGrammar.AABB
             self._size = AABB_FRAME_SIZE

@@ -543,6 +543,7 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
         connection, reader, writer, run = await self._open("framed")
         future = asyncio.get_running_loop().create_future()
         connection._pending[0xAABB] = future
+        connection._pending_fcode[0xAABB] = 4
         reader.feed_data(junk + valid)
         header, payload = await asyncio.wait_for(future, 1.0)
         self.assertEqual(header.tid, 0xAABB)

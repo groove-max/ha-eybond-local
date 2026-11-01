@@ -153,7 +153,12 @@ the header error. Do not `readexactly` another 8 bytes to find it.
 - If the fresh header is legal, read only that payload and continue the
   session.
 - If the fresh header is also illegal, close with that reason and publish
-  nothing.
+  nothing. The close log includes `discarded=` (the dropped window) and
+  `header=` (the second window).
+- A recovered discard logs `Discarded illegal EyeBond header` with
+  `discarded=` and `next_tid` / `next_fc` / `next_payload`. Grep that line
+  to prove the known junk header was skipped and a real frame followed.
+  A silent framed redial logs `Adopting silent framed redial remote=`.
 
 Do **not** discard through: `binary_frame_ambiguous` (AABB/EyeBond overlap),
 bad AABB checksum, or unowned AABB. Those stay session-fatal. A claim-matched
