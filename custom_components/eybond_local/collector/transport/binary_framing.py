@@ -1,8 +1,9 @@
-"""Bounded binary framing, independent of inverter metadata and live waiters.
+"""Bounded binary framing, independent of inverter metadata and future liveness.
 
 This codec is an internal building block for the short-ASCII auxiliary channel.
 It does not negotiate a collector protocol or admit that channel itself.
-The session owner supplies the admitted grammar, never a future's done() state.
+The session owner supplies the admitted grammar and any outstanding
+AuxiliaryReadClaim snapshot. A future merely being alive is never evidence.
 """
 
 from __future__ import annotations
@@ -60,6 +61,16 @@ class BinaryFramingError(ValueError):
     """An invalid, incomplete or ambiguous boundary requires session recovery."""
 
 
+class AuxiliaryBoundaryClaim(Protocol):
+    """Ownership snapshot for MIXED overlap selection: subtype only.
+
+    Callers pass the AuxiliaryReadClaim captured when the frame started.
+    Do not infer intent from future.done() or waiter lifetime.
+    """
+
+    subtype: bytes
+
+
 @dataclass(frozen=True, slots=True)
 class BinaryFrame:
     """One structural frame; interpreting payload values is a separate concern."""
@@ -94,18 +105,26 @@ class BinaryFrameDecoder:
     The buffer, grammar and deadline never reset on fragmentation or retry.
     An error is terminal: the caller must not guess a boundary and continue.
 
-    MIXED deliberately refuses overlaps, even with a valid checksum. Selecting
-    AABB instead requires an independently established wire contract; merely
-    waiting for an AABB response is NOT such evidence. The codec cannot invent
-    this contract or distinguish two identical, valid representations.
+    MIXED refuses EyeBond/AABB overlaps unless an outstanding claim's subtype
+    matches ``wire[2:4]``. A valid checksum alone is never enough, and a
+    future merely being alive is never a grammar claim. With a matching claim,
+    choose AABB then ``validate_aabb_frame``; checksum failure stays a reject.
     """
 
-    def __init__(self, grammar: BinaryGrammar, *, started_at: float, timeout: float) -> None:
+    def __init__(
+        self,
+        grammar: BinaryGrammar,
+        *,
+        started_at: float,
+        timeout: float,
+        auxiliary_claim: AuxiliaryBoundaryClaim | None = None,
+    ) -> None:
         if not isinstance(grammar, BinaryGrammar):
             raise ValueError("binary_grammar_invalid")
         if not math.isfinite(started_at) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("binary_deadline_invalid")
         self._grammar = grammar
+        self._auxiliary_claim = auxiliary_claim
         self._last_now = started_at
         self._deadline = started_at + timeout
         if not math.isfinite(self._deadline):
@@ -169,9 +188,15 @@ class BinaryFrameDecoder:
             self._kind = BinaryGrammar.AABB
             self._size = AABB_FRAME_SIZE
         elif auxiliary_prefix and not header_error:
-            # No checksum or future state can prove which of these two binary
-            # grammars the peer intended. Don't consume a speculative tail.
-            self._fail("binary_frame_ambiguous")
+            claim = self._auxiliary_claim
+            if claim is not None and wire[2:4] == claim.subtype:
+                # Outstanding claim subtype matches: choose AABB, then validate.
+                self._kind = BinaryGrammar.AABB
+                self._size = AABB_FRAME_SIZE
+            else:
+                # No claim or subtype mismatch: fail-close. Do not read a
+                # speculative longer EyeBond tail.
+                self._fail("binary_frame_ambiguous")
         elif not header_error:
             self._kind = BinaryGrammar.EYBOND
             self._header = header
@@ -232,18 +257,26 @@ async def async_read_binary_frame(
     grammar: BinaryGrammar,
     started_at: float,
     timeout: float,
+    auxiliary_claim: AuxiliaryBoundaryClaim | None = None,
 ) -> BinaryFrame:
     """Read the rest of a frame under its ORIGINAL first-byte deadline.
 
     Supply at most the fixed8-byte header as prefix. Cancellation is propagated
     to the owner: this function never retries or reuses a partly consumed stream.
     It must not be called by competing readers or after a guessed grammar switch.
+    Pass the claim snapshot from when the frame started; do not infer from
+    future.done().
     """
 
     if not 0 < len(prefix) <= HEADER_SIZE:
         raise ValueError("binary_prefix_length_invalid")
     loop = asyncio.get_running_loop()
-    decoder = BinaryFrameDecoder(grammar, started_at=started_at, timeout=timeout)
+    decoder = BinaryFrameDecoder(
+        grammar,
+        started_at=started_at,
+        timeout=timeout,
+        auxiliary_claim=auxiliary_claim,
+    )
     decoder.feed(prefix, now=loop.time())
     while decoder.frame is None:
         now = loop.time()
