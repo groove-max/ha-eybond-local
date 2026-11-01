@@ -42,7 +42,6 @@ from .binary_framing import (
     BinaryFramingError,
     BinaryGrammar,
     async_read_binary_frame,
-    is_resyncable_header_error,
 )
 from .common import (
     _AT_TEXT_MIXED_FRAME_READ_TIMEOUT,
@@ -596,7 +595,24 @@ class _CollectorConnection:
                     header = decode_header(header_bytes)
                     header_error = _runtime_eybond_header_error(header)
                     if header_error:
-                        if not is_resyncable_header_error(header_error):
+                        # function_invalid stays fatal here. A 7-byte raw RTU
+                        # prefix plus the next frame's first byte is an illegal
+                        # function, and discarding that window invents a second
+                        # header that stalls on a huge payload (#39). Length and
+                        # payload-size errors may discard one window only when
+                        # the next header is already buffered.
+                        inner = getattr(reader, "_reader", None)
+                        unread = len(getattr(reader, "_buffer", b"")) + len(
+                            getattr(inner, "_buffer", b"")
+                        )
+                        resync = (
+                            header_error in (
+                                "collector_frame_length_invalid",
+                                "collector_frame_payload_too_large",
+                            )
+                            and unread >= HEADER_SIZE
+                        )
+                        if not resync:
                             self._collector.last_disconnect_reason = header_error
                             logger.warning(
                                 "Closing collector session after malformed frame header "

@@ -1838,6 +1838,9 @@ class _SharedEybondListener:
             return False
         if self._has_owner_for_remote_ip(self._at_owner_counts, remote_ip):
             return False
+        # A blank collector IP matches every peer for routing. It is not
+        # evidence this socket is a framed redial. Require an IP that already
+        # started a framed payload session.
         return self._has_recent_framed_payload_peer(remote_ip)
 
     def _has_owner_for_collector_pn(
