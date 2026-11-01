@@ -32,6 +32,7 @@ async def test_support_archive_preserves_read_evidence_through_ha_download(
         "MP": b"\x01" + bytes(range(36)) + b"\r",
         "Q1": b"\x01" + body + sum(body).to_bytes(2, "big") + b"\r",
         "MD": b"S2-8127-260101-V7.00  \x00\r",
+        "RH": b"\x01" + bytes(8) + b"\x01" + bytes(18) + b"\x01\r",
         "F": b"#115.0 105 48.00 60.0\r",
         "RB": b"\x01" + rb + bytes([sum(rb) & 255]) + b"\r",
     }
