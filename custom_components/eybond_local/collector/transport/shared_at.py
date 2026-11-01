@@ -102,6 +102,40 @@ class SharedCollectorAtTransport:
             CollectorInfo(remote_ip=self._collector_ip, collector_pn=self._collector_pn)
         )
 
+    def peek_mppt_framing_failure_latch(self) -> str:
+        """Read the live MIXED framing-kill latch without clearing it.
+
+        Same disconnected-framed path as take — collector_info is blank after
+        a framing kill clears ``connected``.
+        """
+
+        if not self._uses_at_text_session():
+            framed = self._framed_connection(create_placeholder=False)
+            if framed is not None:
+                return framed.peek_mppt_framing_failure_latch()
+
+        connection = self._at_connection(create_placeholder=False)
+        if connection is None:
+            return ""
+        return connection.peek_mppt_framing_failure_latch()
+
+    def take_mppt_framing_failure_latch(self) -> str:
+        """Take-clear the live MIXED framing-kill latch from the active socket.
+
+        Read even after a framing kill cleared ``connected`` — gating on
+        connected strands the latch on the disconnect that just set it.
+        """
+
+        if not self._uses_at_text_session():
+            framed = self._framed_connection(create_placeholder=False)
+            if framed is not None:
+                return framed.take_mppt_framing_failure_latch()
+
+        connection = self._at_connection(create_placeholder=False)
+        if connection is None:
+            return ""
+        return connection.take_mppt_framing_failure_latch()
+
     async def start(self) -> None:
         if self._listener is not None:
             return

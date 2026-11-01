@@ -117,6 +117,18 @@ class _CollectorConnection:
         self._collector.heartbeat_fresh = self._has_fresh_heartbeat()
         return _copy_collector_info(self._collector)
 
+    def peek_mppt_framing_failure_latch(self) -> str:
+        """Read the live MIXED framing-kill latch without clearing it."""
+
+        return self._collector.mppt_framing_failure_latch or ""
+
+    def take_mppt_framing_failure_latch(self) -> str:
+        """Return and clear the live MIXED framing-kill latch (not a snapshot)."""
+
+        reason = self._collector.mppt_framing_failure_latch
+        self._collector.mppt_framing_failure_latch = ""
+        return reason
+
     def set_heartbeat_interval(self, interval: float) -> None:
         self._heartbeat_interval = float(interval)
 
@@ -790,8 +802,13 @@ class _CollectorConnection:
                     payload.hex(),
                 )
         except BinaryFramingError as exc:
-            diagnostic.close(str(exc))
-            self._collector.last_disconnect_reason = str(exc)
+            reason = str(exc)
+            diagnostic.close(reason)
+            self._collector.last_disconnect_reason = reason
+            if reason in ("binary_frame_ambiguous", "aabb_checksum_invalid"):
+                # Latch survives run() clearing last_disconnect_reason on
+                # reconnect; the MPPT poller take-clears after reading.
+                self._collector.mppt_framing_failure_latch = reason
             logger.warning("Closing collector binary session remote=%s reason=%s",
                            self._collector.remote_ip, exc)
         except asyncio.IncompleteReadError:
@@ -951,6 +968,18 @@ class _CollectorAtConnection:
     @property
     def collector_info(self) -> CollectorInfo:
         return _copy_collector_info(self._collector)
+
+    def peek_mppt_framing_failure_latch(self) -> str:
+        """Read the live MIXED framing-kill latch without clearing it."""
+
+        return self._collector.mppt_framing_failure_latch or ""
+
+    def take_mppt_framing_failure_latch(self) -> str:
+        """Return and clear the live MIXED framing-kill latch (not a snapshot)."""
+
+        reason = self._collector.mppt_framing_failure_latch
+        self._collector.mppt_framing_failure_latch = ""
+        return reason
 
     @property
     def mixed_frame_observed(self) -> bool:
@@ -1700,9 +1729,14 @@ class _CollectorAtConnection:
                     record_exchange=not reader.line_from_prefix_only(),
                 )
         except BinaryFramingError as exc:
-            diagnostic.close(str(exc))
-            runtime_modbus.close(str(exc))
-            self._collector.last_disconnect_reason = str(exc)
+            reason = str(exc)
+            diagnostic.close(reason)
+            runtime_modbus.close(reason)
+            self._collector.last_disconnect_reason = reason
+            if reason in ("binary_frame_ambiguous", "aabb_checksum_invalid"):
+                # Latch survives run() clearing last_disconnect_reason on
+                # reconnect; the MPPT poller take-clears after reading.
+                self._collector.mppt_framing_failure_latch = reason
             logger.warning("Closing collector binary session remote=%s reason=%s",
                            self._collector.remote_ip, exc)
         except asyncio.IncompleteReadError:

@@ -272,6 +272,14 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.gather(run, return_exceptions=True)
                     self.assertTrue(writer.closed)
                     self.assertEqual(connection.collector_info.last_disconnect_reason, reason)
+                    if reason in ("binary_frame_ambiguous", "aabb_checksum_invalid"):
+                        self.assertEqual(
+                            connection.take_mppt_framing_failure_latch(),
+                            reason,
+                        )
+                        self.assertEqual(connection.take_mppt_framing_failure_latch(), "")
+                    else:
+                        self.assertEqual(connection.take_mppt_framing_failure_latch(), "")
 
     async def test_eof_or_stall_never_becomes_a_short_success(self):
         for kind in ("framed", "at"):
@@ -321,6 +329,10 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
                     connection.collector_info.last_disconnect_reason,
                     "aabb_checksum_invalid",
                 )
+                self.assertEqual(
+                    connection.take_mppt_framing_failure_latch(),
+                    "aabb_checksum_invalid",
+                )
                 self.assertEqual(connection.collector_info.raw_response_count, 0)
             with self.subTest(kind=kind, arm="no_claim_overlap"):
                 # MIXED enabled after a completed read; unsolicited collision.
@@ -337,6 +349,10 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
                     connection.collector_info.last_disconnect_reason,
                     "binary_frame_ambiguous",
                 )
+                self.assertEqual(
+                    connection.take_mppt_framing_failure_latch(),
+                    "binary_frame_ambiguous",
+                )
                 self.assertEqual(connection.collector_info.raw_response_count, 0)
             with self.subTest(kind=kind, arm="subtype_mismatch"):
                 connection, reader, writer, run = await self._open(kind)
@@ -347,6 +363,10 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.gather(run, return_exceptions=True)
                 self.assertEqual(
                     connection.collector_info.last_disconnect_reason,
+                    "binary_frame_ambiguous",
+                )
+                self.assertEqual(
+                    connection.take_mppt_framing_failure_latch(),
                     "binary_frame_ambiguous",
                 )
                 self.assertEqual(connection.collector_info.raw_response_count, 0)
@@ -554,6 +574,73 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaises(ConnectionError):
             future.result()
+
+
+class AtFacadeFramingLatchTests(unittest.TestCase):
+    def test_take_mppt_framing_latch_reads_disconnected_framed_session(self):
+        """Framing kill clears connected; AT facade must still take-clear the latch."""
+        from unittest.mock import MagicMock
+
+        from custom_components.eybond_local.collector.transport.shared_at import (
+            SharedCollectorAtTransport,
+        )
+
+        transport = SharedCollectorAtTransport(
+            host="127.0.0.1",
+            port=18899,
+            request_timeout=3.0,
+            collector_ip="192.0.2.10",
+            collector_session_protocol="eybond_framed",
+        )
+        framed = MagicMock()
+        framed.connected = False
+        framed.take_mppt_framing_failure_latch.return_value = "binary_frame_ambiguous"
+        transport._framed_connection = (  # type: ignore[method-assign]
+            lambda *, create_placeholder=False: framed
+        )
+        transport._at_connection = (  # type: ignore[method-assign]
+            lambda *, create_placeholder=False: None
+        )
+        transport._uses_at_text_session = lambda: False  # type: ignore[method-assign]
+
+        self.assertEqual(
+            transport.take_mppt_framing_failure_latch(),
+            "binary_frame_ambiguous",
+        )
+        framed.take_mppt_framing_failure_latch.assert_called_once_with()
+
+    def test_peek_mppt_framing_latch_reads_disconnected_framed_session(self):
+        """Peek must mirror take's disconnected-framed path (no clear)."""
+        from unittest.mock import MagicMock
+
+        from custom_components.eybond_local.collector.transport.shared_at import (
+            SharedCollectorAtTransport,
+        )
+
+        transport = SharedCollectorAtTransport(
+            host="127.0.0.1",
+            port=18899,
+            request_timeout=3.0,
+            collector_ip="192.0.2.10",
+            collector_session_protocol="eybond_framed",
+        )
+        framed = MagicMock()
+        framed.connected = False
+        framed.peek_mppt_framing_failure_latch.return_value = "binary_frame_ambiguous"
+        transport._framed_connection = (  # type: ignore[method-assign]
+            lambda *, create_placeholder=False: framed
+        )
+        transport._at_connection = (  # type: ignore[method-assign]
+            lambda *, create_placeholder=False: None
+        )
+        transport._uses_at_text_session = lambda: False  # type: ignore[method-assign]
+
+        self.assertEqual(
+            transport.peek_mppt_framing_failure_latch(),
+            "binary_frame_ambiguous",
+        )
+        framed.peek_mppt_framing_failure_latch.assert_called_once_with()
+        framed.take_mppt_framing_failure_latch.assert_not_called()
 
 
 if __name__ == "__main__":
