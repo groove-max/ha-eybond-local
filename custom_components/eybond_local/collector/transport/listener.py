@@ -38,6 +38,7 @@ from .common import (
     _spawn_tracked_task,
 )
 from .connections import _CollectorAtConnection, _CollectorConnection
+from .socket_storm import CallbackSocketStorm, StormSocket, reset_tcp_writer
 from .tcp_acceptor import CollectorTcpAcceptor
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,21 @@ _TERMINAL_SESSION_STATES = frozenset(
         "parked_read_failed",
     }
 )
+
+
+def _unblock_reset_reader(reader: object | None) -> None:
+    """Wake a read blocked on a socket this policy just reset."""
+
+    seen: set[int] = set()
+    while reader is not None and id(reader) not in seen:
+        seen.add(id(reader))
+        set_exception = getattr(reader, "set_exception", None)
+        if callable(set_exception):
+            try:
+                set_exception(ConnectionResetError("socket_storm"))
+            except Exception:
+                pass
+        reader = getattr(reader, "_reader", None)
 
 
 def _session_state_is_terminal(state: str) -> bool:
@@ -87,6 +103,7 @@ class _CollectorSessionInventoryEntry:
     observed_protocol_shapes: set[str] = field(default_factory=set)
     close_reason: str = ""
     identity_probes: list[IdentityProbeProgress] = field(default_factory=list)
+    accepted_monotonic: float = 0.0
 
     def diagnostics(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -189,6 +206,7 @@ class _SharedEybondListener:
         self._exclusive_routes: dict[int, _ExclusiveCollectorRouteReservation] = {}
         self._connection_watcher_seq = 0
         self._connection_watchers: dict[int, tuple[str, Callable[[str], None]]] = {}
+        self._socket_storm = CallbackSocketStorm()
 
     def add_connection_watcher(
         self,
@@ -275,6 +293,7 @@ class _SharedEybondListener:
         self._session_protocol_owner_counts.clear()
         self._exclusive_routes.clear()
         self._session_inventory.clear()
+        self._socket_storm.clear()
 
         return True
 
@@ -899,6 +918,7 @@ class _SharedEybondListener:
             session_id=session_id,
             remote_ip=remote_ip,
             remote_port=remote_port,
+            accepted_monotonic=monotonic(),
         )
         while len(self._session_inventory) > self._MAX_SESSION_INVENTORY:
             oldest = next(iter(self._session_inventory))
@@ -912,6 +932,8 @@ class _SharedEybondListener:
             # never resurrect it as ``routed_*`` or ``route_identity_mismatch``.
             # E500 collectors can open several replacement sockets almost at
             # once, making this ordering observable during strategy recovery.
+            if entry.state == "closed_socket_storm":
+                return
             if _session_state_is_terminal(entry.state) and not _session_state_is_terminal(
                 state
             ):
@@ -974,10 +996,10 @@ class _SharedEybondListener:
         session_id: str,
         collector_pn: str,
         source: str,
-    ) -> None:
+    ) -> bool:
         normalized_pn = validated_collector_pn(collector_pn)
         if not normalized_pn:
-            return
+            return True
         entry = self._session_inventory.get(session_id)
         if entry is not None:
             entry.collector_pn = reconcile_pn(
@@ -997,6 +1019,174 @@ class _SharedEybondListener:
         at_connection = self._session_at_connections.get(session_id)
         if at_connection is not None:
             self._at_connections_by_pn[normalized_pn] = at_connection
+        if identity_source_is_strong(source):
+            self._apply_socket_storm(session_id)
+        return not self._socket_storm_reset(session_id)
+
+    def _payload_connection_is_live_route(self, session_id: str, connection: object) -> bool:
+        """True only for the routed payload socket of a collector already in use."""
+
+        entry = self._session_inventory.get(session_id)
+        state = str(getattr(entry, "state", "") or "")
+        if not state.startswith("routed"):
+            return False
+        connected = getattr(connection, "connected", False)
+        if callable(connected):
+            connected = connected()
+        return bool(connected)
+
+    def _socket_storm_reset(self, session_id: str) -> bool:
+        entry = self._session_inventory.get(session_id)
+        return entry is not None and entry.state == "closed_socket_storm"
+
+    def _storm_sockets(self) -> list[StormSocket]:
+        sockets: list[StormSocket] = []
+        seen: set[str] = set()
+
+        def add(
+            session_id: str,
+            peer_ip: str,
+            writer: object | None,
+            connection: object | None = None,
+            routed_payload: bool = False,
+        ) -> None:
+            if not session_id or session_id in seen or writer is None:
+                return
+            entry = self._session_inventory.get(session_id)
+            if entry is None or _session_state_is_terminal(entry.state):
+                return
+            strong_pn = ""
+            if entry.collector_pn and identity_source_is_strong(
+                entry.collector_identity_source
+            ):
+                strong_pn = entry.collector_pn
+            last_exchange = getattr(
+                connection, "last_framed_exchange_monotonic", None
+            )
+            seen.add(session_id)
+            sockets.append(
+                StormSocket(
+                    session_id=session_id,
+                    peer_ip=peer_ip,
+                    strong_pn=strong_pn,
+                    last_framed_exchange_at=(
+                        last_exchange if isinstance(last_exchange, float) else None
+                    ),
+                    writer=writer,
+                    routed_payload=routed_payload,
+                    accepted_at=float(getattr(entry, "accepted_monotonic", 0.0) or 0.0),
+                )
+            )
+
+        for session_id, connection in self._session_payload_connections.items():
+            add(
+                session_id,
+                str(getattr(connection.collector_info, "remote_ip", "") or ""),
+                getattr(connection, "_writer", None),
+                connection,
+                routed_payload=self._payload_connection_is_live_route(
+                    session_id,
+                    connection,
+                ),
+            )
+        for pending in self._pending_sockets.values():
+            add(pending.session_id, pending.remote_ip, pending.writer)
+        for session_id, connection in self._session_at_connections.items():
+            add(
+                session_id,
+                str(getattr(connection.collector_info, "remote_ip", "") or ""),
+                getattr(connection, "_writer", None),
+                connection,
+            )
+        return sockets
+
+    def _apply_socket_storm(self, focus_session_id: str) -> None:
+        action = self._socket_storm.consider(
+            self._storm_sockets(),
+            focus_session_id,
+            monotonic(),
+        )
+        for session_id in action.session_ids:
+            self._reset_storm_session(session_id)
+
+    def _reset_storm_session(self, session_id: str) -> None:
+        entry = self._session_inventory.get(session_id)
+        if entry is not None and _session_state_is_terminal(entry.state):
+            return
+        pending = self._pending_sockets.get(session_id)
+        connection = self._storm_connection(session_id)
+        writer = pending.writer if pending is not None else None
+        if writer is None and connection is not None:
+            writer = getattr(connection, "_writer", None)
+        if pending is not None:
+            task = pending.sniff_task
+            pending.sniff_task = None
+            if task is not None and task is not asyncio.current_task():
+                task.cancel()
+            self._remove_pending_socket(pending)
+        self._mark_session_state(session_id, "closed_socket_storm")
+        if pending is not None:
+            _unblock_reset_reader(pending.reader)
+        if connection is not None:
+            _unblock_reset_reader(getattr(connection, "_reader", None))
+            self._drop_connection_indexes_for_connection(connection)
+            self._reseat_live_connection_indexes()
+        if writer is not None:
+            reset_tcp_writer(writer)
+
+    def _storm_connection(self, session_id: str) -> object | None:
+        payload = self._session_payload_connections.get(session_id)
+        if payload is not None:
+            return payload
+        at_connection = self._session_at_connections.get(session_id)
+        if at_connection is not None:
+            return at_connection
+        for mapping in (
+            self._connections,
+            self._connections_by_pn,
+            self._at_connections,
+            self._at_connections_by_pn,
+        ):
+            for candidate in mapping.values():
+                if str(getattr(candidate, "_session_id", "") or "") == session_id:
+                    return candidate
+        return None
+
+    def _reseat_live_connection_indexes(self) -> None:
+        """Point PN and peer indexes at a live socket after a storm drop."""
+
+        self._reseat_live_connection_family(
+            self._session_payload_connections,
+            self._connections,
+            self._connections_by_pn,
+        )
+        self._reseat_live_connection_family(
+            self._session_at_connections,
+            self._at_connections,
+            self._at_connections_by_pn,
+        )
+
+    def _reseat_live_connection_family(
+        self,
+        sessions: dict[str, object],
+        by_ip: dict[str, object],
+        by_pn: dict[str, object],
+    ) -> None:
+        for session_id, connection in sessions.items():
+            entry = self._session_inventory.get(session_id)
+            if entry is None or _session_state_is_terminal(entry.state):
+                continue
+            peer_ip = str(
+                getattr(getattr(connection, "collector_info", None), "remote_ip", "")
+                or ""
+            )
+            if peer_ip and by_ip.get(peer_ip) is None:
+                by_ip[peer_ip] = connection
+            if entry.collector_pn and identity_source_is_strong(
+                entry.collector_identity_source
+            ):
+                if by_pn.get(entry.collector_pn) is None:
+                    by_pn[entry.collector_pn] = connection
 
     def matching_callback_ips(self, collector_ip: str) -> tuple[str, ...]:
         if not collector_ip:
@@ -2305,6 +2495,8 @@ class _SharedEybondListener:
             collector_pn, source = _collector_pn_from_initial_chunk(chunk)
             if collector_pn:
                 self._mark_session_identity(pending.session_id, collector_pn, source)
+                if self._socket_storm_reset(pending.session_id):
+                    return ""
                 if identity_source_is_strong(source):
                     return collector_pn
                 weak_pn = collector_pn
@@ -2332,6 +2524,8 @@ class _SharedEybondListener:
             if collector_pn:
                 self._mark_session_first_bytes(pending.session_id, response)
                 self._mark_session_identity(pending.session_id, collector_pn, source)
+                if self._socket_storm_reset(pending.session_id):
+                    return ""
                 return collector_pn
             if pending.reader.at_eof() or pending.writer.is_closing():
                 return weak_pn
@@ -2431,6 +2625,8 @@ class _SharedEybondListener:
                     observed_pn,
                     observed_source,
                 )
+                if self._socket_storm_reset(pending.session_id):
+                    return frame, "", ""
                 if identity_source_is_strong(observed_source):
                     return frame, observed_pn, observed_source
 
@@ -2500,6 +2696,8 @@ class _SharedEybondListener:
             return
 
         if not chunk:
+            if self._socket_storm_reset(pending.session_id):
+                return
             if not exhausted:
                 if self._reserved_for_transparent_route(pending):
                     # Exclusive transparent routes must stay parked / claimable.
@@ -2542,10 +2740,6 @@ class _SharedEybondListener:
             )
             return
 
-        self._remove_pending_socket(pending)
-        if self._last_pending_ip == pending.remote_ip:
-            self._last_pending_ip = ""
-
         initial_pn, initial_pn_source = _collector_pn_from_initial_chunk(chunk)
         if initial_pn:
             self._mark_session_identity(
@@ -2553,6 +2747,13 @@ class _SharedEybondListener:
                 initial_pn,
                 initial_pn_source,
             )
+            if self._socket_storm_reset(pending.session_id):
+                return
+
+        self._remove_pending_socket(pending)
+        if self._last_pending_ip == pending.remote_ip:
+            self._last_pending_ip = ""
+
         identity_can_route = bool(
             initial_pn and identity_source_is_strong(initial_pn_source)
         )
@@ -2660,6 +2861,8 @@ class _SharedEybondListener:
                         initial_pn,
                         initial_pn_source,
                     )
+                    if self._socket_storm_reset(pending.session_id):
+                        return
             self._last_at_connection_ip = pending.remote_ip
             self._mark_session_state(pending.session_id, "routed_at_text")
             await connection.run(
@@ -2725,6 +2928,8 @@ class _SharedEybondListener:
                     initial_pn,
                     initial_pn_source,
                 )
+                if self._socket_storm_reset(pending.session_id):
+                    return
         self._last_connection_ip = pending.remote_ip
         self._note_framed_payload_peer(pending.remote_ip)
         self._mark_session_state(pending.session_id, "routed_framed")
@@ -2766,6 +2971,9 @@ class _SharedEybondListener:
         )
         self._pending_sockets[session_id] = pending
         self._last_pending_ip = remote_ip
+        self._apply_socket_storm(session_id)
+        if self._socket_storm_reset(session_id):
+            return
         pending.sniff_task = _spawn_tracked_task(
             self._sniff_pending_socket(pending),
             name=f"collector_pending_sniff_{remote_ip}",

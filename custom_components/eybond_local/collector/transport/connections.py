@@ -95,6 +95,7 @@ class _CollectorConnection:
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
         self._last_heartbeat_monotonic: float | None = None
         self._last_liveness_monotonic: float | None = None
+        self.last_framed_exchange_monotonic: float | None = None
         self._session_id = ""
         self._session_identity_callback: Callable[[str, str, str], None] | None = None
         self._run_epoch = 0
@@ -401,6 +402,7 @@ class _CollectorConnection:
         # after the runtime's request table is created. Never inherit the old
         # connection's timestamp or replace the supplied observation time by now.
         self._last_liveness_monotonic = initial_liveness_monotonic
+        self.last_framed_exchange_monotonic = None
         self._auxiliary_session = AuxiliaryReadSession()
         self._diagnostic_modbus = DiagnosticModbusSession()
         self._reader = reader
@@ -736,6 +738,7 @@ class _CollectorConnection:
                 # TID. It remains a heartbeat, never an FC2/FC3/FC4 reply. Do not
                 # compare devcode/address: firmware legitimately rewrites those.
                 if correlated:
+                    self.last_framed_exchange_monotonic = observed_at
                     future.set_result((header, payload))
                     continue
 
@@ -811,6 +814,7 @@ class _CollectorConnection:
         self._connected.clear()
         self._last_heartbeat_monotonic = None
         self._last_liveness_monotonic = None
+        self.last_framed_exchange_monotonic = None
         self._session_id = ""
         self._session_identity_callback = None
 
@@ -878,6 +882,7 @@ class _CollectorAtConnection:
         self._pending_framed_parameter: dict[int, int] = {}
         self._tid = TIDCounter()
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
+        self.last_framed_exchange_monotonic: float | None = None
         self._session_id = ""
         self._session_identity_callback: Callable[[str, str, str], None] | None = None
         self._raw_passthrough_bootstrap = str(raw_passthrough_bootstrap or "").strip().lower()
@@ -1367,6 +1372,7 @@ class _CollectorAtConnection:
         self._writer = writer
         self._session_id = str(session_id or "").strip()
         self._session_identity_callback = session_identity_callback
+        self.last_framed_exchange_monotonic = None
         self._raw_passthrough_bootstrapped = False
         # Data-plane evidence belongs to this physical session only. A reconnect
         # must positively negotiate raw serial vs FC4 again.
@@ -1615,6 +1621,7 @@ class _CollectorAtConnection:
                             and (expected_parameter is None or len(payload) < 2
                                  or payload[1] == expected_parameter)
                         ):
+                            self.last_framed_exchange_monotonic = monotonic()
                             future.set_result((header, payload))
                             continue
                     if header.fcode == FC_QUERY_COLLECTOR:
@@ -1784,6 +1791,7 @@ class _CollectorAtConnection:
         self._connected.clear()
         self._session_id = ""
         self._session_identity_callback = None
+        self.last_framed_exchange_monotonic = None
 
         # Do not let old wait_closed()/reader cleanup cancel a newer session.
         future = self._pending_response

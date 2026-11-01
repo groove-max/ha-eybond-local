@@ -1494,28 +1494,39 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(diagnostics["duplicate_peer_ip_count"], 1)
 
     async def test_listener_routes_many_simultaneous_at_collectors_from_same_peer_ip_by_pn(self) -> None:
+        """Distinct strong PNs on one peer IP stay independent."""
+
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         listener.register_session_protocol_owner("at_text")
         pns = tuple(f"E50000200000{index:02d}" for index in range(8))
         for pn in pns:
             listener.register_at_pn_owner(pn)
 
-        async def _run_pending(index: int, pn: str) -> _FakeWriter:
+        pendings: list[tuple[_PendingCollectorSocket, _FakeWriter]] = []
+        for index, pn in enumerate(pns):
             session_id = f"session-{index}"
             listener._remember_session(
                 session_id=session_id,
                 remote_ip="203.0.113.10",
                 remote_port=41000 + index,
             )
+            listener._mark_session_identity(session_id, pn, "at_dtupn")
             reader = asyncio.StreamReader()
 
             class _ProbeWriter(_FakeWriter):
+                def __init__(self, probe_reader: asyncio.StreamReader, probe_pn: str) -> None:
+                    super().__init__()
+                    self._probe_reader = probe_reader
+                    self._probe_pn = probe_pn
+
                 async def drain(self) -> None:
                     await asyncio.sleep(0)
-                    reader.feed_data(f"AT+DTUPN:{pn}\r\n".encode("ascii"))
-                    reader.feed_eof()
+                    self._probe_reader.feed_data(
+                        f"AT+DTUPN:{self._probe_pn}\r\n".encode("ascii")
+                    )
+                    self._probe_reader.feed_eof()
 
-            writer = _ProbeWriter()
+            writer = _ProbeWriter(reader, pn)
             pending = _PendingCollectorSocket(
                 remote_ip="203.0.113.10",
                 remote_port=41000 + index,
@@ -1524,20 +1535,24 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 writer=writer,  # type: ignore[arg-type]
             )
             listener._pending_sockets[session_id] = pending
-            await listener._sniff_pending_socket(pending)
-            return writer
+            pendings.append((pending, writer))
 
-        writers = await asyncio.gather(
-            *(_run_pending(index, pn) for index, pn in enumerate(pns))
+        await asyncio.gather(
+            *(listener._sniff_pending_socket(pending) for pending, _writer in pendings)
         )
 
-        self.assertTrue(all(bytes(writer.buffer) == b"AT+DTUPN?\r\n" for writer in writers))
+        self.assertTrue(
+            all(bytes(writer.buffer) == b"AT+DTUPN?\r\n" for _pending, writer in pendings)
+        )
         self.assertFalse(listener._at_connections_by_pn)
         self.assertFalse(listener._session_at_connections)
         diagnostics = listener.session_inventory_diagnostics()
         self.assertEqual(diagnostics["pending_session_count"], 0)
         self.assertEqual(diagnostics["recent_session_count"], len(pns))
         self.assertEqual(diagnostics["duplicate_peer_ip_count"], 1)
+        for index in range(len(pns)):
+            entry = listener._session_inventory[f"session-{index}"]
+            self.assertNotEqual(entry.state, "closed_socket_storm")
 
     async def test_bind_failure_rolls_back_shared_listener_registry(self) -> None:
         port = 19099
@@ -2884,6 +2899,8 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             await framed.sniff_task
 
     async def test_proxy_capture_route_selects_same_peer_pending_by_collector_pn(self) -> None:
+        """Pending sockets on one IP stay selectable until one is a live route."""
+
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         listener._remember_session(
             session_id="session-one",
@@ -2963,7 +2980,6 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             1,
         )
 
-        # The mismatched socket is watched again after the paused sniff.
         watch = first_pending.sniff_task
         self.assertIsNotNone(watch)
         self.assertFalse(watch.done())
@@ -3157,6 +3173,11 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             client_task = asyncio.create_task(_collector_client())
             try:
                 await asyncio.wait_for(connected.wait(), timeout=1.0)
+                listener = at_transport._listener
+                for _ in range(50):
+                    if listener is not None and listener._pending_sockets:
+                        break
+                    await asyncio.sleep(0.01)
                 response = await at_transport.async_query("WFSS")
                 self.assertEqual(response.command, "WFSS")
                 self.assertEqual(response.value, "-55")
@@ -4215,7 +4236,7 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
         await first.disconnect()
 
     async def test_two_automatically_routed_sessions_keep_exact_transports(self) -> None:
-        """The listener's normal accept path preserves the same invariant."""
+        """Two accepts with the same strong PN keep one survivor and reset the extra."""
 
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
         collector_pn = "E5000020000000"
@@ -4239,24 +4260,77 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
             strong_identity=True,
         )
         second_task = asyncio.create_task(listener._sniff_pending_socket(second_pending))
-        for _ in range(20):
-            if listener.payload_connection_for_session("session-second") is not None:
-                break
-            await asyncio.sleep(0.01)
-
+        await asyncio.wait_for(second_task, timeout=2.0)
+        self.assertNotEqual(
+            listener._session_inventory["session-first"].state,
+            "closed_socket_storm",
+        )
+        self.assertEqual(
+            listener._session_inventory["session-second"].state,
+            "closed_socket_storm",
+        )
         first = listener.payload_connection_for_session("session-first")
         second = listener.payload_connection_for_session("session-second")
         self.assertIsNotNone(first)
-        self.assertIsNotNone(second)
-        self.assertIsNot(first, second)
         self.assertTrue(first.connected)
-        self.assertTrue(second.connected)
-
-        first_pending.reader.feed_eof()
-        second_pending.reader.feed_eof()
-        await asyncio.wait_for(first_task, timeout=2.0)
-        await asyncio.wait_for(second_task, timeout=2.0)
+        self.assertTrue(second is None or not second.connected)
+        first_task.cancel()
+        try:
+            await first_task
+        except (asyncio.CancelledError, ConnectionResetError):
+            pass
         listener.unregister_payload_pn_owner(collector_pn)
+
+    async def test_storm_reset_drops_discarded_connection_indexes(self) -> None:
+        listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
+        collector_pn = "E5000020000000"
+        peer_ip = "203.0.113.10"
+        listener._remember_session(
+            session_id="kept",
+            remote_ip=peer_ip,
+            remote_port=41001,
+        )
+        listener._remember_session(
+            session_id="discarded",
+            remote_ip=peer_ip,
+            remote_port=41002,
+        )
+        listener._mark_session_identity("kept", collector_pn, "fc2_parameter_2")
+        listener._mark_session_identity("discarded", collector_pn, "fc2_parameter_2")
+
+        def _connection(session_id: str, healthy: bool) -> types.SimpleNamespace:
+            return types.SimpleNamespace(
+                _writer=_FakeWriter(),
+                _reader=asyncio.StreamReader(),
+                _session_id=session_id,
+                last_framed_exchange_monotonic=monotonic() if healthy else None,
+                collector_info=types.SimpleNamespace(remote_ip=peer_ip),
+            )
+
+        kept = _connection("kept", True)
+        discarded = _connection("discarded", False)
+        listener._session_payload_connections["kept"] = kept
+        listener._session_payload_connections["discarded"] = discarded
+        listener._connections[peer_ip] = discarded
+        listener._connections_by_pn[collector_pn] = discarded
+
+        listener._apply_socket_storm("discarded")
+
+        self.assertNotEqual(
+            listener._session_inventory["kept"].state,
+            "closed_socket_storm",
+        )
+        self.assertEqual(
+            listener._session_inventory["discarded"].state,
+            "closed_socket_storm",
+        )
+        self.assertIs(listener._session_payload_connections.get("kept"), kept)
+        self.assertNotIn("discarded", listener._session_payload_connections)
+        self.assertIs(listener._connections.get(peer_ip), kept)
+        self.assertIs(listener._connections_by_pn.get(collector_pn), kept)
+        self.assertNotIn(discarded, listener._connections.values())
+        self.assertNotIn(discarded, listener._connections_by_pn.values())
+        self.assertNotIn(discarded, listener._session_payload_connections.values())
 
     async def test_unclaimed_callback_is_parked_instead_of_closed(self) -> None:
         listener = _SharedEybondListener(host="127.0.0.1", port=_free_tcp_port())
