@@ -21,7 +21,22 @@ from .common import (
     seed_unsupported_commands,
 )
 
+from ...drivers.short_ascii_bms_held import STATE_KEY as _SHORT_ASCII_BMS_HELD_STATE_KEY
 from ...drivers.short_ascii_mppt_optional import ADMIT_OPTION_KEY
+
+
+def _is_labelled_held_mirror(key: str) -> bool:
+    """True for labelled estimate mirrors, not live measurements.
+
+    A FULL driver key is otherwise copied into the measurement cache as fresh.
+    ``*_held_estimate`` and its age/mode companions must not be.
+    """
+
+    return (
+        key.endswith("_held_estimate")
+        or key.endswith("_held_estimate_age_seconds")
+        or key.endswith("_held_estimate_mode")
+    )
 
 
 def _sanitize_probe_routes(value: object) -> list[dict[str, object]]:
@@ -622,16 +637,22 @@ class HubRefreshMixin:
         The unsupported-command set is an empirical device fact persisted in
         the config entry; a reconnect must not forget it and start burning
         timeouts on known-dead commands again.
+
+        Short-ASCII BMS held estimates are also kept: reconnect often returns
+        voltage before current, and wiping the hold cache opens sub-TTL gaps.
         """
 
+        held_bms = self._runtime_read_state.get(_SHORT_ASCII_BMS_HELD_STATE_KEY)
         self._runtime_read_state.clear()
         if self._persistent_unsupported_commands:
             seed_unsupported_commands(
                 self._runtime_read_state,
                 self._persistent_unsupported_commands,
             )
-        if self._admit_short_ascii_mppt:
+        if getattr(self, "_admit_short_ascii_mppt", False):
             self._runtime_read_state[ADMIT_OPTION_KEY] = True
+        if held_bms is not None:
+            self._runtime_read_state[_SHORT_ASCII_BMS_HELD_STATE_KEY] = held_bms
 
     def _record_inverter_detection_probe_log(
         self,
@@ -736,26 +757,38 @@ class HubRefreshMixin:
         never re-derived here.
         """
 
-        fresh_keys = set(result.values)
+        measurement_values = {
+            key: value
+            for key, value in result.values.items()
+            if not _is_labelled_held_mirror(key)
+        }
+        held_mirrors = {
+            key: value
+            for key, value in result.values.items()
+            if _is_labelled_held_mirror(key)
+        }
+        # Held mirrors update labelled entities but are not fresh measurements.
+        fresh_keys = set(measurement_values)
         self._runtime_measurement_telemetry = fold_driver_telemetry(
             self._runtime_measurement_telemetry,
             driver_key=getattr(self._inverter, "driver_key", ""),
-            values=result.values,
+            values=measurement_values,
             replace=result.mode is DriverReadMode.FULL,
             removed_keys=result.removed_keys,
         )
         if result.mode is DriverReadMode.FULL:
-            self._runtime_measurement_values = dict(result.values)
+            self._runtime_measurement_values = dict(measurement_values)
             reused = 0
         else:
-            self._runtime_measurement_values.update(result.values)
+            self._runtime_measurement_values.update(measurement_values)
             for key in result.removed_keys:
                 self._runtime_measurement_values.pop(key, None)
             reused = len(set(self._runtime_measurement_values) - fresh_keys)
         self._runtime_measurement_owned_keys.update(fresh_keys)
         self._runtime_measurement_owned_keys.update(result.removed_keys)
         self._runtime_driver_diagnostics = dict(result.diagnostics)
-        self._runtime_driver_diagnostic_owned_keys.update(result.diagnostics)
+        self._runtime_driver_diagnostics.update(held_mirrors)
+        self._runtime_driver_diagnostic_owned_keys.update(self._runtime_driver_diagnostics)
         self._runtime_measurement_last_mode = result.mode.value
         self._runtime_measurement_fresh_count = len(fresh_keys)
         self._runtime_measurement_reused_count = reused

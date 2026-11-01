@@ -67,6 +67,8 @@ class OptionalReads:
         OptionalSample(MPPT_COMMAND, interval=MPPT_INTERVAL, ttl=MPPT_TTL, parser=dict),
     ))
     rb_filter: RbPublishFilter = field(default_factory=RbPublishFilter)
+    # True only when this refresh parsed a new live RB sample (not a TTL replay).
+    rb_live_read: bool = False
     # Quiet stuck-aux counters. Survive optional.clear() on a Q1 miss.
     mppt_diag: MpptPollDiag = field(default_factory=MpptPollDiag)
 
@@ -162,6 +164,7 @@ class OptionalReads:
     ) -> tuple[dict[str, object], dict[str, object]]:
         """At most one extra query per successful Q1 cycle; no discovery budget."""
         now = clock()
+        self.rb_live_read = False
         mppt_admitted = is_admitted(runtime_state)
         diag = self.mppt_diag
         for sample in self.samples:
@@ -266,6 +269,7 @@ class OptionalReads:
             else:
                 if sample.command == "RB":
                     self._apply_rb_parse(sample, parsed, clock())
+                    self.rb_live_read = sample.outcome == "ok"
                 else:
                     sample.values = dict(parsed)
                     sample.sampled_at = clock()

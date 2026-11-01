@@ -286,6 +286,35 @@ class HubMeasurementCacheTests(unittest.TestCase):
         r2 = hub._resolve_runtime_measurements(coerce_driver_read_result({"a": 3}))
         self.assertEqual(r2, {"a": 3})
 
+    def test_held_mirrors_are_not_fresh_measurements(self) -> None:
+        hub = _hub()
+        _bind(hub, _inverter())
+        hub._resolve_runtime_measurements(DriverReadResult(
+            values={
+                "battery_voltage": 52.0,
+                "battery_power_held_estimate": 10.0,
+                "bms_held_estimate_mode": "held",
+                "bms_held_estimate_age_seconds": 12.0,
+                "pv_power_held_estimate": 5.0,
+            },
+            mode=DriverReadMode.FULL,
+            diagnostics={"short_ascii_optional_status": "RB=ok"},
+        ))
+        self.assertEqual(hub._runtime_measurement_values, {"battery_voltage": 52.0})
+        self.assertEqual(hub._runtime_measurement_fresh_count, 1)
+        self.assertEqual(hub._runtime_driver_diagnostics["battery_power_held_estimate"], 10.0)
+        self.assertEqual(hub._runtime_driver_diagnostics["bms_held_estimate_mode"], "held")
+        self.assertEqual(hub._runtime_driver_diagnostics["bms_held_estimate_age_seconds"], 12.0)
+        self.assertEqual(hub._runtime_driver_diagnostics["pv_power_held_estimate"], 5.0)
+        self.assertEqual(
+            hub._runtime_driver_diagnostics["short_ascii_optional_status"],
+            "RB=ok",
+        )
+        self.assertNotIn(
+            "battery_power_held_estimate",
+            hub._runtime_measurement_telemetry.values(),
+        )
+
     def test_diagnostics_report_fresh_and_reused(self) -> None:
         hub = _hub()
         _bind(hub, _inverter())
