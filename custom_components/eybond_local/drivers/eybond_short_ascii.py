@@ -20,6 +20,10 @@ from .catalog_probe import async_probe_ascii_catalog, catalog_model_name
 from .read_result import DriverReadMode, DriverReadResult
 from .support_marker import DriverSupportMarker
 from .short_ascii_battery_dc import battery_dc_power_values
+from .short_ascii_estimates import (
+    best_available_ac_load_estimate_values,
+    estimated_ac_load_values,
+)
 from .short_ascii_optional import optional_reads_for
 
 
@@ -130,6 +134,9 @@ class EybondShortAsciiDriver(InverterDriver):
         # Measured battery DC needs RB currents gated by RH+F (optional path).
         merged = values | extra
         merged.update(battery_dc_power_values(merged))
+        # Keep pure power keys separate. %×VA and the house-load composite are labelled.
+        merged.update(estimated_ac_load_values(merged))
+        merged.update(best_available_ac_load_estimate_values(merged))
         return DriverReadResult(values=merged, mode=DriverReadMode.FULL, diagnostics=diagnostics)
 
     async def async_capture_support_evidence(self, transport, inverter, runtime_state=None):

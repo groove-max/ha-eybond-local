@@ -15,6 +15,9 @@
     {"key": "grid_voltage", "name": "Grid Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
     {"key": "output_voltage", "name": "Output Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
     {"key": "load_percent", "name": "Load Percent", "unit": "%", "state_class": "measurement", "icon": "mdi:gauge"},
+    {"key": "estimated_ac_load_power", "name": "Estimated AC Load Power", "unit": "W", "device_class": "power", "state_class": "measurement", "icon": "mdi:flash", "enabled_default": true},
+    {"key": "best_available_ac_load_estimate", "name": "Best Available AC Load Estimate", "unit": "W", "device_class": "power", "state_class": "measurement", "icon": "mdi:flash", "diagnostic": true, "enabled_default": true},
+    {"key": "best_available_ac_load_estimate_source", "name": "Best Available AC Load Estimate Source", "diagnostic": true, "enabled_default": false},
     {"key": "output_frequency", "name": "Output Frequency", "unit": "Hz", "device_class": "frequency", "state_class": "measurement"},
     {"key": "battery_reference_voltage", "name": "Battery Reference Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement", "diagnostic": true},
     {"key": "temperature", "name": "Inverter Temperature", "unit": "\u00b0C", "device_class": "temperature", "state_class": "measurement"},
@@ -92,6 +95,7 @@
     "battery_power is measured pack DC watts: BMS V \u00d7 (Icharge \u2212 Idischarge), positive while charging. It must not replace load_percent.",
     "RB zero voltage plus zero SOC withdraws all BMS measurements, including trailing retained fields.",
     "Optional MPPT/PV entities come from the documented auxiliary 0200 runtime read only (not tip harvest, not settings 0202). Stock installs do not poll 0200 until config-entry option admit_short_ascii_mppt is true (enabled_default false only hides entities). Live PV/MPPT measurements stay disabled by default; mppt_error_code and mppt_error are quiet diagnostic sensors (enabled_default true, no WARNING spam). Distinct owners: pv_* = PV array; mppt_battery_voltage \u2260 BMS/reference voltage; mppt_temperature \u2260 inverter/BMS temps; dc_load_current \u2260 AC load. Live-qualify with Support Archive before claiming device support; family identity only \u2014 no retail Anern model claim. Controls remain absent.",
+    "estimated_ac_load_power is load percent times rated VA and is not measured active power. best_available_ac_load_estimate uses that value when it is above 0 W; otherwise house load is max(0, PV minus battery) with pack sign +charge / -discharge. The source diagnostic stays disabled by default.",
     "Quiet Q1 fault diagnostics: q1_error_code / q1_error (19B4 trailer errcode) and ups_fault (Q1 flag bit1) are diagnostic sensors with enabled_default true \u2014 entity state only, no per-poll WARNING spam.",
     "MPPT poll counters (attempts, fail class, prefer-FC4 skips, anti-starve forces, aux fence) are quiet diagnostics with enabled_default false."
   ]
