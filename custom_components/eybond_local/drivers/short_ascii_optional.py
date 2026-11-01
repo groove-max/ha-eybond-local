@@ -15,6 +15,7 @@ from .command_support import (
     record_command_success, unsupported_commands,
 )
 from .short_ascii_battery_dc import battery_dc_power_values
+from .short_ascii_rb_filter import RbPublishFilter
 
 STATE_KEY = "short_ascii_optional_reads"
 _PREFIX = "short_ascii:"
@@ -55,12 +56,14 @@ class OptionalReads:
         # Settings block; same cadence as F. Gate for RB current ÷10 publish.
         OptionalSample("RH", interval=900, ttl=900, parser=parse_rh),
     ))
+    rb_filter: RbPublishFilter = field(default_factory=RbPublishFilter)
 
     def clear(self) -> None:
         for sample in self.samples:
             sample.clear()
             sample.next_due = 0
             sample.outcome = "not_checked"
+        self.rb_filter.clear()
 
     def _sample(self, command: str) -> OptionalSample | None:
         for sample in self.samples:
@@ -119,13 +122,22 @@ class OptionalReads:
         return out
 
     def _apply_rb_parse(self, sample: OptionalSample, parsed: dict[str, object], now: float) -> None:
+        rated_v, rated_a, rated_bat = self._f_ratings(now)
         candidate = self._strip_ungated_currents(dict(parsed), now)
         # Derive measured DC only when I keys remain (RH=1 + F present).
         candidate.update(battery_dc_power_values(candidate))
-        sample.values = candidate
-        sample.outcome = (
-            "no_data" if parsed.get("short_ascii_bms_data_available") is False else "ok"
+        decision = self.rb_filter.decide(
+            candidate, now=now,
+            rated_voltage=rated_v, rated_current=rated_a, rated_battery_voltage=rated_bat,
         )
+        sample.outcome = decision.outcome
+        sample.next_due = now + sample.interval
+        if decision.keep_previous:
+            # Hard-reject: leave prior values + sampled_at for ~60 s TTL.
+            return
+        sample.values = dict(decision.values or ())
+        if decision.refresh_sampled_at:
+            sample.sampled_at = now
 
     async def refresh_one(
         self, session: ShortAsciiSession, runtime_state: dict,
@@ -150,19 +162,22 @@ class OptionalReads:
             try:
                 parsed = sample.parser(await session.request(sample.command))
             except (ShortAsciiError, asyncio.TimeoutError) as exc:
+                # Envelope/transport failure: drop; do not invent a hold.
                 sample.clear()
+                if sample.command == "RB":
+                    self.rb_filter.clear()
                 sample.outcome = "timeout" if isinstance(exc, asyncio.TimeoutError) else "invalid_response"
                 sample.next_due = clock() + 30
                 if not session.transport.connected:
                     raise ConnectionError("short_ascii_optional_connection_lost") from None
                 record_command_failure(runtime_state, key)
             else:
-                sample.sampled_at = clock()
-                sample.next_due = sample.sampled_at + sample.interval
                 if sample.command == "RB":
-                    self._apply_rb_parse(sample, parsed, sample.sampled_at)
+                    self._apply_rb_parse(sample, parsed, clock())
                 else:
                     sample.values = dict(parsed)
+                    sample.sampled_at = clock()
+                    sample.next_due = sample.sampled_at + sample.interval
                     sample.outcome = (
                         "no_data" if parsed.get("short_ascii_bms_data_available") is False else "ok"
                     )
@@ -193,6 +208,7 @@ class OptionalReads:
         diagnostics["driver_unsupported_commands"] = ", ".join(
             key for key in unsupported_commands(runtime_state) if key.startswith(_PREFIX)
         )
+        diagnostics.update(self.rb_filter.diagnostic_counters())
         return values, diagnostics
 
 
