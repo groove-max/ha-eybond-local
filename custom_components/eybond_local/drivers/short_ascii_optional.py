@@ -17,8 +17,8 @@ from .command_support import (
 from .short_ascii_battery_dc import battery_dc_power_values
 from .short_ascii_mppt_optional import (
     ADMIT_OPTION_KEY, COMMAND as MPPT_COMMAND, INTERVAL as MPPT_INTERVAL,
-    STRUCTURAL_BACKOFF, TTL as MPPT_TTL, is_admitted, is_structural_aux_error,
-    request_runtime_sample,
+    STRUCTURAL_BACKOFF, TTL as MPPT_TTL, MpptPollDiag, is_admitted,
+    is_structural_aux_error, request_runtime_sample,
 )
 from .short_ascii_rb_filter import RbPublishFilter
 
@@ -67,6 +67,8 @@ class OptionalReads:
         OptionalSample(MPPT_COMMAND, interval=MPPT_INTERVAL, ttl=MPPT_TTL, parser=dict),
     ))
     rb_filter: RbPublishFilter = field(default_factory=RbPublishFilter)
+    # Quiet stuck-aux counters. Survive optional.clear() on a Q1 miss.
+    mppt_diag: MpptPollDiag = field(default_factory=MpptPollDiag)
 
     def clear(self) -> None:
         for sample in self.samples:
@@ -161,12 +163,14 @@ class OptionalReads:
         """At most one extra query per successful Q1 cycle; no discovery budget."""
         now = clock()
         mppt_admitted = is_admitted(runtime_state)
+        diag = self.mppt_diag
         for sample in self.samples:
             if sample.command == MPPT_COMMAND and not mppt_admitted:
-                # G.P1: stock installs must not poll aux 0200.
+                # Stock installs must not poll aux 0200.
                 sample.clear()
                 sample.outcome = "not_admitted"
                 sample.next_due = now + sample.interval
+                diag.note_not_admitted(self.transport)
                 continue
             if command_skipped_as_unsupported(runtime_state, _PREFIX + sample.command):
                 sample.clear()
@@ -178,6 +182,12 @@ class OptionalReads:
             elif sample.outcome == "not_admitted" and mppt_admitted:
                 sample.next_due = now
                 sample.outcome = "not_checked"
+        if mppt_admitted:
+            diag.note_due(any(
+                sample.command == MPPT_COMMAND and sample.outcome != "unsupported"
+                and now >= sample.next_due
+                for sample in self.samples
+            ))
         due = [sample for sample in self.samples
                if sample.outcome not in ("unsupported", "not_admitted")
                and now >= sample.next_due]
@@ -196,15 +206,24 @@ class OptionalReads:
             or mppt_sample.sampled_at is None
             or (now - mppt_sample.sampled_at) > MPPT_TTL
         )
-        if prefer_fc4 and rb_contending and mppt_stale and mppt_sample is not None:
+        force_mppt = bool(
+            prefer_fc4 and rb_contending and mppt_stale and mppt_sample is not None
+        )
+        if force_mppt:
             candidates = [mppt_sample]
         else:
             candidates = fc4_due or due
         sample = min(candidates, key=lambda item: item.next_due) if candidates else None
+        if force_mppt:
+            diag.note_forced_anti_starve()
+        elif prefer_fc4 and sample is not None and sample.command != MPPT_COMMAND:
+            diag.note_prefer_fc4_skip(contending_rb=rb_contending)
         if sample is not None:
             key = _PREFIX + sample.command
+            mppt_retried = False
             try:
                 if sample.command == MPPT_COMMAND:
+                    diag.note_attempt(self.transport)
                     try:
                         parsed = await self._request_mppt()
                     except _SOFT_ERRORS as first_exc:
@@ -214,6 +233,7 @@ class OptionalReads:
                             raise
                         if not session.transport.connected:
                             raise
+                        mppt_retried = True
                         parsed = await self._request_mppt()
                 else:
                     frame = await session.request(sample.command)
@@ -229,6 +249,7 @@ class OptionalReads:
                     else "invalid_response"
                 )
                 if sample.command == MPPT_COMMAND:
+                    diag.note_fail(self.transport, exc)
                     if is_structural_aux_error(exc):
                         # Missing facade: long backoff, never next_due=now storm.
                         sample.next_due = clock() + STRUCTURAL_BACKOFF
@@ -252,6 +273,8 @@ class OptionalReads:
                     sample.outcome = (
                         "no_data" if parsed.get("short_ascii_bms_data_available") is False else "ok"
                     )
+                    if sample.command == MPPT_COMMAND:
+                        diag.note_ok(sample.sampled_at, retried=mppt_retried)
                 record_command_success(runtime_state, key)
         # No staged strike survives a failed/cancelled cycle. Q1 was confirmed
         # by our caller, and from here to commit there are no suspension points.
@@ -280,6 +303,7 @@ class OptionalReads:
             key for key in unsupported_commands(runtime_state) if key.startswith(_PREFIX)
         )
         diagnostics.update(self.rb_filter.diagnostic_counters())
+        diagnostics.update(diag.as_diagnostics(now))
         if not mppt_admitted:
             diagnostics["short_ascii_mppt_admission"] = ADMIT_OPTION_KEY
         return values, diagnostics
