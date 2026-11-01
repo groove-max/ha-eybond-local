@@ -41,6 +41,7 @@ USER_GUIDE_MARKDOWN = (
 )
 MAINTAINER_MARKDOWN = (
     REPO_ROOT / "docs" / "maintainer" / "ADDING_DRIVERS.md",
+    REPO_ROOT / "docs" / "maintainer" / "SHORT_ASCII_MIXED_SOCKET.md",
     REPO_ROOT / "docs" / "maintainer" / "GRAPHIFY.md",
     REPO_ROOT / "docs" / "maintainer" / "GRAPHIFY_ARCHITECTURE_AUDIT.md",
     REPO_ROOT / "docs" / "maintainer" / "ISSUE_TRIAGE.md",

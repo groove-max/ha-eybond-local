@@ -25,10 +25,27 @@ def _query(subtype: bytes = b"\x02\x00") -> bytes:
     return b"\x5a\xa5" + subtype + bytes(16) + bytes([sum(subtype) & 255])
 
 
-def _reply(subtype: bytes = b"\x02\x00", *, collision: bool = False) -> bytes:
-    body = b"\xaa\xbb" + subtype + b"\x04\x3d\x00" + bytes([4 if collision else 70])
-    body += bytes(12)
-    return body + bytes([sum(body[2:]) & 255])
+def _reply(
+    subtype: bytes = b"\x02\x00",
+    *,
+    collision: bool = False,
+    voltage: int = 1085,
+    power: int | None = None,
+) -> bytes:
+    # Exact 20-byte envelope + checksum byte (21 total), matching production AABB.
+    body = bytearray(b"\xaa\xbb" + subtype + bytes(16))
+    body[4:6] = voltage.to_bytes(2, "big")
+    if power is not None:
+        body[6:8] = power.to_bytes(2, "big")
+    else:
+        body[7] = 4 if collision else 70
+    return bytes(body) + bytes([sum(body[2:]) & 255])
+
+
+def _collision_0200() -> bytes:
+    """Checksum-valid AABB/0200 that is also a legal EyeBond header (PV 113.1 V, 20 W)."""
+
+    return _reply(voltage=1131, power=2)
 
 
 def _framed(*, tid: int = 0xAABB, size: int = 20, devcode: int = 0x0200) -> bytes:
@@ -239,7 +256,12 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
                 (_reply()[:-1] + bytes([_reply()[-1] ^ 1]), "aabb_checksum_invalid"),
                 (_reply(b"\x02\x02"), "aabb_response_subtype_mismatch"),
                 (_reply(b"\x02\x03"), "aabb_subtype_unsupported"),
-                (_reply(collision=True), "binary_frame_ambiguous"),
+                # Collision with bad checksum under an outstanding 0200 claim:
+                # choose AABB then reject; never publish.
+                (
+                    _collision_0200()[:-1] + bytes([_collision_0200()[-1] ^ 1]),
+                    "aabb_checksum_invalid",
+                ),
             ):
                 with self.subTest(kind=kind, reason=reason):
                     connection, reader, writer, run = await self._open(kind)
@@ -274,19 +296,70 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(connection.collector_info.raw_response_count, 0)
 
     async def test_late_checksum_colliding_framed_reply_is_not_auxiliary(self):
-        # A valid21-byte AABB prefix of a28-byte EyeBond frame, AND a frame
-        # whose entire21bytes satisfy both grammars. Future liveness is irrelevant.
+        # Outstanding 0200 claim + checksum-valid colliding reply is AABB.
+        # Same bytes with a bad checksum reject. No claim / subtype mismatch
+        # stay fail-closed and never publish.
         for kind in ("framed", "at"):
-            for size in (13, 20):
+            with self.subTest(kind=kind, arm="owned_valid"):
                 connection, reader, writer, _ = await self._open(kind)
-                wire = bytearray(_framed(size=size))
-                wire[20] = sum(wire[2:20]) & 255
+                wire = _collision_0200()
                 task = await self._start_read(connection, writer)
                 reader.feed_data(wire)
+                self.assertEqual(await task, wire)
+                self.assertTrue(connection.connected)
+                self.assertEqual(connection.collector_info.raw_response_count, 0)
+            with self.subTest(kind=kind, arm="owned_bad_checksum"):
+                connection, reader, writer, run = await self._open(kind)
+                wire = _collision_0200()
+                bad = wire[:-1] + bytes([wire[-1] ^ 1])
+                task = await self._start_read(connection, writer)
+                reader.feed_data(bad)
                 with self.assertRaises(ConnectionError):
                     await task
-                self.assertEqual(connection.collector_info.last_disconnect_reason, "binary_frame_ambiguous")
+                await asyncio.gather(run, return_exceptions=True)
+                self.assertEqual(
+                    connection.collector_info.last_disconnect_reason,
+                    "aabb_checksum_invalid",
+                )
                 self.assertEqual(connection.collector_info.raw_response_count, 0)
+            with self.subTest(kind=kind, arm="no_claim_overlap"):
+                # MIXED enabled after a completed read; unsolicited collision.
+                connection, reader, writer, run = await self._open(kind)
+                first = await self._start_read(connection, writer)
+                reader.feed_data(_reply())
+                await first
+                self.assertTrue(connection._auxiliary_session.enabled)
+                self.assertIsNone(connection._auxiliary_session.claim)
+                reader.feed_data(_collision_0200())
+                await asyncio.gather(run, return_exceptions=True)
+                self.assertTrue(writer.closed)
+                self.assertEqual(
+                    connection.collector_info.last_disconnect_reason,
+                    "binary_frame_ambiguous",
+                )
+                self.assertEqual(connection.collector_info.raw_response_count, 0)
+            with self.subTest(kind=kind, arm="subtype_mismatch"):
+                connection, reader, writer, run = await self._open(kind)
+                task = await self._start_read(connection, writer, subtype=b"\x02\x02")
+                reader.feed_data(_collision_0200())
+                with self.assertRaises(ConnectionError):
+                    await task
+                await asyncio.gather(run, return_exceptions=True)
+                self.assertEqual(
+                    connection.collector_info.last_disconnect_reason,
+                    "binary_frame_ambiguous",
+                )
+                self.assertEqual(connection.collector_info.raw_response_count, 0)
+            for size in (13, 20):
+                with self.subTest(kind=kind, arm="framed_prefix", size=size):
+                    connection, reader, writer, _ = await self._open(kind)
+                    wire = bytearray(_framed(size=size))
+                    wire[20] = sum(wire[2:20]) & 255
+                    task = await self._start_read(connection, writer)
+                    reader.feed_data(wire)
+                    self.assertEqual(await task, bytes(wire[:21]))
+                    self.assertTrue(connection.connected)
+                    self.assertEqual(connection.collector_info.raw_response_count, 0)
 
     async def test_default_session_does_not_reinterpret_aabb_tid(self):
         for kind in ("framed", "at"):
