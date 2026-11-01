@@ -532,6 +532,48 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(new.closed)
         self.assertIsNone(new.claim)
 
+    async def test_illegal_eybond_header_resyncs_without_publishing_junk(self) -> None:
+        """Non-aux: discard 000f02ff0000ff04; deliver aabb-leading legal frame only."""
+
+        junk = bytes.fromhex("000f02ff0000ff04")
+        # tid 0xAABB so follow-on starts with aa bb — one-byte slide would false-accept.
+        # Non-AABB subtype prefix so the non-aux EyeBond path stays unambiguous.
+        valid = _framed(tid=0xAABB, size=4, devcode=0x02FF)
+        self.assertEqual(valid[:2], b"\xaa\xbb")
+        connection, reader, writer, run = await self._open("framed")
+        future = asyncio.get_running_loop().create_future()
+        connection._pending[0xAABB] = future
+        reader.feed_data(junk + valid)
+        header, payload = await asyncio.wait_for(future, 1.0)
+        self.assertEqual(header.tid, 0xAABB)
+        self.assertEqual(payload, bytes(4))
+        self.assertLess(header.payload_len, 100)
+        self.assertNotEqual(header.payload_len, 1192)
+        self.assertTrue(connection.connected)
+        self.assertFalse(writer.closed)
+        self.assertEqual(connection.collector_info.last_disconnect_reason, "")
+        await self._stop(run)
+
+    async def test_two_illegal_eybond_headers_close_session(self) -> None:
+        junk = bytes.fromhex("000f02ff0000ff04")
+        connection, reader, writer, run = await self._open("framed")
+        future = asyncio.get_running_loop().create_future()
+        connection._pending[0x1001] = future
+        # Second illegal 8-byte window after one whole-window discard closes.
+        reader.feed_data(junk + bytes([0xFF]) * 8)
+        await asyncio.gather(run, return_exceptions=True)
+        self.assertTrue(writer.closed)
+        self.assertIn(
+            connection.collector_info.last_disconnect_reason,
+            {
+                "collector_frame_length_invalid",
+                "collector_frame_payload_too_large",
+                "collector_frame_function_invalid",
+            },
+        )
+        with self.assertRaises(ConnectionError):
+            future.result()
+
 
 class AtFacadeFramingLatchTests(unittest.TestCase):
     def test_take_mppt_framing_latch_reads_disconnected_framed_session(self):

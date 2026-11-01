@@ -31,6 +31,18 @@ RUNTIME_EYBOND_FCODES = frozenset({
     FC_HEARTBEAT, FC_QUERY_COLLECTOR, FC_SET_COLLECTOR, FC_FORWARD_TO_DEVICE,
     FC_TRIGGER_QUERY_REAL_TIME, FC_SET_DEVICE_REG, FC_TRIGGER_QUERY_HISTORY,
 })
+# function_invalid is fatal. A 7-byte raw RTU prefix plus the next frame's
+# first byte is an illegal function, and discarding that window reads another
+# header that is not buffered (#39). Length and payload-size errors may drop
+# one window only when the next header is already in this chunk.
+# Desynchronized length junk (e.g. 000f02ff0000ff04): drop the entire illegal
+# 8-byte window once, then read a fresh header. Do not one-byte slide (that
+# forms false-legal headers such as ff0000ff04aabb02). Ambiguous AABB overlap
+# and AABB checksum stay fatal.
+RESYNCABLE_HEADER_REASONS = frozenset({
+    "collector_frame_length_invalid",
+    "collector_frame_payload_too_large",
+})
 
 
 def runtime_eybond_header_error(header: EybondHeader) -> str:
@@ -48,6 +60,11 @@ def runtime_eybond_header_error(header: EybondHeader) -> str:
         return "collector_frame_function_invalid"
     return ""
 
+
+def is_resyncable_header_error(reason: str) -> bool:
+    """True when an illegal EyeBond header may be skipped with one whole-window discard."""
+
+    return reason in RESYNCABLE_HEADER_REASONS
 
 class BinaryGrammar(Enum):
     """A session's allowed binary grammars, NOT a request-waiter preference."""
@@ -103,7 +120,13 @@ class BinaryFrameDecoder:
     ``feed`` returns bytes consumed from this chunk. Any suffix belongs to the
     caller and must be processed independently (possibly as an AT line).
     The buffer, grammar and deadline never reset on fragmentation or retry.
-    An error is terminal: the caller must not guess a boundary and continue.
+
+    Illegal EyeBond headers for length or payload-too-large drop the entire
+    8-byte window once only when the next header is already buffered, then
+    require a fresh legal header. ``collector_frame_function_invalid`` is
+    fatal and is never discarded. Skipped bytes are never published. A second
+    illegal window closes. Ambiguous AABB/EyeBond overlap, bad AABB checksum,
+    and unowned AABB stay terminal — no discard through them.
 
     MIXED refuses EyeBond/AABB overlaps unless an outstanding claim's subtype
     matches ``wire[2:4]``. A valid checksum alone is never enough, and a
@@ -135,6 +158,7 @@ class BinaryFrameDecoder:
         self._kind: BinaryGrammar | None = None
         self._error = ""
         self._result: BinaryFrame | None = None
+        self._illegal_header_discarded = False
 
     @property
     def buffered_size(self) -> int:
@@ -171,7 +195,32 @@ class BinaryFrameDecoder:
         if self._result is None and now >= self._deadline:
             self._fail("binary_frame_timeout")
 
-    def _select_boundary(self) -> None:
+    def _discard_illegal_header(self, reason: str) -> None:
+        """Drop the entire illegal 8-byte window; never adopt its payload size.
+
+        At most one discard per frame attempt. The next candidate must be a
+        fresh 8-byte header — never a mix of discarded bytes and following bytes.
+        """
+
+        if self._illegal_header_discarded:
+            self._fail(reason)
+        del self._buffer[:HEADER_SIZE]
+        self._illegal_header_discarded = True
+        self._header = None
+        self._kind = None
+        self._size = 0
+
+    def _maybe_discard_illegal_header(self, header_error: str, follow_buffered: int) -> bool:
+        """Discard one illegal window only when the next header is already buffered."""
+
+        if not is_resyncable_header_error(header_error):
+            return False
+        if follow_buffered < HEADER_SIZE:
+            return False
+        self._discard_illegal_header(header_error)
+        return True
+
+    def _select_boundary(self, *, follow_buffered: int) -> None:
         wire = bytes(self._buffer)
         header = decode_header(wire)
         header_error = runtime_eybond_header_error(header)
@@ -179,6 +228,8 @@ class BinaryFrameDecoder:
 
         if self._grammar is BinaryGrammar.EYBOND:
             if header_error:
+                if self._maybe_discard_illegal_header(header_error, follow_buffered):
+                    return
                 self._fail(header_error)
             self._kind = BinaryGrammar.EYBOND
             self._header = header
@@ -204,6 +255,8 @@ class BinaryFrameDecoder:
         elif wire.startswith(AABB_MAGIC):
             self._kind = BinaryGrammar.AABB
             self._size = AABB_FRAME_SIZE
+        elif self._maybe_discard_illegal_header(header_error, follow_buffered):
+            return
         else:
             self._fail(header_error)
 
@@ -220,7 +273,7 @@ class BinaryFrameDecoder:
             self._buffer.extend(data[consumed:consumed + take])
             consumed += take
             if not self._size and len(self._buffer) == HEADER_SIZE:
-                self._select_boundary()
+                self._select_boundary(follow_buffered=len(data) - consumed)
             if self._size and len(self._buffer) == self._size:
                 wire = bytes(self._buffer)
                 if self._kind is BinaryGrammar.AABB:

@@ -5,8 +5,7 @@ AABB overlap, claim ownership, and reject rules. Field meanings come only from
 `payload/short_ascii_mppt.py` and the framing modules cited below. Do not
 invent registers or units that those parsers do not decode.
 
-Out of scope here: resync of junk header `000f02ff0000ff04`, cloud reverse
-proxy, Modbus, and BLE.
+Out of scope here: cloud reverse proxy, Modbus, and BLE.
 
 ## EyeBond 8-byte header
 
@@ -126,6 +125,40 @@ AABB intent.
 Cancellation/timeout after a send fences that exact socket; replies have no
 transaction id. Integrity or boundary failures close the session.
 
+## Illegal header resync
+
+Source: `BinaryFrameDecoder` and the non-aux EyeBond header check in
+`connections.py` `_read_loop`.
+
+`collector_frame_function_invalid` is fatal on both the non-aux `_read_loop`
+and the MIXED `BinaryFrameDecoder`. A 7-byte raw RTU prefix plus the next
+frame byte is an illegal function; discarding that window would read another
+header that is not buffered.
+
+When an 8-byte EyeBond window fails `runtime_eybond_header_error` with
+`collector_frame_length_invalid` or `collector_frame_payload_too_large`
+(length-invalid example: `000f02ff0000ff04`) **and** the next header is
+already buffered, do **not** close on the first failure. Drop the **entire**
+illegal 8-byte window (no tail kept), then read exactly one fresh 8-byte
+header. At most **one** discard per frame attempt — never a one-byte slide
+(a 32-byte slide budget is wrong: three shifts of `000f02ff0000ff04` ahead of
+`aabb…` form the false-legal window `ff0000ff04aabb02` with `fc=2` and
+`payload_len=1192`). If the next header is not already buffered, close with
+the header error. Do not `readexactly` another 8 bytes to find it.
+
+- Discarded bytes are never published as sensor values and never delivered to
+  a waiter.
+- `payload_too_large` is decided at the header before any multi-kilobyte
+  payload read, including after a discard.
+- If the fresh header is legal, read only that payload and continue the
+  session.
+- If the fresh header is also illegal, close with that reason and publish
+  nothing.
+
+Do **not** discard through: `binary_frame_ambiguous` (AABB/EyeBond overlap),
+bad AABB checksum, or unowned AABB. Those stay session-fatal. A claim-matched
+checksum-valid `0200` still publishes.
+
 ## Maksym rule (rejects stay rejects)
 
 After a grammar is chosen, checksum, length, function-code, and subtype
@@ -174,7 +207,7 @@ range)—the known collision set.
 | Class | Effect |
 |---|---|
 | Framing / boundary / ambiguous / unowned AABB | `BinaryFramingError` (or related close path): session-fatal; socket recovers on reconnect. |
-| RB hard-reject after a good envelope | `RbFilterDecision(keep_previous=True)`: hold the previous sample for the optional TTL (~60 s). Does not invent new values. |
+| RB hard-reject after a good envelope | Omit live BMS keys (`bms_total_voltage`, `battery_soc`, `battery_power`) and set `short_ascii_bms_data_available` false, the same as link-loss. Do not republish the previous live sample inside FULL. |
 | MPPT soft fail | Live `pv_power` / `pv_voltage` stay omitted. Labelled `*_held_estimate` mirrors (plus `mppt_held_estimate_age_seconds` / `mppt_held_estimate_mode`) keep the last good sample for the 60 s MPPT TTL. A cached TTL replay projects mode `held` and age since the real sample; only a newly read sample is observed as `live`. |
 
 Checksum/length/subtype rejects never assign sensor values from the failed
