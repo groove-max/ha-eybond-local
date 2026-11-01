@@ -320,6 +320,24 @@ Measured battery DC watts use published BMS currents. Optional entities are
 disabled by default. Support evidence capture can read MP/Q1/MD/F/RH/RB without
 changing command-support state.
 
+#### Short-ASCII RB hard-reject / link-loss
+
+After a valid RB envelope (fixed length, sum8, documented layout), apply field
+gates before publish. Do **not** hold last-good BMS values for 180 s.
+
+- **Pack-V (F-gated):** when `short_ascii_rated_battery_voltage` from F is
+  unknown, do not hard-reject on Pack-V alone. When known, inclusive window
+  **0.75×–4/3×** that rating (24 V → 18–32 so 25.6 passes; 48 V → 36–64 so
+  16 V / 1230 V die). Not a universal 30–70 band.
+- **Current / power:** SoC ∉ [0, 100] rejects (SoC 0 stays allowed when pack V
+  is present). Reject when abs(I) > **3×** F VA / F Vbat, or abs(P) >
+  **3× F VA** (same overload factor for I and P).
+- **Link-loss omit:** on V=0 ∧ SoC=0, publish
+  `short_ascii_bms_data_available=False` only and **omit** BMS measurement keys
+  from the FULL snapshot so the hub drops them (sensors unavailable). Do not
+  refresh hub freshness with stale V/SoC/I. Checksum/length fail → drop.
+  Optional RB TTL remains ~60 s for normal samples.
+
 AABB/PV admission and inverter controls remain separate work. Do not report
 full PR/device support based on these fields or a saved-wire replay alone.
 
