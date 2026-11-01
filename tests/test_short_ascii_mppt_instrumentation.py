@@ -157,6 +157,39 @@ class MpptInstrumentationDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.diagnostics["mppt_consecutive_failures"], 2)
         self.assertEqual(second.diagnostics["mppt_fail_timeout"], 2)
 
+    async def test_soft_miss_omits_live_pv_and_publishes_held_estimate(self):
+        await self._prime_fc4()
+        self._hold_fc4()
+        ok = await self.read(3)
+        self.assertIn("pv_power", ok.values)
+        self.assertEqual(ok.values["pv_power_held_estimate"], ok.values["pv_power"])
+        self.assertEqual(ok.values["mppt_held_estimate_mode"], "live")
+        for sample in self.state[STATE_KEY].samples:
+            if sample.command == "MPPT":
+                sample.next_due = 4
+        self.transport.aux_responses[RUNTIME_QUERY_0200] = asyncio.TimeoutError()
+        missed = await self.read(4)
+        self.assertNotIn("pv_power", missed.values)
+        self.assertNotIn("pv_voltage", missed.values)
+        self.assertEqual(missed.values["pv_power_held_estimate"], ok.values["pv_power"])
+        self.assertEqual(missed.values["mppt_held_estimate_mode"], "held")
+
+    async def test_cached_ttl_replay_projects_held_not_live(self):
+        await self._prime_fc4()
+        self._hold_fc4()
+        ok = await self.read(3)
+        self.assertEqual(ok.values["mppt_held_estimate_mode"], "live")
+        self.assertEqual(ok.values["mppt_held_estimate_age_seconds"], 0.0)
+        attempts = len(self.transport.aux_requests)
+        for sample in self.state[STATE_KEY].samples:
+            if sample.command == "MPPT":
+                sample.next_due = 10_000
+        replay = await self.read(20)
+        self.assertEqual(len(self.transport.aux_requests), attempts)
+        self.assertEqual(replay.values["mppt_held_estimate_mode"], "held")
+        self.assertGreater(replay.values["mppt_held_estimate_age_seconds"], 10)
+        self.assertIn("pv_power", replay.values)
+
     async def test_connection_fail_class_distinct_from_timeout(self):
         await self._prime_fc4()
         self._hold_fc4()

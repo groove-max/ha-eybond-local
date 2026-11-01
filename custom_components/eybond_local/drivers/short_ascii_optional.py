@@ -15,6 +15,7 @@ from .command_support import (
     record_command_success, unsupported_commands,
 )
 from .short_ascii_battery_dc import battery_dc_power_values
+from .short_ascii_mppt_held import mppt_held_for
 from .short_ascii_mppt_optional import (
     ADMIT_OPTION_KEY, COMMAND as MPPT_COMMAND, HEALTH_HEALTHY, HEALTH_POISONED,
     INTERVAL as MPPT_INTERVAL, STRUCTURAL_BACKOFF, TTL as MPPT_TTL, MpptPollDiag,
@@ -166,6 +167,7 @@ class OptionalReads:
         """At most one extra query per successful Q1 cycle; no discovery budget."""
         now = clock()
         self.rb_live_read = False
+        mppt_just_read = False
         mppt_admitted = is_admitted(runtime_state)
         diag = self.mppt_diag
         health = mppt_health_for(runtime_state)
@@ -327,6 +329,7 @@ class OptionalReads:
                             take_mppt_framing_failure_latch(self.transport)
                             health.mark_healthy()
                         diag.note_ok(sample.sampled_at, retried=mppt_retried)
+                        mppt_just_read = True
                 record_command_success(runtime_state, key)
         # No staged strike survives a failed/cancelled cycle. Q1 was confirmed
         # by our caller, and from here to commit there are no suspension points.
@@ -343,6 +346,12 @@ class OptionalReads:
             elif sample.command == "RH":
                 # Settings gate only — do not publish RH fields as sensors.
                 fresh = {}
+            if sample.command == MPPT_COMMAND:
+                held = mppt_held_for(runtime_state)
+                # Cached TTL replay must not restamp age to 0 / mode live.
+                if fresh and mppt_just_read:
+                    held.observe(fresh, now)
+                values.update(held.project(now))
             if sample.sampled_at is not None:
                 diagnostics[f"short_ascii_{sample.command.lower()}_age_seconds"] = round(
                     now - sample.sampled_at, 3,
