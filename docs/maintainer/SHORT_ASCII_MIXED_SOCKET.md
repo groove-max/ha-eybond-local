@@ -175,7 +175,7 @@ range)—the known collision set.
 |---|---|
 | Framing / boundary / ambiguous / unowned AABB | `BinaryFramingError` (or related close path): session-fatal; socket recovers on reconnect. |
 | RB hard-reject after a good envelope | `RbFilterDecision(keep_previous=True)`: hold the previous sample for the optional TTL (~60 s). Does not invent new values. |
-| MPPT soft fail today | `OptionalSample.clear()` on soft errors in `drivers/short_ascii_optional.py`. Hold-last for MPPT is a later phase (publisher work); this memorial does **not** claim it already happens. |
+| MPPT soft fail | Live `pv_power` / `pv_voltage` stay omitted. Labelled `*_held_estimate` mirrors (plus `mppt_held_estimate_age_seconds` / `mppt_held_estimate_mode`) keep the last good sample for the 60 s MPPT TTL. A cached TTL replay projects mode `held` and age since the real sample; only a newly read sample is observed as `live`. |
 
 Checksum/length/subtype rejects never assign sensor values from the failed
 contract (Maksym rule). Soft MPPT failure must not be treated as a successful
@@ -227,5 +227,5 @@ Transitions:
 | Claim, enable, allow-listed writes | `collector/transport/auxiliary_session.py` |
 | 0200 field scales | `payload/short_ascii_mppt.py` |
 | Optional 0200 solicit + health | `drivers/short_ascii_mppt_optional.py` |
-| Publish / clear / force / poison gate | `drivers/short_ascii_optional.py` (publish/clear/force only; hold-last is later) |
+| Publish / clear / force / poison gate | `drivers/short_ascii_optional.py` (publish, clear, force, and poison). Labelled `*_held_estimate` mirrors on a soft miss are in the session-fatal table above and `drivers/short_ascii_mppt_held.py`. |
 | Framing-kill latch | `CollectorInfo.mppt_framing_failure_latch` + connection `take_mppt_framing_failure_latch` |
