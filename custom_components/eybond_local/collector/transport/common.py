@@ -426,6 +426,7 @@ def _copy_collector_info(collector: CollectorInfo) -> CollectorInfo:
             collector_virtual_bridge=collector.collector_virtual_bridge,
             collector_bridge_kind=collector.collector_bridge_kind,
             collector_bridge_version=collector.collector_bridge_version,
+            mppt_framing_failure_latch=collector.mppt_framing_failure_latch,
         )
     )
 

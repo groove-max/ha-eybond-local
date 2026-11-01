@@ -16,9 +16,10 @@ from .command_support import (
 )
 from .short_ascii_battery_dc import battery_dc_power_values
 from .short_ascii_mppt_optional import (
-    ADMIT_OPTION_KEY, COMMAND as MPPT_COMMAND, INTERVAL as MPPT_INTERVAL,
-    STRUCTURAL_BACKOFF, TTL as MPPT_TTL, MpptPollDiag, is_admitted,
-    is_structural_aux_error, request_runtime_sample,
+    ADMIT_OPTION_KEY, COMMAND as MPPT_COMMAND, HEALTH_HEALTHY, HEALTH_POISONED,
+    INTERVAL as MPPT_INTERVAL, STRUCTURAL_BACKOFF, TTL as MPPT_TTL, MpptPollDiag,
+    is_admitted, mppt_health_for, peek_mppt_framing_failure_latch,
+    request_runtime_sample, should_poison_mppt_aux, take_mppt_framing_failure_latch,
 )
 from .short_ascii_rb_filter import RbPublishFilter
 
@@ -167,6 +168,7 @@ class OptionalReads:
         self.rb_live_read = False
         mppt_admitted = is_admitted(runtime_state)
         diag = self.mppt_diag
+        health = mppt_health_for(runtime_state)
         for sample in self.samples:
             if sample.command == MPPT_COMMAND and not mppt_admitted:
                 # Stock installs must not poll aux 0200.
@@ -197,9 +199,8 @@ class OptionalReads:
         # Oldest due first within the chosen set. Prefer FC4 (RB/F/RH) over aux
         # MPPT when both are due so a virgin MPPT next_due=0 cannot starve an
         # intentional RB refresh; MPPT still runs when it is the only due sample.
-        # While MPPT is stale, the first RB+MPPT collision takes MPPT so prefer-
-        # FC4 cannot starve 0200 across reconnect wipes. F/RH still prefer FC4;
-        # fresh MPPT keeps prefer-FC4.
+        # While MPPT is stale and the channel is not poisoned, the first RB
+        # collision takes MPPT. Poison blocks that force. F/RH still prefer FC4.
         fc4_due = [sample for sample in due if sample.command != MPPT_COMMAND]
         prefer_fc4 = bool(fc4_due) and any(s.command == MPPT_COMMAND for s in due)
         rb_contending = any(s.command == "RB" for s in fc4_due)
@@ -209,10 +210,15 @@ class OptionalReads:
             or mppt_sample.sampled_at is None
             or (now - mppt_sample.sampled_at) > MPPT_TTL
         )
+        poisoned = health.is_poisoned()
         force_mppt = bool(
             prefer_fc4 and rb_contending and mppt_stale and mppt_sample is not None
+            and not poisoned
         )
-        if force_mppt:
+        if poisoned:
+            # Structural/framing backoff: do not solicit 0200 until deadline.
+            candidates = fc4_due
+        elif force_mppt:
             candidates = [mppt_sample]
         else:
             candidates = fc4_due or due
@@ -224,20 +230,47 @@ class OptionalReads:
         if sample is not None:
             key = _PREFIX + sample.command
             mppt_retried = False
+            framing_latch = ""
+            latch_before = ""
             try:
                 if sample.command == MPPT_COMMAND:
                     diag.note_attempt(self.transport)
+                    # Snapshot before solicit — success must not take-clear a
+                    # latch that appeared *during* the good 0200 (follow-on
+                    # MIXED kill after accept).
+                    latch_before = peek_mppt_framing_failure_latch(self.transport)
                     try:
                         parsed = await self._request_mppt()
                     except _SOFT_ERRORS as first_exc:
-                        # Structural TypeError cannot recover mid-cycle; flaky
-                        # aux may. Disconnect skips the second send.
-                        if is_structural_aux_error(first_exc):
+                        # Framing kills and structural TypeError poison the
+                        # channel; flaky aux may retry once in-cycle.
+                        framing_latch = take_mppt_framing_failure_latch(self.transport)
+                        if should_poison_mppt_aux(first_exc, framing_latch):
+                            health.mark_poisoned()
                             raise
                         if not session.transport.connected:
+                            health.mark_healthy()
                             raise
+                        health.mark_retry_once()
                         mppt_retried = True
-                        parsed = await self._request_mppt()
+                        latch_before = peek_mppt_framing_failure_latch(
+                            self.transport,
+                        )
+                        try:
+                            parsed = await self._request_mppt()
+                        except _SOFT_ERRORS as second_exc:
+                            # Second attempt: framing/structural kill must
+                            # poison — never mark_healthy() over a latch.
+                            framing_latch = take_mppt_framing_failure_latch(
+                                self.transport,
+                            )
+                            if should_poison_mppt_aux(second_exc, framing_latch):
+                                health.mark_poisoned()
+                            else:
+                                # Second flaky fail: due again next Q1 cycle,
+                                # not a tight-loop force inside this refresh.
+                                health.mark_healthy()
+                            raise
                 else:
                     frame = await session.request(sample.command)
                     parsed = sample.parser(frame)
@@ -253,14 +286,16 @@ class OptionalReads:
                 )
                 if sample.command == MPPT_COMMAND:
                     diag.note_fail(self.transport, exc)
-                    if is_structural_aux_error(exc):
-                        # Missing facade: long backoff, never next_due=now storm.
+                    if framing_latch and not diag.last_fail_disconnect_reason:
+                        diag.last_fail_disconnect_reason = framing_latch
+                    if health.state == HEALTH_POISONED:
                         sample.next_due = clock() + STRUCTURAL_BACKOFF
                     else:
-                        # No 30 s penalty: due again next poll. Aux 0200 is flaky
-                        # under contention and may fence the socket; never raise
-                        # that into Q1 wipe, and never feed the unsupported cache.
+                        # Flaky: due again next poll. Soft fail must not feed
+                        # the unsupported cache or wipe Q1 via raise.
                         sample.next_due = clock()
+                        if health.state != HEALTH_HEALTHY:
+                            health.mark_healthy()
                 else:
                     sample.next_due = clock() + 30
                     if isinstance(exc, ConnectionError) or not session.transport.connected:
@@ -278,6 +313,19 @@ class OptionalReads:
                         "no_data" if parsed.get("short_ascii_bms_data_available") is False else "ok"
                     )
                     if sample.command == MPPT_COMMAND:
+                        # Checksum-valid 0200 always publishes. Drain only a
+                        # stale latch unchanged since solicit start; a new
+                        # non-empty latch means the session died after the
+                        # good frame — leave it and poison the next attempt.
+                        latch_now = peek_mppt_framing_failure_latch(
+                            self.transport,
+                        )
+                        if latch_now and latch_now != latch_before:
+                            health.mark_poisoned()
+                            sample.next_due = clock() + STRUCTURAL_BACKOFF
+                        else:
+                            take_mppt_framing_failure_latch(self.transport)
+                            health.mark_healthy()
                         diag.note_ok(sample.sampled_at, retried=mppt_retried)
                 record_command_success(runtime_state, key)
         # No staged strike survives a failed/cancelled cycle. Q1 was confirmed
