@@ -16,7 +16,8 @@ from test_short_ascii_mppt import runtime_frame
 from test_short_ascii_optional import _rb, _rh
 from custom_components.eybond_local.drivers.eybond_short_ascii import EybondShortAsciiDriver
 from custom_components.eybond_local.drivers.short_ascii_mppt_optional import (
-    ADMIT_OPTION_KEY, RUNTIME_QUERY_0200, assert_runtime_query_only, values_from_reply,
+    ADMIT_OPTION_KEY, HEALTH_KEY, HEALTH_HEALTHY, HEALTH_POISONED, RUNTIME_QUERY_0200,
+    STRUCTURAL_BACKOFF, assert_runtime_query_only, mppt_health_for, values_from_reply,
 )
 from custom_components.eybond_local.drivers.command_support import unsupported_commands
 from custom_components.eybond_local.drivers.short_ascii_optional import STATE_KEY
@@ -230,13 +231,270 @@ class MpptOptionalReadTests(unittest.IsolatedAsyncioTestCase):
     async def test_binding_change_drops_mppt_without_reuse(self):
         await self._prime_through_rh()
         await self.read(3)
+        # Channel just killed: poison survives OptionalReads rebuild on rebind.
+        health = mppt_health_for(self.state)
+        health.mark_poisoned()
         self.transport.requests.clear()
         self.transport.aux_requests.clear()
         self.inverter = replace(self.inverter)
         result = await self.read(4)
-        # New binding rebuilds optional state; stale MPPT wins first RB collision.
+        # New binding rebuilds optional state (no reused samples). Poison blocks
+        # anti-starve force even though last_success_at is None on the new diag.
+        self.assertEqual(self.transport.aux_requests, [])
+        self.assertNotIn("pv_voltage", result.values)
+        self.assertEqual(result.diagnostics["mppt_forced_anti_starve"], 0)
+        self.assertIs(self.state[HEALTH_KEY], health)
+        self.assertEqual(health.state, HEALTH_POISONED)
+
+    async def test_poisoned_blocks_force_after_optional_reads_rebuild(self):
+        """R4: poison survives transport rebuild; anti-starve must not force."""
+        await self._prime_through_rh()
+        health = mppt_health_for(self.state)
+        health.mark_poisoned()
+        # New transport object rebuilds OptionalReads (last_success_at None).
+        responses = _responses() | {
+            "RB": _rb(), "F": b"#115.0 105 48.00 60.0\r", "RH": _rh(accuracy=1),
+        }
+        self.transport = _Transport(
+            responses, aux_responses={RUNTIME_QUERY_0200: runtime_frame().wire},
+        )
+        for sample in self.state[STATE_KEY].samples:
+            sample.next_due = 0
+        result = await self.read(3)
+        self.assertEqual(self.transport.aux_requests, [])
+        self.assertNotIn("pv_power", result.values)
+        self.assertEqual(result.diagnostics["mppt_forced_anti_starve"], 0)
+        self.assertEqual(self.state[HEALTH_KEY].state, HEALTH_POISONED)
+        self.assertTrue(self.state[HEALTH_KEY].is_poisoned())
+
+    async def test_successful_0200_after_poison_returns_healthy(self):
+        """R5: checksum-valid 0200 clears poison; later stale collision may force."""
+        import time
+
+        await self._prime_through_rh()
+        health = mppt_health_for(self.state)
+        health.mark_poisoned()
+        # Expire poison via monotonic deadline (not wall clock).
+        health.poisoned_until = time.monotonic() - 1.0
+        for sample in self.state[STATE_KEY].samples:
+            if sample.command != "MPPT":
+                sample.next_due = 10_000
+        mppt = next(s for s in self.state[STATE_KEY].samples if s.command == "MPPT")
+        mppt.next_due = 3
+        mppt.clear()
+        mppt.outcome = "not_checked"
+        self.transport.aux_requests.clear()
+        recovered = await self.read(3)
+        self.assertEqual(recovered.values["pv_power"], 370)
+        self.assertEqual(health.state, HEALTH_HEALTHY)
+        self.assertFalse(health.is_poisoned())
+        # Later stale RB+MPPT collision may force again.
+        diag = self.state[STATE_KEY].mppt_diag
+        diag.last_success_at = None
+        diag.forced_anti_starve = 0
+        for sample in self.state[STATE_KEY].samples:
+            sample.next_due = 4
+        mppt.clear()
+        mppt.outcome = "not_checked"
+        self.transport.requests.clear()
+        self.transport.aux_requests.clear()
+        forced = await self.read(4)
         self.assertEqual(self.transport.aux_requests, [RUNTIME_QUERY_0200])
-        self.assertIn("pv_voltage", result.values)
+        self.assertEqual(forced.diagnostics["mppt_forced_anti_starve"], 1)
+
+    async def test_framing_latch_poisons_without_retry_even_if_disconnect_cleared(self):
+        """R6: latch (not last_disconnect_reason) drives poison; no in-cycle retry."""
+        from custom_components.eybond_local.models import CollectorInfo
+
+        await self._prime_through_rh()
+        for sample in self.state[STATE_KEY].samples:
+            if sample.command != "MPPT":
+                sample.next_due = 10_000
+        # Simulate run() having cleared last_disconnect_reason on reconnect
+        # while the framing latch still holds the kill reason.
+        self.transport.collector_info = CollectorInfo(
+            collector_pn="I30000200000000001",
+            last_disconnect_reason="",
+            mppt_framing_failure_latch="binary_frame_ambiguous",
+        )
+        self.transport.aux_responses[RUNTIME_QUERY_0200] = ConnectionError(
+            "collector_disconnected",
+        )
+        result = await self.read(3)
+        self.assertNotIn("pv_power", result.values)
+        self.assertEqual(self.transport.aux_requests, [RUNTIME_QUERY_0200])
+        self.assertEqual(self.transport.collector_info.mppt_framing_failure_latch, "")
+        health = self.state[HEALTH_KEY]
+        self.assertEqual(health.state, HEALTH_POISONED)
+        self.assertTrue(health.is_poisoned())
+        mppt = next(s for s in self.state[STATE_KEY].samples if s.command == "MPPT")
+        self.assertAlmostEqual(mppt.next_due, 3.0 + STRUCTURAL_BACKOFF, delta=1.0)
+        self.assertEqual(
+            result.diagnostics.get("mppt_fail_disconnect_reason"),
+            "binary_frame_ambiguous",
+        )
+        self.assertEqual(unsupported_commands(self.state), ())
+
+    async def test_timeout_with_framing_latch_poisons_without_retry(self):
+        """TimeoutError must not take-clear a framing latch and then discard it."""
+        from custom_components.eybond_local.models import CollectorInfo
+
+        await self._prime_through_rh()
+        for sample in self.state[STATE_KEY].samples:
+            if sample.command != "MPPT":
+                sample.next_due = 10_000
+        self.transport.collector_info = CollectorInfo(
+            collector_pn="I30000200000000001",
+            last_disconnect_reason="",
+            mppt_framing_failure_latch="aabb_checksum_invalid",
+        )
+        self.transport.aux_responses[RUNTIME_QUERY_0200] = asyncio.TimeoutError()
+        result = await self.read(3)
+        self.assertNotIn("pv_power", result.values)
+        # Latch is poison — no in-cycle second 0200.
+        self.assertEqual(self.transport.aux_requests, [RUNTIME_QUERY_0200])
+        self.assertEqual(self.transport.collector_info.mppt_framing_failure_latch, "")
+        health = self.state[HEALTH_KEY]
+        self.assertEqual(health.state, HEALTH_POISONED)
+        self.assertTrue(health.is_poisoned())
+        mppt = next(s for s in self.state[STATE_KEY].samples if s.command == "MPPT")
+        self.assertAlmostEqual(mppt.next_due, 3.0 + STRUCTURAL_BACKOFF, delta=1.0)
+        self.assertEqual(
+            result.diagnostics.get("mppt_fail_disconnect_reason"),
+            "aabb_checksum_invalid",
+        )
+        self.assertEqual(unsupported_commands(self.state), ())
+
+    async def test_successful_0200_drains_latch_so_later_timeout_is_flaky(self):
+        """Stale framing latch must not false-poison after a checksum-valid 0200."""
+        from custom_components.eybond_local.models import CollectorInfo
+
+        await self._prime_through_rh()
+        for sample in self.state[STATE_KEY].samples:
+            if sample.command != "MPPT":
+                sample.next_due = 10_000
+        # Latch left from a prior framing kill; success must take-discard it.
+        self.transport.collector_info = CollectorInfo(
+            collector_pn="I30000200000000001",
+            last_disconnect_reason="",
+            mppt_framing_failure_latch="binary_frame_ambiguous",
+        )
+        self.transport.aux_responses[RUNTIME_QUERY_0200] = runtime_frame().wire
+        ok = await self.read(3)
+        self.assertEqual(ok.values["pv_power"], 370)
+        self.assertEqual(self.transport.collector_info.mppt_framing_failure_latch, "")
+        self.assertEqual(self.state[HEALTH_KEY].state, HEALTH_HEALTHY)
+        self.assertFalse(self.state[HEALTH_KEY].is_poisoned())
+
+        # Later flaky TimeoutError: one in-cycle retry, not poison from stale latch.
+        self.transport.aux_requests.clear()
+        for sample in self.state[STATE_KEY].samples:
+            if sample.command != "MPPT":
+                sample.next_due = 10_000
+        mppt = next(s for s in self.state[STATE_KEY].samples if s.command == "MPPT")
+        mppt.next_due = 4
+        mppt.clear()
+        mppt.outcome = "not_checked"
+        self.transport.aux_responses[RUNTIME_QUERY_0200] = [
+            asyncio.TimeoutError(),
+            runtime_frame().wire,
+        ]
+        recovered = await self.read(4)
+        self.assertEqual(
+            self.transport.aux_requests,
+            [RUNTIME_QUERY_0200, RUNTIME_QUERY_0200],
+        )
+        self.assertEqual(recovered.values["pv_power"], 370)
+        self.assertEqual(self.state[HEALTH_KEY].state, HEALTH_HEALTHY)
+        self.assertFalse(self.state[HEALTH_KEY].is_poisoned())
+        self.assertEqual(unsupported_commands(self.state), ())
+
+    async def test_successful_0200_keeps_latch_set_during_read_and_poisons(self):
+        """Follow-on framing kill after a good 0200 must not be take-cleared."""
+        from custom_components.eybond_local.models import CollectorInfo
+
+        await self._prime_through_rh()
+        for sample in self.state[STATE_KEY].samples:
+            if sample.command != "MPPT":
+                sample.next_due = 10_000
+        # Snapshot empty (or stale); latch changes during the successful read.
+        self.transport.collector_info = CollectorInfo(
+            collector_pn="I30000200000000001",
+            last_disconnect_reason="",
+            mppt_framing_failure_latch="",
+        )
+
+        async def ok_then_follow_on_kill(payload, *, request_timeout):
+            self.transport.aux_requests.append(payload)
+            # Reader parses a buffered follow-on frame after accept returns.
+            self.transport.collector_info.mppt_framing_failure_latch = (
+                "binary_frame_ambiguous"
+            )
+            return runtime_frame().wire
+
+        self.transport.async_send_auxiliary_read = ok_then_follow_on_kill
+        result = await self.read(3)
+        self.assertEqual(result.values["pv_power"], 370)
+        self.assertIn("MPPT=ok", result.diagnostics["short_ascii_optional_status"])
+        # Live kill latch must survive — next attempt poisons from it.
+        self.assertEqual(
+            self.transport.collector_info.mppt_framing_failure_latch,
+            "binary_frame_ambiguous",
+        )
+        health = self.state[HEALTH_KEY]
+        self.assertEqual(health.state, HEALTH_POISONED)
+        self.assertTrue(health.is_poisoned())
+        mppt = next(s for s in self.state[STATE_KEY].samples if s.command == "MPPT")
+        self.assertAlmostEqual(mppt.next_due, 3.0 + STRUCTURAL_BACKOFF, delta=1.0)
+        self.assertEqual(self.transport.aux_requests, [RUNTIME_QUERY_0200])
+        self.assertEqual(unsupported_commands(self.state), ())
+
+    async def test_retry_then_framing_kill_poisons_not_healthy(self):
+        """Second in-cycle failure that is a framing kill must poison, not heal."""
+        from custom_components.eybond_local.models import CollectorInfo
+
+        await self._prime_through_rh()
+        for sample in self.state[STATE_KEY].samples:
+            if sample.command != "MPPT":
+                sample.next_due = 10_000
+        self.transport.collector_info = CollectorInfo(
+            collector_pn="I30000200000000001",
+            last_disconnect_reason="",
+            mppt_framing_failure_latch="",
+        )
+        responses = [
+            asyncio.TimeoutError(),
+            ConnectionError("collector_disconnected"),
+        ]
+
+        async def flaky_then_framing_kill(payload, *, request_timeout):
+            self.transport.aux_requests.append(payload)
+            result = responses.pop(0)
+            if isinstance(result, ConnectionError):
+                # Kill lands on the retry: latch set by the framed reader.
+                self.transport.collector_info.mppt_framing_failure_latch = (
+                    "binary_frame_ambiguous"
+                )
+            raise result
+
+        self.transport.async_send_auxiliary_read = flaky_then_framing_kill
+        result = await self.read(3)
+        self.assertNotIn("pv_power", result.values)
+        self.assertEqual(
+            self.transport.aux_requests,
+            [RUNTIME_QUERY_0200, RUNTIME_QUERY_0200],
+        )
+        health = self.state[HEALTH_KEY]
+        self.assertEqual(health.state, HEALTH_POISONED)
+        self.assertTrue(health.is_poisoned())
+        mppt = next(s for s in self.state[STATE_KEY].samples if s.command == "MPPT")
+        self.assertAlmostEqual(mppt.next_due, 3.0 + STRUCTURAL_BACKOFF, delta=1.0)
+        self.assertLess(3.0 + 15.0, mppt.next_due)
+        self.assertEqual(
+            result.diagnostics.get("mppt_fail_disconnect_reason"),
+            "binary_frame_ambiguous",
+        )
+        self.assertEqual(unsupported_commands(self.state), ())
 
     async def test_disconnect_during_mppt_does_not_wipe_q1(self):
         """MPPT fence must not raise from refresh_one / wipe Q1 extras."""
@@ -310,6 +568,7 @@ class MpptOptionalReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("MPPT=ok", result.diagnostics["short_ascii_optional_status"])
         self.assertEqual(unsupported_commands(self.state), ())
         self.assertEqual(result.diagnostics.get("driver_unsupported_commands"), "")
+        self.assertEqual(self.state[HEALTH_KEY].state, HEALTH_HEALTHY)
 
     async def test_mppt_double_timeout_due_immediately_without_penalty(self):
         await self._prime_through_rh()
@@ -326,6 +585,7 @@ class MpptOptionalReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(mppt.next_due, 3.0, delta=1.0)
         self.assertLess(mppt.next_due, 3.0 + 15.0)
         self.assertEqual(unsupported_commands(self.state), ())
+        self.assertEqual(self.state[HEALTH_KEY].state, HEALTH_HEALTHY)
         # Next poll can succeed immediately (no +30 s backoff).
         self.transport.aux_requests.clear()
         self.transport.aux_responses[RUNTIME_QUERY_0200] = runtime_frame().wire
@@ -333,6 +593,55 @@ class MpptOptionalReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(recovered.values["pv_power"], 370)
         self.assertIn("MPPT=ok", recovered.diagnostics["short_ascii_optional_status"])
         self.assertEqual(self.transport.aux_requests, [RUNTIME_QUERY_0200])
+
+    async def test_structural_typeerror_backs_off_without_retry(self):
+        """Missing aux facade: no in-cycle retry; next_due far in the future."""
+        await self._prime_through_rh()
+        for sample in self.state[STATE_KEY].samples:
+            if sample.command != "MPPT":
+                sample.next_due = 10_000
+        self.transport.aux_responses[RUNTIME_QUERY_0200] = TypeError(
+            "unsupported_auxiliary_transport:_Transport",
+        )
+        result = await self.read(3)
+        self.assertNotIn("pv_power", result.values)
+        self.assertEqual(self.transport.aux_requests, [RUNTIME_QUERY_0200])
+        self.assertEqual(result.diagnostics.get("mppt_fail_reason"), "structural")
+        mppt = next(s for s in self.state[STATE_KEY].samples if s.command == "MPPT")
+        self.assertAlmostEqual(mppt.next_due, 3.0 + STRUCTURAL_BACKOFF, delta=1.0)
+        self.assertEqual(self.state[HEALTH_KEY].state, HEALTH_POISONED)
+        self.assertTrue(self.state[HEALTH_KEY].is_poisoned())
+        self.assertEqual(unsupported_commands(self.state), ())
+        self.assertEqual(result.diagnostics.get("driver_unsupported_commands"), "")
+
+    async def test_ambiguous_aux_disconnect_backs_off_without_retry(self):
+        """MIXED/AABB ambiguity closes the session — do not next_due=now thrash."""
+        from custom_components.eybond_local.models import CollectorInfo
+
+        await self._prime_through_rh()
+        for sample in self.state[STATE_KEY].samples:
+            if sample.command != "MPPT":
+                sample.next_due = 10_000
+        self.transport.collector_info = CollectorInfo(
+            collector_pn="I30000200000000001",
+            last_disconnect_reason="binary_frame_ambiguous",
+            mppt_framing_failure_latch="binary_frame_ambiguous",
+        )
+        self.transport.aux_responses[RUNTIME_QUERY_0200] = ConnectionError(
+            "collector_disconnected",
+        )
+        result = await self.read(3)
+        self.assertNotIn("pv_power", result.values)
+        self.assertEqual(self.transport.aux_requests, [RUNTIME_QUERY_0200])
+        self.assertEqual(result.diagnostics.get("mppt_fail_reason"), "connection")
+        self.assertEqual(
+            result.diagnostics.get("mppt_fail_disconnect_reason"),
+            "binary_frame_ambiguous",
+        )
+        mppt = next(s for s in self.state[STATE_KEY].samples if s.command == "MPPT")
+        self.assertAlmostEqual(mppt.next_due, 3.0 + STRUCTURAL_BACKOFF, delta=1.0)
+        self.assertEqual(self.state[HEALTH_KEY].state, HEALTH_POISONED)
+        self.assertEqual(unsupported_commands(self.state), ())
 
     async def test_mppt_timeouts_never_blacklist_as_unsupported(self):
         """Aux 0200 contention must not persist short_ascii:MPPT forever."""

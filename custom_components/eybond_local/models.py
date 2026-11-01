@@ -514,6 +514,9 @@ class CollectorInfo:
     raw_last_total_duration_ms: int = 0
     inverter_forward_mode: str = ""
     last_disconnect_reason: str = ""
+    # MIXED framing kill latched for the MPPT poller. Survives run() clearing
+    # last_disconnect_reason on reconnect; poller take-clears after reading.
+    mppt_framing_failure_latch: str = ""
     discovery_restart_count: int = 0
     last_discovery_reason: str = ""
     collector_pn: str = ""

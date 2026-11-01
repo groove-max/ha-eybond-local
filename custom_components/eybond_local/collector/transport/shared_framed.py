@@ -104,6 +104,22 @@ class SharedEybondTransport:
             CollectorInfo(remote_ip=self._collector_ip, collector_pn=self._collector_pn)
         )
 
+    def peek_mppt_framing_failure_latch(self) -> str:
+        """Read the live MIXED framing-kill latch without clearing it."""
+
+        connection = self._connection(create_placeholder=False)
+        if connection is None:
+            return ""
+        return connection.peek_mppt_framing_failure_latch()
+
+    def take_mppt_framing_failure_latch(self) -> str:
+        """Take-clear the live MIXED framing-kill latch from the active socket."""
+
+        connection = self._connection(create_placeholder=False)
+        if connection is None:
+            return ""
+        return connection.take_mppt_framing_failure_latch()
+
     async def start(self) -> None:
         if self._listener is not None:
             return

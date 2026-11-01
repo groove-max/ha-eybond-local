@@ -181,6 +181,43 @@ Checksum/length/subtype rejects never assign sensor values from the failed
 contract (Maksym rule). Soft MPPT failure must not be treated as a successful
 decode.
 
+## Optional MPPT poller health
+
+Sources: `drivers/short_ascii_mppt_optional.py` (`MpptHealth`, `HEALTH_KEY`),
+`drivers/short_ascii_optional.py` (`refresh_one`), framing latch on
+`CollectorInfo.mppt_framing_failure_latch` (set in
+`collector/transport/connections.py` read loops).
+
+Channel health lives on `runtime_state[HEALTH_KEY]`, **not** inside
+`OptionalReads`. `optional_reads_for` rebuilds `OptionalReads` when the
+transport object changes or the wall clock goes backward; that rebuild must
+not drop health.
+
+States:
+
+| State | Meaning |
+|---|---|
+| `healthy` | Normal: flaky timeout may take one in-cycle retry; anti-starve may force when stale. |
+| `retry_once` | In-cycle only after a flaky first failure; second flaky fail returns to `healthy` and may be due again next Q1 cycle. Must not tight-loop via `next_due=now` plus an immediate second force inside the same refresh. |
+| `poisoned` | `poisoned_until` is a `time.monotonic()` deadline (`STRUCTURAL_BACKOFF` = 120 s). Wall-clock steps must not expire or extend poison. |
+
+Transitions:
+
+- Flaky timeout with an empty framing latch → `retry_once` → one more 0200 in the same refresh; second flaky failure → `healthy`, `next_due=now` for the **next** Q1 cycle only.
+- Structural `TypeError` (`unsupported_auxiliary_transport`) or MIXED framing kills (`binary_frame_ambiguous`, `aabb_checksum_invalid`) → set `poisoned_until = monotonic()+120` **before** any further await; do not send another 0200 in this cycle; `next_due` uses the long backoff (never `now`). A framing latch is poison even when the soft exception is `TimeoutError` — classify before retrying; never take-clear the latch and then treat it as flaky. A second in-cycle attempt that surfaces a framing latch / structural `TypeError` must poison (not `mark_healthy()`).
+- Framing kills latch on the live collector (`mppt_framing_failure_latch`) when `BinaryFramingError` is raised. `CollectorConnection.run()` clears `last_disconnect_reason` on every new connection — the latch is **not** stored there. The poller take-clears the latch synchronously in the exception handler (via `take_mppt_framing_failure_latch` on the facade / mutable test double). On the AT facade, take the framed latch even when `connected` is already false after the kill.
+- While `monotonic() < poisoned_until`, anti-starve must not force MPPT even if `last_success_at` is `None` after an `OptionalReads` rebuild.
+- When the deadline passes, one attempt is allowed. Another structural failure refreshes the deadline (still not `next_due=now`).
+- Checksum-valid successful 0200 → publish the sample. If the framing latch is
+  **unchanged** from the pre-solicit snapshot, take-discard it and mark
+  `healthy` (stale leftover from a prior kill; a later flaky timeout must not
+  false-poison). If the latch is a **new** non-empty value that appeared during
+  the successful read (follow-on MIXED kill after `accept`), leave the latch,
+  mark `poisoned` (`monotonic()+120`), and do not immediate-retry — the session
+  already died after the good frame. Soft MPPT failure must not call
+  `record_command_failure`. Aux fence must not wipe Q1.
+- Fresh MPPT (success inside TTL) still prefers FC4. Force only when stale **and** healthy **and** RB is also due.
+
 ## Pointers
 
 | Concern | Module |
@@ -189,5 +226,6 @@ decode.
 | MIXED / AABB / `_select_boundary` | `collector/transport/binary_framing.py` |
 | Claim, enable, allow-listed writes | `collector/transport/auxiliary_session.py` |
 | 0200 field scales | `payload/short_ascii_mppt.py` |
-| Optional 0200 solicit | `drivers/short_ascii_mppt_optional.py` |
-| Publish / clear / RB hold | `drivers/short_ascii_optional.py` (publish/clear/force only) |
+| Optional 0200 solicit + health | `drivers/short_ascii_mppt_optional.py` |
+| Publish / clear / force / poison gate | `drivers/short_ascii_optional.py` (publish/clear/force only; hold-last is later) |
+| Framing-kill latch | `CollectorInfo.mppt_framing_failure_latch` + connection `take_mppt_framing_failure_latch` |
