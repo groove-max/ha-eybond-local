@@ -180,6 +180,15 @@ class LinkLossDriverTests(unittest.IsolatedAsyncioTestCase):
             self.transport, self.inverter, runtime_state=self.state, now_monotonic=now,
         )
 
+    async def test_cached_rb_replay_projects_held_age(self):
+        first = await self.read(0)
+        self.assertEqual(first.diagnostics["bms_held_estimate_mode"], "live")
+        self.assertEqual(first.diagnostics["bms_held_estimate_age_seconds"], 0.0)
+        replay = await self.read(10)
+        self.assertIn("battery_soc", replay.values)
+        self.assertEqual(replay.diagnostics["bms_held_estimate_mode"], "held")
+        self.assertGreater(replay.diagnostics["bms_held_estimate_age_seconds"], 5)
+
     async def test_link_loss_full_omits_bms_keys_and_sets_unavailable(self):
         await self.read(0)
         await self.read(1)  # F
@@ -191,6 +200,9 @@ class LinkLossDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("battery_soc", result.values)
         self.assertNotIn("battery_power", result.values)
         self.assertEqual(result.diagnostics["bms_link_loss_count"], 1)
+        self.assertEqual(result.diagnostics["bms_held_estimate_mode"], "held")
+        self.assertIn("battery_soc_held_estimate", result.diagnostics)
+        self.assertNotIn("battery_soc_held_estimate", result.values)
         # Hub FULL freshness: only available=False is present — no last-good V/SoC.
         self.assertEqual(
             self.state[STATE_KEY].samples[0].outcome,
@@ -211,6 +223,7 @@ class LinkLossDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("battery_soc", rejected.values)
         self.assertNotIn("battery_power", rejected.values)
         self.assertEqual(rejected.diagnostics["rb_hard_reject_count"], 1)
+        self.assertEqual(rejected.diagnostics["bms_held_estimate_mode"], "held")
 
 
 if __name__ == "__main__":

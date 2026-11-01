@@ -341,7 +341,10 @@ changing command-support state.
 #### Short-ASCII RB hard-reject / link-loss
 
 After a valid RB envelope (fixed length, sum8, documented layout), apply field
-gates before publish. Do **not** hold last-good BMS values for 180 s.
+gates before publish. Do not republish last-good samples on the live
+measurement keys or in the FULL fresh set. Labelled `*_held_estimate` entities
+may carry the last good sample for the hold TTL (180s BMS, 60s MPPT). They are
+diagnostic. Live keys are omitted on link-loss, hard reject, and MPPT soft miss.
 
 - **Pack-V (F-gated):** when `short_ascii_rated_battery_voltage` from F is
   unknown, do not hard-reject on Pack-V alone. When known, inclusive window

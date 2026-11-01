@@ -20,6 +20,7 @@ from .catalog_probe import async_probe_ascii_catalog, catalog_model_name
 from .read_result import DriverReadMode, DriverReadResult
 from .support_marker import DriverSupportMarker
 from .short_ascii_battery_dc import battery_dc_power_values
+from .short_ascii_bms_held import bms_held_for
 from .short_ascii_estimates import (
     best_available_ac_load_estimate_values,
     estimated_ac_load_values,
@@ -135,8 +136,17 @@ class EybondShortAsciiDriver(InverterDriver):
         merged = values | extra
         merged.update(battery_dc_power_values(merged))
         # Keep pure power keys separate. %×VA and the house-load composite are labelled.
+        # House load uses live battery_power only, before held mirrors exist.
         merged.update(estimated_ac_load_values(merged))
         merged.update(best_available_ac_load_estimate_values(merged))
+        # Labelled held mirrors are diagnostics, not FULL measurement keys.
+        # A present FULL value is fresh to the hub; link-loss and hard-reject
+        # must not look like a new BMS sample. Live BMS keys stay omitted there.
+        now = clock()
+        held = bms_held_for(state)
+        if optional.rb_live_read:
+            held.observe(merged, now)
+        diagnostics.update(held.project(now))
         return DriverReadResult(values=merged, mode=DriverReadMode.FULL, diagnostics=diagnostics)
 
     async def async_capture_support_evidence(self, transport, inverter, runtime_state=None):

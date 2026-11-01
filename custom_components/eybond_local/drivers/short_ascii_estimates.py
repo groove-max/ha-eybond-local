@@ -12,9 +12,10 @@ dashboards:
 (3) else PV alone if BMS watts missing → ``pv_only``;
 (4) else Q1 including 0 W, or omit.
 
-BMS watts are the live ``battery_power`` measurement only. A missing
-``pv_power`` is not treated as 0 W: discharge may omit the PV term, and
-charge/idle without PV does not publish a residual built from that hole.
+BMS watts use live ``battery_power`` only. A missing ``pv_power`` is not
+treated as 0 W: discharge may omit the PV term, and charge/idle without PV
+does not publish a residual built from that hole. Held pack watts stay on
+their own labelled entity.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ def _q1_load_watts(values: dict[str, object]) -> float | None:
 
 
 def _battery_watts(values: dict[str, object]) -> float | None:
-    """Live pack watts only. Held estimates are a later, labelled bridge."""
+    """Live ``battery_power`` only. Held pack watts are a separate entity."""
     live = values.get("battery_power")
     if isinstance(live, (int, float)):
         return float(live)
