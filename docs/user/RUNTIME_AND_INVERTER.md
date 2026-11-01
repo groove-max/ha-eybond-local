@@ -506,7 +506,11 @@ that request is skipped. Use **Re-check supported commands** to try it again,
 for example after connecting a BMS. Missing optional data does not prevent
 basic inverter monitoring.
 
-This profile does not provide PV power, grid frequency or inverter controls.
+Stock installs do not poll PV until MPPT aux is admitted
+(`admit_short_ascii_mppt`). Live PV keys stay unavailable until a sample
+arrives, and a soft miss omits them. Labelled held-estimate entities may
+retain the last sample. Held PV entities are off by default. This profile
+does not provide grid frequency or inverter controls.
 Selecting **Full Control** does not add undocumented settings. If readings are
 missing or implausible, create a Support Archive for review; it can include the
 optional raw replies. Do not select a similar retail model by guesswork.
