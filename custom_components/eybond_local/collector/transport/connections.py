@@ -9,7 +9,7 @@ from time import monotonic
 from typing import Any, Callable
 
 from ..at import (
-    CollectorAtResponse, build_at_query, build_at_write,
+    CollectorAtQueryStatus, CollectorAtResponse, build_at_query, build_at_write,
     normalize_at_command, parse_at_command, parse_at_response,
 )
 from ..identity_probe import build_identity_probe_request, parse_identity_probe_response
@@ -485,6 +485,16 @@ class _CollectorConnection:
     def _handle_at_response(self, payload: bytes) -> None:
         try:
             response = parse_at_response(payload)
+        except CollectorAtQueryStatus as exc:
+            future = self._pending_at_response
+            if future is not None and not future.done() and exc.command == self._pending_at_command:
+                # An explicit, correlated failure proves channel activity, not
+                # a setting value or a fresh heartbeat.
+                self._last_liveness_monotonic = monotonic()
+                future.set_exception(exc)
+            logger.debug("Collector AT query status remote=%s command=%s status=%s",
+                         self._collector.remote_ip, exc.command, exc.status)
+            return
         except Exception:
             logger.debug(
                 "Unhandled collector mixed payload remote=%s payload=%r",
@@ -523,6 +533,10 @@ class _CollectorConnection:
                 auxiliary.at_boundary = False
                 frame_started = asyncio.get_running_loop().time()
                 auxiliary_claim = auxiliary.claim
+                status = await read(reader.read_at_query_status(first))
+                if status is not None:
+                    self._handle_at_response(status)
+                    continue
                 if await diagnostic.consume(reader, first, auxiliary):
                     continue
                 try:
@@ -542,7 +556,7 @@ class _CollectorConnection:
                     )
                     return
                 if prefix.startswith(b"AT+"):
-                    line = prefix + await read(reader.read_at_response())
+                    line = prefix + await read(reader.read_at_response(prefix=prefix))
                     self._handle_at_response(line)
                     continue
 
@@ -1366,6 +1380,11 @@ class _CollectorAtConnection:
                 auxiliary.at_boundary = False
                 frame_started = asyncio.get_running_loop().time()
                 auxiliary_claim = auxiliary.claim
+                if not buffered_prefix:
+                    status = await read(reader.read_at_query_status(first))
+                    if status is not None:
+                        self._handle_at_response_line(status)
+                        continue
                 if not buffered_prefix and await diagnostic.consume(reader, first, auxiliary):
                     continue
                 if not buffered_prefix and await runtime_modbus.consume(reader, first, auxiliary):
@@ -1379,7 +1398,7 @@ class _CollectorAtConnection:
                         ) if auxiliary.enabled else tail
                     )
                     if prefix == b"AT+":
-                        line = prefix + await read(reader.read_at_response())
+                        line = prefix + await read(reader.read_at_response(prefix=prefix))
                         self._handle_at_response_line(line)
                         continue
                     buffered_prefix = prefix + buffered_prefix
@@ -1618,6 +1637,13 @@ class _CollectorAtConnection:
     def _handle_at_response_line(self, line: bytes) -> None:
         try:
             response = parse_at_response(line)
+        except CollectorAtQueryStatus as exc:
+            future = self._pending_response
+            if future is not None and not future.done() and exc.command == self._pending_at_command:
+                future.set_exception(exc)
+            logger.debug("Collector AT query status remote=%s command=%s status=%s",
+                         self._collector.remote_ip, exc.command, exc.status)
+            return
         except Exception:
             logger.debug(
                 "Unhandled collector AT payload remote=%s payload=%r",

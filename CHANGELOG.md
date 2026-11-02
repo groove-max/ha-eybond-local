@@ -9,6 +9,15 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Keep query-echo AT status replies such as `AT+HTBT?\r\n:R001\r\n`
+  separate from binary collector frames (#70). Both runtime readers preserve
+  the following frame across TCP fragmentation and report the matching query
+  as failed, without storing the status as a setting or write acknowledgement.
+  Only an immediately preceding complete query echo permits this bounded
+  continuation; unrelated bytes and binary payloads are not skipped. This
+  addresses the reproduced short parser disconnects, not the separate long
+  periods without a local callback.
+
 - Preserve a successful, correlated collector identity reply as liveness when
   its exact socket moves from the shared listener to the framed runtime (#66).
   FC2-only reconnects no longer lose this evidence while waiting for an FC1

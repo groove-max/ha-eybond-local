@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Awaitable, Callable, Protocol
 
-from ..at import CollectorAtResponse, build_at_write, parse_at_response
+from ..at import CollectorAtResponse, build_at_write, is_at_query_echo, parse_at_response
 from ..cloud_family import (
     apply_collector_cloud_family_observation,
     collector_cloud_family_observation_from_endpoint,
@@ -40,6 +40,7 @@ from ..protocol import (
     parse_heartbeat_pn,
 )
 from .binary_framing import (
+    BinaryFramingError,
     MAX_EYBOND_PAYLOAD_SIZE,
     RUNTIME_EYBOND_FCODES,
     runtime_eybond_header_error,
@@ -221,6 +222,7 @@ def _short_ascii(value: bytes, *, limit: int = 160) -> str:
 
 _AT_TEXT_MIXED_FRAME_READ_TIMEOUT = 0.05
 _AT_TEXT_RESPONSE_IDLE_TIMEOUT = 0.2
+_AT_QUERY_STATUS_COMPLETION_TIMEOUT = 2.0
 _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN = MAX_EYBOND_PAYLOAD_SIZE
 _AT_TEXT_MIXED_FRAME_FCODES = RUNTIME_EYBOND_FCODES
 
@@ -434,6 +436,7 @@ class _PrefixedAsyncReader:
     def __init__(self, reader: asyncio.StreamReader, initial_bytes: bytes = b"") -> None:
         self._reader = reader
         self._buffer = bytearray(initial_bytes)
+        self._at_query_echo = b""
 
     def unread(self, data: bytes) -> None:
         """Return bounded lookahead to the SAME reader at a protocol boundary."""
@@ -483,7 +486,36 @@ class _PrefixedAsyncReader:
                 return prefix[2:]
         return prefix
 
-    async def read_at_response(self) -> bytes:
+    async def read_at_query_status(self, first: bytes) -> bytes | None:
+        """Read only a status immediately after a complete query echo (#70).
+
+        Keep the optional continuation on THIS reader across an idle gap, not
+        in a collector/IP cache. Any intervening frame clears it. A mismatch
+        restores every lookahead byte so even a binary TID ':R' is untouched.
+        Seven bytes is the entire grammar: :Rddd CRLF. No resynchronization,
+        arbitrary line skip or speculative metadata value is allowed.
+        """
+        echo, self._at_query_echo = self._at_query_echo, b""
+        if not echo or first != b":":
+            return None
+        tail = bytearray()
+        try:
+            async with asyncio.timeout(_AT_QUERY_STATUS_COMPLETION_TIMEOUT):
+                for allowed in (b"R", b"0123456789", b"0123456789", b"0123456789", b"\r", b"\n"):
+                    byte = await self.readexactly(1)
+                    tail.extend(byte)
+                    if byte[0] not in allowed:
+                        self.unread(bytes(tail))
+                        return None
+        except asyncio.TimeoutError as exc:
+            self.unread(bytes(tail))
+            raise BinaryFramingError("collector_at_status_timeout") from exc
+        except (asyncio.CancelledError, asyncio.IncompleteReadError):
+            self.unread(bytes(tail))
+            raise
+        return echo + first + bytes(tail)
+
+    async def read_at_response(self, *, prefix: bytes = b"AT+") -> bytes:
         """Read one AT response terminated by newline or a bounded idle gap.
 
         Some collector firmware omits CR/LF for otherwise valid AT responses
@@ -496,6 +528,7 @@ class _PrefixedAsyncReader:
         """
 
         data = bytearray()
+        self._at_query_echo = b""
         binary_suspected = False
         while len(data) < _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN:
             try:
@@ -521,6 +554,9 @@ class _PrefixedAsyncReader:
 
             if byte == b"\n":
                 if not binary_suspected and data.endswith(b"\r\n"):
+                    line = prefix + bytes(data)
+                    if is_at_query_echo(line):
+                        self._at_query_echo = line
                     return bytes(data)
                 # LF-only firmware remains supported through the idle-gap
                 # boundary. A lone LF may also be the high TID byte of the

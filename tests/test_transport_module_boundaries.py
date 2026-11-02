@@ -82,6 +82,13 @@ class TransportModuleBoundaryTests(unittest.TestCase):
             for node in reader_class.body
         ), 1)
         definitions = [item for item in definitions if item != prefix_extension]
+        status_extension = ("AsyncFunctionDef", "read_at_query_status")
+        self.assertEqual(definitions.count(status_extension), 1)
+        self.assertEqual(sum(
+            isinstance(node, ast.AsyncFunctionDef) and node.name == status_extension[1]
+            for node in reader_class.body
+        ), 1)
+        definitions.remove(status_extension)
         handoff_extension = ("AsyncFunctionDef", "async_disconnect_owned_session")
         self.assertEqual(definitions.count(handoff_extension), 2)
         owners = []

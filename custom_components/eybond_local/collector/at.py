@@ -4,10 +4,31 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import re
 
 
 class CollectorAtError(Exception):
     """Raised when a collector AT command or response is invalid."""
+
+
+class CollectorAtQueryStatus(CollectorAtError):
+    """A query echo with a read-status code, not a returned setting value.
+
+    Older firmware's unknown-command handler formats ``%s:%c001``, where
+    ``%s`` can retain the query's CR/LF. Do not mistake that status for data
+    (or a write acknowledgement). Named replies like AT+ATVER:R001 remain
+    ordinary values; only the explicit query-echo envelope qualifies.
+    """
+
+    def __init__(self, command: str, status: str) -> None:
+        self.command = command
+        self.status = status
+        super().__init__(f"collector_at_query_status_{status}")
+
+
+def is_at_query_echo(payload: bytes) -> bool:
+    """Recognize one bounded, complete query echo at a text boundary."""
+    return re.fullmatch(rb"AT\+[A-Z][A-Z0-9]{0,31}\?\r\n", payload) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +132,9 @@ def parse_at_response(
     if not normalized.startswith(prefix):
         raise CollectorAtError("at_response_invalid")
 
+    status = re.fullmatch(r"AT\+([A-Z][A-Z0-9]{0,31})\?(?:\r\n)?:(R[0-9]{3})", normalized)
+    if status is not None:
+        raise CollectorAtQueryStatus(status[1], status[2])
     command_with_value = normalized[len(prefix) :]
     command_text, separator, value = command_with_value.partition(":")
     if not separator:

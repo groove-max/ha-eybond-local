@@ -237,8 +237,8 @@ class CollectorSendOwnershipTests(unittest.IsolatedAsyncioTestCase):
                         self.addCleanup(release.set)
                         read_at_response = _PrefixedAsyncReader.read_at_response
 
-                        async def delayed_line(reader):
-                            line = await read_at_response(reader)
+                        async def delayed_line(reader, *, prefix=b"AT+"):
+                            line = await read_at_response(reader, prefix=prefix)
                             if reader._reader is old_reader:
                                 entered.set()
                                 try:
@@ -365,8 +365,8 @@ class CollectorSendOwnershipTests(unittest.IsolatedAsyncioTestCase):
                     self.addCleanup(release.set)
                     read_at_response = _PrefixedAsyncReader.read_at_response
 
-                    async def delayed_error(reader):
-                        value = await read_at_response(reader)
+                    async def delayed_error(reader, *, prefix=b"AT+"):
+                        value = await read_at_response(reader, prefix=prefix)
                         if reader._reader is old_reader:
                             entered.set()
                             try:
@@ -391,6 +391,49 @@ class CollectorSendOwnershipTests(unittest.IsolatedAsyncioTestCase):
                         old_writer.close_gate.set()
                         await cleanup
                         await self.assert_new_session_works(connection, new_reader, writer)
+
+    async def test_retired_query_status_cannot_fail_successor_query(self):
+        """#70: the status continuation has the same physical-reader fence."""
+        for kind in ("framed", "at"):
+            with self.subTest(kind=kind):
+                connection, old_reader, old_writer, _ = await self.open(kind)
+                reader_task = connection._reader_task
+                entered, release = asyncio.Event(), asyncio.Event()
+                self.addCleanup(release.set)
+                read_status = _PrefixedAsyncReader.read_at_query_status
+
+                async def delayed_status(reader, first):
+                    value = await read_status(reader, first)
+                    if value is not None and reader._reader is old_reader:
+                        entered.set()
+                        try:
+                            await release.wait()
+                        except asyncio.CancelledError:
+                            # Cancellation is not an ownership fence.
+                            await release.wait()
+                    return value
+
+                with patch.object(_PrefixedAsyncReader, "read_at_query_status", delayed_status):
+                    old_reader.feed_data(b"AT+HTBT?\r\n:R001\r\n")
+                    await asyncio.wait_for(entered.wait(), 1)
+                    old_writer.close_gate = asyncio.Event()
+                    self.addCleanup(old_writer.close_gate.set)
+                    cleanup = self.task(connection.disconnect())
+                    await _wait(lambda: old_writer.closed)
+                    _, new_reader, writer, _ = await self.open(kind, connection)
+                    query = self.task(connection.async_query("HTBT", request_timeout=1))
+                    await _wait(lambda: bool(writer.writes))
+                    future = (connection._pending_at_response if kind == "framed"
+                              else connection._pending_response)
+                    release.set()
+                    await asyncio.wait_for(asyncio.gather(reader_task, return_exceptions=True), 1)
+                    self.assertFalse(future.done(), "retired status failed successor query")
+                    self.assertEqual(connection.collector_info.last_disconnect_reason, "")
+                    new_reader.feed_data(b"AT+HTBT:60\r\n")
+                    self.assertEqual((await query).value, "60")
+                    old_writer.close_gate.set()
+                    await cleanup
+                    await self.assert_new_session_works(connection, new_reader, writer)
 
     async def test_retired_raw_reader_cannot_complete_successor_raw_request(self):
         for protocol in ("", "modbus_rtu"):
