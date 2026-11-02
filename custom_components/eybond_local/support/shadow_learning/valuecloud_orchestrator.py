@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
+from copy import deepcopy
 import asyncio
 import logging
 import re
@@ -262,6 +263,42 @@ async def async_orchestrate_valuecloud_shadow_learning(
                 exc.delivery_sequence = sequence_index
                 exc.delivery_total = plan_total
                 exc.delivery_duration_ms = duration_ms
+                attempt.update(
+                    status="indeterminate", delivery_outcome="indeterminate",
+                    reason="cloud_delivery_indeterminate", cloud_duration_ms=duration_ms,
+                )
+                # Even a timed-out HTTP request can already have produced a
+                # locally intercepted write. Preserve that observation without
+                # treating it as a terminal cloud result or advancing the plan.
+                # Evidence publication must never mask the original failure.
+                with suppress(Exception):
+                    observations = _collect_run_observations(
+                        run_cursor_start=run_cursor_start,
+                        current_observations_since=current_observations_since,
+                        attempt_observations=tuple(run_observations),
+                    )
+                    if current_observations_since is not None:
+                        _attach_attempt_observation(
+                            attempt=attempt,
+                            observations=tuple(current_observations_since(cursor_start) or ()),
+                        )
+                        attempt["reason"] = "cloud_delivery_indeterminate"
+                    # Keep locally assembled request/capture evidence, not
+                    # arbitrary HTTP response strings or exception text. Scrub
+                    # before correlation copies unmatched attempts as well.
+                    safe_attempts = deepcopy([*attempts, attempt])
+                    for row in safe_attempts:
+                        for key in ("response", "cloud_rejection", "cloud_nack_response"):
+                            if isinstance(row.get(key), dict):
+                                row[key] = {
+                                    k: v for k, v in row[key].items()
+                                    if k in {"code", "success"}
+                                }
+                    report = _learning_result(
+                        plan, safe_attempts, observations, _safe_read_map(read_map_snapshot),
+                    )
+                    report.update(status="interrupted", source="valuecloud")
+                    exc.retain_learning_report(report)
             logger.warning(
                 "Shadow cloud action delivery indeterminate sequence=%s total=%s "
                 "duration_ms=%s exception_type=%s",
@@ -314,9 +351,19 @@ async def async_orchestrate_valuecloud_shadow_learning(
         current_observations_since=current_observations_since,
         attempt_observations=tuple(run_observations),
     )
+    return _learning_result(plan, attempts, completion_observations, _safe_read_map(read_map_snapshot))
+
+
+def _learning_result(
+    plan: list[dict[str, Any]],
+    attempts: list[dict[str, Any]],
+    observations: tuple[ShadowWriteObservation, ...],
+    read_map: dict[str, Any],
+) -> dict[str, Any]:
+    """One report shape for completed runs and non-activatable failure evidence."""
     correlation = summarize_shadow_learning_attempts(
         attempts=attempts,
-        all_observations=completion_observations,
+        all_observations=observations,
     )
 
     return {
@@ -333,7 +380,7 @@ async def async_orchestrate_valuecloud_shadow_learning(
         "unknown_field_count": sum(1 for item in attempts if bool(item.get("unknown_field"))),
         "results": attempts,
         "correlation": correlation,
-        "read_map": _safe_read_map(read_map_snapshot),
+        "read_map": read_map,
     }
 
 

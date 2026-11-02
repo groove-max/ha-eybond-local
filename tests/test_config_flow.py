@@ -10306,8 +10306,14 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         error.delivery_sequence = 0
         error.delivery_total = 57
         error.delivery_duration_ms = 15023
+        partial = {"status": "interrupted", "source": "valuecloud", "plan": [{"field_id": "synthetic"}],
+                   "planned_write_count": 57, "executed_result_count": 1,
+                   "results": [{"field_id": "synthetic", "status": "indeterminate"}],
+                   "correlation": {"matched_count": 0}, "read_map": {}}
+        error.retain_learning_report(partial)
 
         async def failed_restore(_coordinator):
+            self.assertEqual(options._shadow_learning_state['orchestration'], partial)
             options._shadow_learning_state['session'] = {'status': 'restore_failed'}
 
         with (
@@ -10330,6 +10336,13 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failure['delivery_outcome'], 'indeterminate')
         self.assertEqual(failure['sequence_index'], 0)
         self.assertEqual(failure['planned_action_count'], 57)
+        artifact = coordinator.published[-1]['orchestration']
+        self.assertEqual(artifact['status'], 'interrupted')
+        self.assertEqual(artifact['results'], partial['results'])
+        self.assertEqual(artifact['plan'], partial['plan'])
+        self.assertNotIn('partial_orchestration', failure)
+        self.assertNotIn('synthetic', str(logs.output))
+        self.assertFalse(options._shadow_learning_state.get('overlay'))
         self.assertNotIn('private-secret', str(coordinator.published) + str(logs.output))
 
     async def test_dessmonitor_runner_records_typed_local_semantic_coverage(self) -> None:

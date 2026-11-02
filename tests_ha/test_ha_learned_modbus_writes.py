@@ -2,13 +2,15 @@
 
 Only the device/runtime boundary is synthetic. Profile generation, selection,
 activation, entry reload, entities, services and MUST Modbus encoding run for real.
-No cloud learning session, socket or physical inverter is used.
+The ValueCloud case also uses the real HTTP client and fail-closed TCP proxy on
+loopback before activation. No real cloud account or physical inverter is used.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 
 import pytest
 from homeassistant.helpers import entity_registry as er
@@ -86,9 +88,9 @@ def _correlation(target: ProbeTarget, numeric_evidence=False) -> dict:
 
 
 @pytest.mark.parametrize("mode", ["read_only", "auto", "full"])
-@pytest.mark.parametrize("numeric_evidence", [False, True, "scaled"])
+@pytest.mark.parametrize("numeric_evidence", [False, True, "scaled", "valuecloud"])
 async def test_generated_must_overlay_activation_and_modbus_service_writes(
-    hass, fake_runtime, monkeypatch, tmp_path, mode, numeric_evidence
+    hass, fake_runtime, monkeypatch, tmp_path, mode, numeric_evidence, socket_enabled
 ):
     from conftest import FakeRuntimeManager
 
@@ -214,6 +216,30 @@ async def test_generated_must_overlay_activation_and_modbus_service_writes(
     await entry.runtime_data.async_refresh()
     await hass.async_block_till_done()
 
+    correlation = _correlation(target, numeric_evidence)
+    if numeric_evidence == "valuecloud":
+        helpers = str(Path(__file__).resolve().parents[1] / "tests" / "helpers")
+        if helpers not in sys.path:
+            sys.path.insert(0, helpers)
+        from valuecloud_learning_lab import ValueCloudLearningLab
+
+        fields = [
+            {"id": "synthetic_level", "name": "Synthetic learned level",
+             "datatype": 1, "readwrite": "RW", "val": "20", "unit": "%"},
+            {"id": "synthetic_mode", "name": "Synthetic learned mode",
+             "datatype": 3, "readwrite": "RW", "item": {"3": "Mode A", "4": "Mode B"}},
+        ]
+        async with ValueCloudLearningLab(
+            tmp_path, fields, unit=target.device_addr,
+            mapping={"synthetic_level": (_LEVEL_REGISTER, 6), "synthetic_mode": (_MODE_REGISTER, 16)},
+        ) as lab:
+            learned = await lab.learn()
+        assert learned["captured_not_applied_count"] == 4
+        assert learned["correlation"]["matched_count"] == 4
+        assert len(lab.requests) == len(lab.nacks) == 4
+        assert not lab.collector_traffic
+        correlation = learned["correlation"]
+
     def generate():
         result = generate_shadow_learning_overlay_drafts(
             config_dir=Path(hass.config.config_dir),
@@ -226,7 +252,7 @@ async def test_generated_must_overlay_activation_and_modbus_service_writes(
                 "devaddr": target.collector_addr,
                 "write_response_mode": "exception",
             },
-            correlation=_correlation(target, numeric_evidence),
+            correlation=correlation,
         )
         return result, json.loads(result.profile_path.read_text(encoding="utf-8"))
 

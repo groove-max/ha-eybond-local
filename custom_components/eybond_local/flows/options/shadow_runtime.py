@@ -395,6 +395,18 @@ class ShadowLearningRuntimeMixin:
     def _cached_cloud_evidence_record(self, coordinator):
         return self._shadow_learning_runtime_view(coordinator).cloud_evidence
 
+    def _retain_shadow_learning_failure_evidence(self, diagnostics: dict[str, Any]) -> dict[str, Any]:
+        """Store partial provider evidence before cleanup; keep it out of logs.
+
+        This is not a successful discovery outcome and must not generate or
+        activate an overlay. Recovery failures may supplement, not replace it.
+        """
+        diagnostics = dict(diagnostics)
+        partial = diagnostics.pop("partial_orchestration", None)
+        if isinstance(partial, dict):
+            self._shadow_learning_state["orchestration"] = partial
+        return diagnostics
+
     def _publish_shadow_learning_artifacts(self, coordinator) -> dict[str, Any]:
         """Publish the current UX artifact state into support-package runtime values."""
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import hmac
@@ -39,6 +40,17 @@ class ValueCloudError(RuntimeError):
         self.delivery_sequence: int | None = None
         self.delivery_total: int | None = None
         self.delivery_duration_ms: int | None = None
+        # Set only by the owned learning orchestrator, never from an HTTP body.
+        # Diagnostic evidence is separate from the closed-vocabulary log fields.
+        self._learning_report: dict[str, Any] | None = None
+
+    def retain_learning_report(self, report: dict[str, Any]) -> None:
+        """Retain an interrupted run for support, not as a successful outcome."""
+        self._learning_report = deepcopy(report)
+
+    def learning_report(self) -> dict[str, Any]:
+        """Return detached support evidence; callers cannot mutate the failure."""
+        return deepcopy(self._learning_report) if self._learning_report is not None else {}
 
     def safe_diagnostics(self) -> dict[str, Any]:
         """Export closed vocabulary only, never exception text or response data."""

@@ -874,6 +874,7 @@ class ShadowLearningRunMixin:
                 engine = self._control_discovery_learning_engine(coordinator)
                 cloud_error_code = engine.classify_error(exc)
                 provider_diagnostics = engine.error_diagnostics(exc)
+            provider_diagnostics = self._retain_shadow_learning_failure_evidence(provider_diagnostics)
             failure_reason = self._control_discovery_failure_reason(
                 exc,
                 cloud_error_code=cloud_error_code,

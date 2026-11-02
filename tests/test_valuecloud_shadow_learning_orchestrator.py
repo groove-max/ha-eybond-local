@@ -547,6 +547,48 @@ class ValueCloudShadowLearningOrchestratorTests(unittest.TestCase):
         self.assertNotIn('field_id', diagnostics)
         self.assertNotIn('requested_value', diagnostics)
 
+    def test_interrupted_run_keeps_prior_captures_without_retry_or_success(self) -> None:
+        from custom_components.eybond_local.support.cloud_api_adapters import ValueCloudApiAdapter
+
+        observations = []
+        calls = []
+        error = ValueCloudError('private-http-body', stage='control', reason_code='timeout')
+
+        def send(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 2:
+                raise error
+            observations.append(ShadowWriteObservation(
+                timestamp='2026-11-02T12:00:00+00:00', function_code=16,
+                register=60000, values=(0,), devcode=1, devaddr=1, raw_payload_hex='',
+            ))
+            raise ValueCloudActionRejectedError(code=409, action='ctrlDevice', detail='rejected')
+
+        with self.assertRaises(ValueCloudError) as raised:
+            asyncio.run(async_orchestrate_valuecloud_shadow_learning(
+                batch_control=_batch_control(),
+                session=ValueCloudSession(token='token', secret='secret'),
+                pn='SYNTHETIC', sn='SYNTHETIC', devcode=1, devaddr=1,
+                dry_run=False, confirm_cloud_write=True, shadow_session_state='ready',
+                field_ids=[], setup_action=send,
+                observation_cursor=lambda: len(observations),
+                current_observations_since=lambda cursor: tuple(observations[cursor:]),
+            ))
+        self.assertIs(raised.exception, error)
+        self.assertEqual(len(calls), 2)
+        evidence = ValueCloudApiAdapter().error_diagnostics(error)['partial_orchestration']
+        self.assertEqual(evidence['status'], 'interrupted')
+        self.assertEqual(evidence['executed_result_count'], 2)
+        self.assertEqual(evidence['captured_not_applied_count'], 1)
+        self.assertEqual(evidence['results'][0]['status'], 'captured_not_applied')
+        self.assertEqual(evidence['results'][1]['status'], 'indeterminate')
+        self.assertEqual(evidence['results'][1]['reason'], 'cloud_delivery_indeterminate')
+        self.assertGreater(evidence['planned_write_count'], 2)
+        self.assertNotIn('private-http-body', str(evidence))
+        evidence['results'].clear()
+        self.assertEqual(len(ValueCloudApiAdapter().error_diagnostics(error)
+                             ['partial_orchestration']['results']), 2)
+
     def test_indeterminate_delivery_aborts_before_next_action(self) -> None:
         calls = 0
 
@@ -607,6 +649,29 @@ class ValueCloudShadowLearningOrchestratorTests(unittest.TestCase):
             "private valuecloud detail",
             "\n".join(captured_logs.output),
         )
+
+    def test_partial_correlation_does_not_copy_unmatched_provider_error_text(self) -> None:
+        calls = []
+
+        def send(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise ValueCloudActionRejectedError(
+                    code=409, action='ctrlDevice', detail='private-provider-body',
+                )
+            raise ValueCloudError('private-exception-text', stage='control', reason_code='timeout')
+
+        with self.assertRaises(ValueCloudError) as raised:
+            asyncio.run(async_orchestrate_valuecloud_shadow_learning(
+                batch_control=_batch_control(), session=ValueCloudSession(token='token', secret='secret'),
+                pn='SYNTHETIC', sn='SYNTHETIC', devcode=1, devaddr=1,
+                dry_run=False, confirm_cloud_write=True, shadow_session_state='ready',
+                field_ids=[], setup_action=send, correlation_timeout_seconds=0,
+            ))
+        report = raised.exception.learning_report()
+        self.assertEqual(report['correlation']['unmatched_attempt_count'], 2)
+        self.assertNotIn('private-provider-body', str(report))
+        self.assertNotIn('private-exception-text', str(report))
 
 
 if __name__ == "__main__":

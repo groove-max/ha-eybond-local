@@ -93,7 +93,12 @@ class ValueCloudApiAdapter(CloudApiAdapter):
         return "unexpected"
 
     def error_diagnostics(self, exc: BaseException) -> dict[str, object]:
-        return exc.safe_diagnostics() if isinstance(exc, ValueCloudError) else {}
+        if not isinstance(exc, ValueCloudError):
+            return {}
+        diagnostics = exc.safe_diagnostics()
+        if report := exc.learning_report():
+            diagnostics["partial_orchestration"] = report
+        return diagnostics
 
 
 class DessMonitorCloudApiAdapter(CloudApiAdapter):

@@ -9,6 +9,16 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Preserve partial ValueCloud Write Controls evidence when an HTTP request
+  times out or fails (#46): retain the plan, previous captures and the uncertain
+  attempt in the support package, including a command intercepted before its
+  HTTP response was lost. Keep failure diagnostics separate from endpoint
+  recovery failures and exclude provider response text from the partial report.
+  Do not retry the uncertain command, activate a partial draft or release the
+  existing learning protection. Loopback HTTP/TCP and real-HA activation tests
+  exercise the legacy `ctrlDevice` path; a successful run on the affected
+  physical device and the meaning of its `Ongrid Switch` remain unconfirmed.
+
 - Keep query-echo AT status replies such as `AT+HTBT?\r\n:R001\r\n`
   separate from binary collector frames (#70). Both runtime readers preserve
   the following frame across TCP fragmentation and report the matching query
