@@ -4835,6 +4835,47 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
             reader2.feed_eof()
             await asyncio.wait_for(run2, timeout=1.0)
 
+    async def test_raw_rtu_length_overlap_closes_payload_too_large(self) -> None:
+        """0103021234b533 must close now, not stall on a misaligned FC1 header."""
+
+        async def _quiet_heartbeat(self) -> None:
+            return None
+
+        connection = _CollectorConnection(
+            remote_ip_hint="203.0.113.10",
+            heartbeat_interval=60.0,
+            write_timeout=0.5,
+        )
+        reader = asyncio.StreamReader()
+        writer = _FakeWriter()
+        raw_rtu = bytes.fromhex("0103021234b533")
+        valid_later = build_collector_request(
+            0x6AEE,
+            raw_rtu,
+            devcode=0x0200,
+            collector_addr=1,
+            fcode=4,
+        )
+        with patch.object(
+            _CollectorConnection,
+            "_heartbeat_loop",
+            new=_quiet_heartbeat,
+        ):
+            run = asyncio.create_task(
+                connection.run(reader, writer)  # type: ignore[arg-type]
+            )
+            self.assertTrue(await connection.wait_until_connected(1.0))
+            reader.feed_data(raw_rtu + valid_later)
+            try:
+                await asyncio.wait_for(run, timeout=1.0)
+            except TimeoutError:
+                self.fail("raw RTU prefix stalled the framed reader")
+        self.assertEqual(
+            connection.collector_info.last_disconnect_reason,
+            "collector_frame_payload_too_large",
+        )
+        self.assertTrue(writer.closed)
+
     async def test_framed_reader_bounds_partial_header_and_payload(self) -> None:
         async def _quiet_heartbeat(self) -> None:
             return None

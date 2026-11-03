@@ -39,7 +39,10 @@ from .diagnostic_modbus import DiagnosticModbusSession, ModbusDiagnosticClaim
 from .send_ownership import SocketSendOwner, finish_request_future
 from .request_trace import SocketRequestTrace
 from .binary_framing import (
-    BinaryFramingError, BinaryGrammar, async_read_binary_frame,
+    BinaryFramingError,
+    BinaryGrammar,
+    async_read_binary_frame,
+    is_resyncable_header_error,
 )
 from .common import (
     _AT_TEXT_MIXED_FRAME_READ_TIMEOUT,
@@ -592,21 +595,96 @@ class _CollectorConnection:
                     header = decode_header(header_bytes)
                     header_error = _runtime_eybond_header_error(header)
                     if header_error:
-                        self._collector.last_disconnect_reason = header_error
+                        # function_invalid stays fatal here. A 7-byte raw RTU
+                        # prefix plus the next frame's first byte is often
+                        # payload-too-large, and discarding that window invents
+                        # a second header that stalls on a huge payload (#39).
+                        # Length and payload-size errors may discard one window
+                        # only when the whole next frame is already buffered.
+                        inner = getattr(reader, "_reader", None)
+                        follow = bytes(getattr(reader, "_buffer", b""))
+                        if inner is not None:
+                            follow += bytes(getattr(inner, "_buffer", b""))
+                        next_header = (
+                            decode_header(follow) if len(follow) >= HEADER_SIZE else None
+                        )
+                        resync = (
+                            is_resyncable_header_error(header_error)
+                            and next_header is not None
+                            and not _runtime_eybond_header_error(next_header)
+                            and len(follow) >= next_header.total_len
+                        )
+                        if not resync:
+                            self._collector.last_disconnect_reason = header_error
+                            logger.warning(
+                                "Closing collector session after malformed frame header "
+                                "remote=%s reason=%s header=%s tid=%d devcode=0x%04X "
+                                "devaddr=0x%02X fc=%d payload=%d",
+                                self._collector.remote_ip,
+                                header_error,
+                                header_bytes.hex(),
+                                header.tid,
+                                header.devcode,
+                                header.devaddr,
+                                header.fcode,
+                                header.payload_len,
+                            )
+                            return
+                        # One whole-window discard: ignore the illegal 8 bytes and
+                        # read a fresh header. Never keep a tail or one-byte slide
+                        # (that forms false-legal headers such as ff0000ff04aabb02).
+                        # payload_too_large stays a header check — never
+                        # readexactly of that huge length.
+                        discarded_header_hex = header_bytes.hex()
+                        try:
+                            header_bytes = await read(asyncio.wait_for(
+                                reader.readexactly(HEADER_SIZE),
+                                timeout=_FRAMED_HEADER_COMPLETION_TIMEOUT,
+                            ))
+                        except (asyncio.TimeoutError, asyncio.IncompleteReadError):
+                            self._collector.last_disconnect_reason = header_error
+                            logger.warning(
+                                "Closing collector session after malformed frame header "
+                                "remote=%s reason=%s header=%s tid=%d devcode=0x%04X "
+                                "devaddr=0x%02X fc=%d payload=%d",
+                                self._collector.remote_ip,
+                                header_error,
+                                header_bytes.hex(),
+                                header.tid,
+                                header.devcode,
+                                header.devaddr,
+                                header.fcode,
+                                header.payload_len,
+                            )
+                            return
+                        header = decode_header(header_bytes)
+                        header_error = _runtime_eybond_header_error(header)
+                        if header_error:
+                            self._collector.last_disconnect_reason = header_error
+                            logger.warning(
+                                "Closing collector session after malformed frame header "
+                                "remote=%s reason=%s discarded=%s header=%s tid=%d "
+                                "devcode=0x%04X devaddr=0x%02X fc=%d payload=%d",
+                                self._collector.remote_ip,
+                                header_error,
+                                discarded_header_hex,
+                                header_bytes.hex(),
+                                header.tid,
+                                header.devcode,
+                                header.devaddr,
+                                header.fcode,
+                                header.payload_len,
+                            )
+                            return
                         logger.warning(
-                            "Closing collector session after malformed frame header "
-                            "remote=%s reason=%s header=%s tid=%d devcode=0x%04X "
-                            "devaddr=0x%02X fc=%d payload=%d",
+                            "Discarded illegal EyeBond header remote=%s discarded=%s "
+                            "next_tid=%d next_fc=%d next_payload=%d",
                             self._collector.remote_ip,
-                            header_error,
-                            header_bytes.hex(),
+                            discarded_header_hex,
                             header.tid,
-                            header.devcode,
-                            header.devaddr,
                             header.fcode,
                             header.payload_len,
                         )
-                        return
                     payload = b""
                     if header.payload_len > 0:
                         try:

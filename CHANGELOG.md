@@ -398,6 +398,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Only length and payload-too-large may drop one 8-byte EyeBond window, and
+  only when the whole next frame is already buffered.
+  `collector_frame_function_invalid` stays fatal. A second illegal window
+  still closes the session. The discard logs `Discarded illegal EyeBond
+  header` with the dropped hex.
+
 - PI30 periodically rereads priorities, charging thresholds/currents and flags
   changed through the vendor app or inverter panel (#62). `QPIRI`/`QFLAG` run
   after telemetry, at most one extra request per poll and no more often than
