@@ -505,6 +505,8 @@ async def _async_wait_for_new_session(
     bound_session_id = str(getattr(bootstrap, "session_id", "") or "")
     offer_session_id = ""
     silent_seen = False
+    seen_silent_ids: set[str] = set()
+    silent_since: float | None = None
     probed = False
     while True:
         views = _session_views(hass)
@@ -561,12 +563,27 @@ async def _async_wait_for_new_session(
             )
             if new_silent:
                 silent_seen = True
-                # Exactly ONE causally-new silent socket is an unambiguous
-                # continuation target for a LATER explicit user selection;
-                # two or more stay ambiguous and are never offered or probed.
-                offer_session_id = (
-                    next(iter(new_silent)) if len(new_silent) == 1 else ""
-                )
+                seen_silent_ids.update(new_silent)
+            # A closed socket must not leave behind an actionable offer. Nor
+            # may two candidates become "unique" merely because one closes.
+            # Count every silent candidate seen in this attempt, not just the
+            # currently-live projection. Baseline sockets remain excluded.
+            offer_session_id = (
+                next(iter(new_silent))
+                if len(seen_silent_ids) == 1 and len(new_silent) == 1 else ""
+            )
+            if offer_session_id:
+                if silent_since is None:
+                    silent_since = loop.time()
+                if loop.time() - silent_since >= (
+                    DEFAULT_ONBOARDING_TIMEOUT_POLICY.callback_identity_silent_settle
+                ):
+                    # Return promptly so the user can query this exact live
+                    # socket before its firmware closes the silent connection.
+                    # Readable identity above always takes precedence.
+                    return None, silent_seen, offer_session_id, ""
+            else:
+                silent_since = None
 
         if loop.time() >= deadline:
             return None, silent_seen, offer_session_id, ""
@@ -702,14 +719,19 @@ async def _async_run_attempt(
             session["session_id"] for session in _session_views(hass) if session["session_id"]
         )
         pending_baseline = probe_channel.snapshot_silent_session_ids()
+        session_wait_timeout = (
+            request.session_wait_timeout
+            or DEFAULT_ONBOARDING_TIMEOUT_POLICY.callback_identity_session_wait
+        )
         logger.debug(
             "Callback identity started strategy=%s port=%d baseline=%d "
-            "silent_baseline=%d bootstrap=%s",
+            "silent_baseline=%d bootstrap=%s wait=%.1fs",
             strategy,
             request.tcp_port,
             len(baseline),
             len(pending_baseline),
             bootstrap.protocol if bootstrap is not None else "none",
+            session_wait_timeout,
         )
 
         # --- 3. exactly one trigger, or none ---------------------------------
@@ -750,10 +772,7 @@ async def _async_run_attempt(
             hass,
             baseline=baseline,
             old_session_id=str(request.old_session_id or "").strip(),
-            timeout=(
-                request.session_wait_timeout
-                or DEFAULT_ONBOARDING_TIMEOUT_POLICY.callback_identity_session_wait
-            ),
+            timeout=session_wait_timeout,
             probe_channel=probe_channel,
             pending_baseline=pending_baseline,
             bootstrap=bootstrap,
@@ -771,6 +790,10 @@ async def _async_run_attempt(
             if offer_session_id
             else None
         )
+        if offer is not None and attempt.foreign_sends:
+            # An offer grants the next attempt exact-socket probe authority;
+            # it needs the same trigger provenance check as a readable session.
+            return CallbackIdentityOutcome(result=IDENTITY_TRIGGER_INTERFERENCE)
         if session is None:
             if wait_failure:
                 return CallbackIdentityOutcome(

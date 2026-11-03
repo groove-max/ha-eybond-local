@@ -9,6 +9,15 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Allow a full reconnect cycle during callback identity checks (#75): wait up
+  to 60 seconds for a new socket, but offer the explicit read-only identity
+  query after a short silent-settle interval while that socket is still live.
+  Keep pre-existing connections outside the attempt; discard closed offers,
+  preserve ambiguity across socket churn and require uncontaminated trigger
+  provenance. Clarify that a timeout means no new connection was observed.
+  Deterministic timing and real loopback TCP/UDP tests cover the repair path;
+  the affected WFBLE firmware still needs a user-side identity-query test.
+
 - Preserve partial ValueCloud Write Controls evidence when an HTTP request
   times out or fails (#46): retain the plan, previous captures and the uncertain
   attempt in the support package, including a command intercepted before its

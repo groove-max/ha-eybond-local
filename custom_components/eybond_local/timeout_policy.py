@@ -27,9 +27,14 @@ class OnboardingTimeoutPolicy:
     manual_total_timeout: float = 45.0
     # LINK budget for one callback identity transaction: how long we wait for the
     # collector to actually open a socket after our single trigger sequence. It
-    # is not a detection budget -- no driver work happens inside it -- which is
-    # why it is a fraction of manual_total_timeout above.
-    callback_identity_session_wait: float = 20.0
+    # is not a detection budget -- no driver work happens inside it. A silent
+    # collector may keep its previous socket for ~35s before reconnecting; 20s
+    # can miss the entire reconnect cycle (issue #75). This is only a ceiling.
+    callback_identity_session_wait: float = 60.0
+    # Give a new silent socket a short chance to volunteer its identity, then
+    # offer the explicit query while it is still alive instead of waiting out
+    # the link deadline. Never authorizes a probe or a pre-existing socket.
+    callback_identity_silent_settle: float = 2.0
     # How long one attempt may wait for the exclusive causality lease before
     # giving up. The wire carries no correlation token, so attempts are
     # serialized; this bounds the queue rather than letting a caller hang.

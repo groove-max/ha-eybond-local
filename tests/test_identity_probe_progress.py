@@ -70,6 +70,20 @@ class IdentityProbeProgressTests(unittest.IsolatedAsyncioTestCase):
     def progress(self, listener):
         return listener.session_inventory_diagnostics()["sessions"][0]["identity_probes"][-1]
 
+    async def test_silent_inventory_excludes_eof_before_watcher_cleanup(self):
+        listener, pending, writer = self.setup_probe()
+        self.assertEqual(len(listener.silent_pending_collector_sessions()), 1)
+        pending.reader.feed_eof()
+        self.assertEqual(listener.silent_pending_collector_sessions(), ())
+        self.assertFalse(writer.closed)
+        self.assertIn(pending.session_id, listener._pending_sockets)
+
+    async def test_silent_inventory_excludes_locally_closing_writer(self):
+        listener, pending, writer = self.setup_probe()
+        writer.close()
+        self.assertEqual(listener.silent_pending_collector_sessions(), ())
+        self.assertIn(pending.session_id, listener._pending_sockets)
+
     async def exchange(self, listener, pending, protocol="at_text", **kwargs):
         request = build_identity_probe_request(protocol)
         return await listener._exchange_identity_probe(pending, request, **kwargs)

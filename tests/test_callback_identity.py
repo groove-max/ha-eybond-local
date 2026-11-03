@@ -1577,6 +1577,24 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(outcome.silent_bootstrap_offer)  # no single target
         self.assertEqual(listener.identify_calls, [])
 
+    async def test_silent_offer_requires_uncontaminated_trigger_provenance(self) -> None:
+        live = _Live(())
+        listener = self._FakeListener(live)
+
+        def interfere():
+            listener.silent.append("s-new")
+            get_callback_trigger_ledger().record(
+                target="192.0.2.99", source="foreign_test", attempt_id="",
+            )
+
+        outcome, registry = await self._run(
+            listener=listener, request=_request(), sender=_Sender(on_send=interfere),
+        )
+        self.assertEqual(outcome.result, IDENTITY_TRIGGER_INTERFERENCE)
+        self.assertIsNone(outcome.silent_bootstrap_offer)
+        self.assertEqual(listener.identify_calls, [])
+        self.assertEqual(registry.owner_for_pn(FULL_PN), "")
+
     async def test_no_session_at_all_stays_plain_timeout(self) -> None:
         live = _Live(())
         listener = self._FakeListener(live)

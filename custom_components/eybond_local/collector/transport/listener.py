@@ -1207,6 +1207,8 @@ class _SharedEybondListener:
 
         sessions: list[dict[str, object]] = []
         for pending in self._pending_sockets.values():
+            if pending.reader.at_eof() or pending.writer.is_closing():
+                continue
             session_id = str(pending.session_id or "").strip()
             if not session_id:
                 continue
