@@ -436,38 +436,80 @@ class _PrefixedAsyncReader:
     def __init__(self, reader: asyncio.StreamReader, initial_bytes: bytes = b"") -> None:
         self._reader = reader
         self._buffer = bytearray(initial_bytes)
+        # Parallel to ``_buffer``: 1 if that byte is still from ``initial_bytes``.
+        self._from_prefix = bytearray(b"\x01" * len(initial_bytes))
+        self._recent_from_prefix = bytearray()
+        self._line_live = 0
         self._at_query_echo = b""
+
+    def begin_line(self) -> None:
+        """Start a response whose prefix-vs-socket origin is still unknown."""
+        self._line_live = 0
+
+    def line_from_prefix_only(self) -> bool:
+        """True when this line has not consumed a byte from the live socket.
+
+        Lookahead pushed back with ``unread`` does not count. An accept-time
+        AT identity line therefore stays prefix-only, while a later reply does
+        not.
+        """
+
+        return self._line_live == 0
 
     def unread(self, data: bytes) -> None:
         """Return bounded lookahead to the SAME reader at a protocol boundary."""
+        count = len(data)
+        if count <= 0:
+            return
+        if count <= len(self._recent_from_prefix):
+            origins = self._recent_from_prefix[-count:]
+            del self._recent_from_prefix[-count:]
+        else:
+            origins = b"\x00" * count
+        self._line_live -= origins.count(0)
+        if self._line_live < 0:
+            self._line_live = 0
         self._buffer[:0] = data
+        self._from_prefix[:0] = origins
+
+    def _remember(self, origins: bytes) -> None:
+        if not origins:
+            return
+        self._line_live += origins.count(0)
+        self._recent_from_prefix += origins
+        if len(self._recent_from_prefix) > 8192:
+            del self._recent_from_prefix[:-4096]
+
+    def _take(self, size: int) -> bytes:
+        data = bytes(self._buffer[:size])
+        origins = bytes(self._from_prefix[:size])
+        del self._buffer[:size]
+        del self._from_prefix[:size]
+        self._remember(origins)
+        return data
 
     async def readexactly(self, size: int) -> bytes:
         if size <= 0:
             return b""
         if len(self._buffer) >= size:
-            data = bytes(self._buffer[:size])
-            del self._buffer[:size]
-            return data
+            return self._take(size)
 
-        data = bytes(self._buffer)
-        self._buffer.clear()
+        data = self._take(len(self._buffer))
         if len(data) == size:
             return data
-        data += await self._reader.readexactly(size - len(data))
-        return data
+        rest = await self._reader.readexactly(size - len(data))
+        self._remember(b"\x00" * len(rest))
+        return data + rest
 
     async def readuntil(self, separator: bytes = b"\n") -> bytes:
         index = self._buffer.find(separator)
         if index >= 0:
-            end = index + len(separator)
-            data = bytes(self._buffer[:end])
-            del self._buffer[:end]
-            return data
+            return self._take(index + len(separator))
 
-        data = bytes(self._buffer)
-        self._buffer.clear()
-        return data + await self._reader.readuntil(separator)
+        data = self._take(len(self._buffer))
+        rest = await self._reader.readuntil(separator)
+        self._remember(b"\x00" * len(rest))
+        return data + rest
 
     async def read_framed_prefix(self, first: bytes) -> bytes:
         """Read a bounded EyeBond/AT prefix at an established frame boundary.
@@ -549,7 +591,7 @@ class _PrefixedAsyncReader:
                 frame_start = len(data) - HEADER_SIZE
                 candidate = bytes(data[frame_start:])
                 if _looks_like_eybond_frame_start(candidate):
-                    self._buffer[:0] = candidate
+                    self.unread(candidate)
                     return bytes(data[:frame_start])
 
             if byte == b"\n":

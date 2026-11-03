@@ -404,6 +404,19 @@ the GitHub release body should be rendered from the matching version section her
   still closes the session. The discard logs `Discarded illegal EyeBond
   header` with the dropped hex.
 
+- Extra sockets for the same strong collector PN are aborted with TCP RST.
+  A socket is not reset before its PN is known, and a shared IP is not
+  ownership. A quiet same-PN redial is not reset while the old socket has
+  had no exchange since the new one was accepted; both stay through a short
+  grace, then the newcomer replaces the old socket when the old exchange
+  predates the new accept, and after grace also when the old socket has no
+  exchange and is not a live routed session. A live routed session with no
+  exchange stays. Quiet grace still keeps both until it ends. A live routed
+  AT session is kept when neither socket has an exchange, and a completed
+  AT reply counts as that exchange. The DTUPN line that first records the
+  session PN is not an exchange, including when that line is split across
+  reads.
+
 - PI30 periodically rereads priorities, charging thresholds/currents and flags
   changed through the vendor app or inverter panel (#62). `QPIRI`/`QFLAG` run
   after telemetry, at most one extra request per poll and no more often than

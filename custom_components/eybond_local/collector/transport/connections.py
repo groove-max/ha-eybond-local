@@ -95,8 +95,10 @@ class _CollectorConnection:
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
         self._last_heartbeat_monotonic: float | None = None
         self._last_liveness_monotonic: float | None = None
+        self.last_framed_exchange_monotonic: float | None = None
         self._session_id = ""
         self._session_identity_callback: Callable[[str, str, str], None] | None = None
+        self._session_exchange_callback: Callable[[str], None] | None = None
         self._run_epoch = 0
         self._auxiliary_session = AuxiliaryReadSession()
         self._diagnostic_modbus = DiagnosticModbusSession()
@@ -360,6 +362,7 @@ class _CollectorConnection:
         initial_liveness_monotonic: float | None = None,
         session_id: str = "",
         session_identity_callback: Callable[[str, str, str], None] | None = None,
+        session_exchange_callback: Callable[[str], None] | None = None,
         session_closed_callback: Callable[[str, object], None] | None = None,
         disconnect_callback: Callable[[object], None] | None = None,
     ) -> None:
@@ -389,12 +392,14 @@ class _CollectorConnection:
         # after the runtime's request table is created. Never inherit the old
         # connection's timestamp or replace the supplied observation time by now.
         self._last_liveness_monotonic = initial_liveness_monotonic
+        self.last_framed_exchange_monotonic = None
         self._auxiliary_session = AuxiliaryReadSession()
         self._diagnostic_modbus = DiagnosticModbusSession()
         self._reader = reader
         self._writer = writer
         self._session_id = str(session_id or "").strip()
         self._session_identity_callback = session_identity_callback
+        self._session_exchange_callback = session_exchange_callback
         self._connected.set()
 
         logger.info("Collector connected from %s:%s", self._collector.remote_ip, self._collector.remote_port)
@@ -756,6 +761,10 @@ class _CollectorConnection:
                 # TID. It remains a heartbeat, never an FC2/FC3/FC4 reply. Do not
                 # compare devcode/address: firmware legitimately rewrites those.
                 if correlated:
+                    self.last_framed_exchange_monotonic = observed_at
+                    exchange_callback = self._session_exchange_callback
+                    if exchange_callback is not None and self._session_id:
+                        exchange_callback(self._session_id)
                     future.set_result((header, payload))
                     continue
 
@@ -826,8 +835,10 @@ class _CollectorConnection:
         self._connected.clear()
         self._last_heartbeat_monotonic = None
         self._last_liveness_monotonic = None
+        self.last_framed_exchange_monotonic = None
         self._session_id = ""
         self._session_identity_callback = None
+        self._session_exchange_callback = None
 
         # Request ownership ends synchronously with this physical session.
         # After the first await a successor may already own these shared fields.
@@ -893,8 +904,12 @@ class _CollectorAtConnection:
         self._pending_framed_parameter: dict[int, int] = {}
         self._tid = TIDCounter()
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
+        self.last_framed_exchange_monotonic: float | None = None
+        # Set once the read loop has applied the DTUPN line that records the PN.
+        self._at_dtupn_identity_recorded = False
         self._session_id = ""
         self._session_identity_callback: Callable[[str, str, str], None] | None = None
+        self._session_exchange_callback: Callable[[str], None] | None = None
         self._raw_passthrough_bootstrap = str(raw_passthrough_bootstrap or "").strip().lower()
         self._raw_passthrough_frame_format = (
             str(raw_passthrough_frame_format or "").strip().lower()
@@ -1344,6 +1359,7 @@ class _CollectorAtConnection:
         initial_bytes: bytes = b"",
         session_id: str = "",
         session_identity_callback: Callable[[str, str, str], None] | None = None,
+        session_exchange_callback: Callable[[str], None] | None = None,
         session_closed_callback: Callable[[str, object], None] | None = None,
         disconnect_callback: Callable[[object], None] | None = None,
     ) -> None:
@@ -1370,6 +1386,9 @@ class _CollectorAtConnection:
         self._writer = writer
         self._session_id = str(session_id or "").strip()
         self._session_identity_callback = session_identity_callback
+        self._session_exchange_callback = session_exchange_callback
+        self.last_framed_exchange_monotonic = None
+        self._at_dtupn_identity_recorded = False
         self._raw_passthrough_bootstrapped = False
         # Data-plane evidence belongs to this physical session only. A reconnect
         # must positively negotiate raw serial vs FC4 again.
@@ -1453,6 +1472,9 @@ class _CollectorAtConnection:
                     first = buffered_prefix[:1]
                     buffered_prefix = buffered_prefix[1:]
                 else:
+                    # A fresh line can still be the accept prefix. Bytes carried
+                    # in ``initial_bytes`` are identification, not a later reply.
+                    reader.begin_line()
                     first = await read(reader.readexactly(1))
 
                 auxiliary.at_boundary = False
@@ -1461,7 +1483,10 @@ class _CollectorAtConnection:
                 if not buffered_prefix:
                     status = await read(reader.read_at_query_status(first))
                     if status is not None:
-                        self._handle_at_response_line(status)
+                        self._handle_at_response_line(
+                            status,
+                            record_exchange=not reader.line_from_prefix_only(),
+                        )
                         continue
                 if not buffered_prefix and await diagnostic.consume(reader, first, auxiliary):
                     continue
@@ -1477,7 +1502,10 @@ class _CollectorAtConnection:
                     )
                     if prefix == b"AT+":
                         line = prefix + await read(reader.read_at_response(prefix=prefix))
-                        self._handle_at_response_line(line)
+                        self._handle_at_response_line(
+                            line,
+                            record_exchange=not reader.line_from_prefix_only(),
+                        )
                         continue
                     buffered_prefix = prefix + buffered_prefix
 
@@ -1622,6 +1650,10 @@ class _CollectorAtConnection:
                             and (expected_parameter is None or len(payload) < 2
                                  or payload[1] == expected_parameter)
                         ):
+                            self.last_framed_exchange_monotonic = monotonic()
+                            exchange_callback = self._session_exchange_callback
+                            if exchange_callback is not None and self._session_id:
+                                exchange_callback(self._session_id)
                             future.set_result((header, payload))
                             continue
                     if header.fcode == FC_QUERY_COLLECTOR:
@@ -1642,7 +1674,10 @@ class _CollectorAtConnection:
                     continue
 
                 line = prefix + await read(reader.readuntil(b"\n"))
-                self._handle_at_response_line(line)
+                self._handle_at_response_line(
+                    line,
+                    record_exchange=not reader.line_from_prefix_only(),
+                )
         except BinaryFramingError as exc:
             diagnostic.close(str(exc))
             runtime_modbus.close(str(exc))
@@ -1712,7 +1747,12 @@ class _CollectorAtConnection:
             line,
         )
 
-    def _handle_at_response_line(self, line: bytes) -> None:
+    def _handle_at_response_line(
+        self,
+        line: bytes,
+        *,
+        record_exchange: bool = True,
+    ) -> None:
         try:
             response = parse_at_response(line)
         except CollectorAtQueryStatus as exc:
@@ -1731,10 +1771,17 @@ class _CollectorAtConnection:
             return
         future = self._pending_response
         if future is not None and not future.done() and response.command == self._pending_at_command:
+            if record_exchange:
+                self._record_session_exchange()
             future.set_result(response)
             return
 
-        self._apply_response_metadata(response)
+        first_session_pn = self._apply_response_metadata(response)
+        # The DTUPN line that first records this session PN is identification,
+        # including when that line is split across reads. A later unsolicited
+        # line is still an exchange. Prefix-only suppression stays as well.
+        if record_exchange and not first_session_pn:
+            self._record_session_exchange()
         logger.debug(
             "Unsolicited collector AT response remote=%s command=%s value=%s",
             self._collector.remote_ip,
@@ -1742,13 +1789,28 @@ class _CollectorAtConnection:
             response.value,
         )
 
-    def _apply_response_metadata(self, response: CollectorAtResponse) -> None:
+    def _record_session_exchange(self) -> None:
+        self.last_framed_exchange_monotonic = monotonic()
+        exchange_callback = self._session_exchange_callback
+        if exchange_callback is not None and self._session_id:
+            exchange_callback(self._session_id)
+
+    def _apply_response_metadata(self, response: CollectorAtResponse) -> bool:
+        """Apply unsolicited AT metadata.
+
+        Return True when this line is the one that first records the session
+        PN from AT+DTUPN. That recording is not a storm exchange.
+        """
+
         if response.command == "DTUPN" and response.value:
+            first_identity = not self._at_dtupn_identity_recorded
             self._collector.collector_pn = reconcile_pn(
                 self._collector.collector_pn,
                 response.value,
             )
             self._record_session_identity(response.value, "at_dtupn")
+            self._at_dtupn_identity_recorded = True
+            return first_identity
         elif response.command == "FWVER" and response.value:
             self._collector.smartess_collector_version = response.value
         elif response.command == "CLDSRVHOST1" and response.value:
@@ -1757,6 +1819,7 @@ class _CollectorAtConnection:
                 self._collector,
                 collector_cloud_family_observation_from_endpoint(response.value),
             )
+        return False
 
     def _record_session_identity(self, collector_pn: str, source: str) -> None:
         callback = self._session_identity_callback
@@ -1793,6 +1856,8 @@ class _CollectorAtConnection:
         self._connected.clear()
         self._session_id = ""
         self._session_identity_callback = None
+        self._session_exchange_callback = None
+        self.last_framed_exchange_monotonic = None
 
         # Do not let old wait_closed()/reader cleanup cancel a newer session.
         future = self._pending_response
