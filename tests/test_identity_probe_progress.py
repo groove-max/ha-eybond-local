@@ -72,17 +72,27 @@ class IdentityProbeProgressTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_silent_inventory_excludes_eof_before_watcher_cleanup(self):
         listener, pending, writer = self.setup_probe()
+        self.assertEqual(listener.closed_collector_session_ids(), frozenset())
         self.assertEqual(len(listener.silent_pending_collector_sessions()), 1)
         pending.reader.feed_eof()
         self.assertEqual(listener.silent_pending_collector_sessions(), ())
         self.assertFalse(writer.closed)
         self.assertIn(pending.session_id, listener._pending_sockets)
+        self.assertEqual(listener.closed_collector_session_ids(), frozenset({pending.session_id}))
 
     async def test_silent_inventory_excludes_locally_closing_writer(self):
         listener, pending, writer = self.setup_probe()
         writer.close()
         self.assertEqual(listener.silent_pending_collector_sessions(), ())
         self.assertIn(pending.session_id, listener._pending_sockets)
+        self.assertEqual(listener.closed_collector_session_ids(), frozenset({pending.session_id}))
+
+    async def test_closed_view_retains_terminal_ids_but_does_not_infer_disappearance(self):
+        listener, pending, _ = self.setup_probe()
+        listener._pending_sockets.clear()
+        self.assertEqual(listener.closed_collector_session_ids(), frozenset())
+        listener._mark_session_state(pending.session_id, "parked_peer_closed")
+        self.assertEqual(listener.closed_collector_session_ids(), frozenset({pending.session_id}))
 
     async def exchange(self, listener, pending, protocol="at_text", **kwargs):
         request = build_identity_probe_request(protocol)

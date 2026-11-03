@@ -122,6 +122,22 @@ class SilentSessionIdentityProbeChannel:
             logger.debug("Silent session snapshot failed", exc_info=True)
             return frozenset()
 
+    def snapshot_closed_session_ids(self) -> frozenset[str]:
+        """Positively closed socket ids; unavailable evidence means no closure.
+
+        In particular, a silent socket gaining an identity or an unavailable
+        diagnostics view is NOT evidence that the old connection closed.
+        """
+
+        view = getattr(self._listener, "closed_collector_session_ids", None)
+        if not callable(view):
+            return frozenset()
+        try:
+            return frozenset(view())
+        except Exception:  # pragma: no cover - diagnostics must fail closed
+            logger.debug("Closed session snapshot failed", exc_info=True)
+            return frozenset()
+
     def snapshot_session_observations(self) -> tuple[SessionObservation, ...]:
         """Every live session on this listener, by session id, as typed identity
         observations -- the UNION of the two public views: PN-less pending

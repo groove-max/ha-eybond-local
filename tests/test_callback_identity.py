@@ -865,14 +865,15 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CallbackTriggerSequenceSemanticsTests(unittest.IsolatedAsyncioTestCase):
-    """One logical callback-trigger SEQUENCE per attempt -- not one datagram.
+    """One initial callback-trigger SEQUENCE -- not one datagram.
 
     The wire contract is three compatible ``set>server`` payload variants sent by
     one logical send (collectors differ in which they accept). That is deliberate
     and undocumented-elsewhere, so the attempt contract counts the SEQUENCE the
-    facade performs, never the datagrams underneath it. What must not happen is a
-    second sequence: detector fan-out, a broadcast scan, or a continuous
-    announcer.
+    facade performs, never the datagrams underneath it. Additional addressed
+    sequences require baseline-closure evidence and exact accounting (covered
+    in test_callback_identity_retrigger); detector fan-out, a broadcast scan or
+    a continuous announcer must never run inside the transaction.
     """
 
     async def test_transaction_invokes_the_trigger_facade_exactly_once(self) -> None:
@@ -917,7 +918,7 @@ class CallbackTriggerSequenceSemanticsTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(b"set>server", message if isinstance(message, bytes) else message.encode())
 
     async def test_no_fan_out_scan_or_continuous_announcer(self) -> None:
-        # A second sequence in any shape is what made attempts unattributable.
+        # Uncontrolled sequences make attempts unattributable.
         import custom_components.eybond_local.collector.discovery as discovery
 
         def _boom(name):
