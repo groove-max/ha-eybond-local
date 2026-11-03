@@ -835,16 +835,19 @@ class _SharedEybondListener:
         the same NAT peer IP.
         """
 
+        if not self._session_inventory:
+            return ()
+        pending_session_ids = {
+            str(pending.session_id or "").strip()
+            for pending in self._pending_sockets.values()
+        }
         sessions: list[dict[str, object]] = []
         for entry in self._session_inventory.values():
             collector_pn = str(entry.collector_pn or "").strip()
             remote_ip = str(entry.remote_ip or "").strip()
             session_id = str(entry.session_id or "").strip()
             has_live_backing = bool(session_id) and (
-                any(
-                    str(pending.session_id or "").strip() == session_id
-                    for pending in self._pending_sockets.values()
-                )
+                session_id in pending_session_ids
                 or session_id in self._session_payload_connections
                 or session_id in self._session_at_connections
             )

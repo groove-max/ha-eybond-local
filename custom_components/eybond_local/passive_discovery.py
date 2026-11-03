@@ -395,14 +395,18 @@ class PassiveCallbackDiscovery:
             if (key := _session_inventory_key(session))
         }
 
-    def _capture_active_probe_sessions(self, _observed: object) -> None:
+    def _capture_active_probe_sessions(self, observed_per_socket: object) -> None:
         """Maintain exact-socket suppression from the raw listener inventory."""
 
         # Never prune exact socket markers through the registry's coalesced view:
         # when two same-PN sockets overlap, the winning projection may change even
         # though the retired physical socket is still open. The raw per-socket
         # listener inventory is the lifecycle authority for these markers.
-        current = self._observed_session_keys()
+        current = {
+            key
+            for candidate in tuple(observed_per_socket or ())
+            if (key := _session_inventory_key(candidate.raw))
+        }
         if self._active_probe_scopes:
             for baseline in self._active_probe_scopes.values():
                 self._probe_suppressed_sessions.update(current - baseline)
@@ -632,8 +636,11 @@ class PassiveCallbackDiscovery:
         # short/full PN duplicates, and marks sessions owned by a config entry.
         observed_per_socket = self._registry.observed_sessions_per_socket()
         await self._async_abort_stale_weak_discovery_flows(observed_per_socket)
-        observed = self._registry.observed_sessions()
-        self._capture_active_probe_sessions(observed)
+        # Weak-flow cleanup can await HA flow aborts, allowing new sockets to
+        # arrive. Read a fresh inventory after that await, then derive both
+        # projections from one snapshot without losing exact-socket markers.
+        current_per_socket, observed = self._registry.observed_session_views()
+        self._capture_active_probe_sessions(current_per_socket)
         self._prune_notified_for_observed_sessions(observed)
 
         # 1) Repair/upgrade existing entries from their currently-live session.

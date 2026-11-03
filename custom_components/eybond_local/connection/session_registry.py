@@ -276,6 +276,18 @@ class CallbackSessionRegistry:
 
         return tuple(self._normalized_sessions())
 
+    def observed_session_views(
+        self,
+    ) -> tuple[tuple[CallbackSession, ...], tuple[CallbackSession, ...]]:
+        """Return per-socket and coalesced views of one inventory snapshot.
+
+        Callers that need both projections can avoid reading and normalizing
+        the shared listeners twice. Both views retain identical owner claims.
+        """
+
+        per_socket = tuple(self._normalized_sessions())
+        return per_socket, tuple(self._coalesce(per_socket))
+
     def _attach_owner(self, session: CallbackSession) -> CallbackSession:
         owner = self._owner_for_session(session)
         if not owner:
