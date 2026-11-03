@@ -248,6 +248,17 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Anenji ANJ-4.2KW-24V-WIFI gets a catalog model record for layout 11 / model
+  0x7801 at 4200 W, firmware 7801_A6250708v1, backed by a live read-only
+  identity and telemetry capture and by the unit's printed nameplate: the
+  nameplate states 4200 VA/4200 W, 24 VDC input, 230 VAC output at 18.3 A and a
+  28 A AC charger, and its serial matches the register block at 186-197 (value
+  withheld). Telemetry matches voltage times current. Buzzer mode, LCD backlight
+  and LCD auto-return were written, read back and restored through Home
+  Assistant; controls stay partial because the battery and current setpoints are
+  not write-validated, and power-saving mode (register 307) remains untested on
+  this unit.
+
 - MUST PV3900 (retail PV39-8048 TLV) gets its own catalog entry and reads the
   same optional BMS block as PV3300 (registers 109-113: state of charge, BMS
   voltage, signed current and temperature), confirmed against the BMS app and
