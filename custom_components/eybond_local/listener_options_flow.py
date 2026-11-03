@@ -8,6 +8,8 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlowResult, OptionsFlow
 from homeassistant.helpers.selector import BooleanSelector
 
+from .const import CONF_AUTOMATIC_PASSIVE_DISCOVERY
+
 CONF_CONFIRM_REDISCOVER_DEVICES = "confirm_rediscover_devices"
 
 
@@ -32,7 +34,34 @@ class ListenerOptionsFlow(OptionsFlow):
 
         return self.async_show_menu(
             step_id="listener",
-            menu_options=["rediscover_devices"],
+            menu_options=["automatic_discovery", "rediscover_devices"],
+        )
+
+    async def async_step_automatic_discovery(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Configure background discovery without disrupting shared sessions."""
+
+        if user_input is not None:
+            options = dict(self._config_entry.options)
+            options[CONF_AUTOMATIC_PASSIVE_DISCOVERY] = bool(
+                user_input[CONF_AUTOMATIC_PASSIVE_DISCOVERY]
+            )
+            return self.async_create_entry(data=options)
+
+        return self.async_show_form(
+            step_id="automatic_discovery",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_AUTOMATIC_PASSIVE_DISCOVERY,
+                        default=self._config_entry.options.get(
+                            CONF_AUTOMATIC_PASSIVE_DISCOVERY, True
+                        ),
+                    ): BooleanSelector(),
+                }
+            ),
         )
 
     async def async_step_rediscover_devices(

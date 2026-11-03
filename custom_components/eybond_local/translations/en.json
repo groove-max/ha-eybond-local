@@ -407,9 +407,17 @@
     "step": {
       "listener": {
         "title": "Background discovery",
-        "description": "Shows connected collectors that have not been added yet. Remove this entry to disable background discovery.",
+        "description": "Configure automatic discovery of connected collectors. The shared listener remains available for existing devices and manual scans.",
         "menu_options": {
+          "automatic_discovery": "Automatic discovery settings",
           "rediscover_devices": "Check connected collectors again"
+        }
+      },
+      "automatic_discovery": {
+        "title": "Automatic discovery settings",
+        "description": "Turn off periodic background discovery without affecting existing connections or manual scans.",
+        "data": {
+          "automatic_passive_discovery": "Enable automatic background discovery"
         }
       },
       "rediscover_devices": {

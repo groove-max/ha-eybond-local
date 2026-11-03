@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+import sys
 import types
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from custom_components.eybond_local.const import (
     DOMAIN,
@@ -1533,6 +1539,62 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entry.data["collector_pn"], "V001020SYN6234")
         self.assertEqual(entry.data["connection_mode"], "known_ip")
         self.assertEqual(entry.unique_id, "collector:V001020SYN6234")
+
+    async def test_disabled_automatic_discovery_skips_periodic_inventory_only(self) -> None:
+        entry = types.SimpleNamespace(
+            data={"entry_role": "listener"},
+            options={"automatic_passive_discovery": False},
+        )
+        hass = _FakeHass(entries=[entry])
+        discovery = PassiveCallbackDiscovery(hass)
+        listener = _FakeListener(
+            [
+                {
+                    "session_id": "live-collector",
+                    "peer_ip": "192.0.2.15",
+                    "collector_pn": "V000405SYN94677058",
+                    "state": "routed_framed",
+                    "protocol_shape": "eybond_framed",
+                    "collector_identity_source": "fc2_parameter_2",
+                }
+            ]
+        )
+        discovery._listeners[18899] = listener
+        inventory_reads = Mock(wraps=listener.discovered_collector_sessions)
+        listener.discovered_collector_sessions = inventory_reads
+
+        await discovery._async_background_poll_once()
+        inventory_reads.assert_not_called()
+        self.assertEqual(hass.config_entries.flow.flows, [])
+
+        # The shared registry remains usable for interactive discovery.
+        self.assertEqual(len(discovery.snapshot_unclaimed_collector_sessions()), 1)
+
+        # An explicit user refresh still publishes a flow with auto discovery off.
+        await discovery.async_show_discovered_devices_again()
+        self.assertEqual(len(hass.config_entries.flow.flows), 1)
+
+        # Re-enabling is observed on the next polling cycle, without a restart.
+        hass.config_entries.flow.flows.clear()
+        entry.options = {"automatic_passive_discovery": True}
+        listener._sessions = (
+            {
+                **listener._sessions[0],
+                "session_id": "new-session",
+                "collector_pn": "V000405SYN94677059",
+            },
+        )
+        await discovery._async_background_poll_once()
+        self.assertEqual(len(hass.config_entries.flow.flows), 1)
+
+    async def test_automatic_discovery_defaults_to_enabled_for_old_entries(self) -> None:
+        entry = types.SimpleNamespace(data={"entry_role": "listener"}, options={})
+        hass = _FakeHass(entries=[entry])
+        discovery = PassiveCallbackDiscovery(hass)
+        self.assertTrue(discovery._automatic_discovery_enabled())
+
+        hass.config_entries._entries.clear()
+        self.assertTrue(discovery._automatic_discovery_enabled())
 
 
 if __name__ == "__main__":

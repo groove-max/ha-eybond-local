@@ -13,6 +13,7 @@ from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.eybond_local.const import (
+    CONF_AUTOMATIC_PASSIVE_DISCOVERY,
     CONF_ENTRY_ROLE,
     DOMAIN,
     ENTRY_ROLE_LISTENER,
@@ -154,6 +155,38 @@ async def test_listener_entry_gets_its_own_options_flow(hass: HomeAssistant) -> 
 
     assert result["type"] in (FlowResultType.FORM, FlowResultType.MENU)
     assert result["step_id"]
+
+
+async def test_listener_automatic_discovery_option_persists_in_real_ha(
+    hass: HomeAssistant,
+) -> None:
+    """The listener option flows through Home Assistant's options manager."""
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="EyeBond Local — Discovery",
+        unique_id=f"{DOMAIN}:listener",
+        version=3,
+        data={CONF_ENTRY_ROLE: ENTRY_ROLE_LISTENER},
+    )
+    entry.add_to_hass(hass)
+
+    menu = await hass.config_entries.options.async_init(entry.entry_id)
+    assert menu["step_id"] == "listener"
+    assert "automatic_discovery" in menu["menu_options"]
+
+    form = await hass.config_entries.options.async_configure(
+        menu["flow_id"], step_id="automatic_discovery"
+    )
+    assert form["type"] is FlowResultType.FORM
+    assert form["step_id"] == "automatic_discovery"
+
+    result = await hass.config_entries.options.async_configure(
+        menu["flow_id"],
+        user_input={CONF_AUTOMATIC_PASSIVE_DISCOVERY: False},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_AUTOMATIC_PASSIVE_DISCOVERY] is False
 
 
 async def test_options_flow_entry_is_not_loaded_requirement(
