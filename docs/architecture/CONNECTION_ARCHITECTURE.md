@@ -353,7 +353,14 @@ and it never writes or restores.
 - **Silent endpoint restore / auto-heal.** Under `external`, the integration must
   not write, restore, or auto-heal the endpoint. Only explicit user actions do.
 - **A continuous callback announcer loop** in the connect path. `callback_on_demand`
-  is one trigger per attempt.
+  runtime sends one trigger per connect attempt. The identity transaction may
+  repeat the same addressed trigger after positive closure evidence for a
+  pre-existing silent socket: at most two repeats, at least two seconds apart,
+  within the original 60-second session wait and the same causality lease.
+  Disappearance from a view is not closure evidence. Repeat accounting is exact;
+  it stops after any new candidate appears. No old socket is attributed, probed
+  or closed by this mechanism; only a fresh session and authoritative PN read can
+  establish identity. Inbound and explicit exact-socket continuations send no UDP.
 
 ## Migration
 

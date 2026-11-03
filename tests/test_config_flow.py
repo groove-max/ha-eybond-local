@@ -12286,7 +12286,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow._admission_callback_error, "callback_timeout")
         failed = await flow.async_step_verify_connection_failed()
         explanation = failed["description_placeholders"]["failure_explanation"]
-        self.assertIn("did not call back", explanation)
+        self.assertIn("No new collector connection arrived", explanation)
+        self.assertIn("already-open connection is not automatically attributed", explanation)
         self.assertNotIn("could not verify the collector connection", explanation)
 
     async def test_silent_addressed_callback_reuses_observed_wire_without_second_trigger(

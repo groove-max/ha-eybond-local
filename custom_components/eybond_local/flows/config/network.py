@@ -546,7 +546,7 @@ class ConfigNetworkFlowMixin:
             ),
             "callback_timeout": (
                 "common.dynamic.manual_probe_callback_timeout",
-                "The collector did not call back during this attempt.",
+                "No new collector connection arrived during this attempt. An already-open connection is not automatically attributed to this check.",
             ),
             "callback_identity_mismatch": (
                 "common.dynamic.manual_probe_callback_identity_mismatch",

@@ -108,6 +108,15 @@ class TransportModuleBoundaryTests(unittest.TestCase):
             node for node in _tree(_TRANSPORT / "listener.py").body
             if isinstance(node, ast.ClassDef) and node.name == "_SharedEybondListener"
         )
+        # New positive lifecycle view belongs only to the shared listener.
+        # Preserve the historical decomposition digest rather than relaxing it.
+        closure_view = ("FunctionDef", "closed_collector_session_ids")
+        self.assertEqual(definitions.count(closure_view), 1)
+        self.assertEqual(sum(
+            isinstance(node, ast.FunctionDef) and node.name == closure_view[1]
+            for node in listener_class.body
+        ), 1)
+        definitions.remove(closure_view)
         identity_reader = next(
             node for node in listener_class.body
             if isinstance(node, ast.AsyncFunctionDef) and node.name == "_read_identity_probe_response"

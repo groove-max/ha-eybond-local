@@ -28,8 +28,9 @@ The flow, in order:
 
 1. open ONE attributed attempt (per-attempt trigger accounting);
 2. snapshot the observed-session baseline;
-3. send exactly ONE UDP callback trigger (``callback_on_demand``) or ZERO
-   (``inbound`` -- Home Assistant never dials out);
+3. send ONE UDP callback trigger (``callback_on_demand``) or ZERO
+   (``inbound`` -- Home Assistant never dials out); an addressed trigger may be
+   repeated, bounded, after a baseline silent socket closes, under the SAME lease;
 4. wait, bounded, for a NEW session that is not in the baseline;
 5. transient-claim exactly that ``session_id``;
 6. resolve the live wire for that exact claimed session through the registry;
@@ -48,8 +49,10 @@ consulted -- the wire comes from what the socket actually did.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from ipaddress import IPv4Address
 import logging
 from typing import Any, Protocol
 import uuid
@@ -272,7 +275,7 @@ class CallbackIdentityRequest:
     server_ip: str
     tcp_port: int
     udp_port: int
-    # Where the single trigger goes. Required for callback_on_demand; unused (and
+    # Where every trigger goes. Required for callback_on_demand; unused (and
     # never dialed) for inbound. It is a TARGET, never identity evidence.
     target_ip: str = ""
     strategy: str = CONNECTION_STRATEGY_CALLBACK_ON_DEMAND
@@ -481,6 +484,7 @@ async def _async_wait_for_new_session(
     probe_channel: Any = None,
     pending_baseline: frozenset[str] = frozenset(),
     bootstrap: OnboardingWireProbeIntent | ObservedSessionWireProbeIntent | None = None,
+    retrigger: Callable[[], Awaitable[str]] | None = None,
 ) -> tuple[dict[str, Any] | None, bool, str, str]:
     """Wait, bounded, for the ONE session this attempt may own.
 
@@ -498,6 +502,11 @@ async def _async_wait_for_new_session(
     bound ``bootstrap.session_id``. If that socket is gone the typed
     ``IDENTITY_SILENT_SESSION_STALE`` failure is returned immediately; the
     intent is never rebound to another session.
+
+    A triggering attempt may repeat its addressed request on positive closure
+    evidence for a silent baseline socket. The deadline and original baseline
+    never reset. A closure is only a scheduling signal, not collector identity;
+    stop repeating once any new candidate has appeared, even if it later closes.
     """
 
     loop = asyncio.get_running_loop()
@@ -505,7 +514,13 @@ async def _async_wait_for_new_session(
     bound_session_id = str(getattr(bootstrap, "session_id", "") or "")
     offer_session_id = ""
     silent_seen = False
+    seen_silent_ids: set[str] = set()
+    silent_since: float | None = None
     probed = False
+    consumed_closures: set[str] = set()
+    retry_count = 0
+    last_trigger_time = loop.time()
+    policy = DEFAULT_ONBOARDING_TIMEOUT_POLICY
     while True:
         views = _session_views(hass)
         if bootstrap is not None:
@@ -520,6 +535,7 @@ async def _async_wait_for_new_session(
                 for session in views
                 if session["session_id"]
                 and session["session_id"] not in baseline
+                and session["session_id"] not in pending_baseline
                 and session["session_id"] != old_session_id
                 and _is_live(session)
             ]
@@ -561,15 +577,58 @@ async def _async_wait_for_new_session(
             )
             if new_silent:
                 silent_seen = True
-                # Exactly ONE causally-new silent socket is an unambiguous
-                # continuation target for a LATER explicit user selection;
-                # two or more stay ambiguous and are never offered or probed.
-                offer_session_id = (
-                    next(iter(new_silent)) if len(new_silent) == 1 else ""
-                )
+                seen_silent_ids.update(new_silent)
+            # A closed socket must not leave behind an actionable offer. Nor
+            # may two candidates become "unique" merely because one closes.
+            # Count every silent candidate seen in this attempt, not just the
+            # currently-live projection. Baseline sockets remain excluded.
+            offer_session_id = (
+                next(iter(new_silent))
+                if len(seen_silent_ids) == 1 and len(new_silent) == 1 else ""
+            )
+            if offer_session_id:
+                if silent_since is None:
+                    silent_since = loop.time()
+                if loop.time() - silent_since >= (
+                    DEFAULT_ONBOARDING_TIMEOUT_POLICY.callback_identity_silent_settle
+                ):
+                    # Return promptly so the user can query this exact live
+                    # socket before its firmware closes the silent connection.
+                    # Readable identity above always takes precedence.
+                    return None, silent_seen, offer_session_id, ""
+            else:
+                silent_since = None
 
-        if loop.time() >= deadline:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
             return None, silent_seen, offer_session_id, ""
+        if (
+            retrigger is not None and bootstrap is None and not silent_seen
+            and probe_channel is not None and pending_baseline
+            and retry_count < policy.callback_identity_retrigger_limit
+            and loop.time() - last_trigger_time >= policy.callback_identity_retrigger_spacing
+        ):
+            closed = (
+                probe_channel.snapshot_closed_session_ids() & pending_baseline
+            ) - consumed_closures
+            if closed:
+                # A scheduling signal only. We never attribute, probe or close
+                # any baseline socket, including other collectors on the relay.
+                consumed_closures.update(closed)
+                retry_count += 1
+                logger.debug(
+                    "Callback identity retrigger=%d closed_baseline=%d remaining=%.1fs",
+                    retry_count, len(closed), remaining,
+                )
+                try:
+                    failure = await asyncio.wait_for(retrigger(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    failure = IDENTITY_TRIGGER_NOT_SENT
+                if failure:
+                    return None, silent_seen, "", failure
+                last_trigger_time = loop.time()
+                # Inspect any answer before considering another closure/retry.
+                continue
         await asyncio.sleep(_SESSION_POLL_INTERVAL)
 
 
@@ -585,6 +644,20 @@ def _prefer_readable(sessions: list[dict[str, Any]]) -> dict[str, Any]:
         if _live_wire(session):
             return session
     return sessions[0]
+
+
+def _is_addressed_callback_target(target: str) -> bool:
+    """Conservatively exclude broadcast placeholders and unresolved hosts.
+
+    This restricts extra sends, never asserts identity from a network address.
+    Like discovery, treat *.255 as a broadcast placeholder without a subnet mask.
+    """
+
+    try:
+        address = IPv4Address(target.strip())
+    except ValueError:
+        return False
+    return not (address.is_unspecified or address.is_multicast or int(address) & 0xFF == 0xFF)
 
 
 async def async_run_callback_identity_transaction(
@@ -702,32 +775,49 @@ async def _async_run_attempt(
             session["session_id"] for session in _session_views(hass) if session["session_id"]
         )
         pending_baseline = probe_channel.snapshot_silent_session_ids()
+        session_wait_timeout = (
+            request.session_wait_timeout
+            or DEFAULT_ONBOARDING_TIMEOUT_POLICY.callback_identity_session_wait
+        )
         logger.debug(
             "Callback identity started strategy=%s port=%d baseline=%d "
-            "silent_baseline=%d bootstrap=%s",
+            "silent_baseline=%d bootstrap=%s wait=%.1fs",
             strategy,
             request.tcp_port,
             len(baseline),
             len(pending_baseline),
             bootstrap.protocol if bootstrap is not None else "none",
+            session_wait_timeout,
         )
 
-        # --- 3. exactly one trigger, or none ---------------------------------
+        # --- 3. one initial trigger, or none ---------------------------------
         # The bootstrap CONTINUATION owns no new causal window: the silent socket
         # was already attributed by the previous attempt's trigger, so this
         # attempt sends ZERO datagrams and only runs its one read-only query.
-        expected_sends = (
-            1
-            if strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND and bootstrap is None
-            else 0
-        )
-        if expected_sends:
+        expected_sends = 0
+        trigger_sender = sender or _ProductionTriggerSender()
+
+        async def send_trigger() -> str:
+            nonlocal expected_sends
+            if attempt.foreign_sends:
+                return IDENTITY_TRIGGER_INTERFERENCE
+            if attempt.own_sends != expected_sends:
+                return IDENTITY_TRIGGER_NOT_SENT
+            expected_sends += 1
             try:
-                await (sender or _ProductionTriggerSender()).async_send(request)
+                await trigger_sender.async_send(request)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.info("Callback trigger could not be sent: %s", exc)
+            if attempt.own_sends != expected_sends:
+                return IDENTITY_TRIGGER_NOT_SENT
+            return ""
+
+        if strategy == CONNECTION_STRATEGY_CALLBACK_ON_DEMAND and bootstrap is None:
+            failure = await send_trigger()
+            if failure:
+                return CallbackIdentityOutcome(result=failure)
         if attempt.own_sends != expected_sends:
             # Honest and specific. inbound declares zero and must have sent zero; a
             # callback attempt that never got its datagram out is OUR failure, not
@@ -750,13 +840,14 @@ async def _async_run_attempt(
             hass,
             baseline=baseline,
             old_session_id=str(request.old_session_id or "").strip(),
-            timeout=(
-                request.session_wait_timeout
-                or DEFAULT_ONBOARDING_TIMEOUT_POLICY.callback_identity_session_wait
-            ),
+            timeout=session_wait_timeout,
             probe_channel=probe_channel,
             pending_baseline=pending_baseline,
             bootstrap=bootstrap,
+            retrigger=(
+                send_trigger if expected_sends and _is_addressed_callback_target(request.target_ip)
+                else None
+            ),
         )
         logger.debug(
             "Callback identity session wait selected=%s silent_seen=%s "
@@ -766,11 +857,19 @@ async def _async_run_attempt(
             bool(offer_session_id),
             wait_failure or "none",
         )
+        if attempt.own_sends != expected_sends:
+            # A silent offer also grants later exact-socket probe authority;
+            # require the same exact send count as the readable-session matcher.
+            return CallbackIdentityOutcome(result=IDENTITY_TRIGGER_NOT_SENT)
         offer = (
             SilentSessionBootstrapOffer(session_id=offer_session_id)
             if offer_session_id
             else None
         )
+        if offer is not None and attempt.foreign_sends:
+            # An offer grants the next attempt exact-socket probe authority;
+            # it needs the same trigger provenance check as a readable session.
+            return CallbackIdentityOutcome(result=IDENTITY_TRIGGER_INTERFERENCE)
         if session is None:
             if wait_failure:
                 return CallbackIdentityOutcome(
@@ -852,7 +951,7 @@ async def _async_run_attempt(
         # than a global generation delta: `fired` is what happened during OUR
         # window, so a concurrent flow's trigger shows up as interference instead
         # of silently confirming us.
-        match_baseline = baseline
+        match_baseline = baseline | pending_baseline
         if bootstrap is not None and bootstrap.session_id in match_baseline:
             # The user-bound silent socket legitimately pre-dates this retry:
             # the PREVIOUS attempt causally attributed it. Only that exact id
