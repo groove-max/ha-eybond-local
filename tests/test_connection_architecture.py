@@ -204,6 +204,30 @@ class ConnectionPolicyInvariantTests(unittest.TestCase):
 
 
 class CallbackSessionRegistryInvariantTests(unittest.TestCase):
+    def test_observed_session_views_share_one_inventory_read(self) -> None:
+        reads = 0
+        sessions = [
+            _session("s-short", "V00AAA1111", source="heartbeat"),
+            _session("s-full", "V00AAA1111111111"),
+        ]
+
+        def source():
+            nonlocal reads
+            reads += 1
+            return tuple(sessions)
+
+        registry = CallbackSessionRegistry(sessions_source=source)
+        registry.claim("entry-1", collector_pn="V00AAA1111111111")
+        reads = 0
+
+        per_socket, coalesced = registry.observed_session_views()
+
+        self.assertEqual(reads, 1)
+        self.assertEqual([row.session_id for row in per_socket], ["s-short", "s-full"])
+        self.assertEqual(len(coalesced), 1)
+        self.assertEqual(coalesced[0].collector_pn, "V00AAA1111111111")
+        self.assertEqual(coalesced[0].owner_entry_id, "entry-1")
+
     def test_owned_session_location_excludes_parked_peer_closed_socket(self) -> None:
         sessions = [
             _session(

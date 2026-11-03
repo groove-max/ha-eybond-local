@@ -87,6 +87,16 @@ class _FakeListener:
         return self._sessions
 
 
+class _CountingListener(_FakeListener):
+    def __init__(self, sessions) -> None:
+        super().__init__(sessions)
+        self.inventory_reads = 0
+
+    def discovered_collector_sessions(self):
+        self.inventory_reads += 1
+        return super().discovered_collector_sessions()
+
+
 _ACQUIRE = "custom_components.eybond_local.passive_discovery._acquire_shared_listener"
 _RELEASE = "custom_components.eybond_local.passive_discovery._release_shared_listener"
 
@@ -438,6 +448,31 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(release_started.is_set())
         self.assertEqual(discovery._listeners, {})
         await asyncio.wait_for(release_finished.wait(), timeout=0.2)
+
+    async def test_poll_reuses_per_socket_inventory_for_suppression(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        listener = _CountingListener(
+            [
+                {
+                    "session_id": "listener-18899-1",
+                    "peer_ip": "192.0.2.10",
+                    "collector_pn": "V000405SYN94677058",
+                    "state": "routed_framed",
+                    "protocol_shape": "eybond_framed",
+                    "collector_identity_source": "fc2_parameter_2",
+                }
+            ]
+        )
+        discovery._listeners[18899] = listener
+
+        await discovery._async_poll_once()
+
+        # The first read precedes potentially async flow cleanup; the second
+        # serves both coalesced publication and exact-socket suppression. The
+        # third refreshes unclaimed ownership after the publication pass.
+        self.assertEqual(listener.inventory_reads, 3)
+        self.assertEqual(len(hass.config_entries.flow.flows), 1)
 
     async def test_poll_creates_integration_discovery_flow_for_unclaimed_collector_pn(self) -> None:
         hass = _FakeHass()
