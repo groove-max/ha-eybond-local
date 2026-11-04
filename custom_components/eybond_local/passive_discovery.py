@@ -487,11 +487,13 @@ class PassiveCallbackDiscovery:
         the standard passive listeners AND any scoped ``ensure``-registered custom
         listeners are read; a physical session is deduped by
         ``(listener_port, session_id)`` so a listener visible from more than one
-        source is never counted twice.
+        source is never counted twice. Read each physical listener inventory
+        only once per port, even if the listener holds multiple leases.
         """
 
         sessions: list[dict[str, object]] = []
         seen: set[tuple[int, str]] = set()
+        scanned_listeners: set[tuple[int, int]] = set()
         listeners: list[tuple[str, int, Any]] = [
             (_LISTENER_HOST, port, listener)
             for port, listener in self._listeners.items()
@@ -501,6 +503,9 @@ class PassiveCallbackDiscovery:
             for host, port, listener in self._ensured_listeners.values()
         )
         for host, port, listener in listeners:
+            scan_key = (int(port), id(listener))
+            if scan_key in scanned_listeners:
+                continue
             inventory_provider = getattr(listener, "discovered_collector_sessions", None)
             if not callable(inventory_provider):
                 continue
@@ -508,6 +513,7 @@ class PassiveCallbackDiscovery:
                 observed = inventory_provider() or ()
             except Exception:
                 continue
+            scanned_listeners.add(scan_key)
             for session in observed:
                 if not isinstance(session, dict):
                     continue

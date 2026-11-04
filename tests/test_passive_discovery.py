@@ -152,7 +152,7 @@ class EnsureObservedListenerTests(unittest.IsolatedAsyncioTestCase):
             "peer_ip": "203.0.113.9",
             "state": "routed_framed",
         }
-        listener = _FakeListener((session,))
+        listener = _CountingListener((session,))
         discovery._listeners[40002] = listener
         with patch(_ACQUIRE, AsyncMock(return_value=listener)), patch(
             _RELEASE, AsyncMock()
@@ -162,6 +162,58 @@ class EnsureObservedListenerTests(unittest.IsolatedAsyncioTestCase):
                 s for s in discovery.iter_observed_sessions() if s["session_id"] == "dup"
             ]
             self.assertEqual(len(rows), 1)
+            self.assertEqual(listener.inventory_reads, 1)
+
+    async def test_same_listener_empty_inventory_is_read_once(self) -> None:
+        discovery = self._discovery()
+        listener = _CountingListener(())
+        discovery._listeners[40003] = listener
+        discovery._ensured_listeners["same-listener"] = ("127.0.0.1", 40003, listener)
+
+        self.assertEqual(discovery.iter_observed_sessions(), ())
+        self.assertEqual(listener.inventory_reads, 1)
+
+    async def test_distinct_listeners_same_port_are_both_read(self) -> None:
+        discovery = self._discovery()
+        first = _CountingListener(({"session_id": "first"},))
+        second = _CountingListener(({"session_id": "second"},))
+        discovery._listeners[40004] = first
+        discovery._ensured_listeners["another-listener"] = (
+            "127.0.0.1", 40004, second
+        )
+
+        rows = discovery.iter_observed_sessions()
+        self.assertEqual({row["session_id"] for row in rows}, {"first", "second"})
+        self.assertEqual((first.inventory_reads, second.inventory_reads), (1, 1))
+
+    async def test_same_listener_at_distinct_ports_keeps_both_routes(self) -> None:
+        discovery = self._discovery()
+        listener = _CountingListener(({"session_id": "shared"},))
+        discovery._listeners[40005] = listener
+        discovery._ensured_listeners["another-port"] = (
+            "127.0.0.1", 40006, listener
+        )
+
+        rows = discovery.iter_observed_sessions()
+        self.assertEqual({row["listener_port"] for row in rows}, {40005, 40006})
+        self.assertEqual(listener.inventory_reads, 2)
+
+    async def test_failed_inventory_read_can_retry_through_second_registration(self) -> None:
+        class _FlakyListener(_CountingListener):
+            def discovered_collector_sessions(self):
+                self.inventory_reads += 1
+                if self.inventory_reads == 1:
+                    raise RuntimeError("temporary inventory failure")
+                return self._sessions
+
+        discovery = self._discovery()
+        listener = _FlakyListener(({"session_id": "recovered"},))
+        discovery._listeners[40007] = listener
+        discovery._ensured_listeners["retry"] = ("127.0.0.1", 40007, listener)
+
+        rows = discovery.iter_observed_sessions()
+        self.assertEqual([row["session_id"] for row in rows], ["recovered"])
+        self.assertEqual(listener.inventory_reads, 2)
 
     async def test_two_tokens_same_port_are_refcounted(self) -> None:
         # Batch 8B.2A corrective: two concurrent ensures on ONE (host, port) each
@@ -174,7 +226,7 @@ class EnsureObservedListenerTests(unittest.IsolatedAsyncioTestCase):
             "peer_ip": "203.0.113.9",
             "state": "routed_framed",
         }
-        listener = _FakeListener((session,))
+        listener = _CountingListener((session,))
         released: list = []
         with patch(_ACQUIRE, AsyncMock(return_value=listener)), patch(
             _RELEASE, AsyncMock(side_effect=lambda l, **k: released.append(l))
@@ -193,6 +245,7 @@ class EnsureObservedListenerTests(unittest.IsolatedAsyncioTestCase):
                 sum(1 for s in discovery.iter_observed_sessions() if s["session_id"] == "sess"),
                 1,
             )
+            self.assertEqual(listener.inventory_reads, 1)
             # First release: the second token still holds it observed.
             await discovery.async_release_observed_listener(t1)
             self.assertTrue(_observed())
