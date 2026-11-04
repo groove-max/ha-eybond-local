@@ -7,6 +7,15 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+### Added
+
+- Identify intermediate integration builds independently of the release label.
+  GitHub source archives carry their commit automatically; raw copies also get
+  a deterministic source fingerprint. Configure, startup logs and Support
+  Archives show the identity captured at startup. Local edits change the source
+  ID without pretending the embedded commit proves an unmodified installation.
+  This does not change collector firmware labels or bypass the required HA restart.
+
 ### Changed
 
 - Repeat an addressed callback trigger after a pre-existing silent socket

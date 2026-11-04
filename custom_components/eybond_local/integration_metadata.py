@@ -58,9 +58,11 @@ def _configure_local_metadata_roots(hass: HomeAssistant) -> None:
 def _prime_metadata_caches(config_data_root: Path | None = None) -> None:
     """Warm metadata loaders so async startup paths do not hit disk directly."""
 
+    from .build_identity import build_label, build_runtime_values
     from .drivers.registry import prime_metadata_caches
     from .metadata.device_catalog_loader import refresh_force_unsupported_override
 
+    logger.info("EyeBond Local integration build: %s", build_label(build_runtime_values()))
     prime_metadata_caches()
     # Read the on-device force-unsupported sentinel here (executor) so the
     # detection path never stats it inside the event loop.

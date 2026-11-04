@@ -428,7 +428,7 @@
       },
       "init": {
         "title": "Параметры EyeBond Local",
-        "description": "Выберите, чем именно вы хотите управлять для этой записи.{bridge_note}",
+        "description": "Выберите, чем именно вы хотите управлять для этой записи.{bridge_note}\n\nСборка интеграции: `{integration_build}`",
         "menu_options": {
           "connection": "Подключение коллектора и облака",
           "collector_endpoint": "Адрес подключения к Home Assistant",

@@ -80,6 +80,35 @@ gh release create vX.Y.Z \
 
 Replace `X.Y.Z` with the same version used in the manifest and changelog.
 
+## Build identity in development and release archives
+
+`custom_components/eybond_local/BUILD_INFO.txt` is a committed template marked
+`export-subst` in `.gitattributes`. Archive a **commit or tag**, not a bare Git
+tree: Git expands the full SHA and commit date without a self-referential version
+commit or a bot modifying main after each push. GitHub source archives use
+`git archive`; HACS normally downloads and extracts that archive. Its file-by-file
+fallback can leave the template unexpanded. See [Git archive attributes](https://git-scm.com/docs/gitattributes#_creating_an_archive)
+and [GitHub archive guarantees](https://docs.github.com/en/repositories/working-with-files/using-files/downloading-source-code-archives).
+
+The integration also computes `sha256-source-v1` from sorted relative paths and
+bytes of `.py`, `.json`, `.yaml`, `.yml` files, including the manifest and profiles.
+Build metadata, bytecode and hidden/cache directories are excluded. No Git binary,
+network call or user-specific HA configuration is required. Fingerprinting runs
+in an executor and is retained for the process lifetime; restart after updates.
+Missing/invalid metadata is not guessed. Fingerprint read/size failures report
+unavailable diagnostics rather than preventing integration setup.
+
+The commit is a declaration, never a clean-tree guarantee. To compare a reported
+fingerprint, run `python3 tools/build_identity.py --path /path/to/eybond_local`
+against the same component tree. An archive and its source checkout have the
+same fingerprint; local source changes differ even if commit metadata remains.
+Version and fingerprint still identify raw-copy installations without a commit.
+The settings screen/log use short IDs; Support Archives retain the full hashes.
+
+Archive audits must expect the one substituted metadata file to differ from its
+Git blob; verify its SHA against the archived commit, not by accepting arbitrary
+differences. Do not carry an old deployment's BUILD_INFO file into a new build.
+
 ## Writing Good Release Notes
 
 - Keep release notes user-facing.
