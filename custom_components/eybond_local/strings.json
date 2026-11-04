@@ -428,7 +428,7 @@
       },
       "init": {
         "title": "EyeBond Local Options",
-        "description": "Choose what you want to manage for this entry.{bridge_note}",
+        "description": "Choose what you want to manage for this entry.{bridge_note}\n\nIntegration build: `{integration_build}`",
         "menu_options": {
           "connection": "Collector connection and cloud",
           "collector_endpoint": "Home Assistant connection address",

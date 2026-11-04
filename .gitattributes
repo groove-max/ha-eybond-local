@@ -1,0 +1,2 @@
+# Stamp archive downloads (including GitHub/HACS) without self-referential commits.
+custom_components/eybond_local/BUILD_INFO.txt export-subst

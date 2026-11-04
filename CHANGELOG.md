@@ -36,6 +36,15 @@ Support and validation remain specific to the collector, protocol and firmware.
 - A GitHub prerelease, including RC1, does not replace the stable release in the
   default HACS channel. The subsequent ordinary 0.3.0 release is a separate step.
 
+### Added
+
+- Identify intermediate integration builds independently of the release label.
+  GitHub source archives carry their commit automatically; raw copies also get
+  a deterministic source fingerprint. Configure, startup logs and Support
+  Archives show the identity captured at startup. Local edits change the source
+  ID without pretending the embedded commit proves an unmodified installation.
+  This does not change collector firmware labels or bypass the required HA restart.
+
 ### Changed
 
 - Repeat an addressed callback trigger after a pre-existing silent socket
@@ -56,7 +65,8 @@ Support and validation remain specific to the collector, protocol and firmware.
   preserve ambiguity across socket churn and require uncontaminated trigger
   provenance. Clarify that a timeout means no new connection was observed.
   Deterministic timing and real loopback TCP/UDP tests cover the repair path;
-  the affected WFBLE firmware still needs a user-side identity-query test.
+  subsequent closure-driven retry and the owner's confirmed onboarding result
+  are described above; long-term qualification remains separate.
 
 - Preserve partial ValueCloud Write Controls evidence when an HTTP request
   times out or fails (#46): retain the plan, previous captures and the uncertain

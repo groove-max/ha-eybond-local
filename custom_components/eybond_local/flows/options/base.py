@@ -7,6 +7,8 @@ from typing import Any
 from homeassistant.config_entries import ConfigFlowResult, OptionsFlow
 from homeassistant.helpers.selector import SelectSelector, TextSelector
 
+from ...build_identity import build_label, build_runtime_values
+
 from ...collector.capabilities import (
     CollectorCapabilityProfile,
     collector_capability_profile_from_runtime,
@@ -344,6 +346,7 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
+        integration_build = build_label(await self.hass.async_add_executor_job(build_runtime_values))
         capabilities = self._collector_capabilities()
         marker_present = bool(
             str(
@@ -363,7 +366,7 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
                     "strategy_transition_activation_retry",
                     "strategy_transition_cancel",
                 ],
-                description_placeholders={"bridge_note": ""},
+                description_placeholders={"bridge_note": "", "integration_build": integration_build},
             )
 
         # Capability-filtered BASE menu (a local bridge exposes no vendor-cloud
@@ -427,7 +430,7 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
         return self.async_show_menu(
             step_id="init",
             menu_options=menu_options,
-            description_placeholders={"bridge_note": bridge_note},
+            description_placeholders={"bridge_note": bridge_note, "integration_build": integration_build},
         )
 
     @_with_translation_bundle

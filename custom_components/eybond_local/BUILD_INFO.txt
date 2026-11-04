@@ -1,0 +1,4 @@
+build_metadata_format: 1
+metadata_origin: git-archive
+git_commit: $Format:%H$
+commit_date: $Format:%cI$
