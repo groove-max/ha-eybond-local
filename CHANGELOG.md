@@ -7,6 +7,35 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+## [0.3.0-rc.1]
+
+### Candidate scope and updating
+
+This section prepares a release candidate; it does not announce a published
+release. Publication follows candidate acceptance and an explicit release
+decision. This is the 0.3 line and **does not include Cloud Bridge 0.4**.
+
+The candidate collects the fixes since beta.5: collector identity and recovery,
+shared-listener lifecycle, routed/NAT setup, PI30 settings/flag compatibility,
+dynamic controls, polling load, Shadow Learning and support diagnostics.
+Support and validation remain specific to the collector, protocol and firmware.
+
+- Update the complete integration directory and fully restart HA. Keep existing
+  entries; deleting/re-adding is not an upgrade step. Preserve entity IDs used by
+  automations. Do not leave backup component copies under `custom_components`.
+- Existing learning protection and PI30 flag-case overrides must survive the
+  update. Updating does not authorize learning, inverter writes or cloud return.
+- Review the MUST energy/operating-days corrections and control permissions
+  described below when upgrading from older versions; historical statistics
+  are not rewritten automatically.
+- Some collectors still have unresolved local/cloud coexistence outages. This
+  candidate does not claim a universal firmware fix. Native PI30, DESSMonitor
+  and ValueCloud learning qualification must not be inferred from one successful
+  SmartESS run. An uncertain learning outcome may leave cloud access protected;
+  do not delete protection records or downgrade to bypass recovery.
+- A GitHub prerelease, including RC1, does not replace the stable release in the
+  default HACS channel. The subsequent ordinary 0.3.0 release is a separate step.
+
 ### Changed
 
 - Repeat an addressed callback trigger after a pre-existing silent socket
@@ -17,7 +46,8 @@ the GitHub release body should be rendered from the matching version section her
   Never adopt or probe an old socket, infer closure from missing diagnostics,
   repeat a broadcast or continue triggering after a new candidate appears.
   Real loopback TCP/UDP tests cover the previously failing sequence and an
-  unrelated same-address collector; physical-firmware validation is pending.
+  unrelated same-address collector. The #75 owner confirmed onboarding on
+  WFBLE firmware 8.50.12.3; this is not long-term or universal qualification.
 
 - Allow a full reconnect cycle during callback identity checks (#75): wait up
   to 60 seconds for a new socket, but offer the explicit read-only identity
