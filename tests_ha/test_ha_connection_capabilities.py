@@ -1,11 +1,35 @@
 """Connection setup stays reachable before inverter recognition (#49)."""
 
+import asyncio
 from dataclasses import replace
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState, OperationNotAllowed
 from homeassistant.data_entry_flow import FlowResultType
 
 from test_ha_config_flow import collector_entry
+
+
+async def _unload_settled_entry(hass, entry) -> None:
+    """Unload after a deferred capability reload has finished.
+
+    Setup schedules that reload with call_later(0). The timer can still be
+    pending after async_block_till_done(), and unload then raises because the
+    entry is already UNLOAD_IN_PROGRESS.
+    """
+
+    for _ in range(40):
+        await asyncio.sleep(0)
+        await hass.async_block_till_done()
+        if entry.state is not ConfigEntryState.LOADED:
+            continue
+        try:
+            await hass.config_entries.async_unload(entry.entry_id)
+        except OperationNotAllowed:
+            continue
+        await hass.async_block_till_done()
+        return
+    raise AssertionError(entry.state)
 
 
 @pytest.mark.parametrize("kind", ["unknown", "factory_eybond", "esp_eybond_bridge"])
@@ -75,4 +99,4 @@ async def test_connection_menu_does_not_confuse_unknown_with_local_only(
     finally:
         options.async_abort(flow_id)
         if loaded:
-            await hass.config_entries.async_unload(collector_entry.entry_id)
+            await _unload_settled_entry(hass, collector_entry)
