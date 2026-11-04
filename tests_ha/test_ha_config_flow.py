@@ -176,7 +176,7 @@ async def test_listener_automatic_discovery_option_persists_in_real_ha(
     assert "automatic_discovery" in menu["menu_options"]
 
     form = await hass.config_entries.options.async_configure(
-        menu["flow_id"], step_id="automatic_discovery"
+        menu["flow_id"], {"next_step_id": "automatic_discovery"}
     )
     assert form["type"] is FlowResultType.FORM
     assert form["step_id"] == "automatic_discovery"
