@@ -138,13 +138,60 @@ If you're a contributor working on a fix, please attach:
 
 ---
 
+## Pull Request Acceptance
+
+A PR is accepted for a concrete benefit to this project, not simply because it
+adds code or passes CI. Review applies to the exact revision proposed for merge.
+All of the following must hold:
+
+1. **Useful outcome.** Explain the user problem, supported-device improvement,
+   measurable efficiency gain, or maintainability benefit. Include a reproducer
+   or other evidence where applicable. Avoid duplicating a solution already on
+   the target branch.
+2. **Architectural fit.** Reuse the existing layers and interfaces above.
+   Device-specific metadata belongs in profiles/schemas; shared transport changes
+   must work beyond the contributor's device. Preserve session ownership and
+   identity rules: a shared IP address alone is not proof of collector identity.
+   Propose changes to a shared contract explicitly, rather than hiding them in a
+   model-specific fix.
+3. **No known regressions.** Qualify the result against the current target branch,
+   including affected shared paths and adverse cases. A reproduced regression
+   blocks acceptance even when existing CI is green. Passing tests is evidence,
+   not a guarantee that untested devices or paths work.
+4. **Clear behavior and honest evidence.** Preserve existing settings and flows,
+   or document and test an intentional migration. UI text must explain the actual
+   scope of an option, including effects on discovery, recovery, or maintenance.
+   Distinguish automated checks, contributor hardware observations, and maintainer
+   verification; record untested controls and other limitations explicitly.
+5. **Reviewable scope.** Separate independent driver, transport, and unrelated
+   changes when they need different evidence or can be accepted independently.
+   Explain any dependencies between PRs; opening a follow-up PR does not remove
+   a blocker from the original branch.
+
+For device/control additions, do not infer complete support from working
+telemetry alone. Where cloud learning is supported and access is available, use
+Write Controls to collect the cloud control surface, then distinguish captured
+commands from settings actually applied and read back on the device. Keep
+unverified support marked accordingly; do not require disruptive writes merely
+to complete a checklist.
+
+The review outcome can be **ready**, **changes required**, **awaiting evidence**,
+or **declined** if the benefit or architectural fit is missing. Each PR is judged
+independently; one blocked PR does not invalidate an unrelated useful change.
+See the [validation workflow](docs/maintainer/VALIDATION.md#pull-request-review-evidence)
+for recording the checks that support a decision.
+
 ## Pull Request Checklist
 
 Before opening a PR:
 
+- [ ] Concrete benefit and architectural placement explained
+- [ ] Current target branch and tested revision identified; dependencies disclosed
 - [ ] Tests pass (`python3 -m unittest discover -s tests -v`)
 - [ ] Quality gate passes (`python3 tools/quality_gate.py`)
+- [ ] Affected regression/adverse cases covered; real HA checks run where applicable
 - [ ] New driver / profile / schema additions follow the layering rules above
+- [ ] UI/docs describe actual behavior; hardware evidence and limitations are explicit
 - [ ] Generated docs refreshed if your change affects exported reports
 - [ ] No new dependencies in `manifest.json` requirements (the integration is intentionally dependency-free)
 - [ ] No private `.local/` artifacts committed by accident
