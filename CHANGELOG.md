@@ -249,7 +249,8 @@ the GitHub release body should be rendered from the matching version section her
 ### Added
 
 - Anenji ANJ-4.2KW-24V-WIFI gets a catalog model record for layout 11 / model
-  0x7801 at 4200 W, firmware 7801_A6250708v1, backed by a live read-only
+  0x7801 at 4200 W, observed program version 7801_A6250708v1 (diagnostic
+  metadata, not a profile-selection condition), backed by a live read-only
   identity and telemetry capture and by the unit's printed nameplate: the
   nameplate states 4200 VA/4200 W, 24 VDC input, 230 VAC output at 18.3 A and a
   28 A AC charger, and its serial matches the register block at 186-197 (value
