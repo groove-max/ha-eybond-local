@@ -5,11 +5,11 @@ Modbus exchange on an AT callback socket never reaches
 ``last_framed_exchange_monotonic`` or the session exchange callback, so after
 a same-PN redial's quiet grace the storm policy replaces a working incumbent.
 
-These tests drive the real ``_CollectorAtConnection`` read loop and send
-paths over synthetic streams, with the real ``_SharedEybondListener`` storm
-policy. Only the monotonic clock is replaced, in both modules, so t=10/20/30/36
-are exact. Nothing assigns the exchange time into the policy except the
-explicit positive control.
+These tests drive the real ``_CollectorAtConnection`` and framed
+``_CollectorConnection`` read loops and send paths over synthetic streams,
+with the real ``_SharedEybondListener`` storm policy. Only the monotonic clock
+is replaced, in both modules, so t=10/20/30/36 are exact. Nothing assigns the
+exchange time; only the reader delivery path records it.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
 
 from custom_components.eybond_local.collector.protocol import (
     FC_FORWARD_TO_DEVICE,
+    FC_HEARTBEAT,
     HEADER_SIZE,
     build_collector_request,
     decode_header,
@@ -37,6 +38,10 @@ from custom_components.eybond_local.collector.transport import (
 from custom_components.eybond_local.collector.transport import listener as listener_module
 from custom_components.eybond_local.collector.transport.connections import (
     _CollectorAtConnection,
+    _CollectorConnection,
+)
+from custom_components.eybond_local.collector.transport.send_ownership import (
+    SocketSendOwner,
 )
 from custom_components.eybond_local.collector.transport.listener import (
     _SharedEybondListener,
@@ -68,8 +73,8 @@ _MODBUS_REPLY = _crc(b"\x01\x03\x02\x00\x07")
 _AUX_QUERY = b"\x5a\xa5\x02\x00" + bytes(16) + b"\x02"
 
 
-def _aux_reply() -> bytes:
-    body = b"\xaa\xbb\x02\x00\x04\x3d\x00\x46" + bytes(12)
+def _aux_reply(subtype: bytes = b"\x02\x00") -> bytes:
+    body = b"\xaa\xbb" + subtype + b"\x04\x3d\x00\x46" + bytes(12)
     return body + bytes([sum(body[2:]) & 255])
 
 
@@ -187,6 +192,42 @@ class _ClockedCase(unittest.IsolatedAsyncioTestCase):
 
     def _exchanges_since(self, session_id: str, since: float) -> list[tuple[str, float]]:
         return [item for item in self.exchanges if item[0] == session_id and item[1] >= since]
+
+    async def _drain_case(self, connection, writer, start_send, pending_future, reply_for):
+        """Deliver at t=30 while the sender is inside drain(); resume at t=31.5."""
+
+        captured: list[asyncio.Future] = []
+
+        def responder(wire: bytes) -> bytes | None:
+            reply = reply_for(wire)
+            if reply is not None:
+                captured.append(pending_future())
+            return reply
+
+        writer.responder = responder
+        writer.drain_gate = asyncio.Event()
+        self.clock.now = 30.0
+        send = asyncio.create_task(start_send())
+        await _wait(lambda: bool(captured) and captured[0].done())
+        # Parsed and delivered while the sender is still blocked in drain().
+        self.assertFalse(send.done())
+        self.assertTrue(writer.drain_entered.is_set())
+        receipt_at = self.clock.now
+        self.clock.now = 31.5
+        writer.drain_gate.set()
+        response = await send
+        resumed_at = self.clock.now
+        self.assertEqual((receipt_at, resumed_at), (30.0, 31.5))
+        observed = {
+            "last_framed_exchange_monotonic": connection.last_framed_exchange_monotonic,
+            "exchange_callbacks": list(self.exchanges),
+        }
+        expected = {
+            "last_framed_exchange_monotonic": receipt_at,
+            "exchange_callbacks": [("s-a", receipt_at)],
+        }
+        self.assertEqual(observed, expected)
+        return response
 
 
 class _StormRig(_ClockedCase):
@@ -363,7 +404,8 @@ class RawCompletionStormReproductionTests(_StormRig):
             request=_PI30_REQUEST, reply=_PI30_REPLY, protocol="pi30",
         )
         self.assertEqual((response, raw_delta), (_PI30_REPLY, 1))
-        incumbent.last_framed_exchange_monotonic = 30.0
+        self.assertEqual(incumbent.last_framed_exchange_monotonic, 30.0)
+        self.assertEqual(self._exchanges_since("s-a", 30.0), [])
         self.clock.now = 36.0
         self.assertTrue(self._fire_grace_recheck())
         self.assertEqual(self._storm_decisions(), [("keep_healthy", "s-b")])
@@ -440,39 +482,6 @@ class ReceiptTimeDuringDrainTests(_ClockedCase):
             connection, "s-a", peer=("192.0.2.30", 40004),
         )
         return connection, writer
-
-    async def _drain_case(self, connection, writer, start_send, pending_future, reply_for):
-        captured: list[asyncio.Future] = []
-
-        def responder(wire: bytes) -> bytes | None:
-            reply = reply_for(wire)
-            if reply is not None:
-                captured.append(pending_future())
-            return reply
-
-        writer.responder = responder
-        writer.drain_gate = asyncio.Event()
-        self.clock.now = 30.0
-        send = asyncio.create_task(start_send())
-        await _wait(lambda: bool(captured) and captured[0].done())
-        # Parsed and delivered while the sender is still blocked in drain().
-        self.assertFalse(send.done())
-        self.assertTrue(writer.drain_entered.is_set())
-        receipt_at = self.clock.now
-        self.clock.now = 31.5
-        writer.drain_gate.set()
-        await send
-        resumed_at = self.clock.now
-        self.assertEqual((receipt_at, resumed_at), (30.0, 31.5))
-        observed = {
-            "last_framed_exchange_monotonic": connection.last_framed_exchange_monotonic,
-            "exchange_callbacks": list(self.exchanges),
-        }
-        expected = {
-            "last_framed_exchange_monotonic": receipt_at,
-            "exchange_callbacks": [("s-a", receipt_at)],
-        }
-        self.assertEqual(observed, expected)
 
     async def test_raw_pi30_reply_during_drain_stamps_receipt_time(self) -> None:
         """Fails: raw ASCII delivery (_handle_raw_ascii_line) never stamps."""
@@ -554,6 +563,130 @@ class ReceiptTimeDuringDrainTests(_ClockedCase):
             lambda: connection._pending_response,
             lambda wire: b"AT+FWVER:1.2.3\r\n" if wire.startswith(b"AT+FWVER") else None,
         )
+
+
+class FramedSessionDeliveryTests(_ClockedCase):
+    """Framed ``_CollectorConnection`` sessions are storm candidates as well.
+
+    An explicit diagnostic raw Modbus read holds ``_request_lock``, so FC4
+    polling cannot stamp while it runs. Its owned reply, and an owned auxiliary
+    reply, must stamp at delivery like every other completed exchange.
+    """
+
+    async def _open(self) -> tuple[_CollectorConnection, asyncio.StreamReader, _Writer]:
+        connection = _CollectorConnection(
+            remote_ip_hint="192.0.2.50", heartbeat_interval=300.0, write_timeout=5.0,
+        )
+        reader, writer, _task = await self._run(
+            connection, "s-a", peer=("192.0.2.50", 40009),
+        )
+        # The outbound FC1 heartbeat goes first, so a held drain() below
+        # blocks the request under test and not the heartbeat.
+        await _wait(lambda: bool(writer.writes) and not connection._write_lock.locked())
+        self.assertEqual(decode_header(writer.writes[0][:HEADER_SIZE]).fcode, FC_HEARTBEAT)
+        return connection, reader, writer
+
+    def _diagnostic_read(self, connection, *, timeout: float = 1.0):
+        owner = SocketSendOwner.capture(connection)
+        return connection._diagnostic_modbus.send(
+            connection, owner, _MODBUS_REQUEST, timeout,
+        )
+
+    async def _diagnostic_exchange_at_10(self, connection, writer) -> None:
+        self.clock.now = 10.0
+        writer.responder = lambda wire: _MODBUS_REPLY if wire == _MODBUS_REQUEST else None
+        self.assertEqual(await self._diagnostic_read(connection), _MODBUS_REPLY)
+        writer.responder = None
+        self.assertEqual(self.exchanges, [("s-a", 10.0)])
+
+    async def _auxiliary_exchange_at_10(self, connection, writer) -> None:
+        self.clock.now = 10.0
+        writer.responder = lambda wire: _aux_reply() if wire == _AUX_QUERY else None
+        response = await connection.async_send_auxiliary_read(
+            _AUX_QUERY, request_timeout=1.0,
+        )
+        writer.responder = None
+        self.assertEqual(response, _aux_reply())
+        self.assertEqual(self.exchanges, [("s-a", 10.0)])
+
+    async def test_framed_diagnostic_raw_modbus_reply_during_drain_stamps_receipt_time(self) -> None:
+        """Fails on c0af77c: the framed reader calls consume without on_delivery."""
+
+        connection, _reader, writer = await self._open()
+        response = await self._drain_case(
+            connection, writer,
+            lambda: self._diagnostic_read(connection),
+            lambda: connection._diagnostic_modbus.claim.future,
+            lambda wire: _MODBUS_REPLY if wire == _MODBUS_REQUEST else None,
+        )
+        self.assertEqual(response, _MODBUS_REPLY)
+
+    async def test_framed_auxiliary_reply_during_drain_stamps_receipt_time(self) -> None:
+        """Fails on c0af77c: the framed reader calls accept without on_delivery."""
+
+        connection, _reader, writer = await self._open()
+        response = await self._drain_case(
+            connection, writer,
+            lambda: connection.async_send_auxiliary_read(_AUX_QUERY, request_timeout=1.0),
+            lambda: connection._auxiliary_session.claim.future,
+            lambda wire: _aux_reply() if wire == _AUX_QUERY else None,
+        )
+        self.assertEqual(response, _aux_reply())
+
+    async def test_framed_diagnostic_crc_mismatch_does_not_stamp(self) -> None:
+        connection, _reader, writer = await self._open()
+        await self._diagnostic_exchange_at_10(connection, writer)
+        bad = _MODBUS_REPLY[:-1] + bytes([_MODBUS_REPLY[-1] ^ 0xFF])
+        self.clock.now = 30.0
+        writer.responder = lambda wire: bad if wire == _MODBUS_REQUEST else None
+        with self.assertRaises(ConnectionError):
+            await self._diagnostic_read(connection)
+        self.assertEqual(
+            connection._diagnostic_modbus.failure_reason, "diagnostic_raw_crc_mismatch",
+        )
+        self.assertEqual(self.exchanges, [("s-a", 10.0)])
+        self.assertNotEqual(connection.last_framed_exchange_monotonic, 30.0)
+
+    async def test_framed_unowned_auxiliary_reply_does_not_stamp(self) -> None:
+        connection, reader, writer = await self._open()
+        await self._auxiliary_exchange_at_10(connection, writer)
+        self.clock.now = 30.0
+        reader.feed_data(_aux_reply())
+        await _wait(lambda: not connection.connected)
+        self.assertEqual(
+            connection.collector_info.last_disconnect_reason, "aabb_response_unowned",
+        )
+        self.assertEqual(self.exchanges, [("s-a", 10.0)])
+        self.assertNotEqual(connection.last_framed_exchange_monotonic, 30.0)
+
+    async def test_framed_auxiliary_subtype_mismatch_does_not_stamp(self) -> None:
+        connection, _reader, writer = await self._open()
+        await self._auxiliary_exchange_at_10(connection, writer)
+        self.clock.now = 30.0
+        writer.responder = (
+            lambda wire: _aux_reply(b"\x02\x02") if wire == _AUX_QUERY else None
+        )
+        with self.assertRaises(ConnectionError):
+            await connection.async_send_auxiliary_read(_AUX_QUERY, request_timeout=1.0)
+        self.assertEqual(
+            connection.collector_info.last_disconnect_reason,
+            "aabb_response_subtype_mismatch",
+        )
+        self.assertEqual(self.exchanges, [("s-a", 10.0)])
+        self.assertNotEqual(connection.last_framed_exchange_monotonic, 30.0)
+
+    async def test_framed_inbound_heartbeat_does_not_stamp(self) -> None:
+        connection, reader, writer = await self._open()
+        await self._diagnostic_exchange_at_10(connection, writer)
+        self.clock.now = 30.0
+        reader.feed_data(build_collector_request(
+            0x8001, _PN[:14].encode("ascii"), devcode=0x0102, collector_addr=255,
+            fcode=FC_HEARTBEAT,
+        ))
+        await _wait(lambda: connection._last_heartbeat_monotonic == 30.0)
+        self.assertTrue(connection.connected)
+        self.assertEqual(connection.last_framed_exchange_monotonic, 10.0)
+        self.assertEqual(self.exchanges, [("s-a", 10.0)])
 
 
 class ReplacedSessionTests(_ClockedCase):

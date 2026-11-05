@@ -490,6 +490,12 @@ class _CollectorConnection:
             return
         callback(session_id, collector_pn, source)
 
+    def _record_session_exchange(self) -> None:
+        self.last_framed_exchange_monotonic = monotonic()
+        exchange_callback = self._session_exchange_callback
+        if exchange_callback is not None and self._session_id:
+            exchange_callback(self._session_id)
+
     def _handle_at_response(self, payload: bytes) -> None:
         try:
             response = parse_at_response(payload)
@@ -545,7 +551,9 @@ class _CollectorConnection:
                 if status is not None:
                     self._handle_at_response(status)
                     continue
-                if await diagnostic.consume(reader, first, auxiliary):
+                if await diagnostic.consume(
+                    reader, first, auxiliary, self._record_session_exchange,
+                ):
                     continue
                 try:
                     prefix = await read(asyncio.wait_for(
@@ -575,7 +583,9 @@ class _CollectorConnection:
                         timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
                     ))
                     if frame.grammar is BinaryGrammar.AABB:
-                        auxiliary.accept(frame, auxiliary_claim)
+                        auxiliary.accept(
+                            frame, auxiliary_claim, self._record_session_exchange,
+                        )
                         continue
                     assert frame.header is not None
                     header = frame.header

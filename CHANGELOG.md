@@ -422,7 +422,10 @@ the GitHub release body should be rendered from the matching version section her
   delivers it, so a working raw incumbent is kept after a same-PN redial.
   The recorded time is the delivery time, even while the sender is still
   draining. A request, a timeout, a PN announcement, an AT query-status
-  error or a reply from a replaced session does not update it.
+  error or a reply from a replaced session does not update it. The same
+  applies to an owned diagnostic raw Modbus or auxiliary reply on a framed
+  session; a CRC failure, an unowned or wrong-subtype auxiliary reply or an
+  inbound heartbeat does not update it.
 
 - PI30 periodically rereads priorities, charging thresholds/currents and flags
   changed through the vendor app or inverter panel (#62). `QPIRI`/`QFLAG` run
