@@ -282,6 +282,108 @@ class EnsureObservedListenerTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
+    def test_entry_lookup_preserves_unique_id_fallback_and_prefix_rules(self) -> None:
+        short_pn = "V001020SYN6234"
+        full_pn = "V001020SYN62344022"
+        first = types.SimpleNamespace(
+            data={"collector_pn": f" {short_pn} ", "connection_mode": "callback_listener"},
+            unique_id=f"collector:{short_pn}",
+        )
+        second = types.SimpleNamespace(
+            data={"collector_pn": full_pn, "connection_mode": "callback_listener"},
+            unique_id=f"collector:{full_pn}",
+        )
+        discovery = PassiveCallbackDiscovery(_FakeHass((first, second)))
+
+        # Equal data/unique PNs (with whitespace) need only the data prefix
+        # check. The earlier callback entry must continue to win.
+        self.assertIs(discovery._entry_for_collector_pn(full_pn), first)
+
+        unique_only = types.SimpleNamespace(
+            data={"collector_pn": "E50000200000000001"},
+            unique_id=f"collector:{full_pn}",
+        )
+        discovery = PassiveCallbackDiscovery(_FakeHass((unique_only,)))
+        self.assertIs(discovery._entry_for_collector_pn(full_pn), unique_only)
+
+        prefix_only = types.SimpleNamespace(
+            data={"collector_pn": "E50000200000000001", "connection_mode": "callback_listener"},
+            unique_id=f"collector:{short_pn}",
+        )
+        discovery = PassiveCallbackDiscovery(_FakeHass((prefix_only,)))
+        self.assertIs(discovery._entry_for_collector_pn(full_pn), prefix_only)
+        prefix_only.data["connection_mode"] = "outbound"
+        self.assertIsNone(discovery._entry_for_collector_pn(full_pn))
+
+        empty_unique = types.SimpleNamespace(
+            data={"collector_pn": "   "},
+            unique_id="collector: ",
+        )
+        discovery = PassiveCallbackDiscovery(_FakeHass((empty_unique,)))
+        self.assertIsNone(discovery._entry_for_collector_pn(full_pn))
+
+    async def test_notified_session_skips_flow_lookup_but_keeps_cleanup(self) -> None:
+        hass = _FakeHass()
+        discovery = PassiveCallbackDiscovery(hass)
+        session = {
+            "session_id": "listener-18899-notified",
+            "peer_ip": "203.0.113.9",
+            "collector_pn": "V001020SYN62344022",
+            "state": "routed_framed",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+        }
+        listener = _FakeListener((session,))
+        discovery._listeners[18899] = listener
+        await discovery._async_poll_once()
+
+        for dismissed in (False, True):
+            with self.subTest(dismissed=dismissed):
+                # Both open and dismissed cards are already-published edges.
+                if dismissed:
+                    hass.config_entries.flow.flows.clear()
+                with patch.object(
+                    hass.config_entries.flow,
+                    "async_progress",
+                    wraps=hass.config_entries.flow.async_progress,
+                ) as progress:
+                    await discovery._async_poll_once()
+                self.assertEqual(len(hass.config_entries.flow.flows), 0 if dismissed else 1)
+                # Stale-flow cleanup still reads HA's flows once per sweep.
+                self.assertEqual(progress.call_count, 1)
+
+        listener._sessions = ()
+        await discovery._async_poll_once()
+        listener._sessions = ({**session, "session_id": "listener-18899-reconnected"},)
+        await discovery._async_poll_once()
+        self.assertEqual(len(hass.config_entries.flow.flows), 1)
+
+    def test_notification_pruning_keeps_exact_port_and_normalized_pn(self) -> None:
+        discovery = PassiveCallbackDiscovery(_FakeHass())
+        pn = "V001020SYN62344022"
+        retained = {
+            f"pn:18899:{pn}",
+            f"18899: {pn} ",  # Legacy keys used the same whitespace normalization.
+            "session:18899:live",
+        }
+        discovery._notified = retained | {
+            f"pn:8899:{pn}",
+            "pn:18899:V001020SYN6234",  # Prefix matching must not keep old PN keys.
+            "pn:18899: ",
+            "session:18899:gone",
+            "18899:other",
+        }
+        discovery._prune_notified_for_observed_sessions((
+            types.SimpleNamespace(raw={
+                "listener_port": 18899,
+                "collector_pn": f" {pn} ",
+                "session_id": "live",
+            }),
+            types.SimpleNamespace(raw={"listener_port": 18899, "collector_pn": ""}),
+            types.SimpleNamespace(raw=None),
+        ))
+        self.assertEqual(discovery._notified, retained)
+
     async def test_invalid_wire_identity_never_becomes_discovery(self) -> None:
         hass = _FakeHass()
         discovery = PassiveCallbackDiscovery(hass)
@@ -527,11 +629,105 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
         await discovery._async_poll_once()
 
-        # The first read precedes potentially async flow cleanup; the second
-        # serves both coalesced publication and exact-socket suppression. The
-        # third refreshes unclaimed ownership after the publication pass.
-        self.assertEqual(listener.inventory_reads, 3)
+        # With no flows to abort, one current snapshot serves exact-socket
+        # suppression, coalesced observations and unclaimed publication.
+        self.assertEqual(listener.inventory_reads, 1)
         self.assertEqual(len(hass.config_entries.flow.flows), 1)
+
+    async def test_configured_collectors_without_flows_share_one_inventory(self) -> None:
+        sessions = tuple({
+            "session_id": f"configured-{i}",
+            "collector_pn": f"V001020SYN{i:08d}",
+            "peer_ip": "203.0.113.9",
+            "state": "routed_framed",
+            "protocol_shape": "eybond_framed",
+            "collector_identity_source": "fc2_parameter_2",
+        } for i in range(2))
+        entries = [types.SimpleNamespace(
+            data={"collector_pn": session["collector_pn"]},
+            unique_id=f"collector:{session['collector_pn']}",
+        ) for session in sessions]
+        hass = _FakeHass(entries)
+        discovery = PassiveCallbackDiscovery(hass)
+        listener = _CountingListener(sessions)
+        discovery._listeners[18899] = listener
+        for i, session in enumerate(sessions):
+            discovery.registry.claim(f"entry-{i}", collector_pn=session["collector_pn"])
+        listener.inventory_reads = 0
+
+        with patch.object(
+            hass.config_entries.flow, "async_progress",
+            wraps=hass.config_entries.flow.async_progress,
+        ) as progress:
+            await discovery._async_poll_once()
+
+        self.assertEqual(listener.inventory_reads, 1)
+        self.assertEqual(progress.call_count, 1)
+        self.assertEqual(hass.config_entries.flow.flows, [])
+        # Existing-entry maintenance must still run on the fast path.
+        self.assertEqual(len(hass.config_entries.updates), 2)
+        self.assertTrue(all(e.data["collector_session_protocol"] == "eybond_framed" for e in entries))
+
+    async def test_poll_refreshes_sessions_and_ownership_after_flow_abort(self) -> None:
+        for cleanup in ("weak", "configured"):
+            with self.subTest(cleanup=cleanup):
+                pn = "V001020SYN62344022"
+                session = {
+                    "session_id": "configured",
+                    "collector_pn": pn,
+                    "peer_ip": "203.0.113.9",
+                    "state": "routed_framed",
+                    "protocol_shape": "eybond_framed",
+                    "collector_identity_source": "fc2_parameter_2",
+                }
+                entry = types.SimpleNamespace(data={"collector_pn": pn}, unique_id=f"collector:{pn}")
+                hass = _FakeHass([entry])
+                discovery = PassiveCallbackDiscovery(hass)
+                listener = _FakeListener((session,))
+                discovery._listeners[18899] = listener
+                discovery.registry.claim("configured-entry", collector_pn=pn)
+                hass.config_entries.flow.flows.append((DOMAIN, {
+                    "source": "integration_discovery", "flow_id": "old-flow",
+                    "eybond_discovery": {
+                        "collector_pn": pn if cleanup == "configured" else "",
+                        "collector_identity_source": "fc2_parameter_2" if cleanup == "configured" else "framed_heartbeat",
+                    },
+                }, {}))
+                abort = hass.config_entries.flow.async_abort
+
+                async def abort_with_reconnect(flow_id):
+                    await asyncio.sleep(0)
+                    listener._sessions = (
+                        session,
+                        {**session, "session_id": "new-unclaimed", "collector_pn": "V001020SYN62344023"},
+                        {**session, "session_id": "new-owned", "collector_pn": "V001020SYN62344024"},
+                    )
+                    discovery.registry.claim("new-owner", collector_pn="V001020SYN62344024")
+                    await abort(flow_id)
+
+                with patch.object(hass.config_entries.flow, "async_abort", side_effect=abort_with_reconnect):
+                    await discovery._async_poll_once()
+
+                self.assertEqual(hass.config_entries.flow.aborted, ["old-flow"])
+                self.assertEqual(
+                    [data["session_id"] for _domain, _context, data in hass.config_entries.flow.flows],
+                    ["new-unclaimed"],
+                )
+
+    async def test_failed_flow_inventory_keeps_configured_cleanup(self) -> None:
+        pn = "V001020SYN62344022"
+        hass = _FakeHass([types.SimpleNamespace(data={"collector_pn": pn}, unique_id=f"collector:{pn}")])
+        discovery = PassiveCallbackDiscovery(hass)
+        discovery._listeners[18899] = _FakeListener(({
+            "session_id": "configured", "collector_pn": pn,
+            "peer_ip": "203.0.113.9", "state": "routed_framed",
+        },))
+        with patch.object(
+            hass.config_entries.flow, "async_progress", side_effect=[RuntimeError("unavailable"), []],
+        ) as progress:
+            await discovery._async_poll_once()
+        self.assertEqual(progress.call_count, 2)
+        self.assertEqual(hass.config_entries.flow.flows, [])
 
     async def test_poll_creates_integration_discovery_flow_for_unclaimed_collector_pn(self) -> None:
         hass = _FakeHass()
