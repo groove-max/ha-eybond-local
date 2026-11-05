@@ -1596,6 +1596,102 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         hass.config_entries._entries.clear()
         self.assertTrue(discovery._automatic_discovery_enabled())
 
+    async def test_disabled_periodic_sweep_leaves_orphaned_weak_flow_until_manual_check(
+        self,
+    ) -> None:
+        listener_entry = types.SimpleNamespace(
+            data={"entry_role": "listener"},
+            options={"automatic_passive_discovery": True},
+        )
+        hass = _FakeHass(entries=[listener_entry])
+        discovery = PassiveCallbackDiscovery(hass)
+        listener = _FakeListener(
+            (
+                {
+                    "session_id": "weak-session",
+                    "peer_ip": "192.0.2.16",
+                    "collector_pn": "V001020SYN6234",
+                    "state": "routed_framed",
+                    "protocol_shape": "eybond_framed",
+                    "collector_identity_source": "framed_heartbeat",
+                },
+            )
+        )
+        discovery._listeners[18899] = listener
+
+        with patch(
+            "custom_components.eybond_local.passive_discovery._WEAK_IDENTITY_SETTLE_SECONDS",
+            0,
+        ):
+            await discovery._async_background_poll_once()
+            self.assertEqual(len(hass.config_entries.flow.flows), 1)
+
+            listener._sessions = ()
+            listener_entry.options = {"automatic_passive_discovery": False}
+            await discovery._async_background_poll_once()
+            self.assertEqual(len(hass.config_entries.flow.flows), 1)
+            self.assertEqual(hass.config_entries.flow.aborted, [])
+
+            # The user-triggered sweep restores stale-flow maintenance.
+            await discovery.async_show_discovered_devices_again()
+            self.assertEqual(hass.config_entries.flow.flows, [])
+            self.assertEqual(hass.config_entries.flow.aborted, ["flow-1"])
+
+    async def test_disabled_periodic_sweep_pauses_existing_entry_enrichment(
+        self,
+    ) -> None:
+        for resume_mode in ("manual_check", "reenable"):
+            with self.subTest(resume_mode=resume_mode):
+                listener_entry = types.SimpleNamespace(
+                    data={"entry_role": "listener"},
+                    options={"automatic_passive_discovery": False},
+                )
+                collector_entry = types.SimpleNamespace(
+                    data={
+                        "collector_pn": "V001107SYN8229",
+                        "connection_mode": "callback_listener",
+                        "collector_operation_mode": "home_assistant_only",
+                        "tcp_port": 18899,
+                        "collector_session_protocol": "eybond_framed",
+                    },
+                    unique_id="collector:V001107SYN8229",
+                    title="Collector PN V001107SYN8229",
+                )
+                hass = _FakeHass(entries=[listener_entry, collector_entry])
+                discovery = PassiveCallbackDiscovery(hass)
+                discovery._listeners[18899] = _FakeListener(
+                    (
+                        {
+                            "session_id": "full-identity",
+                            "peer_ip": "192.0.2.17",
+                            "collector_pn": "V001107SYN82291016",
+                            "protocol_shape": "at_text",
+                            "state": "routed_at_text",
+                            "collector_identity_source": "at_dtupn",
+                        },
+                    )
+                )
+
+                await discovery._async_background_poll_once()
+                self.assertEqual(hass.config_entries.updates, [])
+                self.assertEqual(collector_entry.data["collector_pn"], "V001107SYN8229")
+                self.assertEqual(
+                    collector_entry.data["collector_session_protocol"], "eybond_framed"
+                )
+
+                if resume_mode == "manual_check":
+                    await discovery.async_show_discovered_devices_again()
+                    self.assertFalse(listener_entry.options["automatic_passive_discovery"])
+                else:
+                    listener_entry.options = {"automatic_passive_discovery": True}
+                    await discovery._async_background_poll_once()
+
+                self.assertEqual(collector_entry.data["collector_pn"], "V001107SYN82291016")
+                self.assertEqual(collector_entry.data["collector_session_protocol"], "at_text")
+                self.assertEqual(collector_entry.unique_id, "collector:V001107SYN82291016")
+                self.assertEqual(hass.config_entries.flow.flows, [])
+
+
 
 if __name__ == "__main__":
     unittest.main()
