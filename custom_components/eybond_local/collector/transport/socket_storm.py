@@ -105,9 +105,11 @@ class CallbackSocketStorm:
             None,
         )
         if focus is None:
+            self._end_quiet_grace_without_overlap(sockets)
             return StormAction()
         group = _storm_group(focus, sockets)
         if len(group) < 2:
+            self._end_quiet_grace_without_overlap(sockets)
             return StormAction()
         cycle = self._ensure_cycle(group)
         keep, reason = _pick_survivor(group, cycle, focus, now)
@@ -133,6 +135,9 @@ class CallbackSocketStorm:
                 cycle.quiet_grace = True
                 cycle.warned.clear()
             return StormAction((), "hold_quiet", cycle.admitted_at + GRACE_SECONDS)
+        # Any other decision resolves the overlap, even when the admitted
+        # session stays the same, so the next redial starts its own grace.
+        cycle.quiet_grace = False
         reset_ids = tuple(
             sorted(item.session_id for item in group if item.session_id != keep.session_id)
         )
@@ -141,10 +146,16 @@ class CallbackSocketStorm:
         if reason == "replace_stale" or cycle.admitted_id != keep.session_id:
             cycle.admitted_id = keep.session_id
             cycle.admitted_at = now
-            cycle.quiet_grace = False
             cycle.warned.clear()
         self._warn(cycle, focus, reset_ids, reason)
         return StormAction(reset_ids, reason)
+
+    def _end_quiet_grace_without_overlap(
+        self, sockets: list[StormSocket] | tuple[StormSocket, ...]
+    ) -> None:
+        for pn, cycle in self._cycles.items():
+            if sum(1 for item in sockets if item.strong_pn == pn) < 2:
+                cycle.quiet_grace = False
 
     def _ensure_cycle(self, group: list[StormSocket]) -> _Cycle:
         pn = next(item.strong_pn for item in group if item.strong_pn)

@@ -209,6 +209,42 @@ class CallbackSocketStormTests(unittest.TestCase):
             now += 10.0
         self.assertLessEqual(len(live), 2, sorted(live))
 
+    def test_redial_after_keep_healthy_gets_fresh_quiet_grace(self) -> None:
+        """keep_healthy ends quiet grace; a later redial must not inherit it.
+
+        B redials quietly at 0. A frames at 14, so B is reset. C redials at
+        14.5, before the old deadline. C gets its own full grace and A, which
+        framed half a second before C arrived, is not replaced at 15.
+        """
+
+        storm = CallbackSocketStorm()
+        a = _socket(
+            "a",
+            strong_pn=_PN,
+            last_framed_exchange_at=-5.0,
+            routed_payload=True,
+            accepted_at=-10.0,
+        )
+        b = _socket("b", strong_pn=_PN, routed_payload=True, accepted_at=0.0)
+        self.assertEqual(storm.consider([a, b], "b", 0.0).reason, "hold_quiet")
+
+        a = _socket(
+            "a",
+            strong_pn=_PN,
+            last_framed_exchange_at=GRACE_SECONDS - 1.0,
+            routed_payload=True,
+            accepted_at=-10.0,
+        )
+        healthy = storm.consider([a, b], "a", GRACE_SECONDS - 1.0)
+        self.assertEqual((healthy.reason, healthy.session_ids), ("keep_healthy", ("b",)))
+
+        arrival = GRACE_SECONDS - 0.5
+        c = _socket("c", strong_pn=_PN, routed_payload=True, accepted_at=arrival)
+        held = storm.consider([a, c], "c", arrival)
+        self.assertEqual(held.reason, "hold_quiet")
+        self.assertEqual(held.grace_deadline, arrival + GRACE_SECONDS)
+        self.assertEqual(storm.consider([a, c], "c", GRACE_SECONDS).session_ids, ())
+
     def test_after_grace_with_no_exchange_extra_replaces_candidate(self) -> None:
         storm = CallbackSocketStorm()
         first = _socket("a", strong_pn=_PN)
