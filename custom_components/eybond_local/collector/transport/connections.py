@@ -1488,9 +1488,15 @@ class _CollectorAtConnection:
                             record_exchange=not reader.line_from_prefix_only(),
                         )
                         continue
-                if not buffered_prefix and await diagnostic.consume(reader, first, auxiliary):
+                # Each delivery hook runs after the guarded read that proves this
+                # physical session still owns the pending reply.
+                if not buffered_prefix and await diagnostic.consume(
+                    reader, first, auxiliary, self._record_session_exchange,
+                ):
                     continue
-                if not buffered_prefix and await runtime_modbus.consume(reader, first, auxiliary):
+                if not buffered_prefix and await runtime_modbus.consume(
+                    reader, first, auxiliary, self._record_session_exchange,
+                ):
                     self._collector.raw_last_parser = "raw_modbus_rtu"
                     continue
                 if first == b"A":
@@ -1576,7 +1582,9 @@ class _CollectorAtConnection:
                             timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
                         ))
                         if frame.grammar is BinaryGrammar.AABB:
-                            auxiliary.accept(frame, auxiliary_claim)
+                            auxiliary.accept(
+                                frame, auxiliary_claim, self._record_session_exchange,
+                            )
                             continue
                         assert frame.header is not None
                         header = frame.header
@@ -1733,6 +1741,7 @@ class _CollectorAtConnection:
         future = self._pending_raw_response
         if future is not None and not future.done():
             self._collector.raw_last_parser = parser
+            self._record_session_exchange()
             future.set_result(line)
             return
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import math
-from typing import Awaitable, TypeVar
+from typing import Awaitable, Callable, TypeVar
 
 from .binary_framing import BinaryFrame, BinaryFramingError, BinaryGrammar
 from .common import _cancel_and_join_task, _close_writer_bounded
@@ -66,8 +66,15 @@ class AuxiliaryReadSession:
             if self.closed:
                 raise asyncio.CancelledError
 
-    def accept(self, frame: BinaryFrame, claim: AuxiliaryReadClaim | None) -> None:
-        """Deliver only to the owner present when this frame started arriving."""
+    def accept(
+        self, frame: BinaryFrame, claim: AuxiliaryReadClaim | None,
+        on_delivery: Callable[[], None] | None = None,
+    ) -> None:
+        """Deliver only to the owner present when this frame started arriving.
+
+        ``on_delivery`` runs only for an owned, validated reply, immediately
+        before the waiter is resolved, so it observes the receipt time.
+        """
 
         if frame.grammar is not BinaryGrammar.AABB:
             raise ValueError("auxiliary_frame_grammar_invalid")
@@ -78,6 +85,8 @@ class AuxiliaryReadSession:
             raise BinaryFramingError("aabb_response_unowned")
         if frame.wire[2:4] != claim.subtype:
             raise BinaryFramingError("aabb_response_subtype_mismatch")
+        if on_delivery is not None:
+            on_delivery()
         claim.future.set_result(frame.wire)
 
     async def send(

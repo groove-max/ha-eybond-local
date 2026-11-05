@@ -417,6 +417,13 @@ the GitHub release body should be rendered from the matching version section her
   session PN is not an exchange, including when that line is split across
   reads.
 
+- A completed, owned raw ASCII, raw Modbus or auxiliary reply on an AT
+  callback socket now updates the storm exchange clock when the reader
+  delivers it, so a working raw incumbent is kept after a same-PN redial.
+  The recorded time is the delivery time, even while the sender is still
+  draining. A request, a timeout, a PN announcement, an AT query-status
+  error or a reply from a replaced session does not update it.
+
 - PI30 periodically rereads priorities, charging thresholds/currents and flags
   changed through the vendor app or inverter panel (#62). `QPIRI`/`QFLAG` run
   after telemetry, at most one extra request per poll and no more often than
