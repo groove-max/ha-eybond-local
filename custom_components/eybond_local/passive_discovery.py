@@ -27,6 +27,7 @@ from .collector_endpoint import (
     LEGACY_BINARY_COLLECTOR_SERVER_PORT,
 )
 from .const import (
+    CONF_AUTOMATIC_PASSIVE_DISCOVERY,
     CONF_COLLECTOR_IP,
     CONF_COLLECTOR_PN,
     CONF_CONNECTION_MODE,
@@ -35,6 +36,7 @@ from .const import (
     CONNECTION_TYPE_EYBOND,
     DEFAULT_TCP_PORT,
     DOMAIN,
+    ENTRY_ROLE_LISTENER,
     FLOW_CONTEXT_ENTRY_COMMIT_IN_PROGRESS,
 )
 
@@ -624,12 +626,34 @@ class PassiveCallbackDiscovery:
     async def _async_run(self) -> None:
         while True:
             try:
-                await self._async_poll_once()
+                await self._async_background_poll_once()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.debug("Passive EyeBond callback discovery poll failed", exc_info=True)
             await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+
+    async def _async_background_poll_once(self) -> None:
+        """Skip inventory scans when the user disables automatic discovery."""
+
+        if self._automatic_discovery_enabled():
+            await self._async_poll_once()
+
+    def _automatic_discovery_enabled(self) -> bool:
+        """Read the persisted listener preference without touching session state.
+
+        The domain service stays alive for interactive scans and ownership even
+        when periodic discovery is off. Missing options preserve old behavior.
+        """
+
+        entries = getattr(self._hass.config_entries, "async_entries", None)
+        if not callable(entries):
+            return True
+        for entry in entries(DOMAIN):
+            if str(entry.data.get("entry_role") or "") != ENTRY_ROLE_LISTENER:
+                continue
+            return entry.options.get(CONF_AUTOMATIC_PASSIVE_DISCOVERY, True) is not False
+        return True
 
     async def _async_poll_once(self) -> None:
         flow_manager = getattr(getattr(self._hass, "config_entries", None), "flow", None)

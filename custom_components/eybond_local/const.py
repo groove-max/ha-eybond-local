@@ -77,6 +77,7 @@ CONF_DRIVER_HINT = "driver_hint"
 CONF_DRIVER_DETECTION_STRATEGY = "driver_detection_strategy"
 CONF_PROXY_CAPTURE_DURATION_MINUTES = "proxy_capture_duration_minutes"
 CONF_ENTRY_ROLE = "entry_role"
+CONF_AUTOMATIC_PASSIVE_DISCOVERY = "automatic_passive_discovery"
 
 # Integration-level config entry that keeps the passive callback listeners
 # loaded even when no collector/device entries exist. It owns no device,

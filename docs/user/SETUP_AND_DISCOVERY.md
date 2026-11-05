@@ -156,6 +156,27 @@ The normal scan also includes identified sessions that are already connected.
 A collector found through background discovery is therefore not hidden from
 the regular **Add Integration** workflow.
 
+### Pausing periodic discovery and maintenance
+
+The **EyeBond Local — Discovery** entry has a **Periodic discovery and
+maintenance** option, enabled by default (including for existing entries).
+Disable it to reduce the work done by periodic discovery sweeps. This pauses
+the **entire** background sweep, not just new-device notifications:
+
+- New collectors do not produce automatic discovery cards.
+- Stale weak-identity discovery cards are not automatically removed when their
+  sessions disappear.
+- Existing collector entries do not receive automatic identity, protocol, or
+  topology enrichment from newly observed sessions (for example, a short PN
+  is not upgraded to a full PN).
+
+Existing TCP listener ownership, connected devices, and normal inverter polling
+continue unchanged. In the discovery entry's **Configure** menu, choose
+**Check connected collectors again** to run one sweep, including the paused
+maintenance work, even when periodic discovery is disabled. To resume ongoing
+discovery, stale-card cleanup, and entry enrichment, enable **Periodic discovery
+and maintenance** again. The setting does not require a restart.
+
 ## Manual setup
 
 Use **Device not found? Advanced setup → Enter address manually** when:
