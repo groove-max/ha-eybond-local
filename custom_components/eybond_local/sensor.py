@@ -372,10 +372,10 @@ class EybondValueSensor(CoordinatorEntity[EybondLocalCoordinator], SensorEntity)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        values = self.coordinator.data.runtime_values()
+        snapshot = self.coordinator.data
         fields = _SUMMARY_ATTRIBUTE_MAP.get(self._description.key)
         attributes: dict[str, Any] = {}
-        value = self.coordinator.data.runtime_value(self._description.key)
+        value = snapshot.runtime_value(self._description.key)
         if isinstance(value, str):
             if self._description.key in _CAPABILITY_LIST_SENSORS:
                 attributes["capabilities"] = [
@@ -383,11 +383,13 @@ class EybondValueSensor(CoordinatorEntity[EybondLocalCoordinator], SensorEntity)
                 ]
             elif len(value) > _MAX_STATE_LENGTH:
                 attributes["full_value"] = value
-        for attribute_key, value_key in fields or ():
-            value = values.get(value_key)
-            if value is None or value == "":
-                continue
-            attributes[attribute_key] = value
+        if fields:
+            values = snapshot.runtime_values()
+            for attribute_key, value_key in fields:
+                value = values.get(value_key)
+                if value is None or value == "":
+                    continue
+                attributes[attribute_key] = value
         return attributes or None
 
     async def _async_self_heal_entity_registry_precision(self) -> None:
