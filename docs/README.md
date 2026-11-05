@@ -5,6 +5,15 @@ different audiences. Use the first section for installation and day-to-day
 operation. The maintainer references describe implementation boundaries and
 release work; they are not required to use the integration.
 
+## Documentation policy
+
+Committed documentation describes the product. It does not describe one
+installation. Do not put a site name, a household, a person's deployment, a
+LAN or Tailscale address, a collector serial or PN, or a dated incident from
+one unit into `docs/`, `README`, `CONTRIBUTING`, or architecture notes. State
+what any collector of that class can do. Installation-specific evidence
+belongs in local notes that are not part of the published tree.
+
 ## User guides
 
 Start with the [online English](https://groove-max.github.io/ha-eybond-local/en/)
@@ -45,6 +54,7 @@ Ukrainian readers can also use the [Ukrainian README](../README.uk.md).
 If you are extending or maintaining the project, use [../CONTRIBUTING.md](../CONTRIBUTING.md).
 
 - [Adding Drivers](maintainer/ADDING_DRIVERS.md) — driver structure, registration, tests, and documentation updates
+- [Short-ASCII MIXED socket](maintainer/SHORT_ASCII_MIXED_SOCKET.md) — EyeBond and AABB overlap, claim ownership, and when a mixed frame closes the session
 - [Validation](maintainer/VALIDATION.md) — focused tests, quality gate, and Home Assistant compatibility lanes
 - [Releasing](maintainer/RELEASING.md) — maintainer-only release preparation and publication checklist
 - [Issue Triage](maintainer/ISSUE_TRIAGE.md) — manual status labels, evidence requests, retest handling, and closing rules
@@ -56,5 +66,6 @@ If you are extending or maintaining the project, use [../CONTRIBUTING.md](../CON
 - [SMG Protocol Maps](architecture/SMG_PROTOCOL_MAPS.md) — evidence, independent protocol branches, generic controls, and model-specific overrides.
 - [Sumry/GES 0x7530 Qualification](architecture/SUMRY_GES_7530.md) — exact-match read-only binding for Anenji GES48120, nine-field subset, and remaining telemetry/control limits.
 - [Collector Connection Architecture](architecture/CONNECTION_ARCHITECTURE.md) — maintainer reference for the connection axes, session/PN ownership, `callback_on_demand`, endpoint ownership rules, and what must not be reintroduced.
+- [Callback Socket Storm](architecture/CALLBACK_SOCKET_STORM.md) — one collector dialing again without closing the previous session, and which sockets the listener resets.
 - [Cloud Learning Architecture](architecture/CLOUD_LEARNING_ARCHITECTURE.md) — provider-neutral learning methods, typed API sources, trust boundaries, and read-only metadata evidence.
 - [Typed Telemetry Migration](architecture/TYPED_TELEMETRY.md) — staged replacement of the broad runtime value mapping with a strict measurement contract.

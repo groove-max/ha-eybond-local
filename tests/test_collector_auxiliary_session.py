@@ -25,10 +25,27 @@ def _query(subtype: bytes = b"\x02\x00") -> bytes:
     return b"\x5a\xa5" + subtype + bytes(16) + bytes([sum(subtype) & 255])
 
 
-def _reply(subtype: bytes = b"\x02\x00", *, collision: bool = False) -> bytes:
-    body = b"\xaa\xbb" + subtype + b"\x04\x3d\x00" + bytes([4 if collision else 70])
-    body += bytes(12)
-    return body + bytes([sum(body[2:]) & 255])
+def _reply(
+    subtype: bytes = b"\x02\x00",
+    *,
+    collision: bool = False,
+    voltage: int = 1085,
+    power: int | None = None,
+) -> bytes:
+    # Exact 20-byte envelope + checksum byte (21 total), matching production AABB.
+    body = bytearray(b"\xaa\xbb" + subtype + bytes(16))
+    body[4:6] = voltage.to_bytes(2, "big")
+    if power is not None:
+        body[6:8] = power.to_bytes(2, "big")
+    else:
+        body[7] = 4 if collision else 70
+    return bytes(body) + bytes([sum(body[2:]) & 255])
+
+
+def _collision_0200() -> bytes:
+    """Checksum-valid AABB/0200 that is also a legal EyeBond header (PV 113.1 V, 20 W)."""
+
+    return _reply(voltage=1131, power=2)
 
 
 def _framed(*, tid: int = 0xAABB, size: int = 20, devcode: int = 0x0200) -> bytes:
@@ -239,7 +256,12 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
                 (_reply()[:-1] + bytes([_reply()[-1] ^ 1]), "aabb_checksum_invalid"),
                 (_reply(b"\x02\x02"), "aabb_response_subtype_mismatch"),
                 (_reply(b"\x02\x03"), "aabb_subtype_unsupported"),
-                (_reply(collision=True), "binary_frame_ambiguous"),
+                # Collision with bad checksum under an outstanding 0200 claim:
+                # choose AABB then reject; never publish.
+                (
+                    _collision_0200()[:-1] + bytes([_collision_0200()[-1] ^ 1]),
+                    "aabb_checksum_invalid",
+                ),
             ):
                 with self.subTest(kind=kind, reason=reason):
                     connection, reader, writer, run = await self._open(kind)
@@ -250,6 +272,14 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.gather(run, return_exceptions=True)
                     self.assertTrue(writer.closed)
                     self.assertEqual(connection.collector_info.last_disconnect_reason, reason)
+                    if reason in ("binary_frame_ambiguous", "aabb_checksum_invalid"):
+                        self.assertEqual(
+                            connection.take_mppt_framing_failure_latch(),
+                            reason,
+                        )
+                        self.assertEqual(connection.take_mppt_framing_failure_latch(), "")
+                    else:
+                        self.assertEqual(connection.take_mppt_framing_failure_latch(), "")
 
     async def test_eof_or_stall_never_becomes_a_short_success(self):
         for kind in ("framed", "at"):
@@ -274,19 +304,82 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(connection.collector_info.raw_response_count, 0)
 
     async def test_late_checksum_colliding_framed_reply_is_not_auxiliary(self):
-        # A valid21-byte AABB prefix of a28-byte EyeBond frame, AND a frame
-        # whose entire21bytes satisfy both grammars. Future liveness is irrelevant.
+        # Outstanding 0200 claim + checksum-valid colliding reply is AABB.
+        # Same bytes with a bad checksum reject. No claim / subtype mismatch
+        # stay fail-closed and never publish.
         for kind in ("framed", "at"):
-            for size in (13, 20):
+            with self.subTest(kind=kind, arm="owned_valid"):
                 connection, reader, writer, _ = await self._open(kind)
-                wire = bytearray(_framed(size=size))
-                wire[20] = sum(wire[2:20]) & 255
+                wire = _collision_0200()
                 task = await self._start_read(connection, writer)
                 reader.feed_data(wire)
+                self.assertEqual(await task, wire)
+                self.assertTrue(connection.connected)
+                self.assertEqual(connection.collector_info.raw_response_count, 0)
+            with self.subTest(kind=kind, arm="owned_bad_checksum"):
+                connection, reader, writer, run = await self._open(kind)
+                wire = _collision_0200()
+                bad = wire[:-1] + bytes([wire[-1] ^ 1])
+                task = await self._start_read(connection, writer)
+                reader.feed_data(bad)
                 with self.assertRaises(ConnectionError):
                     await task
-                self.assertEqual(connection.collector_info.last_disconnect_reason, "binary_frame_ambiguous")
+                await asyncio.gather(run, return_exceptions=True)
+                self.assertEqual(
+                    connection.collector_info.last_disconnect_reason,
+                    "aabb_checksum_invalid",
+                )
+                self.assertEqual(
+                    connection.take_mppt_framing_failure_latch(),
+                    "aabb_checksum_invalid",
+                )
                 self.assertEqual(connection.collector_info.raw_response_count, 0)
+            with self.subTest(kind=kind, arm="no_claim_overlap"):
+                # MIXED enabled after a completed read; unsolicited collision.
+                connection, reader, writer, run = await self._open(kind)
+                first = await self._start_read(connection, writer)
+                reader.feed_data(_reply())
+                await first
+                self.assertTrue(connection._auxiliary_session.enabled)
+                self.assertIsNone(connection._auxiliary_session.claim)
+                reader.feed_data(_collision_0200())
+                await asyncio.gather(run, return_exceptions=True)
+                self.assertTrue(writer.closed)
+                self.assertEqual(
+                    connection.collector_info.last_disconnect_reason,
+                    "binary_frame_ambiguous",
+                )
+                self.assertEqual(
+                    connection.take_mppt_framing_failure_latch(),
+                    "binary_frame_ambiguous",
+                )
+                self.assertEqual(connection.collector_info.raw_response_count, 0)
+            with self.subTest(kind=kind, arm="subtype_mismatch"):
+                connection, reader, writer, run = await self._open(kind)
+                task = await self._start_read(connection, writer, subtype=b"\x02\x02")
+                reader.feed_data(_collision_0200())
+                with self.assertRaises(ConnectionError):
+                    await task
+                await asyncio.gather(run, return_exceptions=True)
+                self.assertEqual(
+                    connection.collector_info.last_disconnect_reason,
+                    "binary_frame_ambiguous",
+                )
+                self.assertEqual(
+                    connection.take_mppt_framing_failure_latch(),
+                    "binary_frame_ambiguous",
+                )
+                self.assertEqual(connection.collector_info.raw_response_count, 0)
+            for size in (13, 20):
+                with self.subTest(kind=kind, arm="framed_prefix", size=size):
+                    connection, reader, writer, _ = await self._open(kind)
+                    wire = bytearray(_framed(size=size))
+                    wire[20] = sum(wire[2:20]) & 255
+                    task = await self._start_read(connection, writer)
+                    reader.feed_data(wire)
+                    self.assertEqual(await task, bytes(wire[:21]))
+                    self.assertTrue(connection.connected)
+                    self.assertEqual(connection.collector_info.raw_response_count, 0)
 
     async def test_default_session_does_not_reinterpret_aabb_tid(self):
         for kind in ("framed", "at"):
@@ -438,6 +531,116 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(new.enabled)
         self.assertFalse(new.closed)
         self.assertIsNone(new.claim)
+
+    async def test_illegal_eybond_header_resyncs_without_publishing_junk(self) -> None:
+        """Non-aux: discard 000f02ff0000ff04; deliver aabb-leading legal frame only."""
+
+        junk = bytes.fromhex("000f02ff0000ff04")
+        # tid 0xAABB so follow-on starts with aa bb — one-byte slide would false-accept.
+        # Non-AABB subtype prefix so the non-aux EyeBond path stays unambiguous.
+        valid = _framed(tid=0xAABB, size=4, devcode=0x02FF)
+        self.assertEqual(valid[:2], b"\xaa\xbb")
+        connection, reader, writer, run = await self._open("framed")
+        future = asyncio.get_running_loop().create_future()
+        connection._pending[0xAABB] = future
+        connection._pending_fcode[0xAABB] = 4
+        reader.feed_data(junk + valid)
+        header, payload = await asyncio.wait_for(future, 1.0)
+        self.assertEqual(header.tid, 0xAABB)
+        self.assertEqual(payload, bytes(4))
+        self.assertLess(header.payload_len, 100)
+        self.assertNotEqual(header.payload_len, 1192)
+        self.assertTrue(connection.connected)
+        self.assertFalse(writer.closed)
+        self.assertEqual(connection.collector_info.last_disconnect_reason, "")
+        await self._stop(run)
+
+    async def test_two_illegal_eybond_headers_close_session(self) -> None:
+        junk = bytes.fromhex("000f02ff0000ff04")
+        connection, reader, writer, run = await self._open("framed")
+        future = asyncio.get_running_loop().create_future()
+        connection._pending[0x1001] = future
+        # Second illegal 8-byte window after one whole-window discard closes.
+        reader.feed_data(junk + bytes([0xFF]) * 8)
+        await asyncio.gather(run, return_exceptions=True)
+        self.assertTrue(writer.closed)
+        self.assertIn(
+            connection.collector_info.last_disconnect_reason,
+            {
+                "collector_frame_length_invalid",
+                "collector_frame_payload_too_large",
+                "collector_frame_function_invalid",
+            },
+        )
+        with self.assertRaises(ConnectionError):
+            future.result()
+
+
+class AtFacadeFramingLatchTests(unittest.TestCase):
+    def test_take_mppt_framing_latch_reads_disconnected_framed_session(self):
+        """Framing kill clears connected; AT facade must still take-clear the latch."""
+        from unittest.mock import MagicMock
+
+        from custom_components.eybond_local.collector.transport.shared_at import (
+            SharedCollectorAtTransport,
+        )
+
+        transport = SharedCollectorAtTransport(
+            host="127.0.0.1",
+            port=18899,
+            request_timeout=3.0,
+            collector_ip="192.0.2.10",
+            collector_session_protocol="eybond_framed",
+        )
+        framed = MagicMock()
+        framed.connected = False
+        framed.take_mppt_framing_failure_latch.return_value = "binary_frame_ambiguous"
+        transport._framed_connection = (  # type: ignore[method-assign]
+            lambda *, create_placeholder=False: framed
+        )
+        transport._at_connection = (  # type: ignore[method-assign]
+            lambda *, create_placeholder=False: None
+        )
+        transport._uses_at_text_session = lambda: False  # type: ignore[method-assign]
+
+        self.assertEqual(
+            transport.take_mppt_framing_failure_latch(),
+            "binary_frame_ambiguous",
+        )
+        framed.take_mppt_framing_failure_latch.assert_called_once_with()
+
+    def test_peek_mppt_framing_latch_reads_disconnected_framed_session(self):
+        """Peek must mirror take's disconnected-framed path (no clear)."""
+        from unittest.mock import MagicMock
+
+        from custom_components.eybond_local.collector.transport.shared_at import (
+            SharedCollectorAtTransport,
+        )
+
+        transport = SharedCollectorAtTransport(
+            host="127.0.0.1",
+            port=18899,
+            request_timeout=3.0,
+            collector_ip="192.0.2.10",
+            collector_session_protocol="eybond_framed",
+        )
+        framed = MagicMock()
+        framed.connected = False
+        framed.peek_mppt_framing_failure_latch.return_value = "binary_frame_ambiguous"
+        transport._framed_connection = (  # type: ignore[method-assign]
+            lambda *, create_placeholder=False: framed
+        )
+        transport._at_connection = (  # type: ignore[method-assign]
+            lambda *, create_placeholder=False: None
+        )
+        transport._uses_at_text_session = lambda: False  # type: ignore[method-assign]
+
+        self.assertEqual(
+            transport.peek_mppt_framing_failure_latch(),
+            "binary_frame_ambiguous",
+        )
+        framed.peek_mppt_framing_failure_latch.assert_called_once_with()
+        framed.take_mppt_framing_failure_latch.assert_not_called()
 
 
 if __name__ == "__main__":

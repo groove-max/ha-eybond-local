@@ -39,7 +39,9 @@ from .diagnostic_modbus import DiagnosticModbusSession, ModbusDiagnosticClaim
 from .send_ownership import SocketSendOwner, finish_request_future
 from .request_trace import SocketRequestTrace
 from .binary_framing import (
-    BinaryFramingError, BinaryGrammar, async_read_binary_frame,
+    BinaryFramingError,
+    BinaryGrammar,
+    async_read_binary_frame,
 )
 from .common import (
     _AT_TEXT_MIXED_FRAME_READ_TIMEOUT,
@@ -92,6 +94,7 @@ class _CollectorConnection:
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
         self._last_heartbeat_monotonic: float | None = None
         self._last_liveness_monotonic: float | None = None
+        self.last_framed_exchange_monotonic: float | None = None
         self._session_id = ""
         self._session_identity_callback: Callable[[str, str, str], None] | None = None
         self._run_epoch = 0
@@ -111,6 +114,18 @@ class _CollectorConnection:
         self._collector.heartbeat_age_seconds = self._heartbeat_age_seconds()
         self._collector.heartbeat_fresh = self._has_fresh_heartbeat()
         return _copy_collector_info(self._collector)
+
+    def peek_mppt_framing_failure_latch(self) -> str:
+        """Read the live MIXED framing-kill latch without clearing it."""
+
+        return self._collector.mppt_framing_failure_latch or ""
+
+    def take_mppt_framing_failure_latch(self) -> str:
+        """Return and clear the live MIXED framing-kill latch (not a snapshot)."""
+
+        reason = self._collector.mppt_framing_failure_latch
+        self._collector.mppt_framing_failure_latch = ""
+        return reason
 
     def set_heartbeat_interval(self, interval: float) -> None:
         self._heartbeat_interval = float(interval)
@@ -386,6 +401,7 @@ class _CollectorConnection:
         # after the runtime's request table is created. Never inherit the old
         # connection's timestamp or replace the supplied observation time by now.
         self._last_liveness_monotonic = initial_liveness_monotonic
+        self.last_framed_exchange_monotonic = None
         self._auxiliary_session = AuxiliaryReadSession()
         self._diagnostic_modbus = DiagnosticModbusSession()
         self._reader = reader
@@ -565,6 +581,7 @@ class _CollectorConnection:
                         reader, prefix=prefix, grammar=BinaryGrammar.MIXED,
                         started_at=frame_started,
                         timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
+                        auxiliary_claim=auxiliary_claim,
                     ))
                     if frame.grammar is BinaryGrammar.AABB:
                         auxiliary.accept(frame, auxiliary_claim)
@@ -592,21 +609,94 @@ class _CollectorConnection:
                     header = decode_header(header_bytes)
                     header_error = _runtime_eybond_header_error(header)
                     if header_error:
-                        self._collector.last_disconnect_reason = header_error
+                        # function_invalid stays fatal here. A 7-byte raw RTU
+                        # prefix plus the next frame's first byte is an illegal
+                        # function, and discarding that window invents a second
+                        # header that stalls on a huge payload (#39). Length and
+                        # payload-size errors may discard one window only when
+                        # the next header is already buffered.
+                        inner = getattr(reader, "_reader", None)
+                        unread = len(getattr(reader, "_buffer", b"")) + len(
+                            getattr(inner, "_buffer", b"")
+                        )
+                        resync = (
+                            header_error in (
+                                "collector_frame_length_invalid",
+                                "collector_frame_payload_too_large",
+                            )
+                            and unread >= HEADER_SIZE
+                        )
+                        if not resync:
+                            self._collector.last_disconnect_reason = header_error
+                            logger.warning(
+                                "Closing collector session after malformed frame header "
+                                "remote=%s reason=%s header=%s tid=%d devcode=0x%04X "
+                                "devaddr=0x%02X fc=%d payload=%d",
+                                self._collector.remote_ip,
+                                header_error,
+                                header_bytes.hex(),
+                                header.tid,
+                                header.devcode,
+                                header.devaddr,
+                                header.fcode,
+                                header.payload_len,
+                            )
+                            return
+                        # One whole-window discard: ignore the illegal 8 bytes and
+                        # read a fresh header. Never keep a tail or one-byte slide
+                        # (that forms false-legal headers such as ff0000ff04aabb02).
+                        # payload_too_large stays a header check — never
+                        # readexactly of that huge length.
+                        discarded_header_hex = header_bytes.hex()
+                        try:
+                            header_bytes = await read(asyncio.wait_for(
+                                reader.readexactly(HEADER_SIZE),
+                                timeout=_FRAMED_HEADER_COMPLETION_TIMEOUT,
+                            ))
+                        except (asyncio.TimeoutError, asyncio.IncompleteReadError):
+                            self._collector.last_disconnect_reason = header_error
+                            logger.warning(
+                                "Closing collector session after malformed frame header "
+                                "remote=%s reason=%s header=%s tid=%d devcode=0x%04X "
+                                "devaddr=0x%02X fc=%d payload=%d",
+                                self._collector.remote_ip,
+                                header_error,
+                                header_bytes.hex(),
+                                header.tid,
+                                header.devcode,
+                                header.devaddr,
+                                header.fcode,
+                                header.payload_len,
+                            )
+                            return
+                        header = decode_header(header_bytes)
+                        header_error = _runtime_eybond_header_error(header)
+                        if header_error:
+                            self._collector.last_disconnect_reason = header_error
+                            logger.warning(
+                                "Closing collector session after malformed frame header "
+                                "remote=%s reason=%s discarded=%s header=%s tid=%d "
+                                "devcode=0x%04X devaddr=0x%02X fc=%d payload=%d",
+                                self._collector.remote_ip,
+                                header_error,
+                                discarded_header_hex,
+                                header_bytes.hex(),
+                                header.tid,
+                                header.devcode,
+                                header.devaddr,
+                                header.fcode,
+                                header.payload_len,
+                            )
+                            return
                         logger.warning(
-                            "Closing collector session after malformed frame header "
-                            "remote=%s reason=%s header=%s tid=%d devcode=0x%04X "
-                            "devaddr=0x%02X fc=%d payload=%d",
+                            "Discarded illegal EyeBond header remote=%s discarded=%s "
+                            "next_tid=%d next_fc=%d next_payload=%d",
                             self._collector.remote_ip,
-                            header_error,
-                            header_bytes.hex(),
+                            discarded_header_hex,
                             header.tid,
-                            header.devcode,
-                            header.devaddr,
                             header.fcode,
                             header.payload_len,
                         )
-                        return
                     payload = b""
                     if header.payload_len > 0:
                         try:
@@ -678,6 +768,7 @@ class _CollectorConnection:
                 # TID. It remains a heartbeat, never an FC2/FC3/FC4 reply. Do not
                 # compare devcode/address: firmware legitimately rewrites those.
                 if correlated:
+                    self.last_framed_exchange_monotonic = observed_at
                     future.set_result((header, payload))
                     continue
 
@@ -691,8 +782,13 @@ class _CollectorConnection:
                     payload.hex(),
                 )
         except BinaryFramingError as exc:
-            diagnostic.close(str(exc))
-            self._collector.last_disconnect_reason = str(exc)
+            reason = str(exc)
+            diagnostic.close(reason)
+            self._collector.last_disconnect_reason = reason
+            if reason in ("binary_frame_ambiguous", "aabb_checksum_invalid"):
+                # Latch survives run() clearing last_disconnect_reason on
+                # reconnect; the MPPT poller take-clears after reading.
+                self._collector.mppt_framing_failure_latch = reason
             logger.warning("Closing collector binary session remote=%s reason=%s",
                            self._collector.remote_ip, exc)
         except asyncio.IncompleteReadError:
@@ -748,6 +844,7 @@ class _CollectorConnection:
         self._connected.clear()
         self._last_heartbeat_monotonic = None
         self._last_liveness_monotonic = None
+        self.last_framed_exchange_monotonic = None
         self._session_id = ""
         self._session_identity_callback = None
 
@@ -815,6 +912,7 @@ class _CollectorAtConnection:
         self._pending_framed_parameter: dict[int, int] = {}
         self._tid = TIDCounter()
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
+        self.last_framed_exchange_monotonic: float | None = None
         self._session_id = ""
         self._session_identity_callback: Callable[[str, str, str], None] | None = None
         self._raw_passthrough_bootstrap = str(raw_passthrough_bootstrap or "").strip().lower()
@@ -846,6 +944,18 @@ class _CollectorAtConnection:
     @property
     def collector_info(self) -> CollectorInfo:
         return _copy_collector_info(self._collector)
+
+    def peek_mppt_framing_failure_latch(self) -> str:
+        """Read the live MIXED framing-kill latch without clearing it."""
+
+        return self._collector.mppt_framing_failure_latch or ""
+
+    def take_mppt_framing_failure_latch(self) -> str:
+        """Return and clear the live MIXED framing-kill latch (not a snapshot)."""
+
+        reason = self._collector.mppt_framing_failure_latch
+        self._collector.mppt_framing_failure_latch = ""
+        return reason
 
     @property
     def mixed_frame_observed(self) -> bool:
@@ -1292,6 +1402,7 @@ class _CollectorAtConnection:
         self._writer = writer
         self._session_id = str(session_id or "").strip()
         self._session_identity_callback = session_identity_callback
+        self.last_framed_exchange_monotonic = None
         self._raw_passthrough_bootstrapped = False
         # Data-plane evidence belongs to this physical session only. A reconnect
         # must positively negotiate raw serial vs FC4 again.
@@ -1468,6 +1579,7 @@ class _CollectorAtConnection:
                             reader, prefix=prefix, grammar=BinaryGrammar.MIXED,
                             started_at=frame_started,
                             timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
+                            auxiliary_claim=auxiliary_claim,
                         ))
                         if frame.grammar is BinaryGrammar.AABB:
                             auxiliary.accept(frame, auxiliary_claim)
@@ -1544,6 +1656,7 @@ class _CollectorAtConnection:
                             and (expected_parameter is None or len(payload) < 2
                                  or payload[1] == expected_parameter)
                         ):
+                            self.last_framed_exchange_monotonic = monotonic()
                             future.set_result((header, payload))
                             continue
                     if header.fcode == FC_QUERY_COLLECTOR:
@@ -1566,9 +1679,14 @@ class _CollectorAtConnection:
                 line = prefix + await read(reader.readuntil(b"\n"))
                 self._handle_at_response_line(line)
         except BinaryFramingError as exc:
-            diagnostic.close(str(exc))
-            runtime_modbus.close(str(exc))
-            self._collector.last_disconnect_reason = str(exc)
+            reason = str(exc)
+            diagnostic.close(reason)
+            runtime_modbus.close(reason)
+            self._collector.last_disconnect_reason = reason
+            if reason in ("binary_frame_ambiguous", "aabb_checksum_invalid"):
+                # Latch survives run() clearing last_disconnect_reason on
+                # reconnect; the MPPT poller take-clears after reading.
+                self._collector.mppt_framing_failure_latch = reason
             logger.warning("Closing collector binary session remote=%s reason=%s",
                            self._collector.remote_ip, exc)
         except asyncio.IncompleteReadError:
@@ -1715,6 +1833,7 @@ class _CollectorAtConnection:
         self._connected.clear()
         self._session_id = ""
         self._session_identity_callback = None
+        self.last_framed_exchange_monotonic = None
 
         # Do not let old wait_closed()/reader cleanup cancel a newer session.
         future = self._pending_response

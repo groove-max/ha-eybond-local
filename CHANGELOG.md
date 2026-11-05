@@ -419,10 +419,36 @@ the GitHub release body should be rendered from the matching version section her
   or inverter controls are inferred.
 
 - Short-ASCII devices can also expose documented BMS and rated readings through
-  optional read-only RB/F queries. These entities are disabled by default.
+  optional read-only RB/F/RH queries. These entities are disabled by default.
   Missing, invalid or expired BMS samples remove their old values without
-  interrupting basic telemetry. BMS current scaling and PV remain unqualified;
-  this is not full device or control support (#45).
+  interrupting basic telemetry. Charge/discharge currents and measured
+  `battery_power` publish at 19B4 segment-7 `multiply=0.1` only while optional
+  RH reports BMS current display accuracy `1` (with decimals) and F ratings are
+  present for I/P bounds; RH `0`, unread or failed RH omits those keys. RH=1 is
+  the discriminator (no retail-model gate). One live family member has
+  SmartValue correlation for that path; other members (e.g. Maxinn) are not
+  separately live-proven. This is not full device or control support (#45).
+
+- Optional short-ASCII **live PV/MPPT** uses the documented auxiliary `0200`
+  runtime read, gated by config-entry option `admit_short_ascii_mppt` (stock
+  installs do not poll until admitted). Live PV/MPPT measurement sensors stay
+  **disabled by default**. Quiet fault diagnostics `q1_error_code`, `q1_error`,
+  `ups_fault`, `mppt_error_code`, and `mppt_error` are `enabled_default: true`
+  (entity state only — no per-poll WARNING spam). When an outstanding `0200`
+  claim matches an EyeBond/AABB overlap, the reply is read as AABB and must
+  still pass the checksum. A framing kill poisons further `0200` polls for
+  120 s. A soft miss omits live PV keys and publishes labelled
+  `*_held_estimate` mirrors for the 60 s MPPT TTL.
+
+- An illegal EyeBond header is dropped once as a whole 8-byte window and the
+  next header is read fresh. A second illegal header still closes the session.
+  The discard logs `Discarded illegal EyeBond header` with the dropped hex and
+  the next header's tid, function code, and payload length.
+
+- A collector that redials without sending bytes, and that this listener
+  already owns as a framed payload peer, enters the framed session and receives
+  a heartbeat. An AT owner on the same IP still waits for identity bytes. That
+  adopt logs `Adopting silent framed redial remote=`.
 
 ### Fixed
 

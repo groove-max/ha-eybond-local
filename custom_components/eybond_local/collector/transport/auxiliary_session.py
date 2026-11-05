@@ -35,9 +35,10 @@ class AuxiliaryReadClaim:
 class AuxiliaryReadSession:
     """One physical session, independent of caller future lifetime.
 
-    MIXED remains conservative: a checksum cannot disambiguate a valid EyeBond
-    frame with TID0xAABB. Neither a current waiter nor historical request absence
-    is permission to guess. An ambiguous boundary is a terminal framing error.
+    MIXED overlap selection uses the outstanding AuxiliaryReadClaim subtype,
+    never future.done() or checksum preference alone. Matching claim plus AABB
+    validation admits the 21-byte reply; no claim or subtype mismatch on an
+    EyeBond/AABB overlap stays ``binary_frame_ambiguous`` (session-fatal).
     """
 
     def __init__(self) -> None:

@@ -182,6 +182,16 @@ late readiness callbacks and final shared-listener cleanup with real loopback
 sockets. The HA repair/reload cancellation test remains enabled and unchanged;
 neither expected-error suppression nor sleeps are used to hide the race.
 
+When one identified collector dials again without closing the previous
+session, [CALLBACK_SOCKET_STORM.md](CALLBACK_SOCKET_STORM.md) keeps exactly
+one survivor and resets only the extras. That policy never rebinds this
+listener and never quiet-rejects every dial. Two unidentified sockets that
+only share a peer IP stay independent. A PN-less sibling is in that
+collector's storm set only when the same peer IP has a live routed payload
+connection for that strong full PN. A parked, stale, or not-yet-routed
+socket does not pull a PN-less neighbor into the set. A socket that
+presents a different strong full PN is left alone, even on the same peer IP.
+
 ## Session registry owns identity
 
 `connection/session_registry.py` (`CallbackSessionRegistry`) is the single object

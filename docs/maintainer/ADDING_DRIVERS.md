@@ -121,14 +121,15 @@ Only the request present at the start of a frame can receive that frame.
 Cancellation or timeout after sending closes that exact socket, since these
 replies have no transaction identifier. Reconnection starts a new owner.
 
-Integrity or boundary failures close the session. In particular, a valid
-EyeBond frame with transaction ID `0xAABB` can overlap the auxiliary grammar:
-neither a valid checksum nor an absent waiter resolves that ambiguity. The
-current foundation refuses such a frame; it does **not** guarantee auxiliary
-availability for every possible payload. Driver-level admission, truthful
-model/field semantics and optional-data expiry remain separate work before
-user-facing support. Normal connections keep their existing grammar until an
-explicit auxiliary read is requested.
+Integrity or boundary failures close the session. EyeBond and AABB can overlap
+on the first eight bytes. A checksum-valid AABB reply is accepted only when
+the outstanding auxiliary claim matches that subtype. No claim, or a subtype
+mismatch, stays ambiguous and closes the session. The reject rules are in
+[SHORT_ASCII_MIXED_SOCKET.md](SHORT_ASCII_MIXED_SOCKET.md). The foundation
+does not guarantee auxiliary availability for every possible payload.
+Driver-level admission, truthful model/field semantics and optional-data
+expiry remain separate work before user-facing support. Normal connections
+keep their existing grammar until an explicit auxiliary read is requested.
 
 Ordinary framed, AT-management and raw-payload sends also pin their physical
 writer and run epoch before waiting for request/write locks. `SocketSendOwner`
@@ -160,6 +161,10 @@ not a proved availability or sentinel policy. The sample has no timestamp or
 freshness claim. See the [offline inspector](../../tools/README.md#inspect-a-short-ascii-mppt-frame-offline)
 for capture analysis; enabling live PV still requires the admission contract
 and per-session optional-sample expiry/invalidation described above.
+Quiet fault diagnostics `mppt_error_code` / `mppt_error` and Q1
+`q1_error_code` / `q1_error` / `ups_fault` are default-on diagnostic sensors
+(entity state only — no per-poll WARNING spam). Do not force-enable live
+PV/MPPT measurements from catalog overlays.
 
 ### Qualified 09C1 baseline
 
@@ -244,35 +249,80 @@ candidate revisions, resolution and evidence fingerprint. Reload must restore
 that schema without borrowing default driver controls. Unqualified schema-only
 hints remain invalid.
 
-Optional F (22-byte fixed text) and RB (40 bytes, unsigned **8-bit** body sum,
-not Q1's 16-bit checksum) are runtime reads, not additional detection probes.
-The documented 25-byte RB field layout and captured 12 zero padding bytes are
-required; unknown extensions are rejected. Vendor 19B4 segments 6/7 and the
-correlated saved exchanges qualify these fields. Segment 5 also describes a
-BMS precision setting, but only one variant was captured: RB currents remain
-raw evidence until their scaling is established for both variants.
+Optional F (22-byte fixed text), RH (30 bytes, unsigned **8-bit** body sum) and
+RB (40 bytes, unsigned **8-bit** body sum, not Q1's 16-bit checksum) are runtime
+reads, not additional detection probes. The documented 25-byte RB field layout
+and captured 12 zero padding bytes are required; unknown extensions are
+rejected. Vendor 19B4 segments 6/7 and the correlated saved exchanges qualify
+the non-current RB fields. Segment 7 documents charge/discharge
+``multiply=0.1``; those currents and measured ``battery_power``
+(V × (Icharge − Idischarge)) publish only while optional RH reports BMS current
+display accuracy ``1`` (with decimals) and F ratings are available for I/P
+scaling bounds. RH ``0``, unread, expired or failed RH omits the keys —
+do not publish ÷10 blindly. RH=1 is the discriminator (no retail-model gate).
+That RH=1 path is SmartValue-correlated on one live family member; other
+members (e.g. Maxinn) are not separately live-proven and only light up if
+RH=1.
 
 `short_ascii_optional` owns per-runtime samples, scoped to the transport and
 inverter binding. The hub discards this state on recovery; samples are never
 persisted as identity. Each successful Q1 cycle performs at most one optional
-request (4-second bound), oldest due group first: RB every 30 seconds with a
-60-second TTL, F every 900 seconds with a 900-second TTL. Freshness is checked
-after the await. Invalid/timeout replies clear that group immediately, and
-FULL-result omission removes it from the hub. A failed or cancelled mandatory
-cycle, lost connection, changed binding or clock rollback clears all samples.
-Only optional failures alongside a successful Q1 count towards the shared
-four-strike command cache; the existing re-check action re-enables requests.
+request (4-second bound): RB every 30 seconds with a 60-second TTL, F and RH
+every 900 seconds with a 900-second TTL, and optional MPPT (`0200` aux) every
+30 seconds with a 60-second TTL **only when admitted**. Admission is the
+config-entry option `admit_short_ascii_mppt` (default absent/false), mirrored
+into runtime state by the hub; `enabled_default: false` alone only hides
+entities and must not poll. When both FC4 (RB/F/RH) and MPPT are due, prefer
+FC4 (oldest due within that set); MPPT runs only when it is the sole due
+sample, except that a due RB whose last sample is already TTL-stale yields
+once to MPPT so prefer-FC4 cannot starve admitted PV forever. MPPT
+soft-failures clear immediately with no 30 s penalty, one in-cycle 0200
+retry while connected for transient faults, never `record_command_failure`,
+and an MPPT fence must not abort the Q1 merge. A structural aux failure
+(`TypeError` / missing AT aux facade) backs off for a full TTL without that
+retry. Freshness is checked after the await. Invalid/timeout replies clear
+that group immediately, and FULL-result omission removes it from the hub. A
+failed or cancelled mandatory cycle, lost connection, changed binding or
+clock rollback clears all samples. Only optional FC4 failures alongside a
+successful Q1 count towards the shared four-strike command cache; the
+existing re-check action re-enables requests. Support Archive capture may
+include correlated `0200_request` / `0200` hex when a framed or AT aux
+facade is available (user-initiated evidence, not a stock poll). The
+short-ASCII capture sends 0200 only when `admit_short_ascii_mppt` is set.
 
 An RB reply with zero voltage and zero SOC explicitly withdraws **all** BMS
 measurements/path flags, including nonzero trailing fields seen in the capture.
 Positive voltage with zero SOC remains valid. Data availability is not a
 physical connection detector. Reference voltage, BMS voltage and ratings have
-separate owners; no current scaling, VA-to-watts or pack-voltage inference is
-allowed. Optional entities are disabled by default. Support evidence capture
-can read MP/Q1/MD/F/RB without changing command-support state.
+separate owners; pack-voltage is never inferred from reference voltage.
+Measured battery DC watts use published BMS currents. Optional entities are
+disabled by default. Support evidence capture can read MP/Q1/MD/F/RH/RB without
+changing command-support state.
 
-AABB/PV admission and inverter controls remain separate work. Do not report
-full PR/device support based on these fields or a saved-wire replay alone.
+#### Short-ASCII RB hard-reject / link-loss
+
+After a valid RB envelope (fixed length, sum8, documented layout), apply field
+gates before publish. Do not republish last-good samples on the live
+measurement keys or in the FULL fresh set. Labelled `*_held_estimate` entities
+may carry the last good sample for the hold TTL (180s BMS, 60s MPPT). They are
+diagnostic. Live keys are omitted on link-loss, hard reject, and MPPT soft miss.
+
+- **Pack-V (F-gated):** when `short_ascii_rated_battery_voltage` from F is
+  unknown, do not hard-reject on Pack-V alone. When known, inclusive window
+  **0.75×–4/3×** that rating (24 V → 18–32 so 25.6 passes; 48 V → 36–64 so
+  16 V / 1230 V die). Not a universal 30–70 band.
+- **Current / power:** SoC ∉ [0, 100] rejects (SoC 0 stays allowed when pack V
+  is present). Reject when abs(I) > **3×** F VA / F Vbat, or abs(P) >
+  **3× F VA** (same overload factor for I and P).
+- **Link-loss omit:** on V=0 ∧ SoC=0, publish
+  `short_ascii_bms_data_available=False` only and **omit** BMS measurement keys
+  from the FULL snapshot so the hub drops them (sensors unavailable). Do not
+  refresh hub freshness with stale V/SoC/I. Checksum/length fail → drop.
+  Optional RB TTL remains ~60 s for normal samples.
+
+Live PV is request-gated by `admit_short_ascii_mppt` as above; inverter
+controls remain separate work. Do not report full PR/device support based on
+these fields or a saved-wire replay alone.
 
 The preferred workflow is:
 

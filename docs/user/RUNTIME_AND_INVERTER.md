@@ -424,11 +424,17 @@ pack; do not use it as a replacement for a 24/48 V pack measurement.
 
 Some compatible devices also answer optional requests for **BMS Battery Voltage**,
 **Battery State of Charge**, BMS temperatures, cell voltages, cycle count,
-protection limits, charge/discharge path flags and rated values. These entities
-are disabled by default: open the inverter's entity list and enable the ones
-you need. A charge-path flag means the path is enabled, not that the battery is
+protection limits, charge/discharge path flags and rated values. When the
+device's RH settings report BMS current display accuracy **with decimals**,
+**BMS Charging Current**, **BMS Discharging Current** and **Battery DC Power**
+may also appear (scaled per the vendor decimals path). If RH reports without
+decimals, or RH has not been read successfully yet, those current/power
+entities stay unavailable rather than guessing a scale. These entities are
+disabled by default: open the inverter's entity list and enable the ones you
+need. A charge-path flag means the path is enabled, not that the battery is
 currently charging. BMS voltage is separate from Battery Reference Voltage;
-neither reading is calculated from the other.
+neither reading is calculated from the other. Battery DC Power is measured from
+BMS voltage and currents (positive while charging).
 
 For example, a Battery Reference Voltage near 12.5 V is not a claim that your
 48 V battery bank has dropped to 12.5 V. If the inverter does not answer the BMS
@@ -436,14 +442,15 @@ request, full-pack voltage remains unavailable; we do not multiply the reference
 by a guessed cell/block count. Temperature is supplied in °C; Home Assistant
 can display °F according to its unit settings or the entity's unit override.
 
-BMS is requested no more often than every 30 seconds, rated values every
-15 minutes, with at most one extra request per normal poll. A longer poll
-interval can delay them further. Failed or invalid responses immediately
-remove the old values for that group. At each refresh, BMS samples aged
-60 seconds or more and rated values aged 15 minutes or more are discarded.
-If the device returns the known
+BMS is requested no more often than every 30 seconds, rated values and RH
+settings every 15 minutes, with at most one extra request per normal poll. A
+longer poll interval can delay them further. Failed or invalid responses
+immediately remove the old values for that group. At each refresh, BMS samples
+aged 60 seconds or more and rated/RH values aged 15 minutes or more are
+discarded. If the device returns the known
 no-data BMS reply, **BMS Data Available** turns off and its measurements become
-unavailable, even if some fields still contain old numbers. This does not
+unavailable, even if some fields still contain old numbers. Labelled
+held-estimate entities may retain the last sample. This does not
 prove the physical battery is disconnected.
 
 After four failed optional requests while basic telemetry still responds,
@@ -451,11 +458,14 @@ that request is skipped. Use **Re-check supported commands** to try it again,
 for example after connecting a BMS. Missing optional data does not prevent
 basic inverter monitoring.
 
-This profile does not provide PV power, BMS currents, battery power, grid
-frequency or inverter controls. Selecting **Full Control** does not add
-undocumented settings. If readings are missing or implausible, create a
-Support Archive for review; it can include the optional raw replies. Do not
-select a similar retail model by guesswork.
+Stock installs do not poll PV until MPPT aux is admitted
+(`admit_short_ascii_mppt`). Live PV keys stay unavailable until a sample
+arrives, and a soft miss omits them. Labelled held-estimate entities may
+retain the last sample. Held PV entities are off by default. This profile
+does not provide grid frequency or inverter controls.
+Selecting **Full Control** does not add undocumented settings. If readings are
+missing or implausible, create a Support Archive for review; it can include the
+optional raw replies. Do not select a similar retail model by guesswork.
 
 ## Control mode
 
