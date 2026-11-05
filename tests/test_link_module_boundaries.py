@@ -104,6 +104,12 @@ class LinkCompositionBoundaryTests(unittest.TestCase):
             {name: paths for name, paths in owners.items() if len(paths) != 1},
             {},
         )
+        # Keep the original decomposition fingerprint intact while explicitly
+        # accounting for the new synchronous monitor observation helper.
+        self.assertEqual(counts.pop("_observe_owned_session_state"), 1)
+        self.assertEqual(
+            owners["_observe_owned_session_state"], {"session_projection.py"}
+        )
         payload = "\n".join(f"{name}:{count}" for name, count in sorted(counts.items()))
         self.assertEqual(sum(counts.values()), 120)
         self.assertEqual(len(counts), 120)
