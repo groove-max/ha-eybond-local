@@ -520,6 +520,7 @@ class _CollectorConnection:
         future = self._pending_at_response
         if future is not None and not future.done() and response.command == self._pending_at_command:
             self._last_liveness_monotonic = monotonic()
+            self._record_session_exchange()
             future.set_result(response)
             return
 

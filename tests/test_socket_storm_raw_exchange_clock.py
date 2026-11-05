@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from custom_components.eybond_local.collector.at import CollectorAtQueryStatus
 from custom_components.eybond_local.collector.protocol import (
     FC_FORWARD_TO_DEVICE,
     FC_HEARTBEAT,
@@ -71,6 +72,13 @@ def _crc(body: bytes) -> bytes:
 _MODBUS_REPLY = _crc(b"\x01\x03\x02\x00\x07")
 
 _AUX_QUERY = b"\x5a\xa5\x02\x00" + bytes(16) + b"\x02"
+
+_FWVER_REPLY = b"AT+FWVER:1.2.3\r\n"
+_FWVER_STATUS = b"AT+FWVER?\r\n:R001\r\n"
+
+
+def _fwver_responder(reply: bytes):
+    return lambda wire: reply if wire.startswith(b"AT+FWVER") else None
 
 
 def _aux_reply(subtype: bytes = b"\x02\x00") -> bytes:
@@ -729,6 +737,65 @@ class FramedSessionDeliveryTests(_ClockedCase):
         self.assertIsNone(connection.last_framed_exchange_monotonic)
         self.assertEqual(self._exchanges_since("s-b", 0.0), [])
 
+    async def test_framed_at_fwver_reply_during_drain_stamps_receipt_time(self) -> None:
+        """Fails on ec34608: _CollectorConnection._handle_at_response never stamps.
+
+        Maksym, PR #78 (issuecomment-6655658859): the mixed-text AT path in a
+        framed session resolves the future without recording the exchange.
+        """
+
+        connection, _reader, writer = await self._open()
+        response = await self._drain_case(
+            connection, writer,
+            lambda: connection.async_query("FWVER", request_timeout=1.0),
+            lambda: connection._pending_at_response,
+            _fwver_responder(_FWVER_REPLY),
+        )
+        self.assertEqual(response.value, "1.2.3")
+
+    async def test_framed_at_reply_before_replacement_does_not_stamp_successor(
+        self,
+    ) -> None:
+        """A framed AT reply delivered on s-a stamps s-a at delivery, never s-b.
+
+        Fails on ec34608 at the delivery assertion, because nothing stamps.
+        A fix that stamps on sender return, or stamps the successor, also fails.
+        """
+
+        connection, _reader, writer = await self._open()
+        captured: list[asyncio.Future] = []
+
+        def responder(wire: bytes) -> bytes | None:
+            if not wire.startswith(b"AT+FWVER"):
+                return None
+            future = connection._pending_at_response
+            if future is not None:
+                captured.append(future)
+            return _FWVER_REPLY
+
+        writer.responder = responder
+        writer.drain_gate = asyncio.Event()
+        self.clock.now = 30.0
+        send = asyncio.create_task(connection.async_query("FWVER", request_timeout=1.0))
+        await _wait(lambda: bool(captured) and captured[0].done())
+        self.assertFalse(send.done())
+        self.assertEqual(captured[0].result().value, "1.2.3")
+        self.assertEqual(self.exchanges, [("s-a", 30.0)])
+
+        self.clock.now = 32.0
+        _reader_2, writer_2, _task_2 = await self._run(
+            connection, "s-b", peer=("192.0.2.50", 40010),
+        )
+        self.assertIs(connection._writer, writer_2)
+        self.assertIsNone(connection.last_framed_exchange_monotonic)
+
+        self.clock.now = 33.0
+        writer.drain_gate.set()
+        with self.assertRaises(ConnectionError):
+            await send
+        self.assertIsNone(connection.last_framed_exchange_monotonic)
+        self.assertEqual(self._exchanges_since("s-b", 0.0), [])
+
 
 class ReplacedSessionTests(_ClockedCase):
     """An old AT raw reply must never stamp the session that replaced it."""
@@ -815,6 +882,170 @@ class ReplacedSessionTests(_ClockedCase):
         self.assertFalse(reader_1.at_eof())
         reader_1.feed_data(_PI30_REPLY)
         await asyncio.sleep(0.02)
+        self.assertIsNone(connection.last_framed_exchange_monotonic)
+        self.assertEqual(self.exchanges, [])
+
+
+class FramedAtStormTests(_StormRig):
+    """Framed incumbent, correlated AT reply, real storm policy.
+
+    Maksym, PR #78 (issuecomment-6655658859): a successful AT+FWVER reply on
+    the mixed-text path of ``_CollectorConnection`` must keep the incumbent
+    after quiet grace, as the same query on ``_CollectorAtConnection`` does.
+    Query-status errors, unsolicited metadata and the first identity DTUPN
+    must not stamp.
+    """
+
+    async def _open_framed_identified(self, session_id: str, *, at: float, peer: tuple[str, int]):
+        listener = self.listener
+        self.clock.now = at
+        listener._remember_session(
+            session_id=session_id, remote_ip=peer[0], remote_port=peer[1],
+        )
+        connection = _CollectorConnection(
+            remote_ip_hint=peer[0], heartbeat_interval=300.0, write_timeout=5.0,
+        )
+        listener._session_payload_connections[session_id] = connection
+        listener._mark_session_state(session_id, "routed_framed")
+        reader, writer, _task = await self._run(
+            connection,
+            session_id,
+            peer=peer,
+            on_exchange=listener._apply_socket_storm,
+            identity=listener._mark_session_identity,
+            closed=listener._mark_socket_session_closed,
+            disconnect=listener._drop_connection_indexes_for_connection,
+        )
+        await _wait(lambda: bool(writer.writes) and not connection._write_lock.locked())
+        self.assertEqual(decode_header(writer.writes[0][:HEADER_SIZE]).fcode, FC_HEARTBEAT)
+        reader.feed_data(f"AT+DTUPN:{_PN}\r\n".encode("ascii"))
+        await _wait(lambda: listener._session_inventory[session_id].collector_pn == _PN)
+        return connection, reader, writer
+
+    async def _setup_framed_overlap(self):
+        incumbent, reader_a, writer_a = await self._open_framed_identified(
+            "s-a", at=0.0, peer=("192.0.2.60", 40011),
+        )
+        self.assertIsNone(incumbent.last_framed_exchange_monotonic)
+        self.assertEqual(self.exchanges, [])
+
+        self.clock.now = 10.0
+        writer_a.responder = lambda wire: _MODBUS_REPLY if wire == _MODBUS_REQUEST else None
+        owner = SocketSendOwner.capture(incumbent)
+        reply = await incumbent._diagnostic_modbus.send(
+            incumbent, owner, _MODBUS_REQUEST, 1.0,
+        )
+        writer_a.responder = None
+        self.assertEqual(reply, _MODBUS_REPLY)
+        self.assertEqual(incumbent.last_framed_exchange_monotonic, 10.0)
+        self.assertEqual(self.exchanges, [("s-a", 10.0)])
+
+        await self._open_identified("s-b", at=20.0, peer=("192.0.2.60", 40012))
+        deadline, _handle = self.listener._socket_storm_rechecks[_PN]
+        self.assertEqual(deadline, 20.0 + GRACE_SECONDS)
+        self.assertEqual(self.storm_lines, [])
+        return incumbent, reader_a, writer_a
+
+    def _arbitrate_at_36(self) -> dict:
+        self.clock.now = 36.0
+        self._fire_grace_recheck()
+        inventory = self.listener._session_inventory
+        return {
+            "storm_decisions": self._storm_decisions(),
+            "incumbent_state": inventory["s-a"].state,
+            "newcomer_state": inventory["s-b"].state,
+        }
+
+    async def test_framed_at_fwver_reply_keeps_incumbent_after_grace(self) -> None:
+        """Maksym's reproduction. Fails on ec34608: s-a is replaced at t=36."""
+
+        incumbent, _reader_a, writer_a = await self._setup_framed_overlap()
+        self.clock.now = 30.0
+        writer_a.responder = _fwver_responder(_FWVER_REPLY)
+        response = await incumbent.async_query("FWVER", request_timeout=1.0)
+        writer_a.responder = None
+        observed = {
+            "fwver_value": response.value,
+            "collector_version": incumbent.collector_info.smartess_collector_version,
+            "incumbent_last_framed_exchange_monotonic": (
+                incumbent.last_framed_exchange_monotonic
+            ),
+            "incumbent_exchange_callbacks_at_or_after_t30": (
+                self._exchanges_since("s-a", 30.0)
+            ),
+        }
+        observed.update(self._arbitrate_at_36())
+        expected = {
+            "fwver_value": "1.2.3",
+            "collector_version": "1.2.3",
+            "incumbent_last_framed_exchange_monotonic": 30.0,
+            "incumbent_exchange_callbacks_at_or_after_t30": [("s-a", 30.0)],
+            "storm_decisions": [("keep_healthy", "s-b")],
+            "incumbent_state": "routed_framed",
+            "newcomer_state": "closed_socket_storm",
+        }
+        self.assertEqual(observed, expected)
+
+    async def test_at_socket_fwver_reply_keeps_incumbent_after_grace(self) -> None:
+        """Passing comparison: the same AT+FWVER query on _CollectorAtConnection."""
+
+        incumbent, writer_a = await self._setup_overlap()
+        await self._at_exchange(incumbent, writer_a, at=30.0)
+        observed = {
+            "incumbent_last_framed_exchange_monotonic": (
+                incumbent.last_framed_exchange_monotonic
+            ),
+            "incumbent_exchange_callbacks_at_or_after_t30": (
+                self._exchanges_since("s-a", 30.0)
+            ),
+        }
+        observed.update(self._arbitrate_at_36())
+        expected = {
+            "incumbent_last_framed_exchange_monotonic": 30.0,
+            "incumbent_exchange_callbacks_at_or_after_t30": [("s-a", 30.0)],
+            "storm_decisions": [("keep_healthy", "s-b")],
+            "incumbent_state": "routed_at_text",
+            "newcomer_state": "closed_socket_storm",
+        }
+        self.assertEqual(observed, expected)
+
+    async def test_framed_at_query_status_error_does_not_stamp(self) -> None:
+        """Passes on ec34608: liveness only, no exchange."""
+
+        incumbent, _reader_a, writer_a = await self._setup_framed_overlap()
+        self.clock.now = 30.0
+        writer_a.responder = _fwver_responder(_FWVER_STATUS)
+        with self.assertRaises(CollectorAtQueryStatus) as caught:
+            await incumbent.async_query("FWVER", request_timeout=1.0)
+        writer_a.responder = None
+        self.assertEqual((caught.exception.command, caught.exception.status), ("FWVER", "R001"))
+        self.assertEqual(incumbent._last_liveness_monotonic, 30.0)
+        self.assertEqual(incumbent.last_framed_exchange_monotonic, 10.0)
+        self.assertEqual(self._exchanges_since("s-a", 30.0), [])
+
+    async def test_framed_unsolicited_at_metadata_does_not_stamp(self) -> None:
+        """Passes on ec34608: metadata applied, no pending future, no exchange."""
+
+        incumbent, reader_a, _writer_a = await self._setup_framed_overlap()
+        self.assertIsNone(incumbent._pending_at_response)
+        self.clock.now = 30.0
+        reader_a.feed_data(b"AT+FWVER:9.9.9\r\n")
+        await _wait(
+            lambda: incumbent.collector_info.smartess_collector_version == "9.9.9",
+        )
+        self.assertEqual(incumbent.last_framed_exchange_monotonic, 10.0)
+        self.assertEqual(self._exchanges_since("s-a", 30.0), [])
+
+    async def test_framed_first_dtupn_identity_does_not_stamp(self) -> None:
+        """Passes on ec34608: the unsolicited identity DTUPN is not an exchange."""
+
+        connection, _reader, _writer = await self._open_framed_identified(
+            "s-id", at=5.0, peer=("192.0.2.61", 40013),
+        )
+        entry = self.listener._session_inventory["s-id"]
+        self.assertEqual(
+            (entry.collector_pn, entry.collector_identity_source), (_PN, "at_dtupn"),
+        )
         self.assertIsNone(connection.last_framed_exchange_monotonic)
         self.assertEqual(self.exchanges, [])
 

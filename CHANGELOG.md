@@ -425,7 +425,10 @@ the GitHub release body should be rendered from the matching version section her
   error or a reply from a replaced session does not update it. The same
   applies to an owned diagnostic raw Modbus or auxiliary reply on a framed
   session; a CRC failure, an unowned or wrong-subtype auxiliary reply or an
-  inbound heartbeat does not update it.
+  inbound heartbeat does not update it. A completed owned AT reply on a
+  framed session also updates it when the reader delivers it; a
+  query-status error, unsolicited metadata and the first identity
+  announcement do not.
 
 - PI30 periodically rereads priorities, charging thresholds/currents and flags
   changed through the vendor app or inverter panel (#62). `QPIRI`/`QFLAG` run
