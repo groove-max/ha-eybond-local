@@ -688,9 +688,50 @@ class FramedSessionDeliveryTests(_ClockedCase):
         self.assertEqual(connection.last_framed_exchange_monotonic, 10.0)
         self.assertEqual(self.exchanges, [("s-a", 10.0)])
 
+    async def test_framed_diagnostic_reply_before_replacement_does_not_stamp_successor(
+        self,
+    ) -> None:
+        """A framed diagnostic reply delivered on s-a must not refresh s-b."""
+
+        connection, _reader, writer = await self._open()
+        captured: list[asyncio.Future] = []
+
+        def responder(wire: bytes) -> bytes | None:
+            if wire != _MODBUS_REQUEST:
+                return None
+            claim = connection._diagnostic_modbus.claim
+            if claim is not None:
+                captured.append(claim.future)
+            return _MODBUS_REPLY
+
+        writer.responder = responder
+        writer.drain_gate = asyncio.Event()
+        self.clock.now = 30.0
+        send = asyncio.create_task(self._diagnostic_read(connection))
+        await _wait(lambda: bool(captured) and captured[0].done())
+        self.assertFalse(send.done())
+        self.assertEqual(self.exchanges, [("s-a", 30.0)])
+
+        self.clock.now = 32.0
+        _reader_2, writer_2, _task_2 = await self._run(
+            connection, "s-b", peer=("192.0.2.50", 40010),
+        )
+        # The old diagnostic still holds the write lock inside drain(), so the
+        # new session's heartbeat cannot land yet. Replacement already cleared
+        # the exchange clock.
+        self.assertIs(connection._writer, writer_2)
+        self.assertIsNone(connection.last_framed_exchange_monotonic)
+
+        self.clock.now = 33.0
+        writer.drain_gate.set()
+        with self.assertRaises(ConnectionError):
+            await send
+        self.assertIsNone(connection.last_framed_exchange_monotonic)
+        self.assertEqual(self._exchanges_since("s-b", 0.0), [])
+
 
 class ReplacedSessionTests(_ClockedCase):
-    """An old socket's completion must never stamp a replacement session."""
+    """An old AT raw reply must never stamp the session that replaced it."""
 
     async def _replace_during_drain(self, *, request, reply, protocol, pending) -> None:
         connection = _CollectorAtConnection(
@@ -718,6 +759,7 @@ class ReplacedSessionTests(_ClockedCase):
         )
         await _wait(lambda: bool(captured) and captured[0].done())
         self.assertFalse(send.done())
+        self.assertEqual(self._exchanges_since("s-1", 30.0), [("s-1", 30.0)])
 
         self.clock.now = 32.0
         _reader_2, writer_2, _task_2 = await self._run(
@@ -735,7 +777,7 @@ class ReplacedSessionTests(_ClockedCase):
         self.assertEqual(connection.collector_info.raw_response_count, 0)
 
     async def test_raw_pi30_delivered_before_replacement_does_not_stamp_successor(self) -> None:
-        """Passes today (nothing stamps). Guards a fix at async_send_raw_payload return."""
+        """The old session is stamped at delivery. The successor is not."""
 
         await self._replace_during_drain(
             request=_PI30_REQUEST, reply=_PI30_REPLY, protocol="pi30",
