@@ -53,6 +53,7 @@ class _Cycle:
     pn: str
     admitted_id: str = ""
     admitted_at: float = 0.0
+    quiet_grace: bool = False
     warned: set[str] = field(default_factory=set)
 
 
@@ -112,7 +113,8 @@ class CallbackSocketStorm:
         keep, reason = _pick_survivor(group, cycle, focus, now)
         if reason == "hold_quiet":
             # Grace starts when this same-PN overlap is first seen. A later
-            # redial must not inherit an admission clock from an older socket.
+            # redial must not inherit an older admission clock, and a redial
+            # while quiet grace is open does not extend it.
             newest_accept = max(
                 (
                     item.accepted_at
@@ -121,9 +123,14 @@ class CallbackSocketStorm:
                 ),
                 default=0.0,
             )
-            if cycle.admitted_id != keep.session_id or cycle.admitted_at < newest_accept:
+            if cycle.quiet_grace:
+                restart = now >= cycle.admitted_at + GRACE_SECONDS
+            else:
+                restart = cycle.admitted_at < newest_accept
+            if cycle.admitted_id != keep.session_id or restart:
                 cycle.admitted_id = keep.session_id
                 cycle.admitted_at = now
+                cycle.quiet_grace = True
                 cycle.warned.clear()
             return StormAction((), "hold_quiet", cycle.admitted_at + GRACE_SECONDS)
         reset_ids = tuple(
@@ -134,6 +141,7 @@ class CallbackSocketStorm:
         if reason == "replace_stale" or cycle.admitted_id != keep.session_id:
             cycle.admitted_id = keep.session_id
             cycle.admitted_at = now
+            cycle.quiet_grace = False
             cycle.warned.clear()
         self._warn(cycle, focus, reset_ids, reason)
         return StormAction(reset_ids, reason)
@@ -187,12 +195,12 @@ def _pick_survivor(
     )
     if quiet:
         newest = max(item.accepted_at for item in quiet)
-        grace_covers_arrival = (
-            admitted is not None
-            and cycle.admitted_at >= newest
-            and now < cycle.admitted_at + GRACE_SECONDS
-        )
-        if admitted is None or cycle.admitted_at < newest or grace_covers_arrival:
+        grace_end = cycle.admitted_at + GRACE_SECONDS
+        if cycle.quiet_grace:
+            new_overlap = min(item.accepted_at for item in quiet) >= grace_end
+        else:
+            new_overlap = cycle.admitted_at < newest
+        if admitted is None or now < grace_end or new_overlap:
             return _quiet_incumbent(group, quiet, admitted), "hold_quiet"
     if admitted is not None and now < cycle.admitted_at + GRACE_SECONDS:
         exchange = admitted.last_framed_exchange_at

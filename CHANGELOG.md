@@ -415,7 +415,9 @@ the GitHub release body should be rendered from the matching version section her
   AT session is kept when neither socket has an exchange, and a completed
   AT reply counts as that exchange. The DTUPN line that first records the
   session PN is not an exchange, including when that line is split across
-  reads.
+  reads. A quiet redial that arrives while grace is open does not move the
+  grace deadline, and a connected socket is never dropped from the session
+  inventory, so repeated redials and short dials cannot hide the old socket.
 
 - A completed, owned raw ASCII, raw Modbus or auxiliary reply on an AT
   callback socket now updates the storm exchange clock when the reader

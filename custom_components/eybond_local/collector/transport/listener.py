@@ -926,9 +926,29 @@ class _SharedEybondListener:
             remote_port=remote_port,
             accepted_monotonic=monotonic(),
         )
+        # A socket that is still connected keeps its entry past the cap so the
+        # storm set can still see it; the dict grows when every entry is live.
+        pending_ids = {pending.session_id for pending in self._pending_sockets.values()}
         while len(self._session_inventory) > self._MAX_SESSION_INVENTORY:
-            oldest = next(iter(self._session_inventory))
-            self._session_inventory.pop(oldest, None)
+            evict = next(
+                (
+                    sid
+                    for sid, entry in self._session_inventory.items()
+                    if sid != session_id
+                    and (
+                        _session_state_is_terminal(entry.state)
+                        or (
+                            sid not in pending_ids
+                            and sid not in self._session_payload_connections
+                            and sid not in self._session_at_connections
+                        )
+                    )
+                ),
+                None,
+            )
+            if evict is None:
+                break
+            self._session_inventory.pop(evict, None)
 
     def _mark_session_state(self, session_id: str, state: str) -> None:
         entry = self._session_inventory.get(session_id)

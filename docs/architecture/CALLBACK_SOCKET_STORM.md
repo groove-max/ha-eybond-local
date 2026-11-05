@@ -86,7 +86,9 @@ accepted (no exchange since that accept, or the last exchange is older than
 the accept time), do not reset the newcomer at identification. Keep both
 through the 15-second grace that starts when the same-PN overlap is first
 seen. If the incumbent's last exchange is older than that accept when grace
-ends, `replace_stale` admits the newcomer.
+ends, `replace_stale` admits the newcomer. A further quiet redial that arrives
+while that grace is open does not move the deadline; only a redial accepted
+after grace has ended starts a new grace.
 
 **No framed exchange yet.** When accept times do not show a later socket,
 keep a candidate and give it 15 seconds of grace from when it became the

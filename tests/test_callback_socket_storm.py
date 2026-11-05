@@ -169,6 +169,46 @@ class CallbackSocketStormTests(unittest.TestCase):
         self.assertEqual(during.session_ids, ("f",))
         self.assertEqual(_reasons(caught.output), ["keep_candidate"])
 
+    def test_quiet_redial_every_ten_seconds_does_not_grow_the_storm_set(self) -> None:
+        """A redial inside each grace must not restart grace for every socket.
+
+        The incumbent framed once before the first redial, then nothing
+        frames again. The collector redials the same PN every 10 seconds.
+        """
+
+        storm = CallbackSocketStorm()
+        live = {
+            "a": _socket(
+                "a",
+                strong_pn=_PN,
+                last_framed_exchange_at=0.0,
+                routed_payload=True,
+                accepted_at=-5.0,
+            )
+        }
+        now = 1.0
+        for index in range(1, 6):
+            session_id = f"n{index}"
+            live[session_id] = _socket(
+                session_id,
+                strong_pn=_PN,
+                routed_payload=True,
+                accepted_at=now,
+            )
+            action = storm.consider(list(live.values()), session_id, now)
+            for reset_id in action.session_ids:
+                live.pop(reset_id)
+            if action.grace_deadline is not None and action.grace_deadline < now + 10.0:
+                timer = storm.consider(
+                    list(live.values()),
+                    session_id,
+                    action.grace_deadline,
+                )
+                for reset_id in timer.session_ids:
+                    live.pop(reset_id)
+            now += 10.0
+        self.assertLessEqual(len(live), 2, sorted(live))
+
     def test_after_grace_with_no_exchange_extra_replaces_candidate(self) -> None:
         storm = CallbackSocketStorm()
         first = _socket("a", strong_pn=_PN)
@@ -681,6 +721,76 @@ class CallbackSocketStormListenerTests(unittest.IsolatedAsyncioTestCase):
                 "closed_socket_storm",
             )
             self.assertGreaterEqual(listener._server.sockets[0].fileno(), 0)
+            await _expect_rst(reader_a)
+        finally:
+            listener_module.monotonic = monotonic
+            for writer in (writer_a, writer_b):
+                if writer is not None:
+                    writer.close()
+            await listener.release()
+
+    async def test_live_incumbent_stays_in_storm_set_after_inventory_churn(
+        self,
+    ) -> None:
+        """A live routed socket must stay visible to the storm after churn.
+
+        A is routed with a framed exchange. The collector then opens and
+        drops more short PN-less dials than the session inventory keeps.
+        B redials the same FC2 PN. After grace, the half-open A must be
+        reset and B kept, exactly as without the churn.
+        """
+
+        port = _free_tcp_port()
+        listener = _SharedEybondListener(host="127.0.0.1", port=port)
+        listener.register_payload_pn_owner(_PN_A)
+        await listener.acquire()
+        writer_a = writer_b = None
+        try:
+            reader_a, writer_a = await asyncio.open_connection("127.0.0.1", port)
+            writer_a.write(_fc2_parameter_2(1, _PN_A))
+            await writer_a.drain()
+            entry_a = await _wait_session(
+                listener,
+                lambda entry: (
+                    entry.collector_pn == _PN_A and entry.state == "routed_framed"
+                ),
+            )
+            connection_a = await _wait_connected(listener, entry_a.session_id)
+            await _complete_framed_exchange(reader_a, writer_a, connection_a)
+
+            for _ in range(listener._MAX_SESSION_INVENTORY):
+                _churn_reader, churn_writer = await asyncio.open_connection(
+                    "127.0.0.1",
+                    port,
+                )
+                churn_writer.close()
+            await _wait_until(
+                lambda: listener._session_seq > listener._MAX_SESSION_INVENTORY
+            )
+            self.assertTrue(connection_a.connected)
+
+            reader_b, writer_b = await asyncio.open_connection("127.0.0.1", port)
+            writer_b.write(_fc2_parameter_2(2, _PN_A))
+            await writer_b.drain()
+            entry_b = await _wait_session(
+                listener,
+                lambda entry: entry.session_id != entry_a.session_id
+                and entry.collector_pn == _PN_A
+                and entry.state in {"routed_framed", "closed_socket_storm"},
+            )
+            await _wait_connected(listener, entry_b.session_id)
+            self.assertIn(
+                entry_a.session_id,
+                {item.session_id for item in listener._storm_sockets()},
+                _session_snapshot(listener),
+            )
+
+            stamp = listener_module.monotonic()
+            listener_module.monotonic = lambda: stamp + GRACE_SECONDS
+            try:
+                listener._apply_socket_storm(entry_b.session_id)
+            finally:
+                listener_module.monotonic = monotonic
             await _expect_rst(reader_a)
         finally:
             listener_module.monotonic = monotonic
