@@ -664,8 +664,7 @@ class PassiveCallbackDiscovery:
         # The registry is the single coalescing + ownership authority: it reads
         # the listener inventory (via ``iter_observed_sessions``), collapses
         # short/full PN duplicates, and marks sessions owned by a config entry.
-        observed_per_socket = self._registry.observed_sessions_per_socket()
-        await self._async_abort_stale_weak_discovery_flows(observed_per_socket)
+        has_flows = await self._async_abort_stale_weak_discovery_flows()
         # Weak-flow cleanup can await HA flow aborts, allowing new sockets to
         # arrive. Read a fresh inventory after that await, then derive both
         # projections from one snapshot without losing exact-socket markers.
@@ -674,6 +673,7 @@ class PassiveCallbackDiscovery:
         self._prune_notified_for_observed_sessions(observed)
 
         # 1) Repair/upgrade existing entries from their currently-live session.
+        refresh_unclaimed = False
         for candidate in observed:
             session = dict(candidate.raw)
             collector_pn = validated_collector_pn(session.get("collector_pn"))
@@ -684,10 +684,12 @@ class PassiveCallbackDiscovery:
             self._log_session_once(port, session)
             existing_entry = self._entry_for_collector_pn(collector_pn)
             if existing_entry is not None:
-                await self._async_abort_configured_discovery_flows(
-                    port=port,
-                    session=session,
-                )
+                if has_flows:
+                    await self._async_abort_configured_discovery_flows(
+                        port=port,
+                        session=session,
+                    )
+                    refresh_unclaimed = True
                 self._maybe_upgrade_existing_entry_from_session(
                     existing_entry,
                     port=port,
@@ -695,9 +697,18 @@ class PassiveCallbackDiscovery:
                 )
 
         # 2) Publish unclaimed candidates -- collectors that already dial Home
-        # Assistant but no entry owns yet. list_unclaimed_sessions() already
-        # excludes registry-claimed identities.
-        for candidate in self._registry.list_unclaimed_sessions():
+        # Assistant but no entry owns yet. Reuse the current view while the
+        # repair pass stayed synchronous. Flow aborts can yield to new sockets
+        # or ownership claims, so retain a fresh registry read after that path.
+        unclaimed = (
+            self._registry.list_unclaimed_sessions()
+            if refresh_unclaimed
+            else (
+                candidate for candidate in observed
+                if not candidate.owner_entry_id and candidate.discoverable
+            )
+        )
+        for candidate in unclaimed:
             session = dict(candidate.raw)
             if self._session_is_suppressed(session):
                 logger.debug(
@@ -721,6 +732,16 @@ class PassiveCallbackDiscovery:
                 state=session.get("state"),
                 protocol_shape=session.get("protocol_shape"),
             )
+            # Publication history already suppresses this live edge, even if
+            # its card was dismissed. Avoid reading HA flows again in that case.
+            if self._already_notified(port, collector_pn, session=session):
+                logger.debug(
+                    "Passive callback discovery already published port=%s pn=%s peer=%s",
+                    port,
+                    collector_pn,
+                    peer_ip,
+                )
+                continue
             # Never replace an existing short-PN flow when this same identity
             # later yields its full PN.  The user may already be interacting
             # with that flow; aborting it makes the frontend poll a removed
@@ -730,14 +751,6 @@ class PassiveCallbackDiscovery:
             if self._active_discovery_flow_exists(port=port, session=session):
                 logger.debug(
                     "Passive callback discovery flow already active port=%s pn=%s peer=%s",
-                    port,
-                    collector_pn,
-                    peer_ip,
-                )
-                continue
-            if self._already_notified(port, collector_pn, session=session):
-                logger.debug(
-                    "Passive callback discovery already published port=%s pn=%s peer=%s",
                     port,
                     collector_pn,
                     peer_ip,
@@ -789,26 +802,37 @@ class PassiveCallbackDiscovery:
 
     async def _async_abort_stale_weak_discovery_flows(
         self,
-        observed: object,
-    ) -> None:
+    ) -> bool:
         """Abort weak discovery flows after their usable session disappears.
 
         A weak heartbeat PN is evidence tied to a physical TCP session, not a
         durable collector identity.  Keep the flow while that exact socket is
         live, or while a live replacement has enriched the same PN.  Invalid
         legacy flow identities are always removed.  Strong discovery flows are
-        deliberately unaffected by socket churn.
+        deliberately unaffected by socket churn. Return whether configured
+        flow cleanup may still be needed; an empty flow list needs no inventory.
         """
 
         flow_manager = getattr(getattr(self._hass, "config_entries", None), "flow", None)
         async_progress = getattr(flow_manager, "async_progress", None)
         async_abort = getattr(flow_manager, "async_abort", None)
         if not callable(async_progress) or not callable(async_abort):
-            return
+            return True
+
+        try:
+            flows = async_progress(include_uninitialized=True)
+        except TypeError:
+            flows = async_progress()
+        except Exception:
+            logger.debug("Failed to inspect weak passive discovery flows", exc_info=True)
+            return True
+        flows = tuple(flows or ())
+        if not flows:
+            return False
 
         live_sessions: set[tuple[int, str]] = set()
         live_identities: list[str] = []
-        for candidate in tuple(observed or ()):
+        for candidate in self._registry.observed_sessions_per_socket():
             if getattr(candidate, "state", "") == SESSION_STATE_CLOSED:
                 continue
             session_id = str(getattr(candidate, "session_id", "") or "").strip()
@@ -821,15 +845,7 @@ class PassiveCallbackDiscovery:
             if collector_pn:
                 live_identities.append(collector_pn)
 
-        try:
-            flows = async_progress(include_uninitialized=True)
-        except TypeError:
-            flows = async_progress()
-        except Exception:
-            logger.debug("Failed to inspect weak passive discovery flows", exc_info=True)
-            return
-
-        for flow in tuple(flows or ()):
+        for flow in flows:
             flow_data = self._flow_discovery_data(flow)
             if flow_data is None:
                 continue
@@ -887,6 +903,7 @@ class PassiveCallbackDiscovery:
                 self._notified.discard(
                     f"session:{listener_port}:{session_id}"
                 )
+        return True
 
     def _log_session_once(self, port: int, session: dict[str, object]) -> None:
         collector_pn = str(session.get("collector_pn") or "").strip()
@@ -1084,7 +1101,7 @@ class PassiveCallbackDiscovery:
             return
 
         alive_sessions: set[str] = set()
-        alive_pns: list[tuple[str, str]] = []
+        alive_pns: set[tuple[str, str]] = set()
         for candidate in tuple(observed or ()):
             raw = getattr(candidate, "raw", None)
             if not isinstance(raw, Mapping):
@@ -1095,7 +1112,7 @@ class PassiveCallbackDiscovery:
             if session_id:
                 alive_sessions.add(f"session:{port}:{session_id}")
             if collector_pn:
-                alive_pns.append((port, collector_pn))
+                alive_pns.add((port, collector_pn))
 
         pruned: set[str] = set()
         for notified in self._notified:
@@ -1108,10 +1125,7 @@ class PassiveCallbackDiscovery:
                 port, _sep, pn = rest.partition(":")
             else:
                 port, _sep, pn = notified.partition(":")
-            if any(
-                port == alive_port and _collector_identity_matches(pn, alive_pn)
-                for alive_port, alive_pn in alive_pns
-            ):
+            if (port, pn.strip()) in alive_pns:
                 pruned.add(notified)
         self._notified = pruned
 
@@ -1266,17 +1280,18 @@ class PassiveCallbackDiscovery:
             if is_callback_listener and _collector_prefix_matches(entry_pn, collector_pn):
                 return entry
             unique_id = str(getattr(entry, "unique_id", "") or "")
-            if unique_id.startswith("collector:") and _collector_identity_matches(
-                unique_id.split(":", 1)[1],
-                collector_pn,
-            ):
-                return entry
-            if (
-                is_callback_listener
-                and unique_id.startswith("collector:")
-                and _collector_prefix_matches(unique_id.split(":", 1)[1], collector_pn)
-            ):
-                return entry
+            if unique_id.startswith("collector:"):
+                unique_pn = unique_id.split(":", 1)[1]
+                # Config-entry unique IDs normally repeat data.collector_pn.
+                # Their exact and callback-prefix checks above already tested
+                # that same identity, so only inspect different IDs.
+                if unique_pn.strip() != entry_pn.strip():
+                    if _collector_identity_matches(unique_pn, collector_pn):
+                        return entry
+                    if is_callback_listener and _collector_prefix_matches(
+                        unique_pn, collector_pn
+                    ):
+                        return entry
         return None
 
     def _entry_exists_for_collector_pn(self, collector_pn: str) -> bool:
