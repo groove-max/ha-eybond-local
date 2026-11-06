@@ -171,6 +171,47 @@ class PendingRouteIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(resumed)
         self.assertFalse(listener._pending_socket_still_registered(pending))
 
+    async def test_cancelled_ip_claim_during_sniff_drain_leaves_socket_watched(self):
+        listener, pending = self.pending()
+        listener._mark_session_identity(pending.session_id, "V001107SYN82291016", "fc2_parameter_2")
+        started, draining, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def sniff():
+            started.set()
+            try:
+                await asyncio.get_running_loop().create_future()
+            finally:
+                draining.set()
+                await release.wait()
+
+        pending.sniff_task = sniff_task = asyncio.create_task(sniff())
+        claim = None
+        try:
+            await started.wait()
+            claim = asyncio.create_task(listener.pop_pending_socket_for_route(collector_ip="192.0.2.8"))
+            await draining.wait()
+            claim.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(claim.done())
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await claim
+            self.assertTrue(listener._pending_socket_still_registered(pending))
+            watcher = pending.sniff_task
+            self.assertIsNotNone(watcher)
+            self.assertIsNot(watcher, sniff_task)
+            self.assertFalse(watcher.done())
+            self.assertIs(await listener.pop_pending_socket_for_route(collector_ip="192.0.2.8"), pending)
+            self.assertTrue(watcher.done())
+            self.assertFalse(listener._pending_socket_still_registered(pending))
+        finally:
+            release.set()
+            tasks = [t for t in (claim, sniff_task, pending.sniff_task) if t is not None]
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def _ip_claim_during_split_frame_sniff(self, split):
         listener, pending = self.pending()
         listener._mark_session_identity(pending.session_id, "V001107SYN82291016", "fc2_parameter_2")

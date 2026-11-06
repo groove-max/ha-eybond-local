@@ -1768,6 +1768,7 @@ class _SharedEybondListener:
                 continue
         await drain_task
         if parent_cancelled:
+            self._resume_pending_watch(pending)
             raise asyncio.CancelledError
 
     def _collector_pn_matches(self, expected_pn: str, observed_pn: str) -> bool:

@@ -480,6 +480,10 @@ the GitHub release body should be rendered from the matching version section her
   EyeBond frame no longer hands the new connection a stream that starts
   mid-frame. The claimer could otherwise misparse every following frame.
 
+- A route claim that is cancelled while the pending sniff drains no longer
+  leaves its callback socket registered with nobody watching it. That socket
+  would miss a peer close and block every later same-IP route as a phantom.
+
 - An IP-only route no longer takes a callback socket whose PN owner registered
   while its sniff task was draining. The socket stays for that owner and its
   watcher is resumed.
