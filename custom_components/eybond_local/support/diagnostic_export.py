@@ -89,10 +89,49 @@ def build_shareable_payload(result: DiagnosticRunResult) -> dict:
         events.append(event)
     if "wire_events" in context:
         context["wire_events"] = events
+    _redact_opaque_identity_reads(payload)
     payload = anonymize_proxy_trace_line(payload)
     payload = _mask_numeric_identifiers(payload)
     _redact_known_identity_registers(payload)
     return payload
+
+
+def _redact_opaque_identity_reads(payload: dict) -> None:
+    """Opaque requests must not bypass known Modbus identity-range masking.
+
+    Decode before generic masking can alter a request's CRC. Copy changed
+    records so the private, unredacted run remains intact.
+    """
+
+    steps = []
+    sensitive_lines: set[int] = set()
+    for item in payload.get("results") or []:
+        step = dict(item)
+        steps.append(step)
+        if step.get("kind") != "payload":
+            continue
+        try:
+            request = decode_read_request(bytes.fromhex(
+                (step.get("request") or {}).get("raw_hex", ""),
+            ))
+        except (TypeError, ValueError):
+            request = None
+        if request is None or not (
+            request.address <= _SMG_SERIAL_REGISTER_END
+            and request.address + request.count > _SMG_SERIAL_REGISTER_START
+        ):
+            continue
+        response = dict(step.get("response") or {})
+        if "raw_hex" in response:
+            response["raw_hex"] = "REDACTED_IDENTITY_RANGE"
+            step["response"] = response
+        if isinstance(step.get("line"), int):
+            sensitive_lines.add(step["line"])
+    payload["results"] = steps
+    if isinstance(payload.get("output"), str):
+        payload["output"] = _redact_identity_blocks_from_output(
+            payload["output"], sensitive_lines,
+        )
 
 
 def _redact_known_identity_registers(payload: dict) -> None:
@@ -152,7 +191,7 @@ def _redact_identity_blocks_from_output(output: str, sensitive_lines: set[int]) 
             current_sensitive = int(header.group(1)) in sensitive_lines
             redacted.append(line)
             continue
-        if current_sensitive and line.startswith(("decimal:", "hex:", "ascii:")):
+        if current_sensitive and line.startswith(("decimal:", "hex:", "ascii:", "raw_hex:")):
             label = line.split(":", 1)[0]
             suffix = "\n" if line.endswith("\n") else ""
             redacted.append(f"{label}: REDACTED_IDENTITY_RANGE{suffix}")

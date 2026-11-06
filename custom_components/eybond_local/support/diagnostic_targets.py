@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..link_models import LinkRoute
 from ..link_transport import PayloadLinkTransport, async_send_payload, select_payload_route
 from ..models import ProbeTarget
 from ..payload import ascii_line
@@ -29,6 +30,8 @@ class UnsupportedDriverError(DiagnosticTargetError):
 
 # Single source of truth for the command/driver compatibility matrix.
 DIAGNOSTIC_SUPPORTED_KINDS: dict[str, frozenset[str]] = {
+    # Diagnostic encoder only; never a selectable runtime inverter profile.
+    "raw": frozenset({"payload"}),
     "modbus": frozenset({"read", "write", "write_bit"}),
     "modbus_smg": frozenset({"read", "write", "write_bit"}),
     "pi30": frozenset({"ascii"}),
@@ -62,6 +65,24 @@ class AsciiOutcome:
     raw: bytes
     payload: str | None
     decode_error: str | None
+
+
+class RawDiagnosticTarget:
+    """One exact FC4 payload, without driver guessing, encoding or retries."""
+
+    supported_kinds = frozenset({"payload"})
+
+    def __init__(self, transport: PayloadLinkTransport, route: LinkRoute) -> None:
+        self._transport = transport
+        self._route = route
+
+    async def send_payload(
+        self, payload: bytes, *, request_timeout: float | None = None,
+    ) -> bytes:
+        return await async_send_payload(
+            self._transport, payload, route=self._route,
+            request_timeout=request_timeout,
+        )
 
 
 class ModbusDiagnosticTarget:
@@ -172,6 +193,8 @@ def build_diagnostic_target(
 ):
     """Build the diagnostic target adapter for one driver (no transport I/O)."""
 
+    if driver_key == "raw":
+        return RawDiagnosticTarget(transport, target.link_route)
     if driver_key in {"modbus", "modbus_smg"}:
         session = ModbusSession(
             transport,

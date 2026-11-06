@@ -599,7 +599,7 @@
         "data_description": {
           "diagnostic_commands": "Paste the complete multiline scenario, including driver, address and wire overrides when provided. wire auto/fc4/raw_modbus applies only to this run. The downloadable JSON includes request/reply bytes.",
           "diagnostic_stop_on_error": "Disable this only when later commands should still run after a failed command.",
-          "diagnostic_confirm_write": "Required for register writes and all free-form ASCII commands because an arbitrary ASCII command may change device settings.",
+          "diagnostic_confirm_write": "Required for register writes, free-form ASCII commands and payload_hex: arbitrary commands may change device settings even when supplied as a read query.",
           "diagnostic_publish_download_copy": "Creates a short-lived signed link to the redacted result. Leave disabled unless you intend to download or share it.",
           "diagnostic_result": "Read-only output from the latest run. Copy it or use the shareable download link above."
         }

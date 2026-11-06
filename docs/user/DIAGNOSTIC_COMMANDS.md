@@ -10,7 +10,8 @@ and use diagnostic commands only when a developer asks for a specific scenario.
 ## Safety boundary
 
 - `read`, `read_input`, and `sleep` do not write inverter settings.
-- `write`, `write_single`, `write_bit`, and free-form `ascii` commands can change the device.
+- `write`, `write_single`, `write_bit`, free-form `ascii`, and `payload_hex`
+  commands can change the device.
 - Any scenario containing a potentially changing command is refused unless
   **Confirm commands that may change settings** is enabled.
 - The scenario can temporarily override the command codec, addresses and wire
@@ -31,7 +32,7 @@ Only run the exact commands supplied for your device by a developer you trust.
 5. Leave **Stop after the first error** enabled unless the developer says
    otherwise.
 6. Enable the write confirmation only when the supplied scenario contains a
-   deliberate write or ASCII command.
+   deliberate write, ASCII or binary payload command.
 7. Submit the form and wait for the result.
 
 The same runner is available as the
@@ -44,7 +45,7 @@ Optional directives must appear before the first command:
 
 | Directive | Meaning |
 |---|---|
-| `driver <key>` | Command codec: `modbus`, `modbus_smg`, `pi30`, `pi18`, or `eybond_g_ascii`. |
+| `driver <key>` | Command codec: `modbus`, `modbus_smg`, `pi30`, `pi18`, `eybond_g_ascii`, or diagnostic-only `raw`. |
 | `wire <auto\|fc4\|raw_modbus>` | Use normal routing (default), an EyeBond FC4 envelope, or bare Modbus RTU on the existing TCP stream. |
 | `devcode <number>` | Override the run-scoped inverter device code. |
 | `collector_addr <number>` | Override the collector-side address. |
@@ -62,6 +63,7 @@ Supported commands are:
 | `write_single <register> <value>` | Write exactly one holding register using FC06. |
 | `write_bit <register> <bit> <0\|1>` | Change one bit in a register. |
 | `ascii <command>` | Send one driver-supported ASCII command. |
+| `payload_hex <hex bytes>` | Send exact binary payload bytes with `driver raw` and explicit `wire fc4`. |
 | `sleep <milliseconds>` | Pause between commands. |
 
 A read-only example for an already configured Modbus diagnostic target is:
@@ -114,6 +116,30 @@ write acknowledgement is **not** proof of the final setting: include a known
 readback command when the device map provides one. This tool does not discover
 valid value ranges or make an unknown write safe.
 
+## Exact binary payloads
+
+`payload_hex` is for developer-supplied protocols that cannot be expressed by
+one of the supported codecs. Hex bytes may be contiguous or separated by spaces;
+each byte must have two hexadecimal digits, without `0x` prefixes or escape
+sequences. The payload must contain 1–512 bytes.
+
+This requires explicit `driver raw`, `wire fc4`, `devcode`, `collector_addr` and
+`device_addr` directives. No address is inherited from the active profile.
+`device_addr` is recorded as context but is **not inserted into the payload**;
+if the protocol needs an address, CRC or line ending, the supplied bytes must
+already contain it. The collector FC4 envelope is added by the transport.
+
+The entire payload is sent unchanged, once per command. There is no protocol
+guessing, automatic decoding or fallback to a different wire. `raw` is only a
+diagnostic codec, not a new inverter profile. It cannot be combined with
+`read`, `write` or `ascii` commands in the same scenario.
+
+Even a developer-provided read query needs write confirmation: EyeBond Local
+cannot determine what arbitrary bytes do. A completed transport exchange is
+not an inverter acknowledgement. Check `reply_status` (`payload_received` or
+`empty_reply`) and `response_size`; `decode_status: not_attempted` means that
+no telemetry, checksum or setting acknowledgement was validated.
+
 ## Results and downloads
 
 The form shows the output from the latest run and the local result path.
@@ -151,7 +177,8 @@ normal Support Archive may still be requested because it contains the wider
 runtime and device context.
 Known identity ranges and recognizable identifiers are masked in the shareable
 copy, including the new payload trace. Review the file before public sharing:
-unknown register maps can contain identifiers that cannot be recognized reliably.
+unknown register maps and opaque binary protocols can contain identifiers that
+cannot be recognized reliably.
 
 ## If a scenario fails
 

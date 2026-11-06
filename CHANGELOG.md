@@ -9,6 +9,14 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Add explicit `payload_hex` diagnostic commands for developer-supplied binary
+  protocols (#82). Require the diagnostic-only `raw` codec, an explicit FC4
+  route and confirmation; send the supplied bytes unchanged with no retries,
+  automatic detection or profile changes. Distinguish an empty transport reply
+  from received bytes without claiming decoded telemetry. Preserve known
+  identity-range masking in shareable results. This does not add a Manyi driver
+  or change normal polling; physical-device verification is still needed.
+
 - Identify intermediate integration builds independently of the release label.
   GitHub source archives carry their commit automatically; raw copies also get
   a deterministic source fingerprint. Configure, startup logs and Support

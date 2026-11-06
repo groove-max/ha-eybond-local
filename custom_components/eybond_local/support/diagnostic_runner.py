@@ -26,6 +26,7 @@ from .diagnostic_commands import (
     AsciiCommand,
     Command,
     Directives,
+    PayloadCommand,
     ReadCommand,
     ScenarioError,
     SleepCommand,
@@ -145,8 +146,17 @@ def _resolve_probe_target(
     context: DiagnosticRuntimeContext,
 ) -> ProbeTarget:
     directives = scenario.directives
-    base = context.active_probe_target
-    if base is None:
+    # Opaque payloads must not silently borrow a live driver's target or
+    # choose raw UART based on its state. Address the confirmed FC4 path.
+    if driver_key == "raw":
+        if directives.driver != "raw" or directives.wire != "fc4":
+            raise ScenarioError("raw payloads require explicit driver raw and wire fc4")
+        if any(value is None for value in (
+            directives.devcode, directives.collector_addr, directives.device_addr,
+        )):
+            raise ScenarioError("raw payloads require explicit devcode, collector_addr and device_addr")
+    base = None if driver_key == "raw" else context.active_probe_target
+    if base is None and driver_key != "raw":
         base = context.driver_default_probe_target(driver_key)
 
     def pick(field_name: str, override: int | None) -> int | None:
@@ -272,7 +282,7 @@ def _check_write_confirmation(
     if confirm_write:
         return
     for command in commands:
-        if command.requires in ("write", "write_bit", "ascii"):
+        if command.requires in ("write", "write_bit", "ascii", "payload"):
             raise ScenarioError(
                 "scenario contains a command that may change device settings; "
                 "set confirm_write=true to run it",
@@ -413,6 +423,17 @@ async def _execute_command(
         }
         return request, response
 
+    if isinstance(command, PayloadCommand):
+        raw = await _maybe_timeout(
+            target.send_payload(command.payload, request_timeout=timeout), timeout,
+        )
+        # A reply is transport evidence, not an acknowledgement of a setting.
+        return {"raw_hex": command.payload.hex()}, {
+            "raw_hex": raw.hex(), "response_size": len(raw),
+            "reply_status": "payload_received" if raw else "empty_reply",
+            "decode_status": "not_attempted",
+        }
+
     if isinstance(command, SleepCommand):
         # Sleep is a deliberate delay, not a transport operation: it is not
         # wrapped by operation_timeout.
@@ -518,6 +539,11 @@ def _render_step_body(step: dict, lines: list[str]) -> None:
             lines.append(f"payload: {response['payload']}")
         if response.get("decode_error"):
             lines.append(f"decode_error: {response['decode_error']}")
+        lines.append(f"raw_hex: {response['raw_hex']}")
+    elif kind == "payload":
+        lines.append(f"reply_status: {response['reply_status']}")
+        lines.append(f"response_size: {response['response_size']}")
+        lines.append(f"decode_status: {response['decode_status']}")
         lines.append(f"raw_hex: {response['raw_hex']}")
     elif kind == "sleep":
         lines.append(f"slept_ms: {response['milliseconds']}")

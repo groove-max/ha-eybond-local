@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import re
 
 
 REGISTER_MIN = 0
@@ -20,6 +21,7 @@ VALUE_MIN = 0
 VALUE_MAX = 0xFFFF
 BIT_INDEX_MIN = 0
 BIT_INDEX_MAX = 15
+PAYLOAD_MAX_BYTES = 512
 
 
 class ScenarioError(ValueError):
@@ -111,6 +113,21 @@ class AsciiCommand(Command):
 
 
 @dataclass(frozen=True, slots=True)
+class PayloadCommand(Command):
+    """Exact inverter payload; no protocol encoding or line ending added."""
+
+    payload: bytes = b""
+
+    @property
+    def kind(self) -> str:
+        return "payload"
+
+    @property
+    def requires(self) -> str:
+        return "payload"
+
+
+@dataclass(frozen=True, slots=True)
 class SleepCommand(Command):
     milliseconds: int = 0
 
@@ -153,7 +170,7 @@ DIRECTIVE_KEYWORDS = frozenset(
         "wire",
     }
 )
-COMMAND_KEYWORDS = frozenset({"read", "read_input", "write", "write_single", "write_bit", "ascii", "sleep"})
+COMMAND_KEYWORDS = frozenset({"read", "read_input", "write", "write_single", "write_bit", "ascii", "payload_hex", "sleep"})
 
 
 # --- Token helpers --------------------------------------------------------
@@ -294,6 +311,16 @@ def _parse_command(
         if not command.isascii():
             raise ScenarioError("ascii command must be ASCII", line=line)
         return AsciiCommand(line=line, source=source, command=command)
+
+    if keyword == "payload_hex":
+        # Either contiguous hex or whitespace-separated complete octets; no
+        # escape sequences, odd nibbles, prefixes or invisible control bytes.
+        text = " ".join(args)
+        if not text or re.fullmatch(r"(?:[0-9a-fA-F]{2})+(?: (?:[0-9a-fA-F]{2})+)*", text) is None:
+            raise ScenarioError("expected payload_hex <complete hex bytes>", line=line)
+        if len(text.replace(" ", "")) > PAYLOAD_MAX_BYTES * 2:
+            raise ScenarioError(f"payload must not exceed {PAYLOAD_MAX_BYTES} bytes", line=line)
+        return PayloadCommand(line=line, source=source, payload=bytes.fromhex(text))
 
     if keyword == "sleep":
         _require_args(args, 1, line=line, usage="sleep <milliseconds>")

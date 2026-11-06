@@ -11,12 +11,16 @@ import pytest
 
 from custom_components.eybond_local.const import DOMAIN, SERVICE_RUN_DIAGNOSTIC_COMMANDS
 from custom_components.eybond_local.fixtures.transport import FixtureTransport
-from custom_components.eybond_local.link_models import RawSerialLinkRoute
+from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
 from custom_components.eybond_local.models import ProbeTarget
 from test_ha_config_flow import collector_entry
 
 
 SCRIPT = "driver modbus\nwire raw_modbus\ndevice_addr 1\nwrite_single 354 2\nread 354"
+PAYLOAD_SCRIPT = (
+    "driver raw\nwire fc4\ndevcode 1\ncollector_addr 255\ndevice_addr 1\n"
+    "payload_hex 43 4D 53 47 06 49 4E 56 2D 48 42 0D"
+)
 
 
 class Device:
@@ -50,14 +54,34 @@ class Device:
         return await self.fixture.async_send_forward(payload, devcode=0, collector_addr=0)
 
 
+class PayloadDevice(Device):
+    def create_diagnostic_transport(self, wire, *, timeout):
+        assert wire == "fc4"
+        assert timeout == 10
+        return self
+
+    async def async_send_payload(self, payload, *, route, request_timeout=None):
+        assert self.coordinator._diagnostic_active
+        assert self.coordinator._runtime_operation_lock.locked()
+        assert route == EybondLinkRoute(devcode=1, collector_addr=255)
+        self.requests.append(payload)
+        self.started.set()
+        if self.wait is not None:
+            await self.wait.wait()
+        return b"\xab\xcd\xef"
+
+
 @pytest.mark.parametrize("through_ui", [False, True])
+@pytest.mark.parametrize("opaque", [False, True])
 async def test_confirmed_override_runs_and_exports_without_changing_entry(
-    hass, hass_client_no_auth, collector_entry, fake_runtime, monkeypatch, through_ui,
+    hass, hass_client_no_auth, collector_entry, fake_runtime, monkeypatch, through_ui, opaque,
 ):
     assert await hass.config_entries.async_setup(collector_entry.entry_id)
     await hass.async_block_till_done()
     coordinator = collector_entry.runtime_data
-    device = Device(coordinator)
+    device = PayloadDevice(coordinator) if opaque else Device(coordinator)
+    script = PAYLOAD_SCRIPT if opaque else SCRIPT
+    wire = "fc4" if opaque else "raw_modbus"
     monkeypatch.setattr(coordinator, "_diagnostic_link_transport", lambda: device)
     before = (dict(collector_entry.data), dict(collector_entry.options))
     flow_id = None
@@ -68,29 +92,32 @@ async def test_confirmed_override_runs_and_exports_without_changing_entry(
             flow_id = initial["flow_id"]
             flow = options._progress[flow_id]
             result = await flow.async_step_diagnostic_commands({
-                "diagnostic_commands": SCRIPT, "diagnostic_confirm_write": False,
+                "diagnostic_commands": script, "diagnostic_confirm_write": False,
                 "diagnostic_publish_download_copy": True,
             })
             assert not result["errors"]
             assert "confirm_write" in flow._diagnostic_commands_output
             assert device.requests == []
             result = await flow.async_step_diagnostic_commands({
-                "diagnostic_commands": SCRIPT, "diagnostic_confirm_write": True,
+                "diagnostic_commands": script, "diagnostic_confirm_write": True,
                 "diagnostic_publish_download_copy": True,
             })
             assert not result["errors"]
-            assert "wire: raw_modbus" in flow._diagnostic_commands_output
+            assert f"wire: {wire}" in flow._diagnostic_commands_output
             url = flow._diagnostic_commands_download_url
         else:
             response = await hass.services.async_call(
                 DOMAIN, SERVICE_RUN_DIAGNOSTIC_COMMANDS,
-                {"entry_id": collector_entry.entry_id, "commands": SCRIPT,
+                {"entry_id": collector_entry.entry_id, "commands": script,
                  "confirm_write": True, "publish_download_copy": True},
                 blocking=True, return_response=True,
             )
             assert response["success"]
             url = response["download_url"]
-        assert [request[1] for request in device.requests] == [6, 3]
+        if opaque:
+            assert device.requests == [b"CMSG\x06INV-HB\r"]
+        else:
+            assert [request[1] for request in device.requests] == [6, 3]
         assert not coordinator._diagnostic_active
         assert not coordinator._runtime_operation_lock.locked()
         assert (dict(collector_entry.data), dict(collector_entry.options)) == before
@@ -99,26 +126,35 @@ async def test_confirmed_override_runs_and_exports_without_changing_entry(
         assert response.status == 200
         artifact = json.loads(await response.text())
         assert artifact["success"]
-        assert artifact["context"]["requested_wire"] == "raw_modbus"
-        assert len(artifact["context"]["wire_events"]) == 2
+        assert artifact["context"]["requested_wire"] == wire
+        assert len(artifact["context"]["wire_events"]) == (1 if opaque else 2)
         assert "entry_id" not in artifact["context"]
-        assert artifact["results"][-1]["response"]["decimal"] == [2]
+        if opaque:
+            assert artifact["results"][-1]["response"] == {
+                "raw_hex": "abcdef", "response_size": 3,
+                "reply_status": "payload_received", "decode_status": "not_attempted",
+            }
+        else:
+            assert artifact["results"][-1]["response"]["decimal"] == [2]
     finally:
         if flow_id:
             hass.config_entries.options.async_abort(flow_id)
         await hass.config_entries.async_unload(collector_entry.entry_id)
 
 
+@pytest.mark.parametrize("opaque", [False, True])
 async def test_unload_cancels_diagnostic_and_releases_runtime_lock(
-    hass, collector_entry, fake_runtime, monkeypatch,
+    hass, collector_entry, fake_runtime, monkeypatch, opaque,
 ):
     assert await hass.config_entries.async_setup(collector_entry.entry_id)
     await hass.async_block_till_done()
     coordinator = collector_entry.runtime_data
-    device = Device(coordinator)
+    device = PayloadDevice(coordinator) if opaque else Device(coordinator)
     device.wait = asyncio.Event()
     monkeypatch.setattr(coordinator, "_diagnostic_link_transport", lambda: device)
-    pending = asyncio.create_task(coordinator.async_run_diagnostic_commands(commands=SCRIPT, confirm_write=True))
+    pending = asyncio.create_task(coordinator.async_run_diagnostic_commands(
+        commands=PAYLOAD_SCRIPT if opaque else SCRIPT, confirm_write=True,
+    ))
     await asyncio.wait_for(device.started.wait(), 2)
     await hass.config_entries.async_unload(collector_entry.entry_id)
     with pytest.raises(asyncio.CancelledError):
