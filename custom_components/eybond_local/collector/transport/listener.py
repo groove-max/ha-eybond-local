@@ -1443,6 +1443,29 @@ class _SharedEybondListener:
                 await self._pause_pending_sniff(pending)
                 if not self._pending_socket_still_registered(pending):
                     return None
+                # Owner registration does not take _pending_route_lock, so an
+                # owner of this PN may have appeared during the drain.
+                entry = self._session_inventory.get(pending.session_id)
+                presented_pn = str(getattr(entry, "collector_pn", "") or "").strip()
+                presented_source = str(
+                    getattr(entry, "collector_identity_source", "") or ""
+                ).strip()
+                presented_strong = bool(
+                    presented_pn and identity_source_is_strong(presented_source)
+                )
+                presented_pn_owned = any(
+                    self._has_owner_for_collector_pn(counts, presented_pn)
+                    for counts in (self._payload_pn_owner_counts, self._at_pn_owner_counts)
+                )
+                presented_wire = (
+                    _classify_initial_protocol_shape(pending.initial_bytes)
+                    in {"eybond_framed", "at_text"}
+                    or str(getattr(entry, "protocol_shape", "") or "")
+                    in {"eybond_framed", "at_text"}
+                )
+                if presented_pn_owned or (not presented_strong and not presented_wire):
+                    self._resume_pending_watch(pending)
+                    return None
                 return self._claim_pending_socket(pending)
 
             matched = self._select_pending_socket_by_collector_pn(normalized_pn)

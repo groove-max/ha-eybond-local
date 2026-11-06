@@ -115,6 +115,62 @@ class PendingRouteIdentityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(listener._collector_pn_matches(owner_pn, pn))
                 self.assertIs(await listener.pop_pending_socket_for_route(collector_ip="192.0.2.8"), pending)
 
+    async def _ip_claim_across_sniff_drain(self, register):
+        listener, pending = self.pending()
+        pn = "V001107SYN82291016"
+        listener.register_payload_pn_owner("V001107SYN99887766")
+        listener._mark_session_identity(pending.session_id, pn, "fc2_parameter_2")
+        started, draining, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def sniff():
+            started.set()
+            try:
+                await asyncio.get_running_loop().create_future()
+            finally:
+                draining.set()
+                await release.wait()
+
+        pending.sniff_task = sniff_task = asyncio.create_task(sniff())
+        claim = resumed = None
+        try:
+            await started.wait()
+            claim = asyncio.create_task(listener.pop_pending_socket_for_route(collector_ip="192.0.2.8"))
+            await draining.wait()
+            self.assertFalse(claim.done())
+            if register is not None:
+                getattr(listener, register)(pn)
+            release.set()
+            claimed = await claim
+            resumed = pending.sniff_task
+            return listener, pending, pn, claimed, resumed
+        finally:
+            release.set()
+            for task in (claim, sniff_task):
+                if task is not None and not task.done():
+                    task.cancel()
+            await asyncio.gather(*(t for t in (claim, sniff_task) if t is not None), return_exceptions=True)
+
+    async def test_owner_registered_during_sniff_drain_keeps_socket_from_ip_only_claim(self):
+        for register in ("register_payload_pn_owner", "register_at_pn_owner"):
+            with self.subTest(register=register):
+                listener, pending, pn, claimed, resumed = await self._ip_claim_across_sniff_drain(register)
+                try:
+                    self.assertIsNone(claimed)
+                    self.assertTrue(listener._pending_socket_still_registered(pending))
+                    self.assertIsNotNone(resumed)
+                    self.assertFalse(resumed.done())
+                    self.assertIs(await listener.pop_pending_socket_for_route(collector_pn=pn), pending)
+                finally:
+                    if resumed is not None:
+                        resumed.cancel()
+                        await asyncio.gather(resumed, return_exceptions=True)
+
+    async def test_ip_only_claim_across_sniff_drain_without_matching_owner(self):
+        listener, pending, _pn, claimed, resumed = await self._ip_claim_across_sniff_drain(None)
+        self.assertIs(claimed, pending)
+        self.assertIsNone(resumed)
+        self.assertFalse(listener._pending_socket_still_registered(pending))
+
     async def test_own_at_text_bytes_allow_legacy_ip_route(self):
         for via in ("initial_bytes", "inventory_shape"):
             with self.subTest(via=via):

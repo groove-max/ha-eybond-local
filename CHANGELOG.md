@@ -476,6 +476,10 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- An IP-only route no longer takes a callback socket whose PN owner registered
+  while its sniff task was draining. The socket stays for that owner and its
+  watcher is resumed.
+
 - Only length and payload-too-large may drop one 8-byte EyeBond window, and
   only when the whole next frame is already buffered.
   `collector_frame_function_invalid` stays fatal. A second illegal window
