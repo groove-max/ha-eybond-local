@@ -171,6 +171,41 @@ class PendingRouteIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(resumed)
         self.assertFalse(listener._pending_socket_still_registered(pending))
 
+    async def _ip_claim_during_split_frame_sniff(self, split):
+        listener, pending = self.pending()
+        listener._mark_session_identity(pending.session_id, "V001107SYN82291016", "fc2_parameter_2")
+        frame = build_collector_request(1, b"SYNTHETIC", devcode=0x0994, collector_addr=1, fcode=4)
+        if split is None:
+            split = len(frame)
+        pending.reader.feed_data(frame[:split])
+        pending.sniff_task = sniff_task = asyncio.create_task(listener._sniff_pending_socket(pending))
+        try:
+            deadline = asyncio.get_running_loop().time() + 1
+            while pending.reader._buffer:
+                self.assertLess(asyncio.get_running_loop().time(), deadline)
+                await asyncio.sleep(.01)
+            await asyncio.sleep(.01)
+            claimed = await listener.pop_pending_socket_for_route(collector_ip="192.0.2.8")
+            self.assertIs(claimed, pending)
+            replay = pending.initial_bytes
+            if split < len(frame):
+                pending.reader.feed_data(frame[split:])
+                replay += await asyncio.wait_for(pending.reader.read(64), 1)
+            return frame, replay
+        finally:
+            if not sniff_task.done():
+                sniff_task.cancel()
+            await asyncio.gather(sniff_task, return_exceptions=True)
+
+    async def test_ip_claim_inside_split_frame_sniff_replays_from_header(self):
+        frame, replay = await self._ip_claim_during_split_frame_sniff(HEADER_SIZE + 3)
+        self.assertEqual(replay[:HEADER_SIZE], frame[:HEADER_SIZE])
+        self.assertEqual(replay, frame)
+
+    async def test_ip_claim_after_buffered_full_frame_replays_from_header(self):
+        frame, replay = await self._ip_claim_during_split_frame_sniff(None)
+        self.assertEqual(replay, frame)
+
     async def test_own_at_text_bytes_allow_legacy_ip_route(self):
         for via in ("initial_bytes", "inventory_shape"):
             with self.subTest(via=via):

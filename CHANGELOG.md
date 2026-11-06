@@ -476,6 +476,10 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- A route claim that lands while the sniff is waiting for the rest of a split
+  EyeBond frame no longer hands the new connection a stream that starts
+  mid-frame. The claimer could otherwise misparse every following frame.
+
 - An IP-only route no longer takes a callback socket whose PN owner registered
   while its sniff task was draining. The socket stays for that owner and its
   watcher is resumed.

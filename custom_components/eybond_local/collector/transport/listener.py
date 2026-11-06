@@ -2468,6 +2468,10 @@ class _SharedEybondListener:
                             pending.reader.readexactly(frame_len - len(chunk)),
                             timeout=0.5,
                         )
+                    except asyncio.CancelledError:
+                        # A claimer replays initial_bytes; it must start at the frame header.
+                        pending.initial_bytes = chunk + pending.initial_bytes
+                        raise
                     except asyncio.IncompleteReadError as exc:
                         chunk += exc.partial
                         return chunk, True
