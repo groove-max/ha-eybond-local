@@ -63,6 +63,39 @@ def _validate_catalog(catalog: dict) -> None:
             not isinstance(value, str) for value in item["unverified"]
         ):
             raise ValueError("diagnostic_catalog_limitations_invalid")
+        variants = item.get("response_variants", [])
+        if not isinstance(variants, list) or len(variants) > 8:
+            raise ValueError("diagnostic_catalog_variants_invalid")
+        lengths = {item["response_size"]}
+        for variant in variants:
+            if not isinstance(variant, dict) or set(variant) != {
+                "response_size", "body_size", "response_prefix_hex", "length_basis", "evidence_url",
+            }:
+                raise ValueError("diagnostic_catalog_variant_invalid")
+            prefix = _hex_bytes(variant["response_prefix_hex"])
+            if (type(variant["response_size"]) is not int or type(variant["body_size"]) is not int
+                    or not 0 < variant["response_size"] <= MAX_PAYLOAD_BYTES
+                    or variant["response_size"] in lengths
+                    or variant["body_size"] < item["body_size"]
+                    or item["body_offset"] + variant["body_size"] + trailer != variant["response_size"]
+                    or not prefix or len(prefix) > item["body_offset"]
+                    or not isinstance(variant["length_basis"], str) or not variant["length_basis"]
+                    or not isinstance(variant["evidence_url"], str)
+                    or not variant["evidence_url"].startswith("https://")):
+                raise ValueError("diagnostic_catalog_variant_invalid")
+            lengths.add(variant["response_size"])
+
+
+def _response_layout(descriptor: dict, size: object) -> dict | None:
+    """Only explicit layouts, never arbitrary lengths inferred from a checksum."""
+    if type(size) is not int:
+        return None
+    if size == descriptor["response_size"]:
+        return descriptor
+    for variant in descriptor.get("response_variants", []):
+        if variant["response_size"] == size:
+            return descriptor | variant
+    return None
 
 
 def _check_response(event: dict, descriptor: dict) -> tuple[str, str]:
@@ -84,8 +117,12 @@ def _check_response(event: dict, descriptor: dict) -> tuple[str, str]:
         return "not_validated", "empty_reply"
     if response == bytes.fromhex(descriptor["request_hex"]):
         return "not_validated", "request_echo"
-    if len(response) != descriptor["response_size"]:
+    layout = _response_layout(descriptor, len(response))
+    if layout is None:
         return "not_validated", "unexpected_length"
+    prefix = layout.get("response_prefix_hex")
+    if prefix is not None and not response.startswith(bytes.fromhex(prefix)):
+        return "not_validated", "unexpected_header"
     if descriptor["checksum"] == "sum8_body":
         valid = (sum(response[descriptor["body_offset"]:-1]) & 0xFF) == response[-1]
     elif descriptor["checksum"] == "sum16be_before_trailer3":
@@ -121,16 +158,20 @@ def analyze_protocol_candidates(payload: dict, *, catalog: dict | None = None) -
             if request != bytes.fromhex(descriptor["request_hex"]):
                 continue
             status, reason = _check_response(event, descriptor)
+            layout = _response_layout(descriptor, event.get("response_size")) or descriptor
             observations.append({
                 "event_index": index,
                 "candidate_key": descriptor["key"],
                 "vendor_code": descriptor["vendor_code"],
                 "source_class": descriptor["source_class"],
                 "status": status, "reason": reason,
-                "expected_response_size": descriptor["response_size"],
-                "length_basis": descriptor["length_basis"],
+                "expected_response_size": layout["response_size"],
+                "length_basis": layout["length_basis"],
                 "body_offset": descriptor["body_offset"],
-                "body_size": descriptor["body_size"],
+                "body_size": layout["body_size"],
+                "vendor_parse_body_size": descriptor["body_size"],
+                "extension_size": layout["body_size"] - descriptor["body_size"],
+                **({"layout_evidence_url": layout["evidence_url"]} if "evidence_url" in layout else {}),
                 "unverified": list(descriptor["unverified"]),
             })
     candidates = sorted({item["candidate_key"] for item in observations

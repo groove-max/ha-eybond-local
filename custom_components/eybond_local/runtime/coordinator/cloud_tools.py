@@ -187,7 +187,20 @@ class CoordinatorCloudToolsMixin:
             # Expiry reconciliation runs inside the poll's runtime lock. Only
             # that exact task may reuse it; locked() alone proves no ownership.
             owns_poll = getattr(self, "_runtime_poll_task", None) is task
+            wait_started = asyncio.get_running_loop().time()
+            entry_id = getattr(getattr(self, "config_entry", None), "entry_id", "")
+            logger.debug(
+                "Cloud-tool preparation entry=%s waiting for runtime ownership "
+                "shutdown=%s owns_poll=%s",
+                entry_id,
+                getattr(self, "_shutdown_complete", False), owns_poll,
+            )
             async with nullcontext() if owns_poll else lock:
+                logger.debug(
+                    "Cloud-tool preparation entry=%s acquired runtime ownership wait_ms=%s",
+                    entry_id,
+                    max(0, round((asyncio.get_running_loop().time() - wait_started) * 1000)),
+                )
                 if getattr(self, "_shutdown_complete", False) and not allow_shutdown:
                     raise RuntimeError("coordinator_stopped")
                 yield

@@ -1,7 +1,8 @@
-"""Static vendor layout fixtures, NOT captures or claims of physical support."""
+"""Nominal synthetic layouts plus one public wire fixture; no telemetry claims."""
 
 from copy import deepcopy
 import json
+from pathlib import Path
 import unittest
 
 from custom_components.eybond_local.support.protocol_candidates import (
@@ -31,6 +32,70 @@ def analyze(*events, catalog=None):
 
 
 class ProtocolCandidateTests(unittest.TestCase):
+    def observed_exchange(self):
+        source = json.loads((Path(__file__).parent / "fixtures/protocol_candidates/issue82_099e_status.json").read_text())
+        return synthetic_exchange() | {"request_hex": source["request_hex"],
+                                       "response_hex": source["response_hex"], "response_size": 84}
+
+    def test_extended_device_response_retains_vendor_window_and_unknown_extension(self):
+        event = self.observed_exchange()
+        original = deepcopy(event)
+        report = analyze(event)
+        self.assertEqual(report["candidate_keys"], ["eybond_099e_06"])
+        observation = report["observations"][0]
+        self.assertEqual(observation["expected_response_size"], 84)
+        self.assertEqual(observation["body_size"], 78)
+        self.assertEqual(observation["vendor_parse_body_size"], 66)
+        self.assertEqual(observation["extension_size"], 12)
+        self.assertEqual(observation["length_basis"], "observed_extended_body_issue82")
+        self.assertEqual(observation["layout_evidence_url"],
+                         "https://github.com/groove-max/ha-eybond-local/issues/82")
+        self.assertFalse(report["runtime_support_confirmed"] or report["telemetry_decoded"])
+        self.assertEqual(report["additional_requests_sent"], 0)
+        self.assertEqual(event, original)
+        self.assertNotIn(event["response_hex"], json.dumps(report))
+
+    def test_extended_checksum_covers_extension_and_header_is_explicit(self):
+        for index, reason in ((0, "unexpected_header"), (4, "unexpected_header"),
+                              (5, "checksum_mismatch"), (71, "checksum_mismatch"),
+                              (82, "checksum_mismatch"), (83, "checksum_mismatch")):
+            event = self.observed_exchange()
+            raw = bytearray.fromhex(event["response_hex"])
+            raw[index] ^= 1
+            event["response_hex"] = raw.hex()
+            with self.subTest(index=index):
+                report = analyze(event)
+                self.assertEqual(report["candidate_keys"], [])
+                self.assertEqual(report["observations"][0]["reason"], reason)
+        # A valid checksum with some other plausible extension is not admitted.
+        for length in (73, 83, 85, 512):
+            event = self.observed_exchange()
+            body = bytes([1] * (length - 6))
+            raw = b"VPHBO" + body + bytes([sum(body) & 255])
+            event.update(response_hex=raw.hex(), response_size=len(raw))
+            self.assertEqual(analyze(event)["observations"][0]["reason"], "unexpected_length")
+
+    def test_observed_variant_does_not_skip_correlation_or_truncation_checks(self):
+        for change in ({"status": "error"}, {"response_truncated": True},
+                       {"request_truncated": True}, {"wire": "auto"},
+                       {"transport_progress": {"response_received": False}}):
+            self.assertEqual(analyze(self.observed_exchange() | change)["candidate_keys"], [])
+
+    def test_observed_variant_schema_rejects_ambiguous_or_unbounded_layouts(self):
+        original = json.loads(CATALOG_PATH.read_text())
+        for change in ({"response_size": 72}, {"response_size": True}, {"response_size": 513},
+                       {"body_size": 66}, {"body_size": True}, {"response_prefix_hex": ""},
+                       {"response_prefix_hex": "zz"}, {"response_prefix_hex": "ab" * 6},
+                       {"evidence_url": ""}, {"length_basis": None}):
+            catalog = deepcopy(original)
+            catalog["candidates"][0]["response_variants"][0].update(change)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                analyze(self.observed_exchange(), catalog=catalog)
+        catalog = deepcopy(original)
+        catalog["candidates"][0]["response_variants"] *= 2
+        with self.assertRaises(ValueError):
+            analyze(catalog=catalog)
+
     def test_both_static_layouts_are_only_structural_leads(self):
         for code, key in (("099E", "eybond_099e_06"), ("09D5", "eybond_09d5_01")):
             with self.subTest(code=code):

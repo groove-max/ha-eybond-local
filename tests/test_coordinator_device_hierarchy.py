@@ -8769,7 +8769,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             coordinator.async_request_refresh = refresh
             coordinator._async_stop_proxy_capture_once = _stop_once
             first = asyncio.create_task(coordinator.async_stop_proxy_capture())
-            await entered.wait()
+            await asyncio.wait_for(entered.wait(), 1)
             second = asyncio.create_task(coordinator.async_stop_proxy_capture())
             await asyncio.sleep(0)
             self.assertEqual(max_active, 1)

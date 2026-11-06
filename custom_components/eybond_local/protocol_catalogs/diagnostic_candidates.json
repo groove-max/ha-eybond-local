@@ -17,6 +17,15 @@
       "body_offset": 5,
       "body_size": 66,
       "checksum": "sum8_body",
+      "response_variants": [
+        {
+          "response_size": 84,
+          "body_size": 78,
+          "response_prefix_hex": "565048424f",
+          "length_basis": "observed_extended_body_issue82",
+          "evidence_url": "https://github.com/groove-max/ha-eybond-local/issues/82"
+        }
+      ],
       "unverified": ["response_header", "field_map", "physical_device_compatibility"]
     },
     {

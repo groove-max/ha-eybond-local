@@ -43,6 +43,16 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Separate diagnostic runtime-lock waiting from scenario execution in exported
+  timing evidence, and log export/cleanup waiting independently. A fast wire
+  response no longer hides time spent waiting for an existing poll. Poll and
+  endpoint-restoration ownership rules are unchanged.
+
+- Recognize the observed 84-byte `099E_06` diagnostic reply from #82, checking
+  its complete checksum and recording the 12-byte extension separately from
+  the vendor parser's nominal body. Retain strict known-layout matching; this
+  is passive support evidence, not a new Manyi telemetry driver or field map.
+
 - Finish BLE connection cleanup after partial setup, notification errors or
   cancellation. Bound unsubscribe/disconnect waits, revoke stale clients and
   notification callbacks, and serialize reconnect behind cleanup. A failed

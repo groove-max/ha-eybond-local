@@ -8,6 +8,8 @@ import asyncio
 from dataclasses import replace
 from io import BytesIO
 import json
+import logging
+from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
@@ -169,7 +171,7 @@ async def test_unload_cancels_diagnostic_and_releases_runtime_lock(
     assert not coordinator._runtime_operation_lock.locked()
 
 
-@pytest.mark.parametrize("code", ["099E", "09D5"])
+@pytest.mark.parametrize("code", ["099E", "099E_extended", "09D5"])
 async def test_saved_candidate_in_signed_support_zip_after_reload(
     hass, hass_client_no_auth, collector_entry, fake_runtime, monkeypatch, code,
 ):
@@ -177,7 +179,13 @@ async def test_saved_candidate_in_signed_support_zip_after_reload(
     await hass.async_block_till_done()
     coordinator = collector_entry.runtime_data
     device = PayloadDevice(coordinator)
-    if code == "099E":
+    if code == "099E_extended":
+        fixture = json.loads((Path(__file__).resolve().parents[1]
+                              / "tests/fixtures/protocol_candidates/issue82_099e_status.json")
+                             .read_text(encoding="utf-8"))
+        device.response = bytes.fromhex(fixture["response_hex"])
+        script = PAYLOAD_SCRIPT
+    elif code == "099E":
         body = bytes([0xAB] * 66)
         device.response = b"\xa1\xb2\xc3\xd4\xe5" + body + bytes([sum(body) & 255])
         script = PAYLOAD_SCRIPT
@@ -206,7 +214,14 @@ async def test_saved_candidate_in_signed_support_zip_after_reload(
         assert status["identity_level"] == "collector_only"
         payload = json.loads(archive.read("evidence/diagnostic_run.json"))
         report = json.loads(archive.read("evidence/protocol_candidates.json"))
-        assert report["observations"][0]["vendor_code"] == code
+        observation = report["observations"][0]
+        assert observation["vendor_code"] == code.split("_")[0]
+        if code == "099E_extended":
+            assert observation["expected_response_size"] == 84
+            assert observation["body_size"] == 78
+            assert observation["vendor_parse_body_size"] == 66
+            assert observation["extension_size"] == 12
+            assert observation["layout_evidence_url"] == fixture["source_url"].split("#")[0]
         assert not report["runtime_support_confirmed"]
         assert report["additional_requests_sent"] == 0
         assert payload["context"]["wire_events"][0]["response_hex"] == device.response.hex()
@@ -239,3 +254,87 @@ async def test_identity_change_during_diagnostic_does_not_bind_archive_cache(
     assert payload["context"]["support_archive_cache_status"] == "identity_unavailable_or_changed"
     assert result["success"]  # The independent diagnostic result is preserved.
     await hass.config_entries.async_unload(collector_entry.entry_id)
+
+
+@pytest.mark.parametrize("finish", ["complete", "cancel", "unload"])
+async def test_diagnostic_waits_for_existing_poll_without_extra_requests(
+    hass, hass_client_no_auth, collector_entry, fake_runtime, monkeypatch, caplog, finish,
+):
+    from custom_components.eybond_local.runtime.coordinator import diagnostics
+
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = collector_entry.runtime_data
+    snapshot = coordinator.data
+    device = PayloadDevice(coordinator)
+    entered, release = asyncio.Event(), asyncio.Event()
+    ticks = [100.0]
+    caplog.set_level(logging.DEBUG, logger="custom_components.eybond_local.runtime.coordinator")
+    monkeypatch.setattr(diagnostics, "monotonic", lambda: ticks[0])
+    monkeypatch.setattr(coordinator, "_diagnostic_link_transport", lambda: device)
+
+    async def slow_poll(**kwargs):
+        entered.set()
+        await release.wait()
+        return snapshot
+
+    monkeypatch.setattr(coordinator, "_async_update_data_with_runtime_lock", slow_poll)
+    poll = asyncio.create_task(coordinator._async_update_data())
+    pending = unload = None
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        pending = asyncio.create_task(coordinator.async_run_diagnostic_commands(
+            commands=PAYLOAD_SCRIPT, confirm_write=True, publish_download_copy=True,
+        ))
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if "waiting for runtime ownership" in caplog.text:
+                break
+        assert coordinator._diagnostic_active
+        assert "waiting for runtime ownership" in caplog.text
+        assert not pending.done()
+        assert device.requests == []
+        assert await coordinator._async_update_data() is snapshot
+        ticks[0] += 3.0
+        if finish == "unload":
+            unload = asyncio.create_task(hass.config_entries.async_unload(collector_entry.entry_id))
+        elif finish == "cancel":
+            pending.cancel()
+        if finish != "complete":
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(pending, 2)
+            assert device.requests == []
+            assert not coordinator._diagnostic_active
+            # Cancelling queued diagnostics cannot steal the poll's lock.
+            assert coordinator._runtime_operation_lock.locked()
+            assert not poll.done()
+            assert "cancelled phase=runtime_lock_wait" in caplog.text
+            if unload is not None:
+                assert not unload.done()
+                assert coordinator._runtime.stopped == 0
+        release.set()
+        await asyncio.wait_for(poll, 2)
+        if finish == "complete":
+            response = await asyncio.wait_for(pending, 2)
+            assert response["success"]
+            assert len(device.requests) == 1
+            timing = {"runtime_lock_wait_ms": 3000, "scenario_ms": 0}
+            assert response["context"]["coordinator_timing"] == timing
+            client = await hass_client_no_auth()
+            download = await client.get(response["download_url"])
+            assert download.status == 200
+            artifact = json.loads(await download.text())
+            assert artifact["context"]["coordinator_timing"] == timing
+            assert "export wait finished completed=True" in caplog.text
+        if unload is not None:
+            assert await asyncio.wait_for(unload, 2)
+            assert "shutdown=True owns_poll=False" in caplog.text
+        assert not coordinator._runtime_operation_lock.locked()
+    finally:
+        release.set()
+        tasks = [task for task in (poll, pending, unload) if task is not None]
+        if pending is not None and not pending.done():
+            pending.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if unload is None:
+            await hass.config_entries.async_unload(collector_entry.entry_id)

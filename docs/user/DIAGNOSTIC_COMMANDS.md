@@ -227,15 +227,28 @@ For explicit FC4 diagnostics, the exported JSON also has a passive
 `protocol_candidates` report. Initial descriptors cover vendor variants
 `099E_06` and `09D5_01`, derived from static analysis of SmartClient 3.48.11.0.
 They check the exact request, response length and additive checksum on the
-original bytes, **before redaction**. The `099E` length is a nominal layout,
-not a vendor-enforced length check. These are structural leads only: response
-headers, field meanings and physical-device compatibility remain unverified.
+original bytes, **before redaction**. The `099E` 72-byte length is a nominal
+layout, not a vendor-enforced length check. A second, explicit 84-byte layout
+matches the reply captured in [issue #82](https://github.com/groove-max/ha-eybond-local/issues/82#issuecomment-6686294107),
+including its observed `VPHB` + `4F` prefix and checksum over the entire 78-byte
+body. The report distinguishes the vendor parser's 66-byte body from the
+12-byte extension; it does not truncate the reply or accept arbitrary lengths.
+These are structural leads only: field meanings and general physical-device
+compatibility remain unverified, and the extension has no decoded meaning yet.
 No match does not rule out another firmware variant, and multiple matches
 remain ambiguous. Redaction may prevent recomputing the checksum from the
 shareable bytes. The report sends no requests, selects no driver and enables
 no sensors or controls. A vendor protocol ID is not an FC4 envelope address.
 
 ## If a scenario fails
+
+The JSON's `started_at` / `finished_at` describe scenario execution, not time
+spent waiting for a running poll. `context.coordinator_timing` separately
+records `runtime_lock_wait_ms` and `scenario_ms`. Debug logs also record the
+wait for result export (which cannot be timed inside that same exported file).
+Cloud-tool cleanup logs its wait for runtime ownership, including on unload.
+These timings help distinguish a slow device from a busy polling channel or
+slow storage; they do not cancel a poll or retry a command automatically.
 
 Check that:
 

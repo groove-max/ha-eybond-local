@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from pathlib import Path
+from time import monotonic
 
 from ...const import CONF_COLLECTOR_PN, CONF_DRIVER_HINT, DRIVER_HINT_AUTO
 from ...support.diagnostic_evidence import DiagnosticEvidenceScope, diagnostic_evidence_scope
@@ -10,6 +13,9 @@ from ...support.diagnostic_export import export_diagnostic_run
 from ...support.diagnostic_projection import build_runtime_transport_debug
 from ...support.diagnostic_runner import DiagnosticRuntimeContext, run_scenario
 from ...support.download import sign_diagnostic_run_download_url
+
+
+logger = logging.getLogger(__name__)
 
 
 class CoordinatorDiagnosticsMixin:
@@ -199,28 +205,64 @@ class CoordinatorDiagnosticsMixin:
         publish_download_copy: bool = False,
         device_scope: DiagnosticEvidenceScope | None = None,
     ) -> dict:
-        async with self._runtime_operation_lock:
-            # Context was captured before waiting for ownership. Do not bind a
-            # result to a device that replaced it during that wait or exchange.
-            if device_scope != self._diagnostic_evidence_scope():
-                device_scope = None
-            result = await run_scenario(commands, context)
-            if device_scope != self._diagnostic_evidence_scope():
-                device_scope = None
+        queued_at = monotonic()
+        phase = "runtime_lock_wait"
+        entry_id = self.config_entry.entry_id
+        logger.debug("Diagnostic entry=%s waiting for runtime ownership", entry_id)
+        try:
+            async with self._runtime_operation_lock:
+                acquired_at = monotonic()
+                phase = "scenario"
+                wait_ms = max(0, round((acquired_at - queued_at) * 1000))
+                logger.debug(
+                    "Diagnostic entry=%s acquired runtime ownership wait_ms=%s",
+                    entry_id, wait_ms,
+                )
+                # Context was captured before waiting for ownership. Do not bind a
+                # result to a device that replaced it during that wait or exchange.
+                if device_scope != self._diagnostic_evidence_scope():
+                    device_scope = None
+                result = await run_scenario(commands, context)
+                if device_scope != self._diagnostic_evidence_scope():
+                    device_scope = None
+                result.context["coordinator_timing"] = {
+                    "runtime_lock_wait_ms": wait_ms,
+                    "scenario_ms": max(0, round((monotonic() - acquired_at) * 1000)),
+                }
+        except asyncio.CancelledError:
+            logger.debug(
+                "Diagnostic entry=%s cancelled phase=%s elapsed_ms=%s",
+                entry_id, phase, max(0, round((monotonic() - queued_at) * 1000)),
+            )
+            raise
         result.context["runtime_debug_after"] = build_runtime_transport_debug(
             getattr(context, "transport", None)
         )
         config_dir = Path(self.hass.config.config_dir)
-        entry_id = self.config_entry.entry_id
-        export = await self.hass.async_add_executor_job(
-            lambda: export_diagnostic_run(
-                config_dir=config_dir,
-                entry_id=entry_id,
-                result=result,
-                publish_download_copy=publish_download_copy,
-                device_scope=device_scope,
+        export_started = monotonic()
+        export_completed = False
+        try:
+            export = await self.hass.async_add_executor_job(
+                lambda: export_diagnostic_run(
+                    config_dir=config_dir,
+                    entry_id=entry_id,
+                    result=result,
+                    publish_download_copy=publish_download_copy,
+                    device_scope=device_scope,
+                )
             )
-        )
+            export_completed = True
+        finally:
+            # Export duration cannot be written into the file being exported.
+            # Log it separately, including failure/cancellation of this waiter;
+            # cancellation does not claim the executor worker has stopped.
+            logger.debug(
+                "Diagnostic entry=%s export wait finished completed=%s "
+                "export_wait_ms=%s total_wait_ms=%s",
+                entry_id, export_completed,
+                max(0, round((monotonic() - export_started) * 1000)),
+                max(0, round((monotonic() - queued_at) * 1000)),
+            )
         download_url = (
             sign_diagnostic_run_download_url(
                 self.hass,
