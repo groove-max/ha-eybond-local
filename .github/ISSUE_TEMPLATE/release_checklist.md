@@ -15,9 +15,12 @@ assignees: groove-max
 
 ## Validation
 
+- [ ] Freeze the candidate SHA, installed component fingerprint, feature scope and known limitations; keep unrelated new PRs outside this candidate.
 - [ ] Refresh `docs/generated/INVERTER_MODEL_CATALOG.generated.md` with `tools/model_catalog.py` and commit it if changed.
 - [ ] Run `python3 tools/validate.py release` with both supported real-Home-Assistant lanes.
 - [ ] Confirm the public documentation link/index check passes.
+- [ ] Complete targeted recovery checks, then the fixed final observation; review short recorder gaps and record the acceptance decision without restarting for unrelated changes.
+- [ ] If a blocker changed the candidate, document which evidence is retained and why any repeated long observation is necessary.
 - [ ] Confirm GitHub Actions are green for HACS validation, Hassfest, Quality Gate, and the current HA runtime lane.
 
 ## Release Notes
