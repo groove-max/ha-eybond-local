@@ -73,6 +73,12 @@ the GitHub release body should be rendered from the matching version section her
   or runtime session claim owns it. Preserve server-first identity probing and
   prevent IP-only callers from taking a named collector's session behind NAT.
 
+- Let an IP-only route claim a callback socket that presented its own framed
+  bytes, AT text or a strong PN, even when another entry owns an unrelated PN.
+  An unrelated owner or a missing AT-text shape must not strand that socket.
+  Refuse the IP-only claim when the socket PN, weak or strong, matches a
+  registered owner, so only that owner can take it through the PN path.
+
 - Preserve a known full collector PN when a reconnect initially reports only
   its heartbeat prefix. Passive discovery no longer shortens the stored PN,
   title or unique ID and triggers avoidable config-entry reloads. Legitimate
@@ -486,6 +492,22 @@ the GitHub release body should be rendered from the matching version section her
   this is not full device or control support (#45).
 
 ### Fixed
+
+- A route claim that lands while the sniff is waiting for the rest of a split
+  EyeBond frame no longer hands the new connection a stream that starts
+  mid-frame. The claimer could otherwise misparse every following frame.
+
+- A route claim that is cancelled while the pending sniff drains no longer
+  leaves its callback socket registered with nobody watching it. That socket
+  would miss a peer close and block every later same-IP route as a phantom.
+
+- A PN route claim that is cancelled during the identity read also leaves
+  that socket watched. The pause itself already handles a cancel during the
+  drain. The identity read is the later await, and it needed the same resume.
+
+- An IP-only route no longer takes a callback socket whose PN owner registered
+  while its sniff task was draining. The socket stays for that owner and its
+  watcher is resumed.
 
 - Only length and payload-too-large may drop one 8-byte EyeBond window, and
   only when the whole next frame is already buffered.
