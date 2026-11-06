@@ -182,6 +182,11 @@ late readiness callbacks and final shared-listener cleanup with real loopback
 sockets. The HA repair/reload cancellation test remains enabled and unchanged;
 neither expected-error suppression nor sleeps are used to hide the race.
 
+When one identified collector dials again without closing the previous
+session, see [CALLBACK_SOCKET_STORM.md](CALLBACK_SOCKET_STORM.md). During
+quiet-redial grace both sockets stay. After grace, one survivor remains.
+That policy never rebinds this listener.
+
 ## Session registry owns identity
 
 `connection/session_registry.py` (`CallbackSessionRegistry`) is the single object

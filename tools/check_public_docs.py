@@ -48,6 +48,7 @@ MAINTAINER_MARKDOWN = (
     REPO_ROOT / "docs" / "maintainer" / "VALIDATION.md",
 )
 ARCHITECTURE_MARKDOWN = (
+    REPO_ROOT / "docs" / "architecture" / "CALLBACK_SOCKET_STORM.md",
     REPO_ROOT / "docs" / "architecture" / "CLOUD_LEARNING_ARCHITECTURE.md",
     REPO_ROOT / "docs" / "architecture" / "CONNECTION_ARCHITECTURE.md",
     REPO_ROOT / "docs" / "architecture" / "SMG_PROTOCOL_MAPS.md",

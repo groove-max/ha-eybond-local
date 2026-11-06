@@ -68,8 +68,12 @@ class DiagnosticModbusSession:
         if claim is not None and not claim.future.done():
             claim.future.set_exception(ConnectionError("collector_disconnected"))
 
-    async def consume(self, reader, first: bytes, guard) -> bool:
-        """Consume a matching RTU boundary; return all lookahead otherwise."""
+    async def consume(self, reader, first: bytes, guard, on_delivery=None) -> bool:
+        """Consume a matching RTU boundary; return all lookahead otherwise.
+
+        ``on_delivery`` runs only for an owned reply that passed CRC and echo
+        checks, immediately before the waiter is resolved.
+        """
         claim = self.claim
         if claim is None or claim.future.done() or self.closed:
             return False
@@ -119,6 +123,8 @@ class DiagnosticModbusSession:
             echo_size = 4 if function[0] == 6 and not self.strict_write_echo else 6
             if prefix[:echo_size] != request[:echo_size]:
                 raise self._error("write_echo_mismatch")
+        if on_delivery is not None:
+            on_delivery()
         claim.future.set_result(prefix)
         return True
 

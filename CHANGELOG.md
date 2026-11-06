@@ -426,6 +426,40 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Only length and payload-too-large may drop one 8-byte EyeBond window, and
+  only when the whole next frame is already buffered.
+  `collector_frame_function_invalid` stays fatal. A second illegal window
+  still closes the session. The discard logs `Discarded illegal EyeBond
+  header` with the dropped hex.
+
+- Extra sockets for the same strong collector PN are aborted with TCP RST.
+  A socket is not reset before its PN is known, and a shared IP is not
+  ownership. A quiet same-PN redial is not reset while the old socket has
+  had no exchange since the new one was accepted; both stay through a short
+  grace, then the newcomer replaces the old socket when the old exchange
+  predates the new accept, and after grace also when the old socket has no
+  exchange and is not a live routed session. A live routed session with no
+  exchange stays. Quiet grace still keeps both until it ends. A live routed
+  AT session is kept when neither socket has an exchange, and a completed
+  AT reply counts as that exchange. The DTUPN line that first records the
+  session PN is not an exchange, including when that line is split across
+  reads. A quiet redial that arrives while grace is open does not move the
+  grace deadline, and a connected socket is never dropped from the session
+  inventory, so repeated redials and short dials cannot hide the old socket.
+
+- A completed, owned raw ASCII, raw Modbus or auxiliary reply on an AT
+  callback socket now updates the storm exchange clock when the reader
+  delivers it, so a working raw incumbent is kept after a same-PN redial.
+  The recorded time is the delivery time, even while the sender is still
+  draining. A request, a timeout, a PN announcement, an AT query-status
+  error or a reply from a replaced session does not update it. The same
+  applies to an owned diagnostic raw Modbus or auxiliary reply on a framed
+  session; a CRC failure, an unowned or wrong-subtype auxiliary reply or an
+  inbound heartbeat does not update it. A completed owned AT reply on a
+  framed session also updates it when the reader delivers it; a
+  query-status error, unsolicited metadata and the first identity
+  announcement do not.
+
 - PI30 periodically rereads priorities, charging thresholds/currents and flags
   changed through the vendor app or inverter panel (#62). `QPIRI`/`QFLAG` run
   after telemetry, at most one extra request per poll and no more often than
