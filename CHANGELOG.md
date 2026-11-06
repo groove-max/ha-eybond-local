@@ -35,6 +35,13 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Finish BLE connection cleanup after partial setup, notification errors or
+  cancellation. Bound unsubscribe/disconnect waits, revoke stale clients and
+  notification callbacks, and serialize reconnect behind cleanup. A failed
+  disconnect remains an error, not proof that a remote Bluetooth Proxy slot
+  was released. This does not add a BLE management wizard or confirm a new
+  collector's command support.
+
 - Do not send application commands to an unidentified silent callback socket
   merely because it shares a configured collector IP (#81). Keep that socket
   watched until it presents protocol/identity evidence or an explicit onboarding
