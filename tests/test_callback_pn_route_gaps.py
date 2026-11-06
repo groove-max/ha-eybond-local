@@ -1,4 +1,4 @@
-"""A strong-PN callback must not be published under its peer IP."""
+"""PN route gaps: peer-IP alias, and a frame that follows an AT line."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from custom_components.eybond_local.collector.protocol import (
+    FC_HEARTBEAT,
     FC_QUERY_COLLECTOR,
     build_collector_request,
 )
@@ -20,9 +21,22 @@ from custom_components.eybond_local.collector.transport import (
     _PendingCollectorSocket,
     _SharedEybondListener,
 )
+from custom_components.eybond_local.collector.transport.common import (
+    _collector_pn_from_initial_chunk,
+)
 
 PN = "V001107SYN82291016"
 PEER = "192.0.2.8"
+
+
+def _heartbeat(pn14: str) -> bytes:
+    return build_collector_request(
+        1,
+        pn14.encode("ascii"),
+        devcode=0,
+        collector_addr=1,
+        fcode=FC_HEARTBEAT,
+    )
 
 
 def _fc2(pn: str) -> bytes:
@@ -121,3 +135,29 @@ class PnRouteGapTests(unittest.IsolatedAsyncioTestCase):
 
         run.assert_awaited()
         self.assertIs(listener._connections[PEER], ip_only)
+
+
+class InitialChunkPnTests(unittest.TestCase):
+    def test_frame_after_a_non_dtupn_at_line_keeps_its_pn(self):
+        pn14 = "V001107SYN8229"
+        self.assertEqual(
+            _collector_pn_from_initial_chunk(b"AT+INFO\r\n" + _heartbeat(pn14)),
+            (pn14, "framed_heartbeat"),
+        )
+        self.assertEqual(
+            _collector_pn_from_initial_chunk(b"AT+INFO\r\n" + _fc2(PN)),
+            (PN, "fc2_parameter_2"),
+        )
+
+    def test_dtupn_still_wins_when_a_frame_follows(self):
+        chunk = f"AT+DTUPN:{PN}\r\n".encode("ascii") + _fc2("V001107SYN998877")
+        self.assertEqual(_collector_pn_from_initial_chunk(chunk), (PN, "at_dtupn"))
+
+    def test_frame_at_offset_zero_is_unchanged(self):
+        self.assertEqual(
+            _collector_pn_from_initial_chunk(_fc2(PN)),
+            (PN, "fc2_parameter_2"),
+        )
+
+    def test_at_line_without_a_following_frame_has_no_pn(self):
+        self.assertEqual(_collector_pn_from_initial_chunk(b"AT+INFO\r\n"), ("", ""))

@@ -480,6 +480,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- A framed PN is still read when an AT line that is not AT+DTUPN shares the
+  first chunk. The frame is not at byte 0, so the socket used to look
+  unidentified and an IP-only claim could take a named collector. AT+DTUPN
+  still wins when both are present. A lone AT line still has no PN.
+
 - A callback whose first bytes already carry a strong PN is no longer also
   stored under that peer IP. An IP-only entry on the same address was sending
   on the named collectors socket. The PN owner still receives that socket.
