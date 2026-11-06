@@ -29,10 +29,17 @@ Support and validation remain specific to the collector, protocol and firmware.
   described below when upgrading from older versions; historical statistics
   are not rewritten automatically.
 - Some collectors still have unresolved local/cloud coexistence outages. This
-  candidate does not claim a universal firmware fix. Native PI30, DESSMonitor
-  and ValueCloud learning qualification must not be inferred from one successful
-  SmartESS run. An uncertain learning outcome may leave cloud access protected;
+  candidate does not claim a universal firmware fix. Native PI30 cloud learning,
+  DESSMonitor and ValueCloud have automated coverage, but a complete successful
+  physical-device learning/activation/return run on this candidate is not yet
+  confirmed. Historical SmartESS results do not qualify those combinations.
+  These functions remain available for public testing with that limitation.
+  An uncertain learning outcome may leave cloud access protected;
   do not delete protection records or downgrade to bypass recovery.
+- The PI30 MAX lowercase flag fix is covered by protocol evidence and regression
+  tests; confirmation of the published fix on the reporting user's device is
+  still pending (#64). Keep the correct model profile and any deliberate flag-case
+  override. This is not automatic detection of every PI30 firmware's flag format.
 - A GitHub prerelease, including RC1, does not replace the stable release in the
   default HACS channel. The subsequent ordinary 0.3.0 release is a separate step.
 
@@ -46,6 +53,12 @@ Support and validation remain specific to the collector, protocol and firmware.
   This does not change collector firmware labels or bypass the required HA restart.
 
 ### Changed
+
+- Preserve a known full collector PN when a reconnect initially reports only
+  its heartbeat prefix. Passive discovery no longer shortens the stored PN,
+  title or unique ID and triggers avoidable config-entry reloads. Legitimate
+  short-to-full identity enrichment and missing protocol metadata upgrades
+  remain supported. This fixes recovery churn, not the cause of a network loss.
 
 - Repeat an addressed callback trigger after a pre-existing silent socket
   closes during identity verification (#75). Some collectors do not reconnect
@@ -456,6 +469,40 @@ Support and validation remain specific to the collector, protocol and firmware.
   this is not full device or control support (#45).
 
 ### Fixed
+
+- Only length and payload-too-large may drop one 8-byte EyeBond window, and
+  only when the whole next frame is already buffered.
+  `collector_frame_function_invalid` stays fatal. A second illegal window
+  still closes the session. The discard logs `Discarded illegal EyeBond
+  header` with the dropped hex.
+
+- Extra sockets for the same strong collector PN are aborted with TCP RST.
+  A socket is not reset before its PN is known, and a shared IP is not
+  ownership. A quiet same-PN redial is not reset while the old socket has
+  had no exchange since the new one was accepted; both stay through a short
+  grace, then the newcomer replaces the old socket when the old exchange
+  predates the new accept, and after grace also when the old socket has no
+  exchange and is not a live routed session. A live routed session with no
+  exchange stays. Quiet grace still keeps both until it ends. A live routed
+  AT session is kept when neither socket has an exchange, and a completed
+  AT reply counts as that exchange. The DTUPN line that first records the
+  session PN is not an exchange, including when that line is split across
+  reads. A quiet redial that arrives while grace is open does not move the
+  grace deadline, and a connected socket is never dropped from the session
+  inventory, so repeated redials and short dials cannot hide the old socket.
+
+- A completed, owned raw ASCII, raw Modbus or auxiliary reply on an AT
+  callback socket now updates the storm exchange clock when the reader
+  delivers it, so a working raw incumbent is kept after a same-PN redial.
+  The recorded time is the delivery time, even while the sender is still
+  draining. A request, a timeout, a PN announcement, an AT query-status
+  error or a reply from a replaced session does not update it. The same
+  applies to an owned diagnostic raw Modbus or auxiliary reply on a framed
+  session; a CRC failure, an unowned or wrong-subtype auxiliary reply or an
+  inbound heartbeat does not update it. A completed owned AT reply on a
+  framed session also updates it when the reader delivers it; a
+  query-status error, unsolicited metadata and the first identity
+  announcement do not.
 
 - PI30 periodically rereads priorities, charging thresholds/currents and flags
   changed through the vendor app or inverter panel (#62). `QPIRI`/`QFLAG` run

@@ -16,10 +16,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from custom_components.eybond_local.collector.protocol import EybondHeader, build_collector_request
+from custom_components.eybond_local.collector.protocol import (
+    HEADER_SIZE,
+    EybondHeader,
+    build_collector_request,
+    decode_header,
+)
 from custom_components.eybond_local.collector.transport.binary_framing import (
     AABB_FRAME_SIZE,
-    MAX_BINARY_FRAME_SIZE,
     BinaryFrameDecoder,
     BinaryFramingError,
     BinaryGrammar,
@@ -219,20 +223,188 @@ class BinaryFrameDecoderTests(unittest.TestCase):
 
     def test_large_payload_is_bounded_before_buffer_growth(self) -> None:
         decoder = self._decoder(BinaryGrammar.EYBOND)
+        oversized_header = _framed(size=4097)[:HEADER_SIZE]
+        # Header-only: next header is not buffered, so close. Never adopt 4097.
         with self.assertRaisesRegex(BinaryFramingError, "collector_frame_payload_too_large"):
-            decoder.feed(_framed(size=4097), now=10.1)
-        self.assertLessEqual(decoder.buffered_size, MAX_BINARY_FRAME_SIZE)
-        self.assertEqual(decoder.buffered_size, 8)
+            decoder.feed(oversized_header, now=10.1)
+        self.assertIsNone(decoder.frame)
+        self.assertEqual(decoder.bytes_needed, 0)
+
+    def test_illegal_junk_header_resyncs_to_aabb_follow_on(self) -> None:
+        """Whole-window discard must not form ff0000ff04aabb02 (payload_len=1192)."""
+
+        junk = bytes.fromhex("000f02ff0000ff04")
+        # EyeBond follow-on whose first bytes are aa bb (tid 0xAABB), small payload.
+        # Use non-0200/0202 devcode so MIXED does not treat the header as AABB overlap.
+        eybond_follow = _framed(tid=0xAABB, size=4, devcode=0x02FF)
+        self.assertEqual(eybond_follow[:2], b"\xaa\xbb")
+        self.assertNotIn(eybond_follow[:4], (b"\xaa\xbb\x02\x00", b"\xaa\xbb\x02\x02"))
+        for grammar in (BinaryGrammar.EYBOND, BinaryGrammar.MIXED):
+            with self.subTest(grammar=grammar, follow="eybond_tid_aabb"):
+                decoder = self._decoder(grammar)
+                chunk = junk + eybond_follow
+                self.assertEqual(decoder.feed(chunk, now=10.1), len(junk) + len(eybond_follow))
+                frame = decoder.finish(now=10.1)
+                self.assertEqual(frame.grammar, BinaryGrammar.EYBOND)
+                self.assertEqual(frame.wire, eybond_follow)
+                self.assertNotEqual(frame.wire[:HEADER_SIZE], junk)
+                self.assertLess(frame.header.payload_len, 100)
+                self.assertNotEqual(frame.header.payload_len, 1192)
+
+    def test_two_illegal_headers_close_without_publish(self) -> None:
+        junk = bytes.fromhex("000f02ff0000ff04")
+        second = bytes([0xFF]) * HEADER_SIZE
+        decoder = self._decoder(BinaryGrammar.EYBOND)
+        with self.assertRaisesRegex(
+            BinaryFramingError,
+            "collector_frame_(length_invalid|payload_too_large|function_invalid)",
+        ):
+            decoder.feed(junk + second, now=10.1)
+        self.assertIsNone(decoder.frame)
+        self.assertEqual(decoder.buffered_size, HEADER_SIZE)
 
     def test_invalid_header_length_and_function(self) -> None:
+        legal = _framed(tid=0x1234, devcode=0x0456, size=5)
+        legal_header = decode_header(legal)
+        self.assertEqual(runtime_eybond_header_error(legal_header), "")
+        self.assertGreater(len(legal), HEADER_SIZE)
+        self.assertGreaterEqual(len(legal), legal_header.total_len)
         for wire, reason in (
             (bytes.fromhex("aabb02000000ff04"), "collector_frame_length_invalid"),
             (bytes.fromhex("001002ff0002ffff"), "collector_frame_function_invalid"),
         ):
             with self.subTest(reason=reason):
+                # Header only: nothing follows, so close. Do not wait for 8 more bytes.
                 decoder = self._decoder(BinaryGrammar.EYBOND)
                 with self.assertRaisesRegex(BinaryFramingError, reason):
                     decoder.feed(wire, now=10.1)
+                self.assertIsNone(decoder.frame)
+                self.assertEqual(decoder.bytes_needed, 0)
+                if reason == "collector_frame_function_invalid":
+                    # Stays fatal beside a complete legal follow-on frame.
+                    follow = legal
+                    follow_reason = reason
+                else:
+                    # Length-invalid may discard once when the next header is
+                    # already buffered. A second illegal window still closes.
+                    follow = bytes([0xFF]) * HEADER_SIZE
+                    follow_reason = (
+                        "collector_frame_(length_invalid|payload_too_large|function_invalid)"
+                    )
+                exhausted = self._decoder(BinaryGrammar.EYBOND)
+                with self.assertRaisesRegex(BinaryFramingError, follow_reason):
+                    exhausted.feed(wire + follow, now=10.1)
+                self.assertIsNone(exhausted.frame)
+                if reason == "collector_frame_function_invalid":
+                    self.assertEqual(exhausted.buffered_size, HEADER_SIZE)
+
+    def test_raw_rtu_prefix_closes_payload_too_large_without_false_payload(self) -> None:
+        """7-byte RTU plus a real FC4 frame must not become a 2303-byte read."""
+
+        raw_rtu = bytes.fromhex("0103021234b533")
+        valid = build_collector_request(
+            0x6AEE,
+            raw_rtu,
+            devcode=0x0200,
+            collector_addr=1,
+            fcode=4,
+        )
+        chunk = raw_rtu + valid
+        misaligned = chunk[HEADER_SIZE:HEADER_SIZE * 2]
+        self.assertEqual(misaligned.hex(), "ee02000009010401")
+        false_header = decode_header(misaligned)
+        self.assertEqual(false_header.fcode, 1)
+        self.assertEqual(false_header.payload_len, 2303)
+        self.assertEqual(runtime_eybond_header_error(false_header), "")
+        self.assertEqual(
+            runtime_eybond_header_error(decode_header(chunk[:HEADER_SIZE])),
+            "collector_frame_payload_too_large",
+        )
+        for grammar in (BinaryGrammar.EYBOND, BinaryGrammar.MIXED):
+            with self.subTest(grammar=grammar):
+                decoder = self._decoder(grammar)
+                with self.assertRaisesRegex(
+                    BinaryFramingError,
+                    "collector_frame_payload_too_large",
+                ):
+                    decoder.feed(chunk, now=10.1)
+                self.assertIsNone(decoder.frame)
+                self.assertEqual(decoder.bytes_needed, 0)
+                self.assertEqual(decoder.buffered_size, HEADER_SIZE)
+
+    def test_raw_rtu_prefix_close_does_not_log_discard_recovered(self) -> None:
+        """0103021234b533 plus a real FC4 reply closes and does not log recovery."""
+
+        raw_rtu = bytes.fromhex("0103021234b533")
+        valid = build_collector_request(
+            0x6AEE,
+            raw_rtu,
+            devcode=0x0200,
+            collector_addr=1,
+            fcode=4,
+        )
+        chunk = raw_rtu + valid
+        log_name = "custom_components.eybond_local.collector.transport.binary_framing"
+        for grammar in (BinaryGrammar.EYBOND, BinaryGrammar.MIXED):
+            with self.subTest(grammar=grammar):
+                decoder = self._decoder(grammar)
+                with self.assertNoLogs(log_name, level="WARNING"):
+                    with self.assertRaisesRegex(
+                        BinaryFramingError,
+                        "collector_frame_payload_too_large",
+                    ):
+                        decoder.feed(chunk, now=10.1)
+                self.assertIsNone(decoder.frame)
+                self.assertEqual(decoder.bytes_needed, 0)
+                self.assertEqual(decoder.buffered_size, HEADER_SIZE)
+
+    def test_discard_recovered_log_names_the_buffered_legal_frame(self) -> None:
+        """A one-window discard logs the legal frame that was kept, not the junk."""
+
+        junk = bytes.fromhex("000f02ff0000ff04")
+        discarded = decode_header(junk)
+        legal = build_collector_request(
+            0x1234,
+            b"abcde",
+            devcode=0x0456,
+            collector_addr=1,
+            fcode=2,
+        )
+        legal_header = decode_header(legal)
+        self.assertEqual(
+            runtime_eybond_header_error(discarded),
+            "collector_frame_length_invalid",
+        )
+        self.assertEqual(runtime_eybond_header_error(legal_header), "")
+        self.assertGreaterEqual(len(legal), legal_header.total_len)
+        self.assertNotEqual(
+            (legal_header.fcode, legal_header.payload_len),
+            (discarded.fcode, discarded.payload_len),
+        )
+        log_name = "custom_components.eybond_local.collector.transport.binary_framing"
+        expected = (
+            f"discarded={junk.hex()} "
+            f"next_tid={legal_header.tid} next_devcode=0x{legal_header.devcode:04X} "
+            f"next_fc={legal_header.fcode} next_payload={legal_header.payload_len}"
+        )
+        wrong = f"next_fc={discarded.fcode} next_payload={discarded.payload_len}"
+        for grammar in (BinaryGrammar.EYBOND, BinaryGrammar.MIXED):
+            with self.subTest(grammar=grammar):
+                decoder = self._decoder(grammar)
+                with self.assertLogs(log_name, level="WARNING") as caught:
+                    self.assertEqual(
+                        decoder.feed(junk + legal, now=10.1),
+                        len(junk) + len(legal),
+                    )
+                frame = decoder.finish(now=10.1)
+                self.assertEqual(frame.wire, legal)
+                self.assertIsNotNone(frame.header)
+                self.assertEqual(frame.header.fcode, legal_header.fcode)
+                self.assertEqual(frame.header.payload_len, legal_header.payload_len)
+                recovered = [line for line in caught.output if "discard recovered" in line]
+                self.assertEqual(len(recovered), 1)
+                self.assertIn(expected, recovered[0])
+                self.assertNotIn(wrong, recovered[0])
 
     def test_invalid_constructor_deadline_and_grammar(self) -> None:
         for start, timeout in ((10, 0), (10, -1), (10, float("inf")), (float("nan"), 1)):
@@ -261,6 +433,40 @@ class BinaryFrameDecoderTests(unittest.TestCase):
 
 
 class BinaryFrameReaderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_payload_too_large_header_never_reads_claimed_payload(self) -> None:
+        """payload_too_large is decided at the header, including after a discard."""
+
+        oversized_header = _framed(size=4097)[:HEADER_SIZE]
+        # Discard once, then a second illegal header closes — never readexactly(4097).
+        stream = oversized_header + bytes([0xFF]) * HEADER_SIZE
+        reads: list[int] = []
+
+        class Reader:
+            def __init__(self) -> None:
+                self._data = stream[HEADER_SIZE:]
+
+            async def readexactly(self, size: int) -> bytes:
+                reads.append(size)
+                if size > len(self._data):
+                    raise asyncio.IncompleteReadError(self._data, size)
+                chunk, self._data = self._data[:size], self._data[size:]
+                return chunk
+
+        with self.assertRaisesRegex(
+            BinaryFramingError,
+            "collector_frame_payload_too_large",
+        ):
+            await async_read_binary_frame(
+                Reader(),
+                prefix=oversized_header,
+                grammar=BinaryGrammar.EYBOND,
+                started_at=asyncio.get_running_loop().time(),
+                timeout=1.0,
+            )
+        # Next header was not in the prefix, so do not readexactly another window.
+        self.assertEqual(reads, [])
+        self.assertNotIn(4097, reads)
+
     async def test_coalesced_stream_keeps_tail_outside_decoder(self) -> None:
         for grammar, wire in (
             (BinaryGrammar.MIXED, _auxiliary()),

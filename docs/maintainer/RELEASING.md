@@ -24,6 +24,46 @@ release, rerun the complete release workflow below from the final tree.
 
 ## Release Workflow
 
+### Candidate freeze and bounded observation
+
+Release acceptance follows a **frozen candidate**, not a moving `main` branch.
+
+- Before the final observation, record the release branch, full commit, installed
+  component fingerprint, accepted feature scope, known limitations, test devices,
+  and the observation's start and end times. Do not deploy from a mutable branch
+  name during that window.
+- New PRs, model support, optimizations and non-blocking fixes go into the next
+  development build. Their arrival does not change the candidate or restart its
+  clock. An unanswered support request is not itself evidence of a regression.
+- Only a demonstrated release blocker may reopen the candidate: unsafe or
+  incorrect writes, loss of configuration/entities, broken supported setup or
+  upgrade, a crash/deadlock, or failure of the promised connection recovery.
+  Record the reproduction and the affected acceptance criterion before changing
+  scope. Do not silently waive missing hardware qualification: document it and
+  obtain a release-scope decision instead.
+- Verify individual fixes first with regression tests and a short targeted bench
+  check. Run the final **24-hour** observation only after local release checks and
+  the scope decision are complete. A longer window needs a specific stated
+  question, not just more elapsed time.
+- At the planned end, collect the result and make the acceptance decision. Review
+  recorder gaps and recovery, not only minute samples. A brief WAN disconnect
+  that recovers automatically is not by itself a failed integration test; an
+  unexplained persistent outage or a growing failure rate needs investigation.
+- If a blocker requires a new build, rerun the affected checks. Restart a full
+  long observation only when the change affects long-running behavior such as
+  session ownership, scheduling, reconnect recovery or resource lifetime, or
+  when a focused test cannot settle the failure. State why and freeze the new
+  candidate before restarting; do not automatically discard unrelated evidence.
+- Evidence from an older SHA remains labeled with that SHA. Identical installed
+  component bytes may support a documentation-only successor after comparison;
+  changed component bytes, including a changed manifest, require an explicit
+  impact review. Never relabel an old run as a test of new code.
+
+The final release workflow below is still required. This policy bounds scope and
+retesting; it does not turn a failed check or an untested device into a pass.
+
+### Final validation and publication
+
 1. Keep incoming work under `## [Unreleased]` in [CHANGELOG.md](../../CHANGELOG.md)
    while the next target version is not assigned yet.
 2. When cutting a release, decide the target version and verify

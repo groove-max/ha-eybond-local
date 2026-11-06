@@ -1129,6 +1129,142 @@ class ProductionBindingAdoptionLifecycleTests(unittest.TestCase):
         )
 
 
+class OwnedSessionMonitorSnapshotTests(unittest.TestCase):
+    def _link(self, sessions, *, pinned=""):
+        link = _bare_link(
+            collector_pn=FULL_PN, collector_ip="", persisted_protocol="at_text",
+            sessions=sessions,
+        )
+        state = {"sessions": sessions, "reads": 0}
+
+        def source():
+            state["reads"] += 1
+            return state["sessions"]
+
+        registry = CallbackSessionRegistry(sessions_source=source)
+        registry.claim("entry", collector_pn=FULL_PN)
+        if pinned:
+            registry.pin_owner_claim_to_session("entry", pinned)
+        link._callback_ownership_registry = registry
+        link._callback_entry_id = "entry"
+        link._activation_session_id = pinned
+        link._owned_session_fingerprint = ("", 0)
+        link._owned_session_changed = asyncio.Event()
+        notifications = []
+        link._collector_connection_watcher = notifications.append
+        return link, registry, state, notifications
+
+    def test_stable_monitor_uses_one_snapshot_with_or_without_pin(self) -> None:
+        for pinned in ("", "socket"):
+            with self.subTest(pinned=pinned):
+                link, _registry, state, notifications = self._link([
+                    _observed("socket", FULL_PN, state="routed_framed", source="at_dtupn"),
+                ], pinned=pinned)
+                link._observe_owned_session_state()
+                state["reads"] = 0
+                generation = link._owned_session_generation
+                link._owned_session_changed.clear()
+
+                link._observe_owned_session_state()
+
+                self.assertEqual(state["reads"], 1)
+                self.assertEqual(link._owned_session_generation, generation)
+                self.assertFalse(link._owned_session_changed.is_set())
+                self.assertEqual(notifications, ["203.0.113.9"])
+
+    def test_monitor_reconciles_same_socket_routing_and_replacement(self) -> None:
+        link, _registry, state, notifications = self._link([
+            _observed("socket", FULL_PN, state="waiting_for_route_identity"),
+        ])
+        link._observe_owned_session_state()
+        generation = link._owned_session_generation
+        self.assertIsNone(link.confirmed_wire_binding)
+
+        state["sessions"] = [
+            _observed("socket", FULL_PN, state="routed_framed", source="at_dtupn"),
+        ]
+        link._owned_session_changed.clear()
+        link._observe_owned_session_state()
+        self.assertTrue(link.confirmed_wire_binding.uses_framed_wire)
+        self.assertEqual(link._owned_session_generation, generation)
+        self.assertFalse(link._owned_session_changed.is_set())
+
+        state["sessions"] = [
+            _observed("replacement", FULL_PN, peer_ip="203.0.113.10", state="routed_framed", source="at_dtupn"),
+        ]
+        link._observe_owned_session_state()
+        self.assertEqual(link._owned_session_fingerprint, ("replacement", 18899))
+        self.assertEqual(link._owned_session_generation, generation + 1)
+        self.assertTrue(link._owned_session_changed.is_set())
+        self.assertEqual(notifications, ["203.0.113.9", "203.0.113.10"])
+
+    def test_snapshot_preserves_separate_pinned_location_and_wire_selection(self) -> None:
+        link, registry, state, notifications = self._link([
+            _observed("pinned", FULL_PN, state="waiting_for_route_identity"),
+            _observed("trusted", FULL_PN, state="routed_framed", source="at_dtupn"),
+        ], pinned="pinned")
+        expected_location = link._owned_domain_session()
+        expected_handle = link._live_session_handle()
+        state["reads"] = 0
+
+        location, handle = registry.observe_owned_runtime_session("entry", pinned_session_id="pinned")
+
+        self.assertEqual(state["reads"], 1)
+        self.assertEqual(location, expected_location)
+        self.assertEqual(handle, expected_handle)
+        self.assertEqual(location.session_id, "pinned")
+        self.assertEqual(handle.session_id, "trusted")
+        link._observe_owned_session_state()
+        self.assertEqual(link._owned_session_fingerprint, ("pinned", 18899))
+        self.assertTrue(link.confirmed_wire_binding.uses_framed_wire)
+        self.assertEqual(notifications, ["203.0.113.9"])
+
+    def test_snapshot_preserves_invalid_pin_and_closed_session_rules(self) -> None:
+        for state_name in ("closed_disconnect", "route_identity_mismatch"):
+            with self.subTest(state=state_name):
+                link, registry, state, _notifications = self._link([
+                    _observed("socket", FULL_PN, state="routed_framed", source="at_dtupn"),
+                ], pinned="socket")
+                state["sessions"] = [_observed("socket", FULL_PN, state=state_name)]
+                expected = (link._owned_domain_session(), link._live_session_handle())
+                actual = registry.observe_owned_runtime_session("entry", pinned_session_id="socket")
+                self.assertEqual(actual, expected)
+                # A mismatched claim pin cannot expose an otherwise live location.
+                actual = registry.observe_owned_runtime_session("entry", pinned_session_id="another")
+                self.assertIsNone(actual[0])
+
+    def test_snapshot_preserves_session_only_claim_without_durable_handle(self) -> None:
+        link, registry, state, _notifications = self._link([
+            _observed("socket", FULL_PN, state="routed_framed", source="at_dtupn"),
+        ])
+        registry.release("entry")
+        registry.claim_session("entry", session_id="socket")
+        link._activation_session_id = "socket"
+        expected = (link._owned_domain_session(), link._live_session_handle())
+        state["reads"] = 0
+
+        location, handle = registry.observe_owned_runtime_session("entry", pinned_session_id="socket")
+
+        self.assertEqual(state["reads"], 1)
+        self.assertEqual(location, expected[0])
+        self.assertIsNone(handle)
+        self.assertEqual(location.session_id, "socket")
+
+    def test_snapshot_does_not_select_foreign_identity_or_released_owner(self) -> None:
+        _link, registry, state, _notifications = self._link([
+            _observed("socket", FULL_PN, state="routed_framed", source="at_dtupn"),
+        ])
+        state["sessions"] = [
+            _observed("foreign", OTHER_FULL_PN, state="routed_framed", source="at_dtupn"),
+        ]
+        registry.claim("other-entry", collector_pn=OTHER_FULL_PN)
+        self.assertEqual(registry.observe_owned_runtime_session("entry"), (None, None))
+        registry.release("entry")
+        state["reads"] = 0
+        self.assertEqual(registry.observe_owned_runtime_session("entry"), (None, None))
+        self.assertEqual(state["reads"], 0)
+
+
 class TransportIndependenceTests(unittest.TestCase):
     """Live adapter negotiation depends ONLY on the observed session signals.
 

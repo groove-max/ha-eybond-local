@@ -151,6 +151,59 @@ class _FakeRegistry:
 
 
 class SensorPrecisionTests(unittest.TestCase):
+    def test_unmapped_extra_attributes_do_not_materialize_full_runtime_values(self) -> None:
+        cases = (
+            ("battery_voltage", 52.3),
+            ("write_capabilities", "cap_a, cap_b"),
+            ("last_error", "x" * 300),
+        )
+        for key, value in cases:
+            with self.subTest(key=key):
+                coordinator = _FakeCoordinator(key, value)
+                sensor = EybondValueSensor(
+                    coordinator, MeasurementDescription(key=key, name=key)
+                )
+                runtime_values_calls = []
+                original_runtime_values = RuntimeSnapshot.runtime_values
+
+                def counted_runtime_values(snapshot):
+                    runtime_values_calls.append(None)
+                    return original_runtime_values(snapshot)
+
+                with patch.object(RuntimeSnapshot, "runtime_values", counted_runtime_values):
+                    attributes = sensor.extra_state_attributes
+                self.assertEqual(runtime_values_calls, [])
+                if key == "battery_voltage":
+                    self.assertIsNone(attributes)
+                elif key == "write_capabilities":
+                    self.assertEqual(attributes, {"capabilities": ["cap_a", "cap_b"]})
+                else:
+                    self.assertEqual(attributes, {"full_value": value})
+
+    def test_summary_extra_attributes_materialize_full_values_once(self) -> None:
+        coordinator = _FakeCoordinator("output_settings_state", "Configured")
+        coordinator.data.values.update(
+            {"operating_mode": "Configured", "configuration_safe_mode": True}
+        )
+        sensor = EybondValueSensor(
+            coordinator,
+            MeasurementDescription(key="output_settings_state", name="Output Settings"),
+        )
+        runtime_values_calls = []
+        original_runtime_values = RuntimeSnapshot.runtime_values
+
+        def counted_runtime_values(snapshot):
+            runtime_values_calls.append(None)
+            return original_runtime_values(snapshot)
+
+        with patch.object(RuntimeSnapshot, "runtime_values", counted_runtime_values):
+            attributes = sensor.extra_state_attributes
+        self.assertEqual(len(runtime_values_calls), 1)
+        self.assertEqual(
+            attributes,
+            {"operating_mode": "Configured", "configuration_safe_mode": True},
+        )
+
     def test_capability_lists_publish_count_and_lossless_attributes(self) -> None:
         from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
 

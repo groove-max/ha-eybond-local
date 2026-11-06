@@ -717,6 +717,29 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         self.assertIs(manager.transport, auxiliary_transport)
         self.assertTrue(manager.connected)
 
+    def test_transport_resolves_payload_adapter_once(self) -> None:
+        manager = self._build_manager()
+        payload_transport = _FakeTransport(
+            connected=True,
+            observed_sessions=(_observed_framed_session(),),
+        )
+        manager._transport = payload_transport  # type: ignore[assignment]
+
+        with patch.object(
+            manager,
+            "_inverter_forward_adapter",
+            return_value="framed_fc4",
+        ) as adapter:
+            self.assertIs(manager.transport, payload_transport)
+
+        adapter.assert_called_once_with()
+
+    def test_transport_fails_closed_for_unavailable_adapter(self) -> None:
+        manager = self._build_manager()
+
+        with patch.object(manager, "_inverter_forward_adapter", return_value="none"):
+            self.assertIs(manager.transport, manager._unavailable_payload_transport)
+
     def test_runtime_link_without_collector_ip_accepts_same_collector_across_listener_ports(self) -> None:
         manager = self._build_manager(collector_ip="")
         primary_transport = _FakeTransport(connected=True, remote_ip="192.168.1.14")
@@ -2182,7 +2205,14 @@ class DomainTransportOwnershipTests(unittest.TestCase):
             self.assertGreater(manager.owned_session_generation, baseline)
             self.assertEqual(manager._claimed_session_id(), "listener-8899-new")
             self.assertEqual(notifications, ["192.0.2.44"])
+            first_monitor = manager._owned_session_monitor_task
             await manager._stop_owned_session_monitor()
+            self.assertTrue(first_monitor.done())
+            self.assertIsNone(manager._owned_session_monitor_task)
+            manager._start_owned_session_monitor()
+            self.assertIsNot(manager._owned_session_monitor_task, first_monitor)
+            await manager._stop_owned_session_monitor()
+            self.assertIsNone(manager._owned_session_monitor_task)
 
         asyncio.run(_run())
 
