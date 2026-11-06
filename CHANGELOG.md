@@ -18,6 +18,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Do not send application commands to an unidentified silent callback socket
+  merely because it shares a configured collector IP (#81). Keep that socket
+  watched until it presents protocol/identity evidence or an explicit onboarding
+  or runtime session claim owns it. Preserve server-first identity probing and
+  prevent IP-only callers from taking a named collector's session behind NAT.
+
 - Preserve a known full collector PN when a reconnect initially reports only
   its heartbeat prefix. Passive discovery no longer shortens the stored PN,
   title or unique ID and triggers avoidable config-entry reloads. Legitimate

@@ -63,6 +63,28 @@ def _free_tcp_port() -> int:
     return port
 
 
+async def _claim_synthetic_pending_session(transport) -> None:
+    """Model an explicit onboarding claim for one fixture-owned silent socket.
+
+    These server-first transport tests own the synthetic client; they are not
+    passive discovery tests. Preserve the exact-session API instead of granting
+    application routing from IP alone. Negative unclaimed/NAT cases live in
+    test_pending_route_identity and the real-HA onboarding lifecycle tests.
+    """
+    deadline = monotonic() + 1.0
+    while monotonic() < deadline:
+        listener = transport._listener
+        pending = tuple(listener._pending_sockets.values()) if listener else ()
+        if pending:
+            assert len(pending) == 1, "fixture must own exactly one accepted session"
+            session_id = pending[0].session_id
+            assert session_id
+            transport.set_claimed_session_provider(lambda: session_id)
+            return
+        await asyncio.sleep(.01)
+    raise AssertionError("synthetic collector did not reach the pending listener")
+
+
 class _FakeWriter:
     def __init__(self) -> None:
         self.closed = False
@@ -1642,7 +1664,11 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         writer = None
         try:
             _, writer = await asyncio.open_connection("127.0.0.1", port)
-            writer.write(b"\x00")
+            # This socket presents its own protocol, not an arbitrary byte or
+            # the remembered address of a previous collector.
+            writer.write(build_collector_request(
+                1, b"E5000099990003", devcode=0x0994, collector_addr=1, fcode=1,
+            ))
             await writer.drain()
             self.assertTrue(await targeted.wait_until_connected(1.0))
             self.assertFalse(await other.wait_until_connected(0.2))
@@ -1871,6 +1897,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             try:
                 client_task = asyncio.create_task(_collector_client())
                 await asyncio.wait_for(connected.wait(), timeout=1.0)
+                await _claim_synthetic_pending_session(targeted)
                 self.assertTrue(await targeted.wait_until_connected(0.2))
                 self.assertTrue(owner.connected)
 
@@ -1885,7 +1912,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 if client_task is not None:
                     await client_task
 
-    async def test_wait_until_connected_activates_pending_socket(self) -> None:
+    async def test_wait_until_connected_activates_exact_claimed_pending_socket(self) -> None:
         port = _free_tcp_port()
         transport = SharedEybondTransport(
             host="127.0.0.1",
@@ -1929,6 +1956,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             client_task = asyncio.create_task(_collector_client())
             try:
                 await asyncio.wait_for(connected.wait(), timeout=1.0)
+                await _claim_synthetic_pending_session(transport)
                 self.assertTrue(await transport.wait_until_connected(0.2))
                 self.assertTrue(transport.connected)
                 header, payload = await transport.async_send_collector(fcode=2, payload=b"\x05")
@@ -2013,7 +2041,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 await client_task
                 await transport.stop()
 
-    async def test_wait_until_heartbeat_activates_pending_socket(self) -> None:
+    async def test_wait_until_heartbeat_activates_exact_claimed_pending_socket(self) -> None:
         port = _free_tcp_port()
         transport = SharedEybondTransport(
             host="127.0.0.1",
@@ -2043,6 +2071,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             client_task = asyncio.create_task(_collector_client())
             try:
                 await asyncio.wait_for(connected.wait(), timeout=1.0)
+                await _claim_synthetic_pending_session(transport)
                 self.assertTrue(await transport.wait_until_connected(0.2))
                 self.assertTrue(transport.connected)
                 self.assertFalse(await transport.wait_until_heartbeat(0.02))
@@ -2458,8 +2487,11 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(placeholder, "run", new=AsyncMock()) as run_mock:
             await listener._handle_connection(reader, _FakeWriter())
+            # The synthetic onboarding scope owns this exact accepted socket.
+            self.assertEqual(len(listener._pending_sockets), 1)
             pending = await listener.pop_pending_socket_for_route(
                 collector_ip="93.184.216.34",
+                session_id=next(iter(listener._pending_sockets.values())).session_id,
             )
             self.assertIsNotNone(pending)
             assert pending is not None
@@ -2499,8 +2531,10 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(placeholder, "run", new=AsyncMock()) as run_mock:
             await listener._handle_connection(reader, _FakeWriter())
+            self.assertEqual(len(listener._pending_sockets), 1)
             pending = await listener.pop_pending_socket_for_route(
                 collector_ip="192.168.1.255",
+                session_id=next(iter(listener._pending_sockets.values())).session_id,
             )
             self.assertIsNotNone(pending)
             assert pending is not None
@@ -3099,7 +3133,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(listener._pending_socket_still_registered(pending))
         await listener.unregister_exclusive_collector_route(token)
 
-    async def test_at_transport_wait_until_connected_activates_pending_socket(self) -> None:
+    async def test_at_transport_wait_until_connected_activates_exact_claimed_pending_socket(self) -> None:
         port = _free_tcp_port()
         at_transport = SharedCollectorAtTransport(
             host="127.0.0.1",
@@ -3128,6 +3162,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             client_task = asyncio.create_task(_collector_client())
             try:
                 await asyncio.wait_for(connected.wait(), timeout=1.0)
+                await _claim_synthetic_pending_session(at_transport)
                 self.assertTrue(await at_transport.wait_until_connected(0.2))
                 self.assertTrue(at_transport.connected)
             finally:
@@ -3181,6 +3216,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                     if listener is not None and listener._pending_sockets:
                         break
                     await asyncio.sleep(0.01)
+                await _claim_synthetic_pending_session(at_transport)
                 response = await at_transport.async_query("WFSS")
                 self.assertEqual(response.command, "WFSS")
                 self.assertEqual(response.value, "-55")
@@ -4210,6 +4246,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         client_task = asyncio.create_task(_collector_client())
         try:
             await asyncio.wait_for(connected.wait(), timeout=1.0)
+            await _claim_synthetic_pending_session(transport)
             self.assertTrue(await transport.wait_until_connected(1.0))
             selected_route = transport.select_payload_route(
                 EybondLinkRoute(devcode=0x0994, collector_addr=0xFF),

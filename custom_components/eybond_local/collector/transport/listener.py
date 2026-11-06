@@ -1388,9 +1388,9 @@ class _SharedEybondListener:
         # connection.session_registry.CallbackSessionRegistry (keyed by full PN,
         # never peer IP); the runtime passes the registry-chosen ``session_id``
         # so this claims exactly that socket. When no session_id is given the
-        # durable ``collector_pn`` is authoritative; ``collector_ip`` is only a
-        # narrowing hint for an unidentified silent collector and can never claim
-        # or disturb a socket already identified as a different collector.
+        # durable ``collector_pn`` is authoritative. An IP-only legacy route
+        # needs evidence presented by THIS socket; an address or configured
+        # protocol hint must not turn a silent peer into an application route.
         async with self._pending_route_lock:
             normalized_session_id = str(session_id or "").strip()
             if normalized_session_id:
@@ -1411,6 +1411,32 @@ class _SharedEybondListener:
                 if pending is None:
                     return None
                 if self._reserved_for_transparent_route(pending):
+                    return None
+                entry = self._session_inventory.get(pending.session_id)
+                presented_pn = str(getattr(entry, "collector_pn", "") or "").strip()
+                presented_source = str(
+                    getattr(entry, "collector_identity_source", "") or ""
+                ).strip()
+                presented_strong = bool(
+                    presented_pn and identity_source_is_strong(presented_source)
+                )
+                pn_owner_registered = any(
+                    count > 0
+                    for counts in (self._payload_pn_owner_counts, self._at_pn_owner_counts)
+                    for count in counts.values()
+                )
+                if presented_strong and pn_owner_registered:
+                    # Named owners use the PN/session paths, never an IP-only
+                    # shortcut that could take another collector behind NAT.
+                    return None
+                presented_framed = (
+                    _classify_initial_protocol_shape(pending.initial_bytes) == "eybond_framed"
+                    or str(getattr(entry, "protocol_shape", "") or "") == "eybond_framed"
+                )
+                if not presented_strong and not presented_framed:
+                    # Do not pause the watcher or probe on behalf of an
+                    # application send. Explicit identity probes retain their
+                    # exact-session authority through the branch above.
                     return None
                 await self._pause_pending_sniff(pending)
                 if not self._pending_socket_still_registered(pending):
