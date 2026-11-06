@@ -14,6 +14,15 @@ from tools.validate import affected_test_files
 
 
 class AffectedValidationSelectionTests(unittest.TestCase):
+    def test_vphb_payload_driver_and_schema_select_regressions(self):
+        for path in (
+            "payload/vphb.py", "drivers/eybond_099e.py",
+            "protocol_catalogs/register_schemas/eybond_099e/base.json",
+        ):
+            with self.subTest(path=path):
+                self.assertIn("test_eybond_099e.py",
+                              self._selected(f"custom_components/eybond_local/{path}"))
+
     def test_collector_identity_changes_select_fc1_lifecycle_regressions(self):
         for path in (
             "collector/identity_probe.py", "collector/session_identity_reader.py",

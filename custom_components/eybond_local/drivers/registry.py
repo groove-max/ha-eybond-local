@@ -43,6 +43,7 @@ from .srne import SrneModbusDriver
 from .eybond_g_ascii import EybondGAsciiDriver
 from .eybond_short_ascii import EybondShortAsciiDriver
 from .eybond_09c1 import Eybond09C1Driver
+from .eybond_099e import Eybond099EDriver
 
 if TYPE_CHECKING:
     from .support_marker import DriverSupportMarker
@@ -59,6 +60,7 @@ _DRIVERS: tuple[InverterDriver, ...] = (
     EybondShortAsciiDriver(),
     Eybond09C1Driver(),
     MarsRockDriver(),
+    Eybond099EDriver(),
 )
 
 _EXPERIMENTAL_REPLAY_DRIVERS: tuple[InverterDriver, ...] = ()

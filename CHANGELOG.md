@@ -9,6 +9,13 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Add a manually selected experimental `EyeBond 099E / VPHB` read-only driver
+  for the common status fields investigated in #82. Decode ten measurements
+  from strict 78/84-byte replies, retain the complete diagnostic payload, and
+  send only one status query per poll. No automatic detection, model inference,
+  controls, charge-current guess or derived PV power. Offline replay is covered;
+  field confirmation on Manyi hardware is still pending.
+
 - Add an explicit query-only BLE collector inspection to existing entries'
   diagnostic tools, through Home Assistant Bluetooth (local adapter or active
   ESPHome Proxy). Read identity, firmware and endpoint without provisioning or

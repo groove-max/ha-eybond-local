@@ -1019,6 +1019,7 @@
         "eybond_g_ascii": "EyeBond G-ASCII",
         "eybond_short_ascii": "EyeBond Short-ASCII",
         "eybond_09c1": "EyeBond 09C1",
+        "eybond_099e": "EyeBond 099E / VPHB (экспериментальный; только чтение)",
         "pi18": "PI18"
       }
     },

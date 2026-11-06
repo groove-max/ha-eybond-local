@@ -2,6 +2,46 @@
 
 This project is designed to grow through transport-aware payload drivers plus declarative metadata, not through hardcoded model logic inside Home Assistant entities.
 
+### Experimental 099E / VPHB telemetry
+
+`eybond_099e` is manual-only and read-only. Its payload codec and typed FC4
+session live in `payload/vphb.py`; the driver uses the existing `InverterDriver`,
+`DriverReadResult` and support-evidence interfaces. HA entities consume the
+declarative `eybond_099e/base.json` schema, without protocol-specific branches.
+
+SmartClient 3.48.11.0's `DevUrtu099E_06` supplies the exact status request
+`434d534706494e562d48420d`, the sum8 checksum and a 66-byte parse window starting
+at byte 5. Its external XML field map was not recovered. The independent
+[FiveStar/V-Series experiment](https://mybroadband.co.za/forum/threads/fivestar-sunmagic-rs232-protocol-decoding.1242521/post-31374789)
+supplies the common telemetry offsets. Replaying those offsets against the
+[Manyi capture](https://github.com/groove-max/ha-eybond-local/issues/82#issuecomment-6686294107)
+produces plausible readings, not yet owner-confirmed field semantics.
+
+| Wire offset (zero-based) | Encoding | Measurement |
+| --- | --- | --- |
+| 17, 19 | U16 little-endian / 10 | Grid voltage, frequency |
+| 21, 23 | U16 little-endian / 10 | Output voltage, frequency |
+| 25 | U16 little-endian / 10 | Battery voltage |
+| 27 | U16 little-endian | Battery state of charge |
+| 29, 30 | U8 | Load percentage, inverter temperature |
+| 39 | U16 little-endian | PV voltage |
+| 42 | U8 | Solar charger temperature |
+
+Accept only the observed 78/84-byte envelopes, prefix `VPHB`, byte 4 equal to
+the remaining byte count, and checksum over bytes 5 through the penultimate
+byte. Reject truncation, extra bytes and unknown lengths; do not clip the Manyi
+packet to the SDK window. Retain the full reply and its 6/12-byte extension in
+support evidence, including rejected replies. Unknown flags/settings remain
+undecoded. Never infer a serial or retail identity from live values.
+
+Polling sends one query on the owner-confirmed FC4 route `(1, 255)`; cloud ID
+2462 does not replace that route. No Q1 fallback, automatic probing, UART
+change, active learning or write capability is enabled. The public reference's
+charge current has a fractional byte in the extension; the zero-only Manyi
+sample does not qualify it. Neither PV current/power nor estimated energy is
+created. Nonzero solar and changing-load comparisons remain acceptance work.
+Fixture tests and HA lifecycle/archive tests do not replace that field check.
+
 ### MarsRock grid-tie evidence boundary
 
 `marsrock_grid_tie` is a manually selected read-only map, not a SUN-family

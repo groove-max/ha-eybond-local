@@ -1,0 +1,25 @@
+{
+  "schema_key": "eybond_099e",
+  "title": "EyeBond 099E / VPHB — experimental read-only telemetry",
+  "driver_key": "eybond_099e",
+  "protocol_family": "eybond_099e",
+  "blocks": [
+    {"key": "serial", "start": 0, "count": 0},
+    {"key": "live", "start": 0, "count": 0},
+    {"key": "status", "start": 0, "count": 0},
+    {"key": "config", "start": 0, "count": 0}
+  ],
+  "measurement_descriptions": [
+    {"key": "protocol_id", "name": "Protocol ID", "diagnostic": true, "live": false},
+    {"key": "grid_voltage", "name": "Grid Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "grid_frequency", "name": "Grid Frequency", "unit": "Hz", "device_class": "frequency", "state_class": "measurement"},
+    {"key": "output_voltage", "name": "Output Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "output_frequency", "name": "Output Frequency", "unit": "Hz", "device_class": "frequency", "state_class": "measurement"},
+    {"key": "battery_voltage", "name": "Battery Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "battery_soc", "name": "Battery State of Charge", "unit": "%", "device_class": "battery", "state_class": "measurement"},
+    {"key": "load_percent", "name": "Load Percent", "unit": "%", "state_class": "measurement", "icon": "mdi:gauge"},
+    {"key": "temperature", "name": "Inverter Temperature", "unit": "°C", "device_class": "temperature", "state_class": "measurement"},
+    {"key": "pv_voltage", "name": "PV Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "solar_charger_temperature", "name": "Solar Charger Temperature", "unit": "°C", "device_class": "temperature", "state_class": "measurement"}
+  ]
+}

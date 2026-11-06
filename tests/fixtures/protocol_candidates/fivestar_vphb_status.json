@@ -1,0 +1,6 @@
+{
+  "source_url": "https://mybroadband.co.za/forum/threads/fivestar-sunmagic-rs232-protocol-decoding.1242521/post-31374789",
+  "provenance": "lost_sock's public 2023-06-15 FiveStar VL-3524M experiment; field meanings compared with V-Series Runtime. Not a Manyi hardware qualification.",
+  "request_hex": "434d534706494e562d48420d",
+  "response_hex": "56504842490c000000000000000001041e3209f301ff08f40107016400122414034705060201014b00031f147d7d7d7d7d7d0202020164648e88697d87e60201010102020201000800738206001f"
+}

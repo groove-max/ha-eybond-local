@@ -20,6 +20,10 @@ HA_TEST_ROOT = REPO_ROOT / "tests_ha"
 
 _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
+        "custom_components/eybond_local/protocol_catalogs/register_schemas/eybond_099e/",
+        ("test_eybond_099e.py", "test_effective_metadata_snapshot.py"),
+    ),
+    (
         "custom_components/eybond_local/protocol_catalogs/register_schemas/eybond_09c1/",
         ("test_eybond_09c1.py", "test_effective_metadata_snapshot.py"),
     ),
@@ -184,6 +188,8 @@ _EXACT_TESTS: dict[str, tuple[str, ...]] = {
         "test_fc1_identity_onboarding.py",
     ),
     "custom_components/eybond_local/payload/urtu09c1.py": ("test_eybond_09c1.py",),
+    "custom_components/eybond_local/payload/vphb.py": ("test_eybond_099e.py",),
+    "custom_components/eybond_local/drivers/eybond_099e.py": ("test_eybond_099e.py",),
     "custom_components/eybond_local/drivers/eybond_09c1.py": ("test_eybond_09c1.py",),
     "custom_components/eybond_local/drivers/eybond_09c1_pv.py": ("test_eybond_09c1.py",),
     "custom_components/eybond_local/support/masking.py": (

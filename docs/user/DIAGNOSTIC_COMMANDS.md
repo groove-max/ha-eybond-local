@@ -240,6 +240,26 @@ remain ambiguous. Redaction may prevent recomputing the checksum from the
 shareable bytes. The report sends no requests, selects no driver and enables
 no sensors or controls. A vendor protocol ID is not an FC4 envelope address.
 
+### Experimental Manyi / 099E polling
+
+For the investigated VPHB variant, the driver selector now offers
+**EyeBond 099E / VPHB (experimental; read-only)**. Select it explicitly when
+directed by support; Auto does not probe this protocol. An existing collector
+connection is still required. Selecting this driver does not require changing
+the endpoint, cloud protocol ID or UART settings.
+
+The experimental profile reads grid/output voltage and frequency, battery
+voltage and state of charge, load percentage, inverter/controller temperatures
+and PV voltage. Each cycle uses one status query. There are no inverter write
+controls, even in Full control mode, and no inferred PV power or energy totals.
+The model is displayed as a protocol family, not an automatically identified
+Manyi model. Values need comparison with the device display or corresponding
+cloud sample; zero PV in the initial capture does not validate daytime PV.
+
+Support Archives retain the raw status reply and unknown extension for further
+analysis. As with other opaque captures, review the archive before sharing it.
+This is experimental read support, not a complete or hardware-certified map.
+
 ## If a scenario fails
 
 The JSON's `started_at` / `finished_at` describe scenario execution, not time
