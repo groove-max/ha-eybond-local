@@ -40,6 +40,7 @@ OPTIONS_MODULES = {
     "flows/options/shadow_runtime.py": "ShadowLearningRuntimeMixin",
     "flows/options/shadow_protocol.py": "ShadowProtocolOptionsMixin",
     "flows/options/proxy.py": "ProxyCaptureOptionsMixin",
+    "flows/options/ble_inspection.py": "BleInspectionOptionsMixin",
     "flows/options/diagnostics.py": "DiagnosticsOptionsMixin",
 }
 FLOW_TRANSLATION = FLOW_COMMON / "translation.py"
@@ -399,6 +400,7 @@ class OptionsFlowDecompositionBoundaryTests(unittest.TestCase):
         "ShadowLearningRuntimeMixin",
         "ShadowProtocolOptionsMixin",
         "ProxyCaptureOptionsMixin",
+        "BleInspectionOptionsMixin",
         "DiagnosticsOptionsMixin",
         "OptionsFlowBase",
     ]
@@ -420,6 +422,9 @@ class OptionsFlowDecompositionBoundaryTests(unittest.TestCase):
         "async_step_strategy_transition_activation_incomplete",
         "async_step_strategy_transition_failed",
         "async_step_diagnostic_commands",
+        "async_step_ble_inspection",
+        "async_step_ble_inspection_progress",
+        "async_step_ble_inspection_result",
         "async_step_shadow_learning",
         "async_step_shadow_learning_credentials",
         "async_step_shadow_learning_progress",

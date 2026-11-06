@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .flows.options.base import OptionsFlowBase
+from .flows.options.ble_inspection import BleInspectionOptionsMixin
 from .flows.options.diagnostics import DiagnosticsOptionsMixin
 from .flows.options.local_register_observation import LocalRegisterObservationOptionsMixin
 from .flows.options.proxy import ProxyCaptureOptionsMixin
@@ -23,6 +24,7 @@ class EybondLocalOptionsFlow(
     ShadowLearningRuntimeMixin,
     ShadowProtocolOptionsMixin,
     ProxyCaptureOptionsMixin,
+    BleInspectionOptionsMixin,
     DiagnosticsOptionsMixin,
     OptionsFlowBase,
 ):

@@ -9,6 +9,14 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Add an explicit query-only BLE collector inspection to existing entries'
+  diagnostic tools, through Home Assistant Bluetooth (local adapter or active
+  ESPHome Proxy). Read identity, firmware and endpoint without provisioning or
+  settings changes. Preserve partial results, bind support evidence only to a
+  matching PN and unchanged device scope, and finish cleanup on dialog abort.
+  Optional signed JSON downloads and support archives reuse the latest-diagnostic
+  cache. This does not add BLE endpoint management or prove callback support.
+
 - Include the latest matching redacted diagnostic attempt in support archives,
   with its original time, route and build identity. Bound the optional cache to
   1 MiB per entry and a seven-day inclusion window; do not reuse evidence across

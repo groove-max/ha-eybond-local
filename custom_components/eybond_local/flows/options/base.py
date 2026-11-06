@@ -70,6 +70,8 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
         self._diagnostic_commands_download_url = ""
         self._diagnostic_commands_result_path = ""
         self._diagnostic_publish_download_copy = False
+        self._ble_inspection_task = None
+        self._ble_inspection_result: dict[str, Any] = {}
         self._runtime_poll_interval_pending_input: dict[str, Any] = {}
         # Verified strategy-transition state: the target selected on the
         # dedicated connection/profile step and the progress task/result.

@@ -373,6 +373,9 @@
   },
   "options": {
     "error": {
+      "ble_inspection_device_unavailable": "No selected connectable collector is available through Home Assistant Bluetooth. Check the adapter or an active ESPHome Bluetooth Proxy near the collector, close the vendor app, then refresh.",
+      "ble_inspection_busy": "Another Bluetooth inspection is still using this collector. Wait for its cleanup to finish.",
+      "ble_inspection_failed": "Bluetooth inspection could not complete. No settings were changed.",
       "invalid_ip": "Invalid IPv4 address.",
       "invalid_port": "Invalid TCP port.",
       "collector_wifi_read_failed": "Could not read Wi-Fi status from the collector.",
@@ -581,9 +584,28 @@
         "menu_options": {
           "create_support_package": "Create support archive",
           "diagnostic_commands": "Run diagnostic commands",
+          "ble_inspection": "Inspect collector over Bluetooth",
           "reload_local_metadata": "Reload local metadata",
           "rollback_local_metadata": "Rollback local metadata",
           "proxy_capture": "Collector traffic capture"
+        }
+      },
+      "ble_inspection": {
+        "title": "Inspect collector over Bluetooth",
+        "description": "Read collector identity, firmware/AT versions and the saved server address only. No Wi-Fi, endpoint, inverter setting or reset is changed. Close the vendor app before starting. Home Assistant must see the collector through a local Bluetooth adapter or an ESPHome Bluetooth Proxy with active connections. Refresh updates HA's discovered-device list; it sends no collector commands. Choose CRLF only when instructed; no automatic format guessing is performed.",
+        "data": {
+          "ble_inspection_action": "Action",
+          "ble_address": "Collector seen by Home Assistant",
+          "ble_line_ending": "Command line ending",
+          "ble_download": "Create shareable download link"
+        }
+      },
+      "ble_inspection_result": {
+        "title": "Bluetooth inspection result",
+        "description": "{download}\n\nSupport archive attachment: {archive_status}\n{export_status}\n\nOnly a matching reported PN and unchanged entry identity allow attachment to the next Support Archive. Unbound/partial results can still be downloaded. This replaces the previous saved diagnostic attempt; it does not prove endpoint restoration. No settings were changed.",
+        "data": {
+          "ble_inspection_action": "Action",
+          "ble_result": "Read-only result"
         }
       },
       "diagnostic_commands": {
@@ -756,6 +778,7 @@
       }
     },
     "progress": {
+      "ble_inspection": "Reading collector metadata over Bluetooth; no settings are being changed…",
       "shadow_learning": "{control_discovery_hint}",
       "strategy_transition_running": "Verifying the connection switch with a controlled collector restart…"
     },
@@ -970,6 +993,19 @@
     }
   },
   "selector": {
+    "ble_inspection_action": {
+      "options": {
+        "read": "Read collector information",
+        "refresh": "Refresh device list",
+        "done": "Back to diagnostics"
+      }
+    },
+    "ble_line_ending": {
+      "options": {
+        "none": "SmartESS / no line ending",
+        "crlf": "AT / CRLF (when instructed)"
+      }
+    },
     "driver_hint": {
       "options": {
         "auto": "Auto",

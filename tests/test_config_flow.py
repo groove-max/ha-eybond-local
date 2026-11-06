@@ -6807,6 +6807,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             [
                 "create_support_package",
                 "diagnostic_commands",
+                "ble_inspection",
                 "reload_local_metadata",
             ],
         )

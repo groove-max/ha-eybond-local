@@ -373,6 +373,9 @@
   },
   "options": {
     "error": {
+      "ble_inspection_device_unavailable": "Обраний колектор недоступний для з’єднання через Bluetooth HA. Перевірте адаптер або активний ESPHome Bluetooth Proxy поруч, закрийте застосунок виробника та оновіть список.",
+      "ble_inspection_busy": "Інша перевірка Bluetooth ще використовує цей колектор. Зачекайте завершення від’єднання.",
+      "ble_inspection_failed": "Не вдалося завершити перевірку Bluetooth. Налаштування не змінено.",
       "invalid_ip": "Некоректна IPv4-адреса.",
       "invalid_port": "Некоректний TCP-порт.",
       "collector_wifi_read_failed": "Не вдалося прочитати стан Wi-Fi з колектора.",
@@ -581,9 +584,28 @@
         "menu_options": {
           "create_support_package": "Створити архів підтримки",
           "diagnostic_commands": "Виконати діагностичні команди",
+          "ble_inspection": "Перевірити колектор через Bluetooth",
           "reload_local_metadata": "Перезавантажити локальні метадані",
           "rollback_local_metadata": "Відкотити локальні метадані",
           "proxy_capture": "Захоплення трафіку колектора"
+        }
+      },
+      "ble_inspection": {
+        "title": "Перевірити колектор через Bluetooth",
+        "description": "Лише читання ідентифікатора, версій прошивки/AT та збереженої адреси сервера. Налаштування Wi-Fi, endpoint та інвертора не змінюються; перезапуску немає. Закрийте застосунок виробника. HA має бачити колектор через локальний Bluetooth-адаптер або ESPHome Bluetooth Proxy з активними з’єднаннями. Оновлення списку не надсилає команд колектору. Вибирайте CRLF лише за інструкцією; автоматичного підбору формату немає.",
+        "data": {
+          "ble_inspection_action": "Дія",
+          "ble_address": "Колектор, знайдений Home Assistant",
+          "ble_line_ending": "Закінчення команди",
+          "ble_download": "Створити посилання для завантаження"
+        }
+      },
+      "ble_inspection_result": {
+        "title": "Результат перевірки Bluetooth",
+        "description": "{download}\n\nДодавання до пакета підтримки: {archive_status}\n{export_status}\n\nРезультат додається лише за збігу отриманого PN і незмінної ідентичності запису. Часткові результати можна завантажити окремо. Ця спроба замінює попередню збережену діагностику; відновлення endpoint не підтверджує. Налаштування не змінено.",
+        "data": {
+          "ble_inspection_action": "Дія",
+          "ble_result": "Результат лише для читання"
         }
       },
       "diagnostic_commands": {
@@ -756,6 +778,7 @@
       }
     },
     "progress": {
+      "ble_inspection": "Читання даних колектора через Bluetooth без зміни налаштувань…",
       "shadow_learning": "{control_discovery_hint}",
       "strategy_transition_running": "Перевірка перемикання контрольованим перезапуском колектора…"
     },
@@ -970,6 +993,19 @@
     }
   },
   "selector": {
+    "ble_inspection_action": {
+      "options": {
+        "read": "Прочитати дані колектора",
+        "refresh": "Оновити список пристроїв",
+        "done": "Назад до діагностики"
+      }
+    },
+    "ble_line_ending": {
+      "options": {
+        "none": "SmartESS / без закінчення рядка",
+        "crlf": "AT / CRLF (за інструкцією)"
+      }
+    },
     "driver_hint": {
       "options": {
         "auto": "Авто",

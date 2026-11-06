@@ -56,6 +56,14 @@ This short context is often as important as the archive itself.
 
 ## What the archive contains
 
+If support asks for a Bluetooth metadata check, first run
+[Inspect collector over Bluetooth](DIAGNOSTIC_COMMANDS.md#collector-information-over-bluetooth)
+in the diagnostic tools, then create the archive. A matching result uses the
+same bounded, identity-scoped latest-diagnostic cache as command scenarios;
+creating the archive never reconnects over Bluetooth or repeats the queries.
+A PN mismatch or a changed device identity prevents attachment to the wrong
+entry. Save separate downloads if you need to keep several diagnostic attempts.
+
 Depending on what is available for this entry, one archive can include:
 
 - integration version and build information;

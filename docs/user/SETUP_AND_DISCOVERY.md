@@ -64,8 +64,9 @@ The first setup screen offers two normal paths:
   use `12345678` as the default password.
 
 You can also use the vendor app to put the collector on Wi-Fi first. Bluetooth
-is used only for Wi-Fi provisioning; normal monitoring remains local network
-traffic.
+can also be used for a [query-only collector information check](DIAGNOSTIC_COMMANDS.md#collector-information-over-bluetooth)
+from an existing entry's diagnostic tools. Normal monitoring remains local
+network traffic; this check does not configure or restore a TCP callback.
 
 ## Normal setup
 

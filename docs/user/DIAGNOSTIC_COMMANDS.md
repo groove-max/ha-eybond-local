@@ -9,6 +9,39 @@ and use diagnostic commands only when a developer asks for a specific scenario.
 
 ## Safety boundary
 
+### Collector information over Bluetooth
+
+**Diagnostics and service tools → Inspect collector over Bluetooth**
+is a separate, query-only tool. It does not require a working TCP callback.
+It uses Home Assistant's connectable Bluetooth discovery: either a local
+adapter or an ESPHome Bluetooth Proxy with active connections enabled must
+be within radio range of the collector. Merely reaching HA over the internet
+does not provide Bluetooth access to a remote collector.
+
+Close the vendor app's Bluetooth connection first. Select the collector
+explicitly, keep **No line ending** unless support asks for CRLF, and choose
+**Read collector information**. Refreshing the list or reopening the result does not
+send queries. The tool attempts only `AT+DTUPN?`, `AT+FWVER?`, `AT+ATVER?` and
+`AT+CLDSRVHOST1?`, once each. It never provisions Wi-Fi, changes an endpoint,
+restarts a device or writes inverter settings. No automatic alternate command
+or line-ending search is performed. Only the vendor GATT layout is supported.
+
+An incomplete result is useful evidence, not a successful connection test.
+The PN returned by the collector must match the entry; a mismatch stops further
+queries. Missing firmware, port or protocol values are not filled with defaults.
+Reading an endpoint does **not** verify TCP callback or endpoint restoration.
+Closing the dialog cancels the attempt and completes connection cleanup.
+
+Optionally request a short-lived JSON download. The redacted result is also
+saved as the latest diagnostic attempt for a matching, unchanged device identity
+and can be included in a subsequent Support Archive. It replaces the previous
+command/Bluetooth diagnostic attempt; download older evidence first if needed.
+Unknown reply text is not exported. Bluetooth addresses are omitted from the
+shareable copy; collector identifiers use the existing masking. Private raw
+result files remain local. An export error is shown separately from query results.
+
+### Free-form diagnostic commands
+
 - `read`, `read_input`, and `sleep` do not write inverter settings.
 - `write`, `write_single`, `write_bit`, free-form `ascii`, and `payload_hex`
   commands can change the device.

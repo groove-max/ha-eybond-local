@@ -504,6 +504,7 @@ class DiagnosticsOptionsMixin:
         menu_options: list[str] = [
             "create_support_package",
             "diagnostic_commands",
+            "ble_inspection",
         ]
 
         # This is already the integration's explicit support/diagnostics area,

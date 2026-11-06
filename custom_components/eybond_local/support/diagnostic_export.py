@@ -73,6 +73,8 @@ def build_shareable_payload(result: DiagnosticRunResult) -> dict:
     payload = build_local_payload(result)
     context = dict(payload.get("context") or {})
     context.pop("entry_id", None)
+    if context.get("diagnostic_kind") == "ble_collector_inspection":
+        context.pop("ble_address", None)
     payload["context"] = context
     # Do this BEFORE generic masking: serial scrubbing can change CRC bytes.
     # The new byte trace must not re-expose an identity range hidden below.
@@ -229,7 +231,11 @@ def export_diagnostic_run(
     # All disk work and passive analysis run in the existing export executor.
     result.context["integration_build"] = build_runtime_values()
     try:
-        protocol_report = analyze_protocol_candidates(build_local_payload(result))
+        protocol_report = (
+            {"status": "not_applicable_ble", "additional_requests_sent": 0}
+            if result.context.get("diagnostic_kind") == "ble_collector_inspection"
+            else analyze_protocol_candidates(build_local_payload(result))
+        )
     except (OSError, ValueError, KeyError, TypeError):
         protocol_report = {"status": "analysis_unavailable", "additional_requests_sent": 0}
     result.context["protocol_candidates"] = protocol_report
