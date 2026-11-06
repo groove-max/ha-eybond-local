@@ -455,6 +455,9 @@ class CanonicalTelemetryTests(unittest.TestCase):
         # measurements, not a support capture or proof of the OEM fingerprint.
         # The 119 W balance deficit must not steal 119 W from the measured
         # PV-to-battery route. Missing grid power and measured zero differ.
+        # When ``pv_charging_power`` proves the battery is charged from PV,
+        # the inferred grid import subtracts that PV-charged share from the
+        # battery sink — the deficit is zero, not 119.
         for mode in ("Mains", "Battery"):
             for grid_power in (None, 0.0, 119.0):
                 with self.subTest(mode=mode, grid_power=grid_power):
@@ -476,12 +479,40 @@ class CanonicalTelemetryTests(unittest.TestCase):
                     self.assertEqual(values["pv_to_home_power"], 290.0)
                     self.assertEqual(
                         values["grid_to_home_power"],
-                        0.0 if grid_power == 0.0 else 119.0,
+                        grid_power if grid_power is not None else 0.0,
                     )
                     if grid_power is None:
                         self.assertNotIn("grid_power", values)
                     else:
                         self.assertEqual(values["grid_power"], grid_power)
+
+    def test_pv_charge_at_utility_source_is_not_misrouted_to_grid(self) -> None:
+        # Field regression (Anenji ANJ-11KW-48V-WIFI-P, protocol 4, 2026-10-24):
+        # load 409, pv 850, pv_charging 560, battery 560, grid_power absent.
+        # The inverter reports power_flow_charge_source_state="Utility" even when
+        # charging purely from PV (protocol 4 quirk).  The old gate blocked the
+        # PV→battery route when charge_source was "Utility"; now it routes via
+        # the measured pv_charging_power regardless.
+        values = {
+            "output_power": 409.0,
+            "pv_power": 850.0,
+            "battery_average_power": 560.0,
+            "pv_charging_power": 560.0,
+            "grid_voltage": 228.0,
+            "power_flow_charge_source_state": "Utility",
+        }
+
+        apply_canonical_measurements("modbus_smg", values)
+
+        self.assertEqual(values["pv_to_battery_power"], 560.0)
+        self.assertEqual(values["pv_to_home_power"], 290.0)
+        self.assertEqual(values["grid_to_home_power"], 0.0)
+        self.assertEqual(values["grid_to_battery_power"], 0.0)
+        self.assertEqual(values["battery_to_home_power"], 0.0)
+        self.assertLessEqual(
+            values["pv_to_home_power"] + values["pv_to_battery_power"],
+            values["pv_power"],
+        )
 
     def test_pv_only_charging_is_not_reattributed_to_grid_when_pv_power_under_reads(
         self,

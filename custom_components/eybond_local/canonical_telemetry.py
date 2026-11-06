@@ -883,10 +883,17 @@ def _compute_flow_split(values: dict[str, Any]) -> dict[str, float | None] | Non
         # Some text protocols report a trustworthy grid-presence voltage but
         # no grid-power register. In that narrower case the missing import can
         # be inferred as the non-negative source deficit needed by the measured
-        # home and battery sinks. This remains a single finite budget below.
+        # home and battery sinks. When ``pv_charging_power`` is measured, the PV-
+        # charged portion of the battery is not a grid deficit — subtract it from
+        # the battery sink before computing the balance.
+        effective_charge = (
+            max(0.0, battery_charge - pv_charging_power)
+            if pv_charging_power is not None
+            else battery_charge
+        )
         grid_import = max(
             0.0,
-            load + battery_charge - pv - battery_discharge,
+            load + effective_charge - pv - battery_discharge,
         )
 
     # These registers are sampled from several blocks and some firmwares expose
@@ -911,7 +918,7 @@ def _compute_flow_split(values: dict[str, Any]) -> dict[str, float | None] | Non
     # stronger than a guessed load-first split. Reserve that route first, but
     # cap it by both the battery sink and the total measured PV source.
     pv_to_battery = 0.0
-    if charge_source != "Utility" and explicit_pv_charge:
+    if explicit_pv_charge:
         desired_pv_charge = (
             battery_charge
             if pv_charging_power is None
