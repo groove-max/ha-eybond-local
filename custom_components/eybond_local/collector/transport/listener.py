@@ -1420,20 +1420,22 @@ class _SharedEybondListener:
                 presented_strong = bool(
                     presented_pn and identity_source_is_strong(presented_source)
                 )
-                pn_owner_registered = any(
-                    count > 0
+                presented_pn_owned = any(
+                    self._has_owner_for_collector_pn(counts, presented_pn)
                     for counts in (self._payload_pn_owner_counts, self._at_pn_owner_counts)
-                    for count in counts.values()
                 )
-                if presented_strong and pn_owner_registered:
+                if presented_pn_owned:
                     # Named owners use the PN/session paths, never an IP-only
                     # shortcut that could take another collector behind NAT.
+                    # Only an owner of THIS socket's PN matters, weak or strong.
                     return None
-                presented_framed = (
-                    _classify_initial_protocol_shape(pending.initial_bytes) == "eybond_framed"
-                    or str(getattr(entry, "protocol_shape", "") or "") == "eybond_framed"
+                presented_wire = (
+                    _classify_initial_protocol_shape(pending.initial_bytes)
+                    in {"eybond_framed", "at_text"}
+                    or str(getattr(entry, "protocol_shape", "") or "")
+                    in {"eybond_framed", "at_text"}
                 )
-                if not presented_strong and not presented_framed:
+                if not presented_strong and not presented_wire:
                     # Do not pause the watcher or probe on behalf of an
                     # application send. Explicit identity probes retain their
                     # exact-session authority through the branch above.

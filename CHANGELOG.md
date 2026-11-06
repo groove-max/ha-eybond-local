@@ -56,6 +56,12 @@ the GitHub release body should be rendered from the matching version section her
   or runtime session claim owns it. Preserve server-first identity probing and
   prevent IP-only callers from taking a named collector's session behind NAT.
 
+- Let an IP-only route claim a callback socket that presented its own framed
+  bytes, AT text or a strong PN, even when another entry owns an unrelated PN.
+  An unrelated owner or a missing AT-text shape must not strand that socket.
+  Refuse the IP-only claim when the socket PN, weak or strong, matches a
+  registered owner, so only that owner can take it through the PN path.
+
 - Preserve a known full collector PN when a reconnect initially reports only
   its heartbeat prefix. Passive discovery no longer shortens the stored PN,
   title or unique ID and triggers avoidable config-entry reloads. Legitimate

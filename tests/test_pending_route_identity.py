@@ -74,6 +74,68 @@ class PendingRouteIdentityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(listener._pending_socket_still_registered(pending))
                 self.assertIs(await listener.pop_pending_socket_for_route(collector_pn=pn), pending)
 
+    async def test_unrelated_owner_does_not_block_ip_only_claim_of_unowned_pn(self):
+        for register in ("register_payload_pn_owner", "register_at_pn_owner"):
+            with self.subTest(register=register):
+                listener, pending = self.pending()
+                getattr(listener, register)("V001107SYN99887766")
+                listener._mark_session_identity(pending.session_id, "V001107SYN82291016", "fc2_parameter_2")
+                self.assertIs(await listener.pop_pending_socket_for_route(collector_ip="192.0.2.8"), pending)
+
+    async def test_weak_pn_matching_owner_is_not_taken_by_ip_only_application(self):
+        owner_pn = "V001107SYN82291016"
+        # Ten characters is CALLBACK_PN_PREFIX_MATCH_MIN_LEN: the shortest prefix that matches.
+        weak_pn = owner_pn[:10]
+        for register in ("register_payload_pn_owner", "register_at_pn_owner"):
+            with self.subTest(register=register):
+                listener, pending = self.pending()
+                getattr(listener, register)(owner_pn)
+                pending.initial_bytes = build_collector_request(1, b"", devcode=0x0994, collector_addr=1, fcode=4)
+                listener._mark_session_first_bytes(pending.session_id, pending.initial_bytes)
+                listener._mark_session_identity(pending.session_id, weak_pn, "framed_heartbeat")
+                self.assertTrue(listener._collector_pn_matches(owner_pn, weak_pn))
+                with patch.object(listener, "_pause_pending_sniff", new_callable=AsyncMock) as pause:
+                    self.assertIsNone(await listener.pop_pending_socket_for_route(collector_ip="192.0.2.8"))
+                pause.assert_not_awaited()
+                self.assertTrue(listener._pending_socket_still_registered(pending))
+                self.assertIs(await listener.pop_pending_socket_for_route(collector_pn=owner_pn), pending)
+
+    async def test_unowned_pn_with_framed_bytes_is_claimed_by_ip_only(self):
+        owner_pn = "V001107SYN82291016"
+        cases = (
+            ("weak", "V009999SYN", "framed_heartbeat"),
+            ("strong", "V009999SYN82291016", "fc2_parameter_2"),
+        )
+        for label, pn, source in cases:
+            with self.subTest(source=label):
+                listener, pending = self.pending()
+                listener.register_payload_pn_owner(owner_pn)
+                pending.initial_bytes = build_collector_request(1, b"", devcode=0x0994, collector_addr=1, fcode=4)
+                listener._mark_session_identity(pending.session_id, pn, source)
+                self.assertFalse(listener._collector_pn_matches(owner_pn, pn))
+                self.assertIs(await listener.pop_pending_socket_for_route(collector_ip="192.0.2.8"), pending)
+
+    async def test_own_at_text_bytes_allow_legacy_ip_route(self):
+        for via in ("initial_bytes", "inventory_shape"):
+            with self.subTest(via=via):
+                listener, pending = self.pending()
+                chunk = b"AT+INFO\r\n"
+                if via == "initial_bytes":
+                    pending.initial_bytes = chunk
+                else:
+                    listener._mark_session_first_bytes(pending.session_id, chunk)
+                    self.assertEqual(listener._session_inventory[pending.session_id].protocol_shape, "at_text")
+                self.assertIs(await listener.pop_pending_socket_for_route(collector_ip="192.0.2.8"), pending)
+
+    async def test_at_text_hint_on_silent_socket_does_not_claim(self):
+        listener, pending = self.pending()
+        with patch.object(listener, "_pause_pending_sniff", new_callable=AsyncMock) as pause:
+            self.assertIsNone(await listener.pop_pending_socket_for_route(
+                collector_ip="192.0.2.8", session_protocol="at_text"))
+            self.assertIsNone(await listener.pop_pending_socket_for_route(collector_ip="192.0.2.8"))
+        pause.assert_not_awaited()
+        self.assertTrue(listener._pending_socket_still_registered(pending))
+
     async def test_loopback_application_payload_never_reaches_silent_peer(self):
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
