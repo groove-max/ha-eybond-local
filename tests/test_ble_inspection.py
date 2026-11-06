@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from pathlib import Path
 import unittest
 from unittest.mock import AsyncMock
 
@@ -19,6 +20,12 @@ REPLIES = [f"AT+DTUPN:{PN}", "AT+FWVER:1.2.3", "AT+ATVER:2.1",
 
 
 class BleInspectionTests(unittest.IsolatedAsyncioTestCase):
+    def test_bluetooth_is_declared_optional_not_required_for_classic_setup(self):
+        path = Path(__file__).resolve().parents[1] / "custom_components/eybond_local/manifest.json"
+        manifest = json.loads(path.read_text())
+        self.assertIn("bluetooth", manifest["after_dependencies"])
+        self.assertNotIn("bluetooth", manifest["dependencies"])
+
     async def test_fixed_queries_only_over_existing_session(self):
         for crlf in (False, True):
             with self.subTest(crlf=crlf):

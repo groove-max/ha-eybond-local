@@ -1,6 +1,9 @@
 {
   "domain": "eybond_local",
   "name": "EyeBond Local",
+  "after_dependencies": [
+    "bluetooth"
+  ],
   "codeowners": [
     "@groove-max"
   ],
