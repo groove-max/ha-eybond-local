@@ -20,6 +20,7 @@ from .connection.removal_finalization import CollectorRemovalSessionTicket
 from .collector_identity import (
     identity_source_is_strong,
     pn_is_same_identity,
+    reconcile_pn,
 )
 from .connection.session_registry import CallbackSessionRegistry, SESSION_STATE_CLOSED
 from .collector_endpoint import (
@@ -1320,6 +1321,16 @@ class PassiveCallbackDiscovery:
 
         current_data = dict(getattr(entry, "data", {}) or {})
         current_pn = str(current_data.get(CONF_COLLECTOR_PN) or "").strip()
+        if current_pn:
+            if not (
+                _collector_identity_matches(current_pn, collector_pn)
+                or _collector_prefix_matches(current_pn, collector_pn)
+            ):
+                return
+            # Reconnect heartbeats can expose only a PN prefix. Enrich a short
+            # identity, but never shorten a full one: that changes the entry's
+            # data/unique_id and needlessly reloads an already known collector.
+            collector_pn = reconcile_pn(current_pn, collector_pn)
         data = dict(current_data)
         changed = False
 

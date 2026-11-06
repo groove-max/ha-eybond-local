@@ -1759,6 +1759,82 @@ class PassiveCallbackDiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entry.unique_id, "collector:V001107SYN82291016")
         self.assertEqual(entry.title, "Collector PN V001107SYN82291016")
 
+    async def test_reconnect_heartbeat_preserves_full_pn_without_entry_churn(self) -> None:
+        full_pn = "V001107SYN82291016"
+        short_pn = "V001107SYN8229"
+        entry = types.SimpleNamespace(
+            data={
+                "collector_pn": full_pn,
+                "connection_mode": "callback_listener",
+                "tcp_port": 18899,
+                "collector_session_protocol": "eybond_framed",
+            },
+            unique_id=f"collector:{full_pn}",
+            title=f"Collector PN {full_pn}",
+        )
+        hass = _FakeHass(entries=[entry])
+        discovery = PassiveCallbackDiscovery(hass)
+        for pn, source in (
+            (short_pn, "framed_heartbeat"),
+            (short_pn, "framed_heartbeat"),
+            (full_pn, "fc2_parameter_2"),
+        ):
+            with self.subTest(pn=pn, source=source):
+                discovery._listeners[18899] = _FakeListener([{
+                    "session_id": "reconnected",
+                    "peer_ip": "192.0.2.8",
+                    "collector_pn": pn,
+                    "collector_identity_source": source,
+                    "protocol_shape": "eybond_framed",
+                    "state": "routed_framed",
+                }])
+                await discovery._async_poll_once()
+                self.assertEqual(entry.data["collector_pn"], full_pn)
+                self.assertEqual(entry.unique_id, f"collector:{full_pn}")
+                self.assertEqual(entry.title, f"Collector PN {full_pn}")
+                self.assertEqual(hass.config_entries.updates, [])
+                self.assertEqual(hass.config_entries.flow.flows, [])
+
+    async def test_short_heartbeat_backfills_protocol_without_shortening_identity(self) -> None:
+        full_pn = "V001107SYN82291016"
+        entry = types.SimpleNamespace(
+            data={"collector_pn": full_pn, "connection_mode": "callback_listener", "tcp_port": 18899},
+            unique_id=f"collector:{full_pn}",
+            title=f"Collector PN {full_pn}",
+        )
+        hass = _FakeHass(entries=[entry])
+        discovery = PassiveCallbackDiscovery(hass)
+        session = {
+            "collector_pn": "V001107SYN8229", "peer_ip": "192.0.2.8",
+            "protocol_shape": "eybond_framed", "state": "routed_framed",
+            "collector_identity_source": "framed_heartbeat",
+        }
+        for _ in range(2):
+            discovery._maybe_upgrade_existing_entry_from_session(entry, port=18899, session=session)
+        self.assertEqual(entry.data["collector_session_protocol"], "eybond_framed")
+        self.assertEqual(entry.data["collector_pn"], full_pn)
+        self.assertEqual(entry.unique_id, f"collector:{full_pn}")
+        self.assertEqual(entry.title, f"Collector PN {full_pn}")
+        self.assertEqual(len(hass.config_entries.updates), 1)
+
+    async def test_foreign_or_too_short_identity_cannot_upgrade_entry_metadata(self) -> None:
+        full_pn = "V001107SYN82291016"
+        for candidate in ("V001107OTHER291016", "V001"):
+            with self.subTest(candidate=candidate):
+                original = {"collector_pn": full_pn, "connection_mode": "outbound"}
+                entry = types.SimpleNamespace(
+                    data=dict(original), unique_id=f"collector:{full_pn}", title="My collector")
+                hass = _FakeHass(entries=[entry])
+                discovery = PassiveCallbackDiscovery(hass)
+                discovery._maybe_upgrade_existing_entry_from_session(entry, port=18899, session={
+                    "collector_pn": candidate, "peer_ip": "192.0.2.8",
+                    "protocol_shape": "eybond_framed", "state": "routed_framed",
+                })
+                self.assertEqual(entry.data, original)
+                self.assertEqual(entry.unique_id, f"collector:{full_pn}")
+                self.assertEqual(entry.title, "My collector")
+                self.assertEqual(hass.config_entries.updates, [])
+
     async def test_live_session_port_does_not_rewrite_stable_entry_port(self) -> None:
         entry = types.SimpleNamespace(
             data={

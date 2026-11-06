@@ -18,6 +18,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Changed
 
+- Preserve a known full collector PN when a reconnect initially reports only
+  its heartbeat prefix. Passive discovery no longer shortens the stored PN,
+  title or unique ID and triggers avoidable config-entry reloads. Legitimate
+  short-to-full identity enrichment and missing protocol metadata upgrades
+  remain supported. This fixes recovery churn, not the cause of a network loss.
+
 - Repeat an addressed callback trigger after a pre-existing silent socket
   closes during identity verification (#75). Some collectors do not reconnect
   until another UDP request arrives; waiting longer alone cannot fix that
