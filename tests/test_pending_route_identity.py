@@ -212,6 +212,37 @@ class PendingRouteIdentityTests(unittest.IsolatedAsyncioTestCase):
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def test_cancelled_pn_claim_during_identity_read_leaves_socket_watched(self):
+        listener, pending = self.pending()
+        pn = "V001107SYN82291016"
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def identify(_pending, session_protocol=""):
+            del session_protocol
+            started.set()
+            await release.wait()
+            return pn
+
+        claim = None
+        with patch.object(listener, "_identify_pending_socket_for_route", side_effect=identify):
+            try:
+                claim = asyncio.create_task(listener.pop_pending_socket_for_route(collector_pn=pn))
+                await asyncio.wait_for(started.wait(), 1)
+                claim.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await claim
+                self.assertTrue(listener._pending_socket_still_registered(pending))
+                watcher = pending.sniff_task
+                self.assertIsNotNone(watcher)
+                self.assertFalse(watcher.done())
+            finally:
+                release.set()
+                if claim is not None and not claim.done():
+                    claim.cancel()
+                if pending.sniff_task is not None:
+                    pending.sniff_task.cancel()
+                    await asyncio.gather(pending.sniff_task, return_exceptions=True)
+
     async def _ip_claim_during_split_frame_sniff(self, split):
         listener, pending = self.pending()
         listener._mark_session_identity(pending.session_id, "V001107SYN82291016", "fc2_parameter_2")

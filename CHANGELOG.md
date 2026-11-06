@@ -484,6 +484,10 @@ the GitHub release body should be rendered from the matching version section her
   leaves its callback socket registered with nobody watching it. That socket
   would miss a peer close and block every later same-IP route as a phantom.
 
+- A PN route claim that is cancelled during the identity read also leaves
+  that socket watched. The pause itself already handles a cancel during the
+  drain. The identity read is the later await, and it needed the same resume.
+
 - An IP-only route no longer takes a callback socket whose PN owner registered
   while its sniff task was draining. The socket stays for that owner and its
   watcher is resumed.

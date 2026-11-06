@@ -1507,27 +1507,35 @@ class _SharedEybondListener:
                 ):
                     self._resume_pending_watch(pending)
                     continue
-                await self._pause_pending_sniff(pending)
-                if not self._pending_socket_still_registered(pending):
-                    continue
-                pending_pn = await self._identify_pending_socket_for_route(
-                    pending,
-                    session_protocol=session_protocol,
-                )
-                if not self._pending_socket_still_registered(pending):
-                    continue
-                if self._collector_pn_matches(normalized_pn, pending_pn):
-                    return self._claim_pending_socket(pending)
-                if pending_pn:
-                    # This requester is not the owner; the socket may still be
-                    # perfectly valid for another entry on the shared listener.
-                    # Do not poison its observed identity for the domain registry.
-                    self._mark_session_state(pending.session_id, "identified")
-                else:
-                    self._mark_session_state(pending.session_id, "waiting_for_route_identity")
-                # The pause above cancelled the sniff task; the socket stays
-                # registered for another claimant, so it needs a watcher again.
-                self._resume_pending_watch(pending)
+                try:
+                    await self._pause_pending_sniff(pending)
+                    if not self._pending_socket_still_registered(pending):
+                        continue
+                    pending_pn = await self._identify_pending_socket_for_route(
+                        pending,
+                        session_protocol=session_protocol,
+                    )
+                    if not self._pending_socket_still_registered(pending):
+                        continue
+                    if self._collector_pn_matches(normalized_pn, pending_pn):
+                        return self._claim_pending_socket(pending)
+                    if pending_pn:
+                        # This requester is not the owner; the socket may still be
+                        # perfectly valid for another entry on the shared listener.
+                        # Do not poison its observed identity for the domain registry.
+                        self._mark_session_state(pending.session_id, "identified")
+                    else:
+                        self._mark_session_state(
+                            pending.session_id, "waiting_for_route_identity",
+                        )
+                    # The pause above cancelled the sniff task; the socket stays
+                    # registered for another claimant, so it needs a watcher again.
+                    self._resume_pending_watch(pending)
+                except asyncio.CancelledError:
+                    # Identify sits after the pause. A cancel there must not
+                    # leave the socket registered with nobody watching it.
+                    self._resume_pending_watch(pending)
+                    raise
             return None
 
     def closed_collector_session_ids(self) -> frozenset[str]:
