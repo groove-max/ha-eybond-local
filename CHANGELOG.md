@@ -480,6 +480,10 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- A callback whose first bytes already carry a strong PN is no longer also
+  stored under that peer IP. An IP-only entry on the same address was sending
+  on the named collectors socket. The PN owner still receives that socket.
+
 - Only length and payload-too-large may drop one 8-byte EyeBond window, and
   only when the whole next frame is already buffered.
   `collector_frame_function_invalid` stays fatal. A second illegal window
