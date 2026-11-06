@@ -27,6 +27,13 @@ _WIRE_HEX_FIELDS = frozenset({
     "command_hex", "request_hex",
 })
 
+# Explicit package identity fields, not arbitrary user-provided *_hash values.
+_BUILD_DIGEST_FIELDS = {
+    "integration_build_git_commit": re.compile(r"(?:[0-9a-f]{7}|[0-9a-f]{12}|[0-9a-f]{40})\Z"),
+    "integration_build_fingerprint": re.compile(r"[0-9a-f]{64}\Z"),
+    "integration_build_id": re.compile(r"sha256:[0-9a-f]{64}\Z"),
+}
+
 
 def mask_identifier_token(token: str) -> str:
     if len(token) <= 4:
@@ -43,7 +50,10 @@ def mask_numeric_identifiers(value):
         masked = {}
         for key, item in value.items():
             masked_key = mask_numeric_identifiers(key) if isinstance(key, str) else key
-            if key in _WIRE_HEX_FIELDS and isinstance(item, str):
+            digest = _BUILD_DIGEST_FIELDS.get(key)
+            if digest is not None and isinstance(item, str) and digest.fullmatch(item):
+                masked[masked_key] = item
+            elif key in _WIRE_HEX_FIELDS and isinstance(item, str):
                 masked[masked_key] = _mask_string(item, wire_hex=True)
             elif key == "responses_hex" and isinstance(item, dict):
                 # A command -> hex reply map. Context applies to its scalar

@@ -73,3 +73,24 @@ Every push and pull request runs the full stub-based quality gate and the
 current HA lane. The older compatibility lane runs on the nightly schedule and
 manual dispatch. Release validation still means both lanes; compatibility has
 only been moved out of the inner development loop, not deleted.
+
+## Pull request review evidence
+
+Use the [acceptance criteria](../../CONTRIBUTING.md#pull-request-acceptance) for
+the merge decision. CI is one input, not the decision itself.
+
+- Record the PR head SHA, current target SHA, and exact tree tested. A green
+  head-only run does not establish compatibility with changes made to the target
+  since the PR branched. Check the merge base and validate the combined result
+  in an isolated worktree when necessary.
+- Select checks by impact using the cadence above. Shared listener or lifecycle
+  changes need relevant real-HA checks and connection/ownership regressions;
+  catalog-only changes do not require repeating unrelated live-device tests.
+- For a suspected regression, run the same reproducer on the target baseline and
+  the proposed result. Preserve a sanitized regression test. Existing tests
+  passing does not override a failing new counterexample.
+- Record skips, environment limitations, untested paths, and the provenance of
+  hardware observations. Do not describe a snapshot or replay as a long live run,
+  or a captured write as proof that a device accepted the setting.
+- Resolve known blockers before acceptance. Recheck the head/target revisions
+  before merging; changed relevant code requires renewed qualification.

@@ -1098,8 +1098,36 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(type(options_flow).__name__, "ListenerOptionsFlow")
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "listener")
-        self.assertEqual(result["menu_options"], ["rediscover_devices"])
+        self.assertEqual(result["menu_options"], ["automatic_discovery", "rediscover_devices"])
         self.assertTrue(callable(getattr(options_flow, "async_step_listener", None)))
+
+    async def test_listener_automatic_discovery_option_is_persisted(self) -> None:
+        entry = types.SimpleNamespace(
+            data={"entry_role": "listener"},
+            options={"existing_setting": "preserved"},
+        )
+        options_flow = EybondLocalConfigFlow.async_get_options_flow(entry)
+
+        form = await options_flow.async_step_automatic_discovery()
+        self.assertEqual(form["step_id"], "automatic_discovery")
+        self.assertEqual(form["type"], "form")
+
+        saved = await options_flow.async_step_automatic_discovery(
+            {"automatic_passive_discovery": False}
+        )
+        self.assertEqual(saved["type"], "create_entry")
+        self.assertEqual(
+            saved["data"],
+            {"existing_setting": "preserved", "automatic_passive_discovery": False},
+        )
+
+        entry.options = saved["data"]
+        restored_flow = EybondLocalConfigFlow.async_get_options_flow(entry)
+        enabled = await restored_flow.async_step_automatic_discovery(
+            {"automatic_passive_discovery": True}
+        )
+        self.assertTrue(enabled["data"]["automatic_passive_discovery"])
+        self.assertEqual(enabled["data"]["existing_setting"], "preserved")
 
     async def test_listener_rediscovery_requires_confirmation_and_reports_result(self) -> None:
         entry = types.SimpleNamespace(
@@ -12286,7 +12314,8 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flow._admission_callback_error, "callback_timeout")
         failed = await flow.async_step_verify_connection_failed()
         explanation = failed["description_placeholders"]["failure_explanation"]
-        self.assertIn("did not call back", explanation)
+        self.assertIn("No new collector connection arrived", explanation)
+        self.assertIn("already-open connection is not automatically attributed", explanation)
         self.assertNotIn("could not verify the collector connection", explanation)
 
     async def test_silent_addressed_callback_reuses_observed_wire_without_second_trigger(

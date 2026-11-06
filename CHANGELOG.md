@@ -7,7 +7,35 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+### Added
+
+- Identify intermediate integration builds independently of the release label.
+  GitHub source archives carry their commit automatically; raw copies also get
+  a deterministic source fingerprint. Configure, startup logs and Support
+  Archives show the identity captured at startup. Local edits change the source
+  ID without pretending the embedded commit proves an unmodified installation.
+  This does not change collector firmware labels or bypass the required HA restart.
+
 ### Changed
+
+- Repeat an addressed callback trigger after a pre-existing silent socket
+  closes during identity verification (#75). Some collectors do not reconnect
+  until another UDP request arrives; waiting longer alone cannot fix that
+  sequence. Keep the same exclusive attempt, destination and 60-second wait
+  budget, with at most two closure-driven repeats and exact trigger accounting.
+  Never adopt or probe an old socket, infer closure from missing diagnostics,
+  repeat a broadcast or continue triggering after a new candidate appears.
+  Real loopback TCP/UDP tests cover the previously failing sequence and an
+  unrelated same-address collector; physical-firmware validation is pending.
+
+- Allow a full reconnect cycle during callback identity checks (#75): wait up
+  to 60 seconds for a new socket, but offer the explicit read-only identity
+  query after a short silent-settle interval while that socket is still live.
+  Keep pre-existing connections outside the attempt; discard closed offers,
+  preserve ambiguity across socket churn and require uncontaminated trigger
+  provenance. Clarify that a timeout means no new connection was observed.
+  Deterministic timing and real loopback TCP/UDP tests cover the repair path;
+  the affected WFBLE firmware still needs a user-side identity-query test.
 
 - Preserve partial ValueCloud Write Controls evidence when an HTTP request
   times out or fails (#46): retain the plan, previous captures and the uncertain

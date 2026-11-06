@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import datetime, timezone
-import json
 from pathlib import Path
 from typing import Any
+
+from ...build_identity import build_runtime_values
 
 from ...const import (
     DEFAULT_PROXY_CAPTURE_DURATION_MINUTES,
@@ -150,48 +151,10 @@ def _package_dir() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _read_package_json(filename: str) -> dict[str, Any]:
-    try:
-        payload = json.loads((_package_dir() / filename).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
-def _read_build_info_file() -> dict[str, str]:
-    path = _package_dir() / "BUILD_INFO.txt"
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return {"build_info_present": "false"}
-
-    result: dict[str, str] = {"build_info_present": "true"}
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        normalized_key = key.strip().lower().replace(" ", "_")
-        if normalized_key:
-            result[normalized_key] = value.strip()
-    return result
-
-
 def integration_build_runtime_values() -> dict[str, object]:
     """Return support-facing package/build diagnostics for the loaded code."""
 
-    manifest = _read_package_json("manifest.json")
-    build_info = _read_build_info_file()
-    values: dict[str, object] = {
-        "integration_package_dir": str(_package_dir()),
-        "integration_manifest_version": str(manifest.get("version") or ""),
-        "integration_build_info_present": build_info.get("build_info_present") == "true",
-    }
-    for key in ("git_describe", "git_commit", "commit_date", "built_at"):
-        value = str(build_info.get(key) or "").strip()
-        if value:
-            values[f"integration_build_{key}"] = value
-    return values
+    return build_runtime_values(_package_dir())
 
 
 def coerce_proxy_capture_duration_minutes(value: object) -> int:

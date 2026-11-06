@@ -407,9 +407,17 @@
     "step": {
       "listener": {
         "title": "Background discovery",
-        "description": "Shows connected collectors that have not been added yet. Remove this entry to disable background discovery.",
+        "description": "Configure the periodic discovery and maintenance sweep. Disabling it does not close existing connections or stop inverter polling, but also pauses cleanup of stale discovery cards and identity/protocol updates for existing entries. Use a manual check for one sweep, or re-enable the option to resume periodic maintenance.",
         "menu_options": {
+          "automatic_discovery": "Periodic discovery and maintenance",
           "rediscover_devices": "Check connected collectors again"
+        }
+      },
+      "automatic_discovery": {
+        "title": "Periodic discovery and maintenance",
+        "description": "Turning this off pauses the entire periodic sweep: discovery of new collectors, cleanup of stale discovery cards, and identity/protocol/topology updates for existing entries. Current device connections and inverter polling continue. To perform one maintenance sweep, choose 'Check connected collectors again'; to resume automatic maintenance, turn this option on.",
+        "data": {
+          "automatic_passive_discovery": "Enable periodic discovery and maintenance"
         }
       },
       "rediscover_devices": {
@@ -428,7 +436,7 @@
       },
       "init": {
         "title": "EyeBond Local Options",
-        "description": "Choose what you want to manage for this entry.{bridge_note}",
+        "description": "Choose what you want to manage for this entry.{bridge_note}\n\nIntegration build: `{integration_build}`",
         "menu_options": {
           "connection": "Collector connection and cloud",
           "collector_endpoint": "Home Assistant connection address",

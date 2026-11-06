@@ -65,6 +65,13 @@ Depending on what is available for this entry, one archive can include:
 - an anonymized replay fixture when one can be built safely;
 - device-learning or cloud evidence that already belongs to this entry.
 
+For current development builds, **Configure → Integration build** and the
+archive include the source fingerprint and, for archive installations, the Git
+commit. The manifest version alone can be identical across several `main`
+builds. A commit is declared provenance, not proof that no files were edited;
+the separate fingerprint identifies the component's runtime sources. It is
+captured at startup and does not replace the required restart after an update.
+
 If the **Retry restoring collector connection** action is missing after failed
 learning, create a fresh archive without starting another learning session. The
 export checks whether a recovery record is present, readable and belongs to this

@@ -241,9 +241,9 @@ class RecoveryRelocationGuards(unittest.TestCase):
         # The policy CLASS is defined in exactly one file (guarded in #4 too).
         default = tp.DEFAULT_ONBOARDING_TIMEOUT_POLICY
         # Representative load-bearing subset spanning scan, callback and
-        # inbound-recovery budgets.  The callback-recovery link window is longer
-        # than the identity-only window because it starts after a physical reboot;
-        # production E500 hardware can need more than 30 seconds to dial back in.
+        # inbound-recovery budgets. Both callback paths cover a full reconnect
+        # cycle; first-contact identity can wait for a silent old socket to close
+        # just as recovery can wait for a collector to finish rebooting.
         expected = {
             "discovery_timeout": 1.5,
             "connect_timeout": 5.0,
@@ -251,7 +251,8 @@ class RecoveryRelocationGuards(unittest.TestCase):
             "heartbeat_timeout": 2.0,
             "manual_total_timeout": 45.0,
             "auto_total_timeout": 30.0,
-            "callback_identity_session_wait": 20.0,
+            "callback_identity_session_wait": 60.0,
+            "callback_identity_silent_settle": 2.0,
             "callback_causality_lease_wait": 30.0,
             "callback_recovery_session_wait": 60.0,
             "inbound_strong_identity_timeout": 30.0,

@@ -10,6 +10,7 @@ from .common import (
     CollectorAtTransport,
     CollectorInfo,
     CollectorTransport,
+    SessionHandle,
     _callback_identity_status_values,
     apply_collector_cloud_family_observation,
     asyncio,
@@ -55,6 +56,7 @@ class LinkSessionProjectionMixin:
 
     def _current_trusted_binding_observation_fingerprint(
         self,
+        handle: SessionHandle | None = None,
     ) -> tuple[str, str, str]:
         """Return positive live-wire evidence for explicit binding adoption.
 
@@ -65,7 +67,8 @@ class LinkSessionProjectionMixin:
         observed and non-conflicting.
         """
 
-        handle = self._live_session_handle()
+        if handle is None:
+            handle = self._live_session_handle()
         if not handle.observed or handle.conflict:
             return ("", "", "")
         return (
@@ -74,10 +77,12 @@ class LinkSessionProjectionMixin:
             str(handle.collector_pn or "").strip(),
         )
 
-    def _reconcile_owned_session_binding_observation(self) -> None:
+    def _reconcile_owned_session_binding_observation(
+        self, handle: SessionHandle | None = None,
+    ) -> None:
         """Adopt a binding when the owned socket gains trusted wire evidence."""
 
-        fingerprint = self._current_trusted_binding_observation_fingerprint()
+        fingerprint = self._current_trusted_binding_observation_fingerprint(handle)
         if fingerprint == getattr(
             self,
             "_owned_binding_observation_fingerprint",
@@ -145,29 +150,49 @@ class LinkSessionProjectionMixin:
 
         while True:
             await asyncio.sleep(0.2)
-            # Routing/negotiation can complete on the same socket, so it is not
-            # sufficient to react only to session_id/port replacement.
+            self._observe_owned_session_state()
+
+    def _observe_owned_session_state(self) -> None:
+        """Reconcile one monitor tick from a synchronous registry observation."""
+
+        observation = None
+        if self._domain_ownership_active():
+            try:
+                observation = self._callback_ownership_registry.observe_owned_runtime_session(
+                    self._callback_entry_id,
+                    pinned_session_id=str(getattr(self, "_activation_session_id", "") or "").strip(),
+                )
+            except Exception:
+                logger.debug("Domain session observation failed", exc_info=True)
+        if observation is None:
             self._reconcile_owned_session_binding_observation()
             fingerprint = self._current_owned_session_fingerprint()
-            if fingerprint == self._owned_session_fingerprint:
-                continue
-            self._owned_session_fingerprint = fingerprint
-            self._owned_session_generation += 1
-            # A newly-observed owned socket is an explicit session event: adopt
-            # its trusted wire as the confirmed binding here (not on any read).
-            self._adopt_trusted_live_binding()
-            self._owned_session_changed.set()
-            if fingerprint[0] and self._collector_connection_watcher is not None:
+            session = None
+        else:
+            session, handle = observation
+            # Routing can complete on the same socket: wire evidence and socket
+            # identity have distinct selectors over this tick's single snapshot.
+            self._reconcile_owned_session_binding_observation(handle or SessionHandle())
+            fingerprint = (
+                str(getattr(session, "session_id", "") or ""),
+                int(getattr(session, "listener_port", 0) or 0),
+            )
+        if fingerprint == self._owned_session_fingerprint:
+            return
+        self._owned_session_fingerprint = fingerprint
+        self._owned_session_generation += 1
+        # New socket identity remains an explicit binding-adoption event.
+        self._adopt_trusted_live_binding()
+        self._owned_session_changed.set()
+        if fingerprint[0] and self._collector_connection_watcher is not None:
+            if observation is None:
                 session = self._owned_domain_session()
-                try:
-                    self._collector_connection_watcher(
-                        str(getattr(session, "peer_ip", "") or "")
-                    )
-                except Exception:
-                    logger.debug(
-                        "Owned-session connection watcher failed",
-                        exc_info=True,
-                    )
+            try:
+                self._collector_connection_watcher(
+                    str(getattr(session, "peer_ip", "") or "")
+                )
+            except Exception:
+                logger.debug("Owned-session connection watcher failed", exc_info=True)
 
     def clear_discovery_reply(self) -> None:
         """Drop the remembered UDP discovery reply.
@@ -209,7 +234,7 @@ class LinkSessionProjectionMixin:
             ADAPTER_INVERTER_RAW_PASSTHROUGH,
         ):
             return self.active_collector_at_transport or self._at_transport
-        return self.active_transport or self._transport
+        return self._connected_payload_transport() or self._transport
 
     @property
     def collector_at_transport(self) -> CollectorAtTransport:

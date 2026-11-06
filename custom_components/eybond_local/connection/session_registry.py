@@ -276,6 +276,18 @@ class CallbackSessionRegistry:
 
         return tuple(self._normalized_sessions())
 
+    def observed_session_views(
+        self,
+    ) -> tuple[tuple[CallbackSession, ...], tuple[CallbackSession, ...]]:
+        """Return per-socket and coalesced views of one inventory snapshot.
+
+        Callers that need both projections can avoid reading and normalizing
+        the shared listeners twice. Both views retain identical owner claims.
+        """
+
+        per_socket = tuple(self._normalized_sessions())
+        return per_socket, tuple(self._coalesce(per_socket))
+
     def _attach_owner(self, session: CallbackSession) -> CallbackSession:
         owner = self._owner_for_session(session)
         if not owner:
@@ -896,7 +908,21 @@ class CallbackSessionRegistry:
         claim = self._claims.get(owner)
         if claim is None or claim.session_id != sid:
             return None
-        for session in self._normalized_sessions():
+        return self._session_handle_for_owned_session_sessions(
+            owner,
+            sid,
+            self._normalized_sessions(),
+        )
+
+    def _session_handle_for_owned_session_sessions(
+        self,
+        owner: str,
+        sid: str,
+        sessions: Iterable[CallbackSession],
+    ) -> SessionHandle | None:
+        """Project an exact owned-session handle from one normalized snapshot."""
+
+        for session in sessions:
             if session.session_id != sid:
                 continue
             if session.state == SESSION_STATE_CLOSED:
@@ -1112,6 +1138,15 @@ class CallbackSessionRegistry:
         pn = _normalize_pn(collector_pn)
         if not pn:
             return None
+        return self._session_handle_for_pn_sessions(pn, self._normalized_sessions())
+
+    @staticmethod
+    def _session_handle_for_pn_sessions(
+        pn: str,
+        sessions: Iterable[CallbackSession],
+    ) -> SessionHandle | None:
+        """Project the best trusted wire handle from one normalized snapshot."""
+
         # Rank over per-socket sessions (not the coalesced view) so a routed,
         # identity-established session always wins over a same-PN-prefix session
         # that is a route-identity mismatch or still awaiting identity. Untrusted
@@ -1119,7 +1154,7 @@ class CallbackSessionRegistry:
         # never become the runtime wire truth for this claimed identity.
         best_handle: SessionHandle | None = None
         best_rank: tuple[int, int, int, int] | None = None
-        for session in self._normalized_sessions():
+        for session in sessions:
             if not _pn_is_same_identity(session.collector_pn, pn):
                 continue
             handle = negotiate_session_adapters(session.raw)
@@ -1240,10 +1275,25 @@ class CallbackSessionRegistry:
         pn = self.claimed_identity(entry_id)
         if not pn:
             return None
+        return self._owned_session_location_sessions(
+            str(entry_id or "").strip(),
+            pn,
+            self.claimed_session_id(entry_id),
+            self._normalized_sessions(),
+        )
+
+    def _owned_session_location_sessions(
+        self,
+        owner_id: str,
+        pn: str,
+        claimed_sid: str,
+        sessions: Iterable[CallbackSession],
+    ) -> CallbackSession | None:
+        """Project the best owned socket location from one normalized snapshot."""
+
         best: CallbackSession | None = None
         best_rank: tuple[int, int, int, int] | None = None
-        claimed_sid = self.claimed_session_id(entry_id)
-        for session in self._normalized_sessions():
+        for session in sessions:
             if not _pn_is_same_identity(session.collector_pn, pn):
                 continue
             raw_state = str(session.raw.get("state") or "").strip().lower()
@@ -1253,7 +1303,7 @@ class CallbackSessionRegistry:
             ):
                 continue
             owner = self._owner_for_session(session)
-            if owner and owner != str(entry_id or "").strip():
+            if owner and owner != owner_id:
                 # Single-owner invariant: never point a runtime at a socket a
                 # different entry owns (e.g. a transient verification claim).
                 continue
@@ -1274,6 +1324,68 @@ class CallbackSessionRegistry:
                 best_rank = rank
                 best = session
         return best
+
+    def observe_owned_runtime_session(
+        self,
+        entry_id: str,
+        *,
+        pinned_session_id: str = "",
+    ) -> tuple[CallbackSession | None, SessionHandle | None]:
+        """Return runtime socket location and wire handle from one snapshot.
+
+        The location and handle intentionally use different selection rules: an
+        activation pin constrains only the location, while the handle remains
+        PN-ranked exactly like :meth:`session_handle_for_entry`. A PN-less claim
+        can still have an exact pinned location, but has no durable-PN handle.
+        """
+
+        owner_id = str(entry_id or "").strip()
+        claim = self._claims.get(owner_id)
+        if not owner_id or claim is None:
+            return None, None
+
+        pn = str(claim.collector_pn or "")
+        pinned_sid = str(pinned_session_id or "").strip()
+        if not pn and (not pinned_sid or claim.session_id != pinned_sid):
+            # Both existing projections can reject this claim without touching
+            # the session source.
+            return None, None
+
+        sessions = self._normalized_sessions()
+        handle = (
+            self._session_handle_for_pn_sessions(_normalize_pn(pn), sessions)
+            if pn
+            else None
+        )
+
+        if pinned_sid:
+            location = None
+            if claim.session_id == pinned_sid and (
+                self._session_handle_for_owned_session_sessions(
+                    owner_id,
+                    pinned_sid,
+                    sessions,
+                )
+                is not None
+            ):
+                location = next(
+                    (
+                        session
+                        for session in sessions
+                        if session.session_id == pinned_sid
+                    ),
+                    None,
+                )
+        elif pn:
+            location = self._owned_session_location_sessions(
+                owner_id,
+                pn,
+                claim.session_id,
+                sessions,
+            )
+        else:
+            location = None
+        return location, handle
 
     # --- diagnostics ----------------------------------------------------------
 

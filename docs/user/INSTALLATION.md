@@ -54,6 +54,15 @@ the archive. Do not mix files from different versions. Fully restart HA;
 reloading the entry does not reload every Python module. Do not delete/re-add
 devices merely to update the code. Include the tested commit in your report.
 
+After restarting, open **Configure**: **Integration build** shows the version,
+the commit when archive metadata is available, and a short `sha256:` source ID.
+These are integration identifiers, not the collector's firmware version. The
+same identity is in the startup log and Support Archive. GitHub archive/HACS
+archive installations carry the commit automatically. A raw file copy or HACS
+fallback download can lack it; the source ID still distinguishes the component
+files. Local edits change that ID even when the embedded commit stays the same.
+The identity is captured at startup: fully restart HA after replacing files.
+
 A manually installed main snapshot does not automatically follow future main
 commits. Published HACS updates and main snapshots are different channels.
 

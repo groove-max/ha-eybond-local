@@ -862,16 +862,19 @@ class _SharedEybondListener:
         the same NAT peer IP.
         """
 
+        if not self._session_inventory:
+            return ()
+        pending_session_ids = {
+            str(pending.session_id or "").strip()
+            for pending in self._pending_sockets.values()
+        }
         sessions: list[dict[str, object]] = []
         for entry in self._session_inventory.values():
             collector_pn = str(entry.collector_pn or "").strip()
             remote_ip = str(entry.remote_ip or "").strip()
             session_id = str(entry.session_id or "").strip()
             has_live_backing = bool(session_id) and (
-                any(
-                    str(pending.session_id or "").strip() == session_id
-                    for pending in self._pending_sockets.values()
-                )
+                session_id in pending_session_ids
                 or session_id in self._session_payload_connections
                 or session_id in self._session_at_connections
             )
@@ -1476,6 +1479,24 @@ class _SharedEybondListener:
                 self._resume_pending_watch(pending)
             return None
 
+    def closed_collector_session_ids(self) -> frozenset[str]:
+        """Positive closure evidence only, never absence from a live view.
+
+        Terminal inventory entries outlive pending-socket removal; EOF and a
+        closing writer cover the interval before the watcher records the state.
+        These ids convey lifecycle, not collector identity or probe authority.
+        """
+
+        closed = {
+            entry.session_id for entry in self._session_inventory.values()
+            if _session_state_is_terminal(entry.state)
+        }
+        closed.update(
+            pending.session_id for pending in self._pending_sockets.values()
+            if pending.reader.at_eof() or pending.writer.is_closing()
+        )
+        return frozenset(closed)
+
     def silent_pending_collector_sessions(self) -> tuple[dict[str, object], ...]:
         """Live pending sockets that have volunteered NO identity yet.
 
@@ -1489,6 +1510,8 @@ class _SharedEybondListener:
 
         sessions: list[dict[str, object]] = []
         for pending in self._pending_sockets.values():
+            if pending.reader.at_eof() or pending.writer.is_closing():
+                continue
             session_id = str(pending.session_id or "").strip()
             if not session_id:
                 continue
