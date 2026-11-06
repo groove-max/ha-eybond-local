@@ -9,6 +9,15 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Include the latest matching redacted diagnostic attempt in support archives,
+  with its original time, route and build identity. Bound the optional cache to
+  1 MiB per entry and a seven-day inclusion window; do not reuse evidence across
+  changed collector/inverter identities or rerun commands during attachment.
+- Add passive structural candidate reports for SmartClient vendor variants
+  `099E_06` and `09D5_01` using saved FC4 request/reply bytes. These static-analysis
+  descriptors do not establish device support, decode sensors, change polling
+  or enable controls.
+
 - Add explicit `payload_hex` diagnostic commands for developer-supplied binary
   protocols (#82). Require the diagnostic-only `raw` codec, an explicit FC4
   route and confirmation; send the supplied bytes unchanged with no retries,

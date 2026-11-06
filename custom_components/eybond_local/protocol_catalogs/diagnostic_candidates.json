@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "source": {
+    "application": "com.eybond.smartclient",
+    "version": "3.48.11.0",
+    "apk_sha256": "c7fb819e082a7a40160c1cde18194cb0e337c75f1669929cc28b779a90e46f59",
+    "verification": "static_dex_analysis_only"
+  },
+  "candidates": [
+    {
+      "key": "eybond_099e_06",
+      "vendor_code": "099E",
+      "source_class": "com.eybond.dev.urtu.DevUrtu099E_06",
+      "request_hex": "434d534706494e562d48420d",
+      "response_size": 72,
+      "length_basis": "nominal_prefix_5_body_66_checksum_1",
+      "body_offset": 5,
+      "body_size": 66,
+      "checksum": "sum8_body",
+      "unverified": ["response_header", "field_map", "physical_device_compatibility"]
+    },
+    {
+      "key": "eybond_09d5_01",
+      "vendor_code": "09D5",
+      "source_class": "com.eybond.dev.urtu.DevUrtu09D5_01",
+      "request_hex": "eb90000100017c7f",
+      "response_size": 56,
+      "length_basis": "vendor_exact_length_check",
+      "body_offset": 5,
+      "body_size": 48,
+      "checksum": "sum16be_before_trailer3",
+      "unverified": ["response_header", "trailing_byte", "field_map", "physical_device_compatibility"]
+    }
+  ]
+}

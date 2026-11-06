@@ -5,15 +5,19 @@ unit tests. No sockets, user HA servers or inverter writes are involved.
 """
 
 import asyncio
+from dataclasses import replace
+from io import BytesIO
 import json
+from zipfile import ZipFile
 
 import pytest
 
 from custom_components.eybond_local.const import DOMAIN, SERVICE_RUN_DIAGNOSTIC_COMMANDS
 from custom_components.eybond_local.fixtures.transport import FixtureTransport
 from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
-from custom_components.eybond_local.models import ProbeTarget
+from custom_components.eybond_local.models import CollectorInfo, ProbeTarget
 from test_ha_config_flow import collector_entry
+from synthetic import SYNTHETIC_OTHER_COLLECTOR_PN
 
 
 SCRIPT = "driver modbus\nwire raw_modbus\ndevice_addr 1\nwrite_single 354 2\nread 354"
@@ -55,6 +59,8 @@ class Device:
 
 
 class PayloadDevice(Device):
+    response = b"\xab\xcd\xef"
+
     def create_diagnostic_transport(self, wire, *, timeout):
         assert wire == "fc4"
         assert timeout == 10
@@ -68,7 +74,7 @@ class PayloadDevice(Device):
         self.started.set()
         if self.wait is not None:
             await self.wait.wait()
-        return b"\xab\xcd\xef"
+        return self.response
 
 
 @pytest.mark.parametrize("through_ui", [False, True])
@@ -161,3 +167,75 @@ async def test_unload_cancels_diagnostic_and_releases_runtime_lock(
         await pending
     assert not coordinator._diagnostic_active
     assert not coordinator._runtime_operation_lock.locked()
+
+
+@pytest.mark.parametrize("code", ["099E", "09D5"])
+async def test_saved_candidate_in_signed_support_zip_after_reload(
+    hass, hass_client_no_auth, collector_entry, fake_runtime, monkeypatch, code,
+):
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = collector_entry.runtime_data
+    device = PayloadDevice(coordinator)
+    if code == "099E":
+        body = bytes([0xAB] * 66)
+        device.response = b"\xa1\xb2\xc3\xd4\xe5" + body + bytes([sum(body) & 255])
+        script = PAYLOAD_SCRIPT
+    else:
+        body = b"\xa1\xb2\xc3\xd4\xe5" + bytes([0xAB] * 48)
+        device.response = body + (sum(body) & 65535).to_bytes(2, "big") + b"\xfe"
+        script = PAYLOAD_SCRIPT.rsplit("payload_hex", 1)[0] + "payload_hex eb90000100017c7f"
+    monkeypatch.setattr(coordinator, "_diagnostic_link_transport", lambda: device)
+    response = await coordinator.async_run_diagnostic_commands(commands=script, confirm_write=True)
+    assert response["success"]
+    assert len(device.requests) == 1
+    # Persistence, not an in-memory last-result pointer; the replacement
+    # coordinator has no diagnostic transport and must not rerun the command.
+    assert await hass.config_entries.async_unload(collector_entry.entry_id)
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    reloaded = collector_entry.runtime_data
+    await reloaded.async_export_support_package()
+    client = await hass_client_no_auth()
+    download = await client.get(reloaded.data.values["support_package_download_url"])
+    assert download.status == 200
+    with ZipFile(BytesIO(await download.read())) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        status = manifest["archive_members"]["diagnostic_evidence"]
+        assert status["status"] == "included"
+        assert status["identity_level"] == "collector_only"
+        payload = json.loads(archive.read("evidence/diagnostic_run.json"))
+        report = json.loads(archive.read("evidence/protocol_candidates.json"))
+        assert report["observations"][0]["vendor_code"] == code
+        assert not report["runtime_support_confirmed"]
+        assert report["additional_requests_sent"] == 0
+        assert payload["context"]["wire_events"][0]["response_hex"] == device.response.hex()
+        assert payload["context"]["integration_build"]
+    assert len(device.requests) == 1
+    await hass.config_entries.async_unload(collector_entry.entry_id)
+
+
+async def test_identity_change_during_diagnostic_does_not_bind_archive_cache(
+    hass, hass_client_no_auth, collector_entry, fake_runtime, monkeypatch,
+):
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = collector_entry.runtime_data
+    device = PayloadDevice(coordinator)
+    device.wait = asyncio.Event()
+    monkeypatch.setattr(coordinator, "_diagnostic_link_transport", lambda: device)
+    pending = asyncio.create_task(coordinator.async_run_diagnostic_commands(
+        commands=PAYLOAD_SCRIPT, confirm_write=True, publish_download_copy=True,
+    ))
+    await asyncio.wait_for(device.started.wait(), 2)
+    coordinator.data = replace(coordinator.data, collector=CollectorInfo(
+        remote_ip="192.0.2.23", collector_pn=SYNTHETIC_OTHER_COLLECTOR_PN,
+    ))
+    device.wait.set()
+    result = await pending
+    client = await hass_client_no_auth()
+    response = await client.get(result["download_url"])
+    payload = json.loads(await response.text())
+    assert payload["context"]["support_archive_cache_status"] == "identity_unavailable_or_changed"
+    assert result["success"]  # The independent diagnostic result is preserved.
+    await hass.config_entries.async_unload(collector_entry.entry_id)

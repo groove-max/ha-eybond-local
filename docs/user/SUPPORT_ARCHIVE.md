@@ -65,6 +65,24 @@ Depending on what is available for this entry, one archive can include:
 - an anonymized replay fixture when one can be built safely;
 - device-learning or cloud evidence that already belongs to this entry.
 
+If you ran **Diagnostic commands** on a build with saved diagnostic evidence,
+the archive can also include `evidence/diagnostic_run.json` and
+`evidence/protocol_candidates.json`. These are the last matching saved attempt,
+not a new diagnostic run. They retain their own capture time, route and build
+identity; a failed attempt replaces the preceding successful one. Inclusion
+requires the same entry and collector PN, the same known inverter/route, and
+a capture no more than seven days old. If the inverter was unidentified, the
+manifest explicitly says `collector_only`: this is not proof of the inverter
+behind it. A later identified or replaced inverter will not inherit that
+capture. Older unbound diagnostics are not automatically imported.
+
+The manifest records why an attachment was omitted (for example, identity
+mismatch, expired capture or unavailable cache). Protocol candidates are
+structural research hints, not confirmation of device support or decoded
+telemetry. Including these saved files adds no device queries; the archive's
+normal evidence reads described below are unchanged. See
+[Diagnostic commands](DIAGNOSTIC_COMMANDS.md#results-and-downloads) for limits.
+
 For current development builds, **Configure → Integration build** and the
 archive include the source fingerprint and, for archive installations, the Git
 commit. The manifest version alone can be identical across several `main`

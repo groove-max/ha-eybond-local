@@ -19,6 +19,7 @@ from ..const import (
 )
 from .masking import mask_numeric_identifiers
 from .redaction import sanitize_support_payload
+from .diagnostic_evidence import load_diagnostic_evidence, scope_from_bundle
 from .shadow_learning.review_model import build_control_discovery_evidence
 
 
@@ -88,6 +89,9 @@ def export_support_package(
         config_dir=config_dir,
         support_bundle=support_bundle,
     )
+    diagnostic_summary, diagnostic_members = load_diagnostic_evidence(
+        config_dir, entry_id, scope_from_bundle(entry_id, support_bundle),
+    )
 
     packages_root = support_packages_root(config_dir)
     packages_root.mkdir(parents=True, exist_ok=True)
@@ -132,6 +136,7 @@ def export_support_package(
             ),
             "cloud_evidence": _CLOUD_EVIDENCE_ARCHIVE_MEMBER if cloud_evidence is not None else None,
             "shadow_learning": shadow_manifest_members or None,
+            "diagnostic_evidence": diagnostic_summary,
         },
     }
 
@@ -165,6 +170,12 @@ def export_support_package(
         readme_lines.append("- fixture/raw_fixture.json")
     if cloud_evidence is not None:
         readme_lines.append("- evidence/cloud_evidence.json")
+    if diagnostic_members:
+        readme_lines.extend([
+            "- evidence/diagnostic_run.json (last matching saved diagnostic; not rerun)",
+            "- evidence/protocol_candidates.json (structural leads, not confirmed device support)",
+            "The diagnostic capture has its own time, route and build identity. No new queries were sent to include it.",
+        ])
     if shadow_manifest_members:
         readme_lines.append(f"- {_SHADOW_ARCHIVE_ROOT}/... (optional shadow-learning evidence)")
     if shadow_manifest_members.get("control_discovery"):
@@ -198,6 +209,7 @@ def export_support_package(
         "README.txt": "\n".join(readme_lines) + "\n",
     }
     archive_members.update(shadow_members)
+    archive_members.update(diagnostic_members)
 
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for member_name, payload in archive_members.items():

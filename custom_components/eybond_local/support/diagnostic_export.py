@@ -20,9 +20,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..build_identity import build_runtime_values
 from ..const import LOCAL_DIAGNOSTIC_RUNS_DIR, LOCAL_METADATA_DIR
 from ..payload.modbus import decode_read_request
+from .diagnostic_evidence import DiagnosticEvidenceScope, save_diagnostic_evidence
 from .diagnostic_runner import DiagnosticRunResult
+from .protocol_candidates import analyze_protocol_candidates
+from .redaction import sanitize_support_payload
 from .masking import (
     _NUMERIC_IDENTIFIER_RE,
     mask_identifier_token as _mask_identifier_token,
@@ -93,7 +97,7 @@ def build_shareable_payload(result: DiagnosticRunResult) -> dict:
     payload = anonymize_proxy_trace_line(payload)
     payload = _mask_numeric_identifiers(payload)
     _redact_known_identity_registers(payload)
-    return payload
+    return sanitize_support_payload(payload)
 
 
 def _redact_opaque_identity_reads(payload: dict) -> None:
@@ -212,6 +216,7 @@ def export_diagnostic_run(
     result: DiagnosticRunResult,
     now: datetime | None = None,
     publish_download_copy: bool = False,
+    device_scope: DiagnosticEvidenceScope | None = None,
 ) -> DiagnosticExportResult:
     """Write the local raw + shareable result files and optionally publish one."""
 
@@ -221,8 +226,25 @@ def export_diagnostic_run(
     timestamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%dT%H%M%S%fZ")
     stem = f"diagnostic_{_safe_stem_part(entry_id)}_{timestamp}"
 
+    # All disk work and passive analysis run in the existing export executor.
+    result.context["integration_build"] = build_runtime_values()
+    try:
+        protocol_report = analyze_protocol_candidates(build_local_payload(result))
+    except (OSError, ValueError, KeyError, TypeError):
+        protocol_report = {"status": "analysis_unavailable", "additional_requests_sent": 0}
+    result.context["protocol_candidates"] = protocol_report
     local_payload = build_local_payload(result)
     shareable_payload = build_shareable_payload(result)
+
+    try:
+        cache_status = save_diagnostic_evidence(
+            config_dir, entry_id, device_scope, shareable_payload, protocol_report,
+        )
+    except (OSError, ValueError, TypeError, RecursionError):
+        # Optional archive cache must never hide the original diagnostic result.
+        cache_status = "cache_write_failed"
+    result.context["support_archive_cache_status"] = cache_status
+    shareable_payload["context"]["support_archive_cache_status"] = cache_status
 
     result_path = root / f"{stem}.json"
     text_path = root / f"{stem}.txt"

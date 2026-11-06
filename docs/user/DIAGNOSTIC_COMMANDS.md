@@ -180,6 +180,28 @@ copy, including the new payload trace. Review the file before public sharing:
 unknown register maps and opaque binary protocols can contain identifiers that
 cannot be recognized reliably.
 
+The latest completed diagnostic attempt (including a failed attempt) is also
+saved as a redacted support attachment. A subsequent Support Archive includes
+it when it is no more than seven days old and matches the same entry, collector
+PN and known inverter identity/route. It survives a Home Assistant restart.
+The archive records the capture's own timestamp and integration build; it does
+not rerun the scenario. Results created before this feature do not have this
+identity binding and are not automatically imported. The optional cache is
+limited to 1 MiB per entry; an oversized or unbound newer attempt prevents an
+older successful result from being presented as the latest capture.
+
+For explicit FC4 diagnostics, the exported JSON also has a passive
+`protocol_candidates` report. Initial descriptors cover vendor variants
+`099E_06` and `09D5_01`, derived from static analysis of SmartClient 3.48.11.0.
+They check the exact request, response length and additive checksum on the
+original bytes, **before redaction**. The `099E` length is a nominal layout,
+not a vendor-enforced length check. These are structural leads only: response
+headers, field meanings and physical-device compatibility remain unverified.
+No match does not rule out another firmware variant, and multiple matches
+remain ambiguous. Redaction may prevent recomputing the checksum from the
+shareable bytes. The report sends no requests, selects no driver and enables
+no sensors or controls. A vendor protocol ID is not an FC4 envelope address.
+
 ## If a scenario fails
 
 Check that:

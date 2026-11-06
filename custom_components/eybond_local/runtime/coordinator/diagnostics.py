@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ...const import CONF_DRIVER_HINT, DRIVER_HINT_AUTO
+from ...const import CONF_COLLECTOR_PN, CONF_DRIVER_HINT, DRIVER_HINT_AUTO
+from ...support.diagnostic_evidence import DiagnosticEvidenceScope, diagnostic_evidence_scope
 from ...support.diagnostic_export import export_diagnostic_run
 from ...support.diagnostic_projection import build_runtime_transport_debug
 from ...support.diagnostic_runner import DiagnosticRuntimeContext, run_scenario
@@ -67,6 +68,7 @@ class CoordinatorDiagnosticsMixin:
         """
 
         async def _factory() -> dict:
+            device_scope = self._diagnostic_evidence_scope()
             context = self._build_diagnostic_context(
                 stop_on_error=stop_on_error,
                 operation_timeout=operation_timeout,
@@ -77,6 +79,7 @@ class CoordinatorDiagnosticsMixin:
                 commands,
                 context,
                 publish_download_copy=publish_download_copy,
+                device_scope=device_scope,
             )
 
         return await self._diagnostic_flight.run(
@@ -153,6 +156,16 @@ class CoordinatorDiagnosticsMixin:
             return accessor()
         return None
 
+    def _diagnostic_evidence_scope(self) -> DiagnosticEvidenceScope | None:
+        snapshot = getattr(self, "data", None)
+        entry = self.config_entry
+        return diagnostic_evidence_scope(
+            entry.entry_id,
+            configured_pn=getattr(entry, "data", {}).get(CONF_COLLECTOR_PN, ""),
+            collector=getattr(snapshot, "collector", None),
+            inverter=getattr(snapshot, "inverter", None),
+        )
+
     @staticmethod
     def _diagnostic_default_probe_target(driver_key: str):
         try:
@@ -184,9 +197,16 @@ class CoordinatorDiagnosticsMixin:
         context: DiagnosticRuntimeContext,
         *,
         publish_download_copy: bool = False,
+        device_scope: DiagnosticEvidenceScope | None = None,
     ) -> dict:
         async with self._runtime_operation_lock:
+            # Context was captured before waiting for ownership. Do not bind a
+            # result to a device that replaced it during that wait or exchange.
+            if device_scope != self._diagnostic_evidence_scope():
+                device_scope = None
             result = await run_scenario(commands, context)
+            if device_scope != self._diagnostic_evidence_scope():
+                device_scope = None
         result.context["runtime_debug_after"] = build_runtime_transport_debug(
             getattr(context, "transport", None)
         )
@@ -198,6 +218,7 @@ class CoordinatorDiagnosticsMixin:
                 entry_id=entry_id,
                 result=result,
                 publish_download_copy=publish_download_copy,
+                device_scope=device_scope,
             )
         )
         download_url = (
