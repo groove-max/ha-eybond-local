@@ -2923,7 +2923,10 @@ class _SharedEybondListener:
                 )
             else:
                 connection.set_write_timeout(1.5)
-            self._at_connections[pending.remote_ip] = connection
+            # A strong PN already selected this connection. Publishing it under
+            # the peer IP would let an IP-only entry send on that collector.
+            if not (initial_pn and identity_can_route):
+                self._at_connections[pending.remote_ip] = connection
             if pending.session_id:
                 self._session_at_connections[pending.session_id] = connection
                 if initial_pn:
@@ -2991,7 +2994,10 @@ class _SharedEybondListener:
         else:
             connection.set_heartbeat_interval(60.0)
             connection.set_write_timeout(1.5)
-        self._connections[pending.remote_ip] = connection
+        # A strong PN already selected this connection. Publishing it under
+        # the peer IP would let an IP-only entry send on that collector.
+        if not (initial_pn and identity_can_route):
+            self._connections[pending.remote_ip] = connection
         if pending.session_id:
             self._session_payload_connections[pending.session_id] = connection
             if initial_pn:

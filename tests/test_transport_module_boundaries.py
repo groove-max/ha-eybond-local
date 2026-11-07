@@ -155,6 +155,15 @@ class TransportModuleBoundaryTests(unittest.TestCase):
         self.assertEqual(definitions.count(dispatch_claim), 1)
         definitions.remove(dispatch_claim)
         definitions.append(retired)
+        # A frame after a non-DTUPN AT line is still that frames PN. The helper
+        # stays in common.py so the historical decomposition digest is unchanged.
+        framed_pn = ("FunctionDef", "_framed_pn_at_offset")
+        self.assertEqual(definitions.count(framed_pn), 1)
+        self.assertEqual(sum(
+            isinstance(node, ast.FunctionDef) and node.name == framed_pn[1]
+            for node in _tree(_TRANSPORT / "common.py").body
+        ), 1)
+        definitions.remove(framed_pn)
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()
