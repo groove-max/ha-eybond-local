@@ -5,7 +5,7 @@
 [English](README.md) · [Документація](https://groove-max.github.io/ha-eybond-local/uk/) · [Сумісність](docs/user/COMPATIBILITY.uk.md) · [Допомога](docs/user/HELP.uk.md)
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=groove-max&repository=ha-eybond-local&category=integration)
-[![Стабільний реліз](https://img.shields.io/github/v/release/groove-max/ha-eybond-local?label=stable)](https://github.com/groove-max/ha-eybond-local/releases/latest)
+[![Останній реліз](https://img.shields.io/github/v/release/groove-max/ha-eybond-local?label=latest)](https://github.com/groove-max/ha-eybond-local/releases/latest)
 [![Включно з попередніми релізами](https://img.shields.io/github/v/release/groove-max/ha-eybond-local?include_prereleases&label=including%20prereleases)](https://github.com/groove-max/ha-eybond-local/releases)
 [![Validate](https://github.com/groove-max/ha-eybond-local/actions/workflows/validate.yml/badge.svg)](https://github.com/groove-max/ha-eybond-local/actions/workflows/validate.yml)
 [![Ліцензія MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
@@ -36,7 +36,7 @@
 
 ## Встановлення
 
-**Спочатку оберіть канал.** Поточна опублікована бета 0.3 — **0.3.0-beta.5**, а GitHub «Latest release» зараз веде на старішу стабільну **0.1.53**. Нові виправлення у `main` не потрапляють автоматично до beta.5. [Версії та безпечне оновлення →](docs/user/INSTALLATION.uk.md)
+**Спочатку оберіть канал.** **0.3.0-rc.1** — останній звичайний GitHub-реліз, доступний у HACS без увімкнення beta-версій. Це все ще кандидат у реліз із задокументованими межами перевірки. Нові експериментальні можливості `main` не входять до RC1 автоматично. [Версії та безпечне оновлення →](docs/user/INSTALLATION.uk.md)
 
 1. Додайте репозиторій у **HACS → Custom repositories**, категорія **Integration**.
 2. Завантажте потрібну опубліковану версію. Для бети за потреби увімкніть показ попередніх релізів у діалозі завантаження.

@@ -10,25 +10,30 @@ access and a backup before changing an existing installation.
 
 | Channel | Current publication | Use it when |
 |---|---|---|
-| Stable release | [0.1.53](https://github.com/groove-max/ha-eybond-local/releases/tag/v0.1.53) | You deliberately need the older stable release; many newer fixes are absent. |
-| Published 0.3 beta | [0.3.0-beta.5](https://github.com/groove-max/ha-eybond-local/releases/tag/v0.3.0-beta.5) | You want the published 0.3 prerelease and accept beta limitations. |
+| Current release | [0.3.0-rc.1](https://github.com/groove-max/ha-eybond-local/releases/tag/v0.3.0-rc.1) | You want the tested 0.3 release snapshot; it remains an RC with documented qualification limits. No beta switch is required. |
+| Older releases | [0.1.53](https://github.com/groove-max/ha-eybond-local/releases/tag/v0.1.53), [0.3.0-beta.5](https://github.com/groove-max/ha-eybond-local/releases/tag/v0.3.0-beta.5) | You deliberately need a historical version; newer fixes are absent. |
 | Current `main` | Unreleased 0.3 development | A maintainer asks you to check a newer fix, or you deliberately choose development code. |
 | Cloud Bridge 0.4 | Separate development | Not part of these installation instructions or the public 0.3 feature set. |
 
-GitHub's **Latest release** excludes prereleases and currently opens 0.1.53.
-The `main` manifest may still say beta.5 even though its code is newer: record
-the commit as well as the version when reporting a test. These guides describe
-current 0.3 development; do not assume every feature is in published beta.5.
-Check the [release list](https://github.com/groove-max/ha-eybond-local/releases)
-for subsequent publications and their compatibility notes.
+GitHub's **Latest release** points to RC1. It is deliberately published without
+the prerelease flag so HACS can offer it in the ordinary release channel. The
+name still means release candidate, not final 0.3.0; read its known limitations.
+
+RC1 is not a superset of newer `main` snapshots. Experimental 099E/VPHB telemetry,
+new Anenji 4200 controls from #88 and query-only BLE inspection remain on `main`.
+If you installed `main` for those features, keep that build rather than replace
+it with RC1. The `main` manifest may still say beta.5: report the commit/source
+ID as well as the version. These guides can describe newer development features;
+check the [release notes](https://github.com/groove-max/ha-eybond-local/releases)
+for the scope of your installed version.
 
 ## Install with HACS
 
 1. Install HACS separately if you do not already use it.
 2. Open HACS, then **Custom repositories** in its menu.
 3. Add `https://github.com/groove-max/ha-eybond-local`, category **Integration**.
-4. Find **EyeBond Local**, select the intended version and download it. If the
-   beta is hidden, enable prerelease/beta versions in the version dialog.
+4. Find **EyeBond Local**, select the intended version and download it. RC1 does
+   not require enabling beta versions; older prereleases may need that option.
 5. Restart Home Assistant, then **Settings → Devices & Services → Add Integration → EyeBond Local**.
 
 [Open repository in HACS](https://my.home-assistant.io/redirect/hacs_repository/?owner=groove-max&repository=ha-eybond-local&category=integration).

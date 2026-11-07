@@ -5,7 +5,7 @@ Local monitoring and supported controls for solar inverters with **EyeBond-compa
 [Українська](README.uk.md) · [Documentation](https://groove-max.github.io/ha-eybond-local/en/) · [Compatibility](docs/user/COMPATIBILITY.md) · [Get help](docs/user/SUPPORT_ARCHIVE.md)
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=groove-max&repository=ha-eybond-local&category=integration)
-[![Stable release](https://img.shields.io/github/v/release/groove-max/ha-eybond-local?label=stable)](https://github.com/groove-max/ha-eybond-local/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/groove-max/ha-eybond-local?label=latest)](https://github.com/groove-max/ha-eybond-local/releases/latest)
 [![Release including prereleases](https://img.shields.io/github/v/release/groove-max/ha-eybond-local?include_prereleases&label=including%20prereleases)](https://github.com/groove-max/ha-eybond-local/releases)
 [![Validate](https://github.com/groove-max/ha-eybond-local/actions/workflows/validate.yml/badge.svg)](https://github.com/groove-max/ha-eybond-local/actions/workflows/validate.yml)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](LICENSE)
@@ -36,7 +36,7 @@ Normal local readings do not require a cloud login. Keeping Cloud + Home Assista
 
 ## Installation
 
-**Choose a channel before downloading.** The current published 0.3 beta is **0.3.0-beta.5**; GitHub's “Latest release” link currently points to the older stable **0.1.53**. Newer fixes on `main` are not automatically part of beta.5. [Release channels and safe updates →](docs/user/INSTALLATION.md)
+**Choose a channel before downloading.** **0.3.0-rc.1** is the latest normal GitHub release and is available in HACS without enabling beta versions. It remains a release candidate with documented testing limits. Newer experimental features on `main` are not automatically part of RC1. [Release channels and safe updates →](docs/user/INSTALLATION.md)
 
 1. Add this repository to **HACS → Custom repositories**, category **Integration**.
 2. Download the intended published version. For a beta, enable prerelease versions in the download/version dialog if needed.

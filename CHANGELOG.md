@@ -7,19 +7,25 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
-## [0.3.0-rc.1]
+## [0.3.0-rc.1] - 2026-11-07
 
 ### Candidate scope and updating
 
-This section prepares a release candidate; it does not announce a published
-release. Publication follows candidate acceptance and an explicit release
-decision. This is the 0.3 line and **does not include Cloud Bridge 0.4**.
+This **release candidate** is deliberately published as a normal GitHub release
+(not a prerelease), so it is available through the ordinary HACS release channel
+without enabling beta versions. The distribution choice does not make it a
+final 0.3.0 release or remove the qualification limits below. This is the 0.3
+line and **does not include Cloud Bridge 0.4**.
 
 The candidate collects the fixes since beta.5: collector identity and recovery,
 shared-listener lifecycle, routed/NAT setup, PI30 settings/flag compatibility,
 dynamic controls, polling load, Shadow Learning and support diagnostics.
 Support and validation remain specific to the collector, protocol and firmware.
 
+- Automated validation covers Home Assistant 2026.2 and 2026.9. Startup, entry
+  reloads, configuration preservation and local telemetry recovery were also
+  checked on a Home Assistant 2026.10.2 bench. These checks do not qualify every
+  collector firmware, inverter profile or cloud-learning combination.
 - Update the complete integration directory and fully restart HA. Keep existing
   entries; deleting/re-adding is not an upgrade step. Preserve entity IDs used by
   automations. Do not leave backup component copies under `custom_components`.
@@ -40,8 +46,13 @@ Support and validation remain specific to the collector, protocol and firmware.
   tests; confirmation of the published fix on the reporting user's device is
   still pending (#64). Keep the correct model profile and any deliberate flag-case
   override. This is not automatic detection of every PI30 firmware's flag format.
-- A GitHub prerelease, including RC1, does not replace the stable release in the
-  default HACS channel. The subsequent ordinary 0.3.0 release is a separate step.
+- This is a frozen release, not a copy of the newest `main`. Experimental
+  099E/VPHB telemetry, the newer Anenji 4200 controls from #88 and the query-only
+  BLE inspection tools on `main` are not included. If you installed a newer
+  `main` snapshot for those features, keep that snapshot rather than treating
+  RC1 as its upgrade. Report the installed build ID, not just the version label.
+- GitHub **Latest release** now points to RC1 instead of the older 0.1.53.
+  A subsequent final 0.3.0 release remains a separate publication decision.
 
 ### Added
 
