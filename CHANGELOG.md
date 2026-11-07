@@ -54,6 +54,23 @@ Support and validation remain specific to the collector, protocol and firmware.
 
 ### Changed
 
+- Preserve a partially read frame when a pending callback is handed to its
+  runtime, and resume socket observation if a claim is cancelled (#81). Recheck
+  named ownership after the handoff wait, including shortened heartbeat PNs;
+  an unrelated collector's owner does not block a qualified legacy IP route.
+  These are specific routing/recovery fixes, not a claim that every malformed
+  frame or local/cloud coexistence outage is resolved.
+
+- Finish BLE connection cleanup after failed setup, unsubscribe errors and
+  cancellation. Do not reuse a disconnected client or deliver notifications
+  from an earlier session into a new one. This repairs the existing BLE Wi-Fi
+  setup path; it does not add BLE inverter operation or the 0.4 setup workflow.
+
+- Make number, select and switch availability follow the same editability
+  conditions as the existing write guard. Disabled controls no longer look
+  usable in an incompatible operating state; warning-only conditions remain
+  usable. No new device controls or model-specific limits are included here.
+
 - Do not send application commands to an unidentified silent callback socket
   merely because it shares a configured collector IP (#81). Keep that socket
   watched until it presents protocol/identity evidence or an explicit onboarding

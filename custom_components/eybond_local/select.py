@@ -251,7 +251,8 @@ class EybondCapabilitySelect(CoordinatorEntity[EybondLocalCoordinator], SelectEn
             return False
         if not self.coordinator.can_expose_capability(self._capability):
             return False
-        return self._capability.runtime_state(snapshot.runtime_values()).visible
+        state = self._capability.runtime_state(snapshot.runtime_values())
+        return state.visible and state.editable
 
     @property
     def current_option(self) -> str | None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 from collections.abc import Awaitable, Callable, Iterable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum
 import logging
@@ -124,6 +125,7 @@ _DEFAULT_WIFI_SCAN_PREFLIGHT_DELAY = 0.5
 _DEFAULT_ANDROID_BLE_TEXT_TIMEOUT = 4.0
 _DEFAULT_ESTABLISH_CONNECTION_TIMEOUT = 8.0
 _DEFAULT_REFRESH_DEVICE_LOOKUP_TIMEOUT = 2.0
+_BLE_CLEANUP_TIMEOUT = 5.0
 _BLE_READ_QUERY_ATTEMPTS = 4
 _VENDOR_NOTIFY_POLL_TIMEOUT = 0.25
 _VENDOR_FRAGMENT_SETTLE_TIMEOUT = 0.5
@@ -774,7 +776,7 @@ async def _default_bleak_connect_client(
                 type(client).__name__,
                 _ble_device_log_summary(fresh_device) if fresh_device is not None else address,
             )
-            await client.connect()
+            await _connect_ble_client(client)
             logger.info(
                 "SmartESS BLE default connect complete address=%s phase=%s elapsed=%.2fs client_type=%s",
                 address,
@@ -793,7 +795,7 @@ async def _default_bleak_connect_client(
                 address,
                 type(client).__name__,
             )
-            await client.connect()
+            await _connect_ble_client(client)
             logger.info(
                 "SmartESS BLE default connect complete address=%s phase=%s elapsed=%.2fs client_type=%s",
                 address,
@@ -1027,6 +1029,41 @@ class BleakSmartEssBleScanner:
         return tuple(deduped.values())
 
 
+async def _finish_ble_cleanup(awaitable: Awaitable[None]) -> None:
+    """Join bounded cleanup through repeated caller cancellation; leave no orphan."""
+
+    task = asyncio.ensure_future(awaitable)
+    cancelled: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            # wait does not transfer waiter cancellation to the owned cleanup.
+            await asyncio.wait((task,))
+        except asyncio.CancelledError as exc:
+            cancelled = cancelled or exc
+    if cancelled is not None:
+        with suppress(Exception, asyncio.CancelledError):
+            task.result()
+        raise cancelled
+    task.result()
+
+
+async def _disconnect_ble_client(client: _BleakClientLike) -> None:
+    await asyncio.wait_for(client.disconnect(), timeout=_BLE_CLEANUP_TIMEOUT)
+
+
+async def _connect_ble_client(client: _BleakClientLike) -> None:
+    """Own a directly constructed client even if connect only partly succeeds."""
+
+    try:
+        await client.connect()
+    except BaseException:
+        try:
+            await _finish_ble_cleanup(_disconnect_ble_client(client))
+        except Exception as exc:
+            logger.warning("SmartESS BLE failed-connect cleanup failed: %s", type(exc).__name__)
+        raise
+
+
 class BleakSmartEssBleLink:
     """Thin adapter from the session link protocol to one Bleak-style client."""
 
@@ -1059,8 +1096,13 @@ class BleakSmartEssBleLink:
             else None
         )
         self._client: _BleakClientLike | None = None
+        self._lifecycle_lock = asyncio.Lock()
 
     async def connect(self) -> Sequence[str]:
+        async with self._lifecycle_lock:
+            return await self._connect_locked()
+
+    async def _connect_locked(self) -> Sequence[str]:
         loop = asyncio.get_running_loop()
         started_at = loop.time()
         phase = "reuse_client"
@@ -1130,12 +1172,24 @@ class BleakSmartEssBleLink:
                 exc,
                 _ble_device_log_summary(self._device),
             )
+            try:
+                await self._disconnect_locked()
+            except Exception as cleanup_error:
+                logger.warning(
+                    "SmartESS BLE failed-connect cleanup failed: %s",
+                    type(cleanup_error).__name__,
+                )
             raise
 
     async def disconnect(self) -> None:
+        async with self._lifecycle_lock:
+            await self._disconnect_locked()
+
+    async def _disconnect_locked(self) -> None:
         if self._client is None:
             return
-        await self._client.disconnect()
+        client, self._client = self._client, None
+        await _finish_ble_cleanup(_disconnect_ble_client(client))
 
     async def start_notify(self, characteristic_uuid: str, callback: Callable[[bytes], None]) -> None:
         if self._client is None:
@@ -1170,6 +1224,8 @@ class SmartEssBleSession:
         self._layout: SmartEssBleUuidLayout | None = None
         self._connected = False
         self._notifications: asyncio.Queue[bytes] = asyncio.Queue()
+        self._lifecycle_lock = asyncio.Lock()
+        self._notify_generation: object | None = None
 
     @property
     def connected(self) -> bool:
@@ -1188,30 +1244,63 @@ class SmartEssBleSession:
     async def connect(self) -> SmartEssBleUuidLayout:
         """Connect the BLE link, negotiate UUIDs, and subscribe to notify."""
 
+        async with self._lifecycle_lock:
+            return await self._connect_locked()
+
+    async def _connect_locked(self) -> SmartEssBleUuidLayout:
         if self._connected and self._layout is not None:
             return self._layout
 
-        service_uuids = await self._link.connect()
-        self._layout = choose_ble_uuid_layout(service_uuids)
-        logger.info(
-            "SmartESS BLE session connected service_uuids=%s selected_layout=%s",
-            tuple(service_uuids),
-            self._layout.name,
-        )
-        self._drain_notifications()
-        await self._link.start_notify(self._layout.notify_uuid, self._handle_notification)
-        self._connected = True
-        return self._layout
+        try:
+            service_uuids = await self._link.connect()
+            self._layout = choose_ble_uuid_layout(service_uuids)
+            logger.info(
+                "SmartESS BLE session connected service_uuids=%s selected_layout=%s",
+                tuple(service_uuids),
+                self._layout.name,
+            )
+            self._drain_notifications()
+            generation = self._notify_generation = object()
+
+            def notify(payload: bytes) -> None:
+                if generation is self._notify_generation:
+                    self._handle_notification(payload)
+
+            await self._link.start_notify(self._layout.notify_uuid, notify)
+            self._connected = True
+            return self._layout
+        except BaseException:
+            try:
+                await self._disconnect_locked()
+            except Exception as cleanup_error:
+                logger.warning(
+                    "SmartESS BLE partial-session cleanup failed: %s",
+                    type(cleanup_error).__name__,
+                )
+            raise
 
     async def disconnect(self) -> None:
         """Disconnect the BLE link and clear any buffered notifications."""
 
-        if self._connected and self._layout is not None:
-            await self._link.stop_notify(self._layout.notify_uuid)
-        await self._link.disconnect()
+        async with self._lifecycle_lock:
+            await self._disconnect_locked()
+
+    async def _disconnect_locked(self) -> None:
+        layout, self._layout = self._layout, None
         self._connected = False
-        self._layout = None
+        self._notify_generation = None
         self._drain_notifications()
+
+        async def cleanup() -> None:
+            try:
+                if layout is not None:
+                    await asyncio.wait_for(
+                        self._link.stop_notify(layout.notify_uuid), timeout=_BLE_CLEANUP_TIMEOUT
+                    )
+            finally:
+                await asyncio.wait_for(self._link.disconnect(), timeout=_BLE_CLEANUP_TIMEOUT)
+
+        await _finish_ble_cleanup(cleanup())
 
     async def send_bytes(self, payload: bytes, *, response: bool = False) -> None:
         """Write one raw payload using the negotiated write characteristic."""

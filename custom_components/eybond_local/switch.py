@@ -75,7 +75,8 @@ class EybondCapabilitySwitch(CoordinatorEntity[EybondLocalCoordinator], SwitchEn
             return False
         if not any(cap.key == self._capability.key for cap in inverter.capabilities):
             return False
-        return self._capability.runtime_state(snapshot.runtime_values()).visible
+        state = self._capability.runtime_state(snapshot.runtime_values())
+        return state.visible and state.editable
 
     @property
     def is_on(self) -> bool | None:

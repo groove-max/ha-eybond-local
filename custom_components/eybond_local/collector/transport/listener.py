@@ -1420,26 +1420,51 @@ class _SharedEybondListener:
                 presented_strong = bool(
                     presented_pn and identity_source_is_strong(presented_source)
                 )
-                pn_owner_registered = any(
-                    count > 0
+                presented_pn_owned = any(
+                    self._has_owner_for_collector_pn(counts, presented_pn)
                     for counts in (self._payload_pn_owner_counts, self._at_pn_owner_counts)
-                    for count in counts.values()
                 )
-                if presented_strong and pn_owner_registered:
+                if presented_pn_owned:
                     # Named owners use the PN/session paths, never an IP-only
                     # shortcut that could take another collector behind NAT.
+                    # Only an owner of THIS socket's PN matters, weak or strong.
                     return None
-                presented_framed = (
-                    _classify_initial_protocol_shape(pending.initial_bytes) == "eybond_framed"
-                    or str(getattr(entry, "protocol_shape", "") or "") == "eybond_framed"
+                presented_wire = (
+                    _classify_initial_protocol_shape(pending.initial_bytes)
+                    in {"eybond_framed", "at_text"}
+                    or str(getattr(entry, "protocol_shape", "") or "")
+                    in {"eybond_framed", "at_text"}
                 )
-                if not presented_strong and not presented_framed:
+                if not presented_strong and not presented_wire:
                     # Do not pause the watcher or probe on behalf of an
                     # application send. Explicit identity probes retain their
                     # exact-session authority through the branch above.
                     return None
                 await self._pause_pending_sniff(pending)
                 if not self._pending_socket_still_registered(pending):
+                    return None
+                # Owner registration does not take _pending_route_lock, so an
+                # owner of this PN may have appeared during the drain.
+                entry = self._session_inventory.get(pending.session_id)
+                presented_pn = str(getattr(entry, "collector_pn", "") or "").strip()
+                presented_source = str(
+                    getattr(entry, "collector_identity_source", "") or ""
+                ).strip()
+                presented_strong = bool(
+                    presented_pn and identity_source_is_strong(presented_source)
+                )
+                presented_pn_owned = any(
+                    self._has_owner_for_collector_pn(counts, presented_pn)
+                    for counts in (self._payload_pn_owner_counts, self._at_pn_owner_counts)
+                )
+                presented_wire = (
+                    _classify_initial_protocol_shape(pending.initial_bytes)
+                    in {"eybond_framed", "at_text"}
+                    or str(getattr(entry, "protocol_shape", "") or "")
+                    in {"eybond_framed", "at_text"}
+                )
+                if presented_pn_owned or (not presented_strong and not presented_wire):
+                    self._resume_pending_watch(pending)
                     return None
                 return self._claim_pending_socket(pending)
 
@@ -1482,27 +1507,35 @@ class _SharedEybondListener:
                 ):
                     self._resume_pending_watch(pending)
                     continue
-                await self._pause_pending_sniff(pending)
-                if not self._pending_socket_still_registered(pending):
-                    continue
-                pending_pn = await self._identify_pending_socket_for_route(
-                    pending,
-                    session_protocol=session_protocol,
-                )
-                if not self._pending_socket_still_registered(pending):
-                    continue
-                if self._collector_pn_matches(normalized_pn, pending_pn):
-                    return self._claim_pending_socket(pending)
-                if pending_pn:
-                    # This requester is not the owner; the socket may still be
-                    # perfectly valid for another entry on the shared listener.
-                    # Do not poison its observed identity for the domain registry.
-                    self._mark_session_state(pending.session_id, "identified")
-                else:
-                    self._mark_session_state(pending.session_id, "waiting_for_route_identity")
-                # The pause above cancelled the sniff task; the socket stays
-                # registered for another claimant, so it needs a watcher again.
-                self._resume_pending_watch(pending)
+                try:
+                    await self._pause_pending_sniff(pending)
+                    if not self._pending_socket_still_registered(pending):
+                        continue
+                    pending_pn = await self._identify_pending_socket_for_route(
+                        pending,
+                        session_protocol=session_protocol,
+                    )
+                    if not self._pending_socket_still_registered(pending):
+                        continue
+                    if self._collector_pn_matches(normalized_pn, pending_pn):
+                        return self._claim_pending_socket(pending)
+                    if pending_pn:
+                        # This requester is not the owner; the socket may still be
+                        # perfectly valid for another entry on the shared listener.
+                        # Do not poison its observed identity for the domain registry.
+                        self._mark_session_state(pending.session_id, "identified")
+                    else:
+                        self._mark_session_state(
+                            pending.session_id, "waiting_for_route_identity",
+                        )
+                    # The pause above cancelled the sniff task; the socket stays
+                    # registered for another claimant, so it needs a watcher again.
+                    self._resume_pending_watch(pending)
+                except asyncio.CancelledError:
+                    # Identify sits after the pause. A cancel there must not
+                    # leave the socket registered with nobody watching it.
+                    self._resume_pending_watch(pending)
+                    raise
             return None
 
     def closed_collector_session_ids(self) -> frozenset[str]:
@@ -1743,6 +1776,7 @@ class _SharedEybondListener:
                 continue
         await drain_task
         if parent_cancelled:
+            self._resume_pending_watch(pending)
             raise asyncio.CancelledError
 
     def _collector_pn_matches(self, expected_pn: str, observed_pn: str) -> bool:
@@ -2443,6 +2477,10 @@ class _SharedEybondListener:
                             pending.reader.readexactly(frame_len - len(chunk)),
                             timeout=0.5,
                         )
+                    except asyncio.CancelledError:
+                        # A claimer replays initial_bytes; it must start at the frame header.
+                        pending.initial_bytes = chunk + pending.initial_bytes
+                        raise
                     except asyncio.IncompleteReadError as exc:
                         chunk += exc.partial
                         return chunk, True
