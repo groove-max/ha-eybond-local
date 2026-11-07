@@ -617,11 +617,22 @@ def _merge_raw_profile(
             if str(item.get("key", "")) not in capability_removals
         ]
     merged["capabilities"] = merged_capabilities
-    merged["presets"] = _merge_keyed_list(
+    merged_presets = _merge_keyed_list(
         base.get("presets", []),
         overlay.get("presets", []),
         key_field="key",
     )
+    preset_removals = _parse_key_removals(
+        overlay.get("preset_removals", ()), kind="preset",
+    )
+    unknown_presets = preset_removals - {
+        str(item.get("key", "")) for item in merged_presets
+    }
+    if unknown_presets:
+        raise ValueError("unknown_preset_removal:" + ",".join(sorted(unknown_presets)))
+    merged["presets"] = [
+        item for item in merged_presets if str(item.get("key", "")) not in preset_removals
+    ]
     merged["conditions"] = {
         **base.get("conditions", {}),
         **overlay.get("conditions", {}),
@@ -632,6 +643,7 @@ def _merge_raw_profile(
             "capability_defaults",
             "capability_templates",
             "capability_removals",
+            "preset_removals",
             "groups",
             "capabilities",
             "presets",
@@ -645,16 +657,22 @@ def _merge_raw_profile(
 def _parse_capability_removals(raw: Any) -> set[str]:
     """Return strict capability keys removed by one profile overlay."""
 
+    return _parse_key_removals(raw, kind="capability")
+
+
+def _parse_key_removals(raw: Any, *, kind: str) -> set[str]:
+    """Validate explicit removals without changing additive empty-list inheritance."""
+
     if raw in (None, (), []):
         return set()
     if not isinstance(raw, (list, tuple)):
-        raise ValueError("invalid_capability_removals")
+        raise ValueError(f"invalid_{kind}_removals")
     removals: set[str] = set()
     for item in raw:
         if type(item) is not str or not item or item != item.strip():
-            raise ValueError(f"invalid_capability_removal:{item!r}")
+            raise ValueError(f"invalid_{kind}_removal:{item!r}")
         if item in removals:
-            raise ValueError(f"duplicate_capability_removal:{item}")
+            raise ValueError(f"duplicate_{kind}_removal:{item}")
         removals.add(item)
     return removals
 

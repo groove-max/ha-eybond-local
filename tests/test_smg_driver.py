@@ -2005,15 +2005,15 @@ class SmgFamilyFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.details["device_type"], 0x3501)
         self.assertEqual(inverter.details["rated_power"], 4200)
         self.assertNotIn("max_discharge_current_protection", inverter.details)
-        self.assertEqual(len(inverter.capabilities), 30)
-        self.assertEqual(len(inverter.capability_presets), 2)
+        self.assertEqual(len(inverter.capabilities), 37)
+        self.assertEqual(len(inverter.capability_presets), 0)
         charge_source_priority = next(
             capability
             for capability in inverter.capabilities
             if capability.key == "charge_source_priority"
         )
         self.assertFalse(charge_source_priority.tested)
-        self.assertNotIn(
+        self.assertIn(
             "low_dc_cutoff_soc",
             {capability.key for capability in inverter.capabilities},
         )

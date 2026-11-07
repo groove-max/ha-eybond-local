@@ -455,6 +455,27 @@ The profile should carry:
 - presets and recommendations
 - support annotations such as `validation_state`, `support_tier`, and `support_notes`
 
+Profile overlays merge capability and preset lists by key; an empty list means
+no changes, not removal. Use `capability_removals` or `preset_removals` with exact
+inherited keys to remove entries for one model. Unknown or duplicate removal
+keys are errors, and descendants may explicitly reintroduce an entry.
+
+A model may override a template's `value_kind` without adding a second capability
+key. Explicitly clear incompatible inherited fields (for example `divisor: null`
+when replacing a scaled number with an enum). If the schema already supplies a
+numeric measurement under that key, give the enum a separate `read_key`; SMG's
+shared capability readback then decodes the same polled register for the selector
+without replacing the measurement or adding another poll. Existing HA setup
+reconciles obsolete platform entities after confirmed device identification.
+Changing number to select changes the entity domain: dependent automations must
+be reviewed; user-disabled unrelated entities must stay disabled.
+
+Use an exact `editable_if` condition for hard device restrictions, not a broad
+safety hint such as `configuration_safe_mode`. Number, select, switch and action
+entities become unavailable when editing is blocked. Warning-only conditions
+remain advisory. A `visible_if` condition makes an already registered entity
+unavailable, not dynamically removed from HA's device page.
+
 The register schema should carry:
 
 - read-side field layouts

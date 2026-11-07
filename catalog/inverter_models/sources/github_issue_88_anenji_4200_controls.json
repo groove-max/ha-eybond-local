@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_88_anenji_4200_controls",
+  "kind": "github_issue",
+  "title": "Single-output Anenji 4200 24 V control report",
+  "reference": "project-issue:88",
+  "captured_at": "2026-11-07",
+  "visibility": "public",
+  "summary": "Owner reports LCD/read/write comparisons on a single-output April 2025 24 V unit, layout 1 and model 0x3501, with Li4/BMS. The model overlay adds reported settings at 330, 338, 339, 341-343 and 351, discrete nominal output choices and SUF. This is user-reported evidence, not a maintainer hardware test or evidence for the distinct layout-11 4200 variant. Battery-type write function, immediate equalization, conflicting voltage limits and unknown program registers still need clarification.",
+  "assertions": [
+    "control_behavior",
+    "write_validation"
+  ]
+}

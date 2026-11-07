@@ -155,8 +155,8 @@ class ProfileLoaderTests(unittest.TestCase):
             )
         )
         self.assertEqual(len(profile.groups), 4)
-        self.assertEqual(len(profile.capabilities), 30)
-        self.assertEqual(len(profile.presets), 2)
+        self.assertEqual(len(profile.capabilities), 37)
+        self.assertEqual(len(profile.presets), 0)
         self.assertEqual(sum(capability.tested for capability in profile.capabilities), 0)
         self.assertFalse(profile.get_capability("charge_source_priority").tested)
         self.assertEqual(profile.get_capability("charge_source_priority").register, 331)
@@ -164,7 +164,7 @@ class ProfileLoaderTests(unittest.TestCase):
             profile.get_capability("power_saving_mode").resolved_support_tier,
             "standard",
         )
-        self.assertEqual(profile.get_capability("power_saving_mode").support_notes, "")
+        self.assertIn("issue #88", profile.get_capability("power_saving_mode").support_notes)
         for key in (
             "battery_bulk_voltage",
             "battery_float_voltage",
@@ -178,8 +178,7 @@ class ProfileLoaderTests(unittest.TestCase):
             self.assertIsNone(capability.minimum, key)
             self.assertIsNone(capability.maximum, key)
             self.assertEqual(capability.divisor, 10, key)
-        with self.assertRaises(KeyError):
-            profile.get_capability("low_dc_cutoff_soc")
+        self.assertEqual(profile.get_capability("low_dc_cutoff_soc").register, 343)
 
     def test_loads_anenji_op2_profile_overlay_with_bitmask_capability(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
@@ -1266,6 +1265,34 @@ class ProfileLoaderTests(unittest.TestCase):
             with self.subTest(reason=reason):
                 with self.assertRaisesRegex(ValueError, reason):
                     profile_loader._merge_raw_profile(base, overlay)
+
+    def test_preset_removal_is_explicit_and_can_be_reintroduced(self) -> None:
+        base = {"presets": [{"key": "keep"}, {"key": "remove"}]}
+        inherited = profile_loader._merge_raw_profile(base, {"presets": []})
+        self.assertEqual(inherited["presets"], base["presets"])
+        narrowed = profile_loader._merge_raw_profile(
+            base, {"preset_removals": ["remove"]},
+        )
+        self.assertEqual(narrowed["presets"], [{"key": "keep"}])
+        self.assertNotIn("preset_removals", narrowed)
+        child = profile_loader._merge_raw_profile(
+            narrowed, {"presets": [{"key": "remove", "title": "Model preset"}]},
+        )
+        self.assertEqual(len(child["presets"]), 2)
+        self.assertEqual(child["presets"][1]["title"], "Model preset")
+        self.assertEqual(len(base["presets"]), 2)
+
+    def test_preset_removals_reject_invalid_duplicate_and_unknown_keys(self) -> None:
+        base = {"presets": [{"key": "known"}]}
+        for raw, reason in (
+            ("known", "invalid_preset_removals"),
+            ([" known"], "invalid_preset_removal"),
+            ([1], "invalid_preset_removal"),
+            (["known", "known"], "duplicate_preset_removal:known"),
+            (["missing"], "unknown_preset_removal:missing"),
+        ):
+            with self.subTest(raw=raw), self.assertRaisesRegex(ValueError, reason):
+                profile_loader._merge_raw_profile(base, {"preset_removals": raw})
 
 
 if __name__ == "__main__":

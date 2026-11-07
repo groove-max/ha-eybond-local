@@ -151,6 +151,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Validation: hardware captured, telemetry confirmed, controls partial
 - Coverage: runtime device_scoped_overlay, cloud device_scoped_overlay, vendor map documented
   - Coverage notes:
+    - Issue #88 adds a model-scoped, still-untested built-in overlay from the single-output 24 V owner's LCD/control report. It does not promote the layout-11 Anenji 4200 or all 0925 devices.
     - The common runtime surface comes from the documented classic SMG RS232 V1 map; the observed register-184 value 1 is separate runtime identity evidence.
     - Full cloud shadow-learning correlated 77 cloud write attempts and activated eight device-scoped learned controls; writes were captured but intentionally not applied.
 - Summary: Anenji 4200 Protocol 1 variant has user support captures from an ANJ-4000W-24V device. Runtime detection resolves exactly to the SMG Protocol 1 surface, read telemetry is confirmed, and a full shadow-learning run mapped the SmartESS 0925 write surface without leaking writes to the real inverter. Treat controls as partial until specific Home Assistant writes are user-validated.
@@ -161,11 +162,12 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `anenji_4200` → surface `anenji_4200_protocol_1_full` (driver modbus_smg, variant anenji_4200_protocol_1)
       - Protocol: modbus_smg | Detection: fingerprint (layout 1, model 13569, rated 4200)
       - Tier: full | Read-only: no | Profile: modbus_smg/models/anenji_4200_protocol_1.json | Schema: modbus_smg/models/anenji_4200_protocol_1.json
-      - Capabilities: 30 (untested 30); support tiers: conditional 21, standard 9 | Telemetry: 100 measurements, 18 binary sensors
+      - Capabilities: 37 (untested 37); support tiers: conditional 25, standard 12 | Telemetry: 100 measurements, 18 binary sensors
 - Known limitations:
+  - Issue #88 nominal output voltage/frequency controls are selectors and editable only in Standby; existing number entities are replaced. Equalization controls are unavailable for lithium. Battery-type writes and immediate equalization are not added from the ambiguous patch.
   - Runtime telemetry is confirmed by user support archives.
   - Full shadow-learning completed and activated eight device-scoped learned controls; the learning proxy intentionally captured but did not apply cloud writes, so direct Home Assistant write/readback validation is still pending.
-- Evidence: 6 source(s)
+- Evidence: 7 source(s)
 
 ### Anenji — ANJ-6200-48PL (`anenji_anj_6200_48pl`)
 

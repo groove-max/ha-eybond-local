@@ -5,9 +5,276 @@
   "driver_key": "modbus_smg",
   "protocol_family": "modbus_smg",
   "capability_defaults": {
-    "support_tier": ""
+    "support_tier": "",
+    "support_notes": "Model-specific additions are based on the single-output 24 V, layout 1 / model 0x3501 report in issue #88. Maintainer hardware validation is pending; inherited untested status is retained."
+  },
+  "preset_removals": [
+    "off_grid_self_consumption",
+    "hybrid_pv_with_grid_backup"
+  ],
+  "conditions": {
+    "anenji_standby_only": {
+      "key": "operating_mode",
+      "operator": "eq",
+      "value": "Standby",
+      "effect": "disable",
+      "reason": "This model accepts nominal output voltage/frequency changes only in Standby."
+    },
+    "anenji_user_battery": {
+      "key": "battery_type",
+      "operator": "eq",
+      "value": "User",
+      "effect": "disable",
+      "reason": "Program 32 is available with User-defined battery type."
+    },
+    "anenji_equalization_battery": {
+      "key": "battery_type",
+      "operator": "in",
+      "value": [
+        "Flooded",
+        "User"
+      ],
+      "effect": "hide",
+      "reason": "Equalization settings apply only to Flooded or User battery type, not lithium."
+    }
   },
   "capabilities": [
+    {
+      "key": "output_source_priority",
+      "choices": [
+        {
+          "value": 0,
+          "label": "Utility First (UTI)"
+        },
+        {
+          "value": 1,
+          "label": "Solar First (SOL)"
+        },
+        {
+          "value": 2,
+          "label": "Solar-Battery-Utility (SBU)"
+        },
+        {
+          "value": 3,
+          "label": "Solar-Utility-Battery (SUB)"
+        },
+        {
+          "value": 4,
+          "label": "SUF"
+        }
+      ],
+      "note": "Program 01: value 4 (SUF) reported against LCD on the single-output 24 V 0x3501 / protocol 1 unit in issue #88. No mode change is performed automatically."
+    },
+    {
+      "key": "charge_source_priority",
+      "choices": [
+        {
+          "value": 1,
+          "label": "PV Priority"
+        },
+        {
+          "value": 2,
+          "label": "PV and Utility"
+        },
+        {
+          "value": 3,
+          "label": "PV Only"
+        }
+      ],
+      "note": "Program 16: CSO / SNU / OSO reported in issue #88. This model does not expose Utility Priority."
+    },
+    {
+      "key": "output_rating_voltage",
+      "value_kind": "enum",
+      "divisor": null,
+      "multiplier": null,
+      "minimum": null,
+      "maximum": null,
+      "unit": null,
+      "device_class": null,
+      "read_key": "output_rating_voltage_setting",
+      "choices": [
+        {
+          "value": 2200,
+          "label": "220 V"
+        },
+        {
+          "value": 2300,
+          "label": "230 V"
+        },
+        {
+          "value": 2400,
+          "label": "240 V"
+        }
+      ],
+      "editable_if": [
+        "anenji_standby_only"
+      ],
+      "note": "Program 08: discrete LCD choices, writable only in Standby according to issue #88. The numeric measurement remains separate from this selector."
+    },
+    {
+      "key": "output_rating_frequency",
+      "value_kind": "enum",
+      "divisor": null,
+      "multiplier": null,
+      "minimum": null,
+      "maximum": null,
+      "unit": null,
+      "device_class": null,
+      "read_key": "output_rating_frequency_setting",
+      "choices": [
+        {
+          "value": 5000,
+          "label": "50 Hz"
+        },
+        {
+          "value": 6000,
+          "label": "60 Hz"
+        }
+      ],
+      "editable_if": [
+        "anenji_standby_only"
+      ],
+      "note": "Program 09: discrete LCD choices, writable only in Standby according to issue #88. The numeric measurement remains separate from this selector."
+    },
+    {
+      "key": "automatic_mains_output_enabled",
+      "register": 338,
+      "value_kind": "enum",
+      "title": "Automatic Mains Output",
+      "group": "system",
+      "order": 150,
+      "enabled_default": false,
+      "advanced": true,
+      "requires_confirm": true,
+      "choices": [
+        {
+          "value": 0,
+          "label": "Manual"
+        },
+        {
+          "value": 1,
+          "label": "Auto"
+        }
+      ],
+      "note": "Program 10: nnL / AtO. Reported on the single-output Anenji 4200 in issue #88; Auto can supply utility to the load with the inverter power switch off."
+    },
+    {
+      "key": "constant_voltage_to_float_time",
+      "register": 330,
+      "value_kind": "u16",
+      "title": "Constant Voltage to Float Time",
+      "unit": "min",
+      "minimum": 0,
+      "maximum": 900,
+      "step": 5,
+      "group": "battery",
+      "order": 260,
+      "enabled_default": false,
+      "advanced": true,
+      "requires_confirm": true,
+      "editable_if": [
+        "anenji_user_battery"
+      ],
+      "note": "Program 32: 0 = AUT; otherwise 5–900 minutes in 5-minute LCD steps, for User battery type, as reported in issue #88."
+    },
+    {
+      "key": "lithium_auto_activation",
+      "register": 339,
+      "value_kind": "enum",
+      "title": "Lithium Automatic Activation",
+      "group": "battery",
+      "order": 280,
+      "enabled_default": false,
+      "advanced": true,
+      "requires_confirm": true,
+      "choices": [
+        {
+          "value": 0,
+          "label": "Disabled"
+        },
+        {
+          "value": 1,
+          "label": "Enabled"
+        }
+      ],
+      "note": "Program 41: nAL / AtO, reported in issue #88. This is automatic activation, not the unconfirmed program 42 manual-activation command."
+    },
+    {
+      "key": "low_dc_protection_soc_grid_mode",
+      "template": "low_dc_protection_soc_grid_mode",
+      "register": 341,
+      "minimum": 5,
+      "maximum": 50,
+      "enabled_default": false,
+      "note": "Program 43: register and limits reported for the 24 V Li4/BMS setup in issue #88. The inverter also validates dependencies on other SOC thresholds."
+    },
+    {
+      "key": "solar_battery_utility_return_soc_threshold",
+      "template": "solar_battery_utility_return_soc_threshold",
+      "register": 342,
+      "minimum": 60,
+      "maximum": 100,
+      "enabled_default": false,
+      "note": "Program 44: register and limits reported for the 24 V Li4/BMS setup in issue #88. The inverter also validates dependencies on other SOC thresholds."
+    },
+    {
+      "key": "low_dc_cutoff_soc",
+      "template": "low_dc_cutoff_soc",
+      "register": 343,
+      "minimum": 3,
+      "maximum": 30,
+      "enabled_default": false,
+      "note": "Program 45: register and limits reported for the 24 V Li4/BMS setup in issue #88. The inverter also validates dependencies on other SOC thresholds."
+    },
+    {
+      "key": "max_discharge_current_protection",
+      "register": 351,
+      "value_kind": "u16",
+      "title": "Maximum Discharge Current Protection",
+      "unit": "A",
+      "group": "battery",
+      "order": 290,
+      "enabled_default": false,
+      "advanced": true,
+      "requires_confirm": true,
+      "note": "Program 46: 0 = OFF, reported in issue #88. No maximum setpoint has been established; only the wire encoding limit is imposed."
+    },
+    {
+      "key": "max_charge_current",
+      "maximum": 1000,
+      "note": "Program 02: up to 100 A (raw tenths), reported for the single-output 24 V unit in issue #88. Must not be less than utility charge current; the inverter validates the combination."
+    },
+    {
+      "key": "max_ac_charge_current",
+      "minimum": 20,
+      "maximum": 800,
+      "note": "Program 11: 2–80 A (raw tenths), reported for the single-output 24 V unit in issue #88. Must not exceed total charge current."
+    },
+    {
+      "key": "battery_equalization_mode",
+      "visible_if": [
+        "anenji_equalization_battery"
+      ]
+    },
+    {
+      "key": "battery_equalization_time",
+      "visible_if": [
+        "anenji_equalization_battery"
+      ]
+    },
+    {
+      "key": "battery_equalization_timeout",
+      "visible_if": [
+        "anenji_equalization_battery"
+      ]
+    },
+    {
+      "key": "battery_equalization_interval",
+      "visible_if": [
+        "anenji_equalization_battery"
+      ]
+    },
     {
       "key": "battery_bulk_voltage",
       "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
@@ -34,6 +301,7 @@
     },
     {
       "key": "battery_equalization_voltage",
+      "visible_if": ["anenji_equalization_battery"],
       "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
     }
   ]

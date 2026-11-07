@@ -55,17 +55,18 @@ class RuntimeInventoryTests(unittest.TestCase):
 
         self.assertEqual(summary["profiles"], len(inventory["profiles"]))
         self.assertEqual(summary["profiles"], 33)
-        self.assertEqual(summary["capabilities"], 1234)
+        self.assertEqual(summary["capabilities"], 1241)
         # The separate PV3300 surface adds 27 controls: four owner-confirmed,
         # 23 untested. The common MUST surface remains wholly untested.
         # Exact Aninerel promotion adds five conditional, untested controls;
         # existing tested counts and all other model profiles stay unchanged.
         # The firmware-scoped PI30 surface inherits 20 existing MAX controls;
         # only its charger-priority enum differs, not validation of other maps.
-        self.assertEqual(summary["validation_state_counts"], {"tested": 458, "untested": 776})
+        # Issue #88 adds seven model-scoped controls, retaining untested status.
+        self.assertEqual(summary["validation_state_counts"], {"tested": 458, "untested": 783})
         self.assertEqual(
             summary["support_tier_counts"],
-            {"blocked": 31, "conditional": 804, "standard": 399},
+            {"blocked": 31, "conditional": 808, "standard": 402},
         )
 
         profile_by_key = {item["profile_key"]: item for item in inventory["profiles"]}
@@ -109,7 +110,7 @@ class RuntimeInventoryTests(unittest.TestCase):
         )
         self.assertEqual(
             profile_by_key["modbus_smg_anenji_4200_protocol_1"]["capabilities"],
-            30,
+            37,
         )
         self.assertEqual(
             profile_by_key["modbus_smg_anenji_anj_5kw_48v_wifi"]["capabilities"],

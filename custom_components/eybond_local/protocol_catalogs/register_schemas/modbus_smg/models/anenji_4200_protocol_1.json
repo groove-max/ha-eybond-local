@@ -5,6 +5,26 @@
   "driver_key": "modbus_smg",
   "protocol_family": "modbus_smg",
   "spec_sets": {
+    "config": [
+      {
+        "key": "output_source_priority",
+        "register": 301,
+        "enum_table": null,
+        "enum_map": {
+          "0": "Utility First (UTI)",
+          "1": "Solar First (SOL)",
+          "2": "Solar-Battery-Utility (SBU)",
+          "3": "Solar-Utility-Battery (SUB)",
+          "4": "SUF"
+        }
+      },
+      {
+        "key": "automatic_mains_output_enabled",
+        "register": 338,
+        "enum_table": null,
+        "enum_map": {"0": "Manual", "1": "Auto"}
+      }
+    ],
     "aux_config": [
       {
         "key": "device_type",

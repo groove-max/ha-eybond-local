@@ -9,12 +9,22 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Add seven model-scoped controls for the single-output Anenji 4200 24 V
+  (layout 1, model 0x3501) from the owner's report in #88, retaining untested
+  status and explicit entity activation. Add SUF and correct its Auto Bypass
+  labels. Use discrete output-voltage/frequency selectors under the existing
+  capability keys, editable only in Standby; obsolete number entities are
+  replaced, so review automations referring to those entities. Do not infer
+  battery-type writes, immediate equalization or unknown activation registers.
+
 - Add a manually selected experimental `EyeBond 099E / VPHB` read-only driver
   for the common status fields investigated in #82. Decode ten measurements
   from strict 78/84-byte replies, retain the complete diagnostic payload, and
   send only one status query per poll. No automatic detection, model inference,
   controls, charge-current guess or derived PV power. Offline replay is covered;
-  field confirmation on Manyi hardware is still pending.
+  #82 now provides partial field corroboration on Manyi hardware. Temperature
+  meanings, the load-percentage basis, inactive input fields and long-term
+  cloud coexistence remain unconfirmed.
 
 - Add an explicit query-only BLE collector inspection to existing entries'
   diagnostic tools, through Home Assistant Bluetooth (local adapter or active
@@ -49,6 +59,12 @@ the GitHub release body should be rendered from the matching version section her
   This does not change collector firmware labels or bypass the required HA restart.
 
 ### Changed
+
+- Apply runtime editability restrictions to number, select and switch entity
+  availability, consistently with actions; warning-only conditions stay advisory.
+  Support explicit model-scoped `preset_removals` without changing the additive
+  meaning of an empty inherited list. Anenji #88 equalization controls become
+  unavailable for lithium rather than being deleted dynamically.
 
 - Separate diagnostic runtime-lock waiting from scenario execution in exported
   timing evidence, and log export/cleanup waiting independently. A fast wire
