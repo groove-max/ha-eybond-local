@@ -7,6 +7,10 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+The following development changes are not part of the frozen 0.3.0-rc.1 release.
+The common connection, BLE lifecycle and editability repairs are recorded under
+RC1 below; newer model features remain here.
+
 ### Added
 
 - Add seven model-scoped controls for the single-output Anenji 4200 24 V
@@ -51,18 +55,9 @@ the GitHub release body should be rendered from the matching version section her
   identity-range masking in shareable results. This does not add a Manyi driver
   or change normal polling; physical-device verification is still needed.
 
-- Identify intermediate integration builds independently of the release label.
-  GitHub source archives carry their commit automatically; raw copies also get
-  a deterministic source fingerprint. Configure, startup logs and Support
-  Archives show the identity captured at startup. Local edits change the source
-  ID without pretending the embedded commit proves an unmodified installation.
-  This does not change collector firmware labels or bypass the required HA restart.
-
 ### Changed
 
-- Apply runtime editability restrictions to number, select and switch entity
-  availability, consistently with actions; warning-only conditions stay advisory.
-  Support explicit model-scoped `preset_removals` without changing the additive
+- Support explicit model-scoped `preset_removals` without changing the additive
   meaning of an empty inherited list. Anenji #88 equalization controls become
   unavailable for lithium rather than being deleted dynamically.
 
@@ -76,24 +71,86 @@ the GitHub release body should be rendered from the matching version section her
   the vendor parser's nominal body. Retain strict known-layout matching; this
   is passive support evidence, not a new Manyi telemetry driver or field map.
 
-- Finish BLE connection cleanup after partial setup, notification errors or
-  cancellation. Bound unsubscribe/disconnect waits, revoke stale clients and
-  notification callbacks, and serialize reconnect behind cleanup. A failed
-  disconnect remains an error, not proof that a remote Bluetooth Proxy slot
-  was released. This does not add a BLE management wizard or confirm a new
-  collector's command support.
+## [0.3.0-rc.1] - 2026-11-07
+
+### Candidate scope and updating
+
+This **release candidate** is deliberately published as a normal GitHub release
+(not a prerelease), so it is available through the ordinary HACS release channel
+without enabling beta versions. The distribution choice does not make it a
+final 0.3.0 release or remove the qualification limits below. This is the 0.3
+line and **does not include Cloud Bridge 0.4**.
+
+The candidate collects the fixes since beta.5: collector identity and recovery,
+shared-listener lifecycle, routed/NAT setup, PI30 settings/flag compatibility,
+dynamic controls, polling load, Shadow Learning and support diagnostics.
+Support and validation remain specific to the collector, protocol and firmware.
+
+- Automated validation covers Home Assistant 2026.2 and 2026.9. Startup, entry
+  reloads, configuration preservation and local telemetry recovery were also
+  checked on a Home Assistant 2026.10.2 bench. These checks do not qualify every
+  collector firmware, inverter profile or cloud-learning combination.
+- Update the complete integration directory and fully restart HA. Keep existing
+  entries; deleting/re-adding is not an upgrade step. Preserve entity IDs used by
+  automations. Do not leave backup component copies under `custom_components`.
+- Existing learning protection and PI30 flag-case overrides must survive the
+  update. Updating does not authorize learning, inverter writes or cloud return.
+- Review the MUST energy/operating-days corrections and control permissions
+  described below when upgrading from older versions; historical statistics
+  are not rewritten automatically.
+- Some collectors still have unresolved local/cloud coexistence outages. This
+  candidate does not claim a universal firmware fix. Native PI30 cloud learning,
+  DESSMonitor and ValueCloud have automated coverage, but a complete successful
+  physical-device learning/activation/return run on this candidate is not yet
+  confirmed. Historical SmartESS results do not qualify those combinations.
+  These functions remain available for public testing with that limitation.
+  An uncertain learning outcome may leave cloud access protected;
+  do not delete protection records or downgrade to bypass recovery.
+- The PI30 MAX lowercase flag fix is covered by protocol evidence and regression
+  tests; confirmation of the published fix on the reporting user's device is
+  still pending (#64). Keep the correct model profile and any deliberate flag-case
+  override. This is not automatic detection of every PI30 firmware's flag format.
+- This is a frozen release, not a copy of the newest `main`. Experimental
+  099E/VPHB telemetry, the newer Anenji 4200 controls from #88 and the query-only
+  BLE inspection tools on `main` are not included. If you installed a newer
+  `main` snapshot for those features, keep that snapshot rather than treating
+  RC1 as its upgrade. Report the installed build ID, not just the version label.
+- GitHub **Latest release** now points to RC1 instead of the older 0.1.53.
+  A subsequent final 0.3.0 release remains a separate publication decision.
+
+### Added
+
+- Identify intermediate integration builds independently of the release label.
+  GitHub source archives carry their commit automatically; raw copies also get
+  a deterministic source fingerprint. Configure, startup logs and Support
+  Archives show the identity captured at startup. Local edits change the source
+  ID without pretending the embedded commit proves an unmodified installation.
+  This does not change collector firmware labels or bypass the required HA restart.
+
+### Changed
+
+- Preserve a partially read frame when a pending callback is handed to its
+  runtime, and resume socket observation if a claim is cancelled (#81). Recheck
+  named ownership after the handoff wait, including shortened heartbeat PNs;
+  an unrelated collector's owner does not block a qualified legacy IP route.
+  These are specific routing/recovery fixes, not a claim that every malformed
+  frame or local/cloud coexistence outage is resolved.
+
+- Finish BLE connection cleanup after failed setup, unsubscribe errors and
+  cancellation. Do not reuse a disconnected client or deliver notifications
+  from an earlier session into a new one. This repairs the existing BLE Wi-Fi
+  setup path; it does not add BLE inverter operation or the 0.4 setup workflow.
+
+- Make number, select and switch availability follow the same editability
+  conditions as the existing write guard. Disabled controls no longer look
+  usable in an incompatible operating state; warning-only conditions remain
+  usable. No new device controls or model-specific limits are included here.
 
 - Do not send application commands to an unidentified silent callback socket
   merely because it shares a configured collector IP (#81). Keep that socket
   watched until it presents protocol/identity evidence or an explicit onboarding
   or runtime session claim owns it. Preserve server-first identity probing and
   prevent IP-only callers from taking a named collector's session behind NAT.
-
-- Let an IP-only route claim a callback socket that presented its own framed
-  bytes, AT text or a strong PN, even when another entry owns an unrelated PN.
-  An unrelated owner or a missing AT-text shape must not strand that socket.
-  Refuse the IP-only claim when the socket PN, weak or strong, matches a
-  registered owner, so only that owner can take it through the PN path.
 
 - Preserve a known full collector PN when a reconnect initially reports only
   its heartbeat prefix. Passive discovery no longer shortens the stored PN,
@@ -109,7 +166,8 @@ the GitHub release body should be rendered from the matching version section her
   Never adopt or probe an old socket, infer closure from missing diagnostics,
   repeat a broadcast or continue triggering after a new candidate appears.
   Real loopback TCP/UDP tests cover the previously failing sequence and an
-  unrelated same-address collector; physical-firmware validation is pending.
+  unrelated same-address collector. The #75 owner confirmed onboarding on
+  WFBLE firmware 8.50.12.3; this is not long-term or universal qualification.
 
 - Allow a full reconnect cycle during callback identity checks (#75): wait up
   to 60 seconds for a new socket, but offer the explicit read-only identity
@@ -118,7 +176,8 @@ the GitHub release body should be rendered from the matching version section her
   preserve ambiguity across socket churn and require uncontaminated trigger
   provenance. Clarify that a timeout means no new connection was observed.
   Deterministic timing and real loopback TCP/UDP tests cover the repair path;
-  the affected WFBLE firmware still needs a user-side identity-query test.
+  subsequent closure-driven retry and the owner's confirmed onboarding result
+  are described above; long-term qualification remains separate.
 
 - Preserve partial ValueCloud Write Controls evidence when an HTTP request
   times out or fails (#46): retain the plan, previous captures and the uncertain
@@ -508,22 +567,6 @@ the GitHub release body should be rendered from the matching version section her
   this is not full device or control support (#45).
 
 ### Fixed
-
-- A route claim that lands while the sniff is waiting for the rest of a split
-  EyeBond frame no longer hands the new connection a stream that starts
-  mid-frame. The claimer could otherwise misparse every following frame.
-
-- A route claim that is cancelled while the pending sniff drains no longer
-  leaves its callback socket registered with nobody watching it. That socket
-  would miss a peer close and block every later same-IP route as a phantom.
-
-- A PN route claim that is cancelled during the identity read also leaves
-  that socket watched. The pause itself already handles a cancel during the
-  drain. The identity read is the later await, and it needed the same resume.
-
-- An IP-only route no longer takes a callback socket whose PN owner registered
-  while its sniff task was draining. The socket stays for that owner and its
-  watcher is resumed.
 
 - Only length and payload-too-large may drop one 8-byte EyeBond window, and
   only when the whole next frame is already buffered.
