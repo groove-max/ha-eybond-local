@@ -74,8 +74,46 @@ class BleInspection:
     connection_status: str = "not_started"
     connection_elapsed_ms: int = 0
 
+    async def _query(self, session, command: str, *, retry_identity: bool = False) -> None:
+        observation = {"command": f"AT+{command}?", "status": "pending",
+                       "attempt": 2 if retry_identity else 1}
+        if retry_identity:
+            observation["reason"] = "identity_after_metadata"
+        self.observations.append(observation)
+        diagnostics = BleExchangeDiagnostics()
+        try:
+            async with asyncio.timeout(QUERY_TIMEOUT):
+                response = await session.exchange_text(
+                    observation["command"], timeout=QUERY_TIMEOUT,
+                    append_crlf=self.append_crlf, response=True,
+                    # Do not satisfy the recheck from a cached ReadValue snapshot.
+                    allow_read_fallback=not retry_identity, diagnostics=diagnostics,
+                )
+            observation["response_size"] = len(response)
+            observation["value"] = _value(command, response)
+            observation["status"] = "received"
+        except (TimeoutError, SmartEssBleError) as exc:
+            observation["status"] = "timeout" if (
+                isinstance(exc, TimeoutError) or str(exc) == "ble_notification_timeout"
+            ) else "transport_error"
+            if observation["status"] == "transport_error":
+                self.error = "ble_transport_error"
+        except CollectorAtQueryStatus as exc:
+            observation.update(status="query_status", code=exc.status)
+        except (CollectorAtError, ValueError):
+            # Unparsed values may contain secrets; retain only classification/size.
+            observation["status"] = "unrecognized_reply"
+        finally:
+            observation["transport"] = diagnostics.snapshot()
+        if command == "DTUPN" and observation["status"] == "received":
+            self.identity_status = (
+                "matched" if self.expected_pn == observation["value"] else "mismatch"
+            ) if self.expected_pn else "unbound"
+            if self.identity_status == "mismatch":
+                self.error = "collector_identity_mismatch"
+
     async def run(self, session) -> None:
-        """Send only the fixed queries, once each, under bounded waits."""
+        """Inspect fixed metadata, with at most one evidence-gated PN recheck."""
 
         try:
             self.connection_status = "connecting"
@@ -93,43 +131,22 @@ class BleInspection:
                 self.error = "unsupported_ble_layout"
                 return
             for command in BLE_INSPECTION_QUERIES:
-                observation = {"command": f"AT+{command}?", "status": "pending"}
-                self.observations.append(observation)
-                diagnostics = BleExchangeDiagnostics()
-                try:
-                    async with asyncio.timeout(QUERY_TIMEOUT):
-                        response = await session.exchange_text(
-                            observation["command"], timeout=QUERY_TIMEOUT,
-                            append_crlf=self.append_crlf, response=True,
-                            diagnostics=diagnostics,
-                        )
-                    observation["response_size"] = len(response)
-                    observation["value"] = _value(command, response)
-                    observation["status"] = "received"
-                except (TimeoutError, SmartEssBleError) as exc:
-                    observation["status"] = "timeout" if (
-                        isinstance(exc, TimeoutError) or str(exc) == "ble_notification_timeout"
-                    ) else "transport_error"
-                    if observation["status"] == "transport_error":
-                        self.error = "ble_transport_error"
-                        break
-                except CollectorAtQueryStatus as exc:
-                    observation.update(status="query_status", code=exc.status)
-                except (CollectorAtError, ValueError):
-                    # Unknown bytes can contain credentials/identifiers. Keep size
-                    # and classification, not unparsed text/hex in support evidence.
-                    observation["status"] = "unrecognized_reply"
-                finally:
-                    # Preserve evidence even when the outer deadline cancels a
-                    # write or response wait. Never export payload or exception text.
-                    observation["transport"] = diagnostics.snapshot()
-                if command == "DTUPN" and observation["status"] == "received":
-                    self.identity_status = (
-                        "matched" if self.expected_pn == observation["value"] else "mismatch"
-                    ) if self.expected_pn else "unbound"
-                    if self.identity_status == "mismatch":
-                        self.error = "collector_identity_mismatch"
-                        break
+                await self._query(session, command)
+                if self.error:
+                    break
+            if (
+                self.error is None
+                and len(self.observations) == len(BLE_INSPECTION_QUERIES)
+                and self.observations[0]["status"] == "timeout"
+                and self.observations[0]["transport"]["write_completed"]
+                and all(item["status"] == "received" for item in self.observations[1:])
+            ):
+                # Some collectors miss the first AT query after subscription.
+                # Recheck only immutable identity after the handler has answered
+                # the other metadata reads. Never reconnect, retry a setter or
+                # bypass an invalid/different PN. Keep the original failed attempt.
+                # A late same-command notify still cannot prove response freshness.
+                await self._query(session, "DTUPN", retry_identity=True)
         except asyncio.CancelledError:
             if self.connection_status == "connecting":
                 self.connection_status = "cancelled"
@@ -149,9 +166,10 @@ class BleInspection:
                 self.error = "ble_connection_failed"
 
     def result(self, *, address: str) -> DiagnosticRunResult:
-        complete = (
-            len(self.observations) == len(BLE_INSPECTION_QUERIES)
-            and all(item["status"] == "received" for item in self.observations)
+        latest = {item["command"]: item for item in self.observations}
+        complete = all(
+            latest.get(f"AT+{command}?", {}).get("status") == "received"
+            for command in BLE_INSPECTION_QUERIES
         )
         error = self.error or self.cleanup_error or (
             None if complete and self.identity_status == "matched" else "partial_or_unbound"
@@ -168,7 +186,8 @@ class BleInspection:
         }
         lines = [f"Identity: {self.identity_status}", f"Result: {error or 'complete'}"]
         for item in self.observations:
-            lines.append(f"{item['command']} — {item['status']}: {item.get('value', '')}")
+            lines.append(f"{item['command']} (attempt {item['attempt']}) — "
+                         f"{item['status']}: {item.get('value', '')}")
         return DiagnosticRunResult(
             success=error is None, output="\n".join(lines), results=list(self.observations),
             context=context, started_at=self.started_at, finished_at=_now(), error=error,

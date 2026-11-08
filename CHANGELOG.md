@@ -13,6 +13,13 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Recheck a timed-out first BLE identity query once after the other three fixed
+  metadata queries succeed. Keep both attempts in diagnostics, require a notify
+  response for the recheck, and retain mismatch/cancellation/cleanup boundaries.
+  Add payload-free categories for ignored BLE fragments. This supports a targeted
+  check of first-query loss without assuming it caused #43, changing settings,
+  accepting an advertised PN or retrying configuration writes.
+
 - Fix fragmented BLE AT replies in the 0.3 development line: continue consuming
   notifications after a partial header, keep notifications separate from GATT
   read snapshots, and wait for a complete or settled response. Reuse the 0.4

@@ -71,6 +71,35 @@ class BleInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attempt.observations[1]["value"], "1.2.3")
         self.assertFalse(attempt.result(address="test").success)
 
+    async def test_recheck_requires_completed_write_and_three_valid_metadata_replies(self):
+        cases = (
+            ([TimeoutError(), *REPLIES[1:]], False, 4),
+            ([TimeoutError(), TimeoutError(), *REPLIES[2:]], True, 4),
+            ([TimeoutError(), "AT+FWVER:R001", *REPLIES[2:]], True, 4),
+            ([TimeoutError(), "AT+FWVER:bad value", *REPLIES[2:]], True, 4),
+            ([TimeoutError(), RuntimeError("disconnected")], True, 2),
+            (["AT+DTUPN:not a pn", *REPLIES[1:]], True, 4),
+            (["AT+DTUPN?:R001", *REPLIES[1:]], True, 4),
+        )
+        for replies, write_completed, count in cases:
+            with self.subTest(replies=replies, write_completed=write_completed):
+                remaining = iter(replies)
+
+                async def exchange(*args, **kwargs):
+                    kwargs["diagnostics"].write_completed = write_completed
+                    value = next(remaining)
+                    if isinstance(value, BaseException):
+                        raise value
+                    return value
+
+                session = AsyncMock()
+                session.connect.return_value = VENDOR_LAYOUT
+                session.exchange_text.side_effect = exchange
+                attempt = BleInspection(PN)
+                await attempt.run(session)
+                self.assertEqual(session.exchange_text.await_count, count)
+                self.assertFalse(attempt.result(address="test").success)
+
     async def test_host_only_does_not_invent_port_or_protocol(self):
         attempt, _ = await self.run_replies([*REPLIES[:3], "AT+CLDSRVHOST1:example.invalid"])
         endpoint = attempt.observations[3]["value"]

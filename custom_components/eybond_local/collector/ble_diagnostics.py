@@ -1,6 +1,6 @@
 """Payload-free observations for one explicitly requested BLE text exchange."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 
 @dataclass(slots=True)
@@ -24,6 +24,9 @@ class BleExchangeDiagnostics:
     read_bytes: int = 0
     matched_notify_bytes: int = 0
     matched_read_bytes: int = 0
+    # Keys are the assembler's fixed disposition labels, never received text.
+    ignored_notify: dict[str, int] = field(default_factory=dict)
+    ignored_read: dict[str, int] = field(default_factory=dict)
     reply_source: str = "none"
     elapsed_ms: int = 0
 

@@ -22,7 +22,12 @@ Close the vendor app's Bluetooth connection first. Select the collector
 explicitly, keep **No line ending** unless support asks for CRLF, and choose
 **Read collector information**. Refreshing the list or reopening the result does not
 send queries. The tool attempts only `AT+DTUPN?`, `AT+FWVER?`, `AT+ATVER?` and
-`AT+CLDSRVHOST1?`, once each. It never provisions Wi-Fi, changes an endpoint,
+`AT+CLDSRVHOST1?`. If the first PN query was sent but timed out and all three
+other metadata queries succeeded, it rechecks PN **once**, on the same connection.
+Both attempts remain in the result. The recheck requires a notification response,
+not a cached GATT read, and never overrides an invalid or mismatching identity.
+There are at most five queries, each with the same four-second timeout; no
+reconnection or retry loop. It never provisions Wi-Fi, changes an endpoint,
 restarts a device or writes inverter settings. No automatic alternate command
 or line-ending search is performed. Only the vendor GATT layout is supported.
 
@@ -35,11 +40,16 @@ Closing the dialog cancels the attempt and completes connection cleanup.
 On newer main builds, the JSON records connection readiness and per-query
 transport evidence: whether the GATT write returned, notification counts/byte
 counts, candidate reply lengths, GATT read results/errors, the response source,
-and elapsed time. This distinguishes a write-stage timeout from silence,
+and elapsed time. Ignored fragments are counted by category (placeholder,
+query echo, binary/control bytes, unmatched text), separately for notifications
+and reads; these categories do not identify the source of unsolicited traffic.
+This distinguishes a write-stage timeout from silence,
 unrelated traffic or an incomplete reply. A completed GATT write does not prove
 that firmware processed the command; received bytes do not prove identity or
 freshness. Raw payloads and backend exception messages are not added to this
-evidence. The same four queries and time limits are retained.
+evidence. A late response to the first PN query cannot be distinguished from a
+response to the recheck; this read-only identity evidence is not proof of a
+fresh response to a settings change or of a working TCP callback.
 
 Optionally request a short-lived JSON download. The redacted result is also
 saved as the latest diagnostic attempt for a matching, unchanged device identity

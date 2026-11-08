@@ -60,10 +60,16 @@ class Link:
         command = payload.decode().strip()
         values = {"AT+DTUPN?": self.pn, "AT+FWVER?": "1.2.3",
                   "AT+ATVER?": "2.0", "AT+CLDSRVHOST1?": "example.invalid,18899,TCP"}
+        if self.reply_mode.startswith("pn_") and command == "AT+DTUPN?":
+            if len(self.commands) == 1 or self.reply_mode == "pn_missing":
+                self.callback(b"--------")
+                return
+            if self.reply_mode == "pn_mismatch":
+                values[command] = SYNTHETIC_OTHER_COLLECTOR_PN
         reply = (command[:-1] + ":" + values[command]).encode()
         if self.reply_mode == "unrelated":
             self.callback(b"AT+PASS:private-password-in-notification\r\n")
-        elif self.reply_mode == "split":
+        elif self.reply_mode == "split" or self.reply_mode.startswith("pn_"):
             reply += b"\r\n"
             self.callback(reply[:4])
             self.callback(reply[4:])
@@ -213,6 +219,47 @@ async def test_transport_evidence_survives_shareable_export_even_without_identit
     assert (dict(collector_entry.data), dict(collector_entry.options)) == before
     assert not ble.link.connected
     assert ble.link.commands == [b"AT+DTUPN?", b"AT+FWVER?", b"AT+ATVER?", b"AT+CLDSRVHOST1?"]
+
+
+@pytest.mark.parametrize("mode", ("pn_recovered", "pn_missing", "pn_mismatch"))
+async def test_identity_recheck_export_and_binding(hass, collector_entry, ble, hass_client_no_auth, monkeypatch, mode):
+    from custom_components.eybond_local.support import ble_inspection
+
+    monkeypatch.setattr(ble_inspection, "QUERY_TIMEOUT", .15)
+    ble.link.reply_mode = mode
+    before = (dict(collector_entry.data), dict(collector_entry.options))
+    assert await async_setup_component(hass, "http", {})
+    result = await runtime.async_inspect_collector_ble(
+        hass, collector_entry, address=ADDRESS, append_crlf=False, publish_download=True,
+    )
+    assert result["success"] is (mode == "pn_recovered")
+    assert result["download_url"]
+    client = await hass_client_no_auth()
+    response = await client.get(result["download_url"])
+    assert response.status == 200
+    text = await response.text()
+    assert collector_entry.data["collector_pn"] not in text
+    assert ADDRESS not in text
+    artifact = json.loads(text)
+    assert len(artifact["results"]) == 5
+    first, *_, retry = artifact["results"]
+    assert first["status"] == "timeout"
+    assert first["transport"]["ignored_notify"] == {"placeholder": 1}
+    assert retry["attempt"] == 2
+    assert retry["reason"] == "identity_after_metadata"
+    assert retry["transport"]["read_attempts"] == 0
+    status, members = load_diagnostic_evidence(
+        Path(hass.config.config_dir), collector_entry.entry_id, runtime.inspection_scope(collector_entry),
+    )
+    if mode == "pn_recovered":
+        assert status["status"] == "included"
+        assert artifact["context"]["identity_status"] == "matched"
+    else:
+        assert members == {}
+        assert artifact["context"]["identity_status"] == ("mismatch" if mode == "pn_mismatch" else "unavailable")
+    assert ble.link.commands == [b"AT+DTUPN?", b"AT+FWVER?", b"AT+ATVER?", b"AT+CLDSRVHOST1?", b"AT+DTUPN?"]
+    assert (dict(collector_entry.data), dict(collector_entry.options)) == before
+    assert not ble.link.connected
 
 
 async def test_flow_abort_drains_cleanup_and_does_not_free_slot_early(hass, collector_entry, ble):

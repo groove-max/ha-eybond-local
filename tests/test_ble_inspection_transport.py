@@ -43,6 +43,21 @@ class InspectLink(_FakeBleLink):
             self.push_notification(self.reply[:4])
         elif self.mode == "unrelated":
             self.push_notification(b"AT+PASS:private-password-from-notify\r\n")
+        elif self.mode.startswith("pn_"):
+            is_pn = data == b"AT+DTUPN?"
+            first = len(self.write_calls) == 1
+            if is_pn and (first or self.mode in {"pn_missing", "pn_cached"}):
+                # Synthetic unmatched traffic, not the owner's unknown bytes.
+                self.push_notification(b"--------")
+                self.push_notification(data)
+                self.push_notification(b"11111111\x01\x03\x02\0\1")
+                self.push_notification(b"AT+PASS:private-password-from-notify\r\n")
+            elif is_pn and self.mode == "pn_mismatch":
+                self.push_notification(b"AT+DTUPN:Q00000000000010001\r\n")
+            elif is_pn and self.mode == "pn_cancel":
+                raise asyncio.CancelledError()
+            else:
+                self.push_notification(self.reply)
 
     async def read(self, uuid):
         self.read_calls.append(uuid)
@@ -50,6 +65,8 @@ class InspectLink(_FakeBleLink):
             raise RuntimeError("private-password-from-read-error")
         if self.mode == "read_timeout":
             await asyncio.Future()
+        if self.mode == "pn_cached" and len(self.write_calls) == 5:
+            return self.reply  # A recheck must not accept this cached PN.
         return self.reply if self.mode == "read_reply" else b""
 
 
@@ -74,10 +91,58 @@ class BleInspectionTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(link.connected)
         self.assertEqual(artifact["context"]["connection"]["status"], "ready")
         self.assertFalse(artifact["context"]["settings_changed"])
-        self.assertLessEqual(len(link.write_calls), 4)
-        self.assertEqual([item[1].decode() for item in link.write_calls], list(REPLIES)[:len(link.write_calls)])
+        self.assertLessEqual(len(link.write_calls), 5)
+        expected = [*REPLIES, "AT+DTUPN?"] if mode.startswith("pn_") else list(REPLIES)
+        self.assertEqual([item[1].decode() for item in link.write_calls], expected[:len(link.write_calls)])
         self.assertTrue(all(item[2] for item in link.write_calls))
         return artifact, link
+
+    async def test_initial_pn_timeout_rechecked_once_after_successful_metadata(self):
+        result, link = await self.inspect("pn_recovered")
+        self.assertTrue(result["success"])
+        self.assertEqual(len(link.write_calls), 5)
+        self.assertEqual(result["context"]["identity_status"], "matched")
+        first, *_, retry = result["results"]
+        self.assertEqual(first["status"], "timeout")
+        self.assertEqual(first["attempt"], 1)
+        self.assertEqual(retry["status"], "received")
+        self.assertEqual(retry["attempt"], 2)
+        self.assertEqual(retry["reason"], "identity_after_metadata")
+        self.assertEqual(retry["transport"]["reply_source"], "notify")
+        self.assertEqual(retry["transport"]["read_attempts"], 0)
+        self.assertEqual(first["transport"]["ignored_notify"], {
+            "placeholder": 1, "command_echo": 1, "binary_or_control": 1,
+            "unmatched_text": 1,
+        })
+
+    async def test_pn_recheck_does_not_override_mismatch_or_keep_retrying(self):
+        for mode, error, identity in (("pn_missing", "partial_or_unbound", "unavailable"),
+                                      ("pn_cached", "partial_or_unbound", "unavailable"),
+                                      ("pn_mismatch", "collector_identity_mismatch", "mismatch")):
+            with self.subTest(mode=mode):
+                result, link = await self.inspect(mode)
+                self.assertFalse(result["success"])
+                self.assertEqual(result["error"], error)
+                self.assertEqual(result["context"]["identity_status"], identity)
+                self.assertEqual(len(link.write_calls), 5)
+                self.assertEqual(result["results"][-1]["transport"]["read_attempts"], 0)
+
+    async def test_retry_cancellation_preserves_first_attempt_and_cleans_up(self):
+        link = InspectLink("pn_cancel")
+        session = SmartEssBleSession(link)
+        attempt = BleInspection(PN)
+        with patch("custom_components.eybond_local.support.ble_inspection.QUERY_TIMEOUT", .03):
+            try:
+                with self.assertRaises(asyncio.CancelledError):
+                    await attempt.run(session)
+            finally:
+                await session.disconnect()
+        self.assertEqual(len(link.write_calls), 5)
+        self.assertEqual(attempt.error, "cancelled")
+        self.assertEqual(attempt.observations[0]["status"], "timeout")
+        self.assertEqual(attempt.observations[-1]["status"], "cancelled")
+        self.assertIsNone(session._exchange_diagnostics)
+        self.assertFalse(link.connected)
 
     async def test_complete_and_split_notifications_succeed_without_snapshot_reads(self):
         for mode, count in (("complete", 1), ("split", 2)):
@@ -180,9 +245,12 @@ class BleInspectionTransportTests(unittest.IsolatedAsyncioTestCase):
 
     def test_trace_is_fixed_field_and_detached(self):
         trace = BleExchangeDiagnostics()
+        trace.ignored_notify["placeholder"] = 1
         self.assertFalse(hasattr(trace, "__dict__"))
         exported = trace.snapshot()
         trace.notifications_received = 1
+        trace.ignored_notify["placeholder"] = 2
         self.assertEqual(exported["notifications_received"], 0)
+        self.assertEqual(exported["ignored_notify"], {"placeholder": 1})
         self.assertEqual({key for key, value in exported.items() if isinstance(value, str)},
                          {"phase", "reply_source"})

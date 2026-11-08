@@ -12,6 +12,27 @@ from test_smartess_ble import _FakeBleLink
 
 
 class VendorAtReplyTests(unittest.TestCase):
+    def test_unicode_setter_ending_in_question_mark_is_not_a_query_echo(self):
+        reply = VendorAtReply("AT+INTPARA=41,Дім?")
+        self.assertTrue(reply.is_write)
+        self.assertEqual(reply.query_echo, b"")
+        self.feed(reply, b"AT+INTPARA:W000\r\n")
+        self.assertEqual(self.result(reply), "AT+INTPARA:W000")
+
+    def test_ignored_fragment_categories_do_not_expose_or_accept_unknown_values(self):
+        samples = ((b"--------", "placeholder"),
+                   (b"\r\n", "placeholder"),
+                   (b"AT+DTUPN?\r\n", "command_echo"),
+                   (b"11111111\x01\x03\x02\0\1", "binary_or_control"),
+                   (b"AT+PASS:private-password", "unmatched_text"),
+                   (b"unknown-private-text", "unmatched_text"))
+        for source in ("read", "notify"):
+            for raw, category in samples:
+                reply = VendorAtReply("AT+DTUPN?")
+                self.assertEqual(reply.feed(raw, source=source, now=0), category)
+                self.assertFalse(reply.pending)
+                self.assertIsNone(self.result(reply))
+
     def feed(self, reply, raw, source="notify", now=0.0):
         reply.feed(raw, source=source, now=now)
 
