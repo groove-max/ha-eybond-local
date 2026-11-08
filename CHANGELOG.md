@@ -11,6 +11,18 @@ The following development changes are not part of the frozen 0.3.0-rc.1 release.
 The common connection, BLE lifecycle and editability repairs are recorded under
 RC1 below; newer model features remain here.
 
+### Fixed
+
+- Fix fragmented BLE AT replies in the 0.3 development line: continue consuming
+  notifications after a partial header, keep notifications separate from GATT
+  read snapshots, and wait for a complete or settled response. Reuse the 0.4
+  response assembler without adding its BLE runtime or setup UX. Commands are
+  serialized, receive buffers are bounded, and uncertain writes are not replayed.
+  BLE inspection now exports payload-free per-query stages, notification/read
+  counts and durations, including timeout/cancellation evidence. This fixes
+  reproduced receive-path errors; it does not yet establish the cause of #43
+  or validate that collector's endpoint management.
+
 ### Added
 
 - Add nine model-scoped controls for the single-output Anenji 4200 24 V

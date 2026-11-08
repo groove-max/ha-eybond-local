@@ -9,6 +9,7 @@ import re
 
 from ..collector.at import CollectorAtError, CollectorAtQueryStatus, parse_at_response
 from ..collector.smartess_ble import SmartEssBleError, VENDOR_LAYOUT
+from ..collector.ble_diagnostics import BleExchangeDiagnostics
 from ..collector_endpoint import inspect_collector_server_endpoint
 from ..collector_identity import validated_collector_pn
 from .diagnostic_runner import DiagnosticRunResult
@@ -70,13 +71,23 @@ class BleInspection:
     error: str | None = None
     cleanup_error: str | None = None
     layout: str = ""
+    connection_status: str = "not_started"
+    connection_elapsed_ms: int = 0
 
     async def run(self, session) -> None:
         """Send only the fixed queries, once each, under bounded waits."""
 
         try:
-            async with asyncio.timeout(CONNECT_TIMEOUT):
-                layout = await session.connect()
+            self.connection_status = "connecting"
+            started = asyncio.get_running_loop().time()
+            try:
+                async with asyncio.timeout(CONNECT_TIMEOUT):
+                    layout = await session.connect()
+            finally:
+                self.connection_elapsed_ms = max(0, int((asyncio.get_running_loop().time() - started) * 1000))
+            # The session connects and subscribes before returning. This is not
+            # proof that the AT handler answered or the identity matched.
+            self.connection_status = "ready"
             self.layout = layout.name
             if layout != VENDOR_LAYOUT:
                 self.error = "unsupported_ble_layout"
@@ -84,11 +95,13 @@ class BleInspection:
             for command in BLE_INSPECTION_QUERIES:
                 observation = {"command": f"AT+{command}?", "status": "pending"}
                 self.observations.append(observation)
+                diagnostics = BleExchangeDiagnostics()
                 try:
                     async with asyncio.timeout(QUERY_TIMEOUT):
                         response = await session.exchange_text(
                             observation["command"], timeout=QUERY_TIMEOUT,
                             append_crlf=self.append_crlf, response=True,
+                            diagnostics=diagnostics,
                         )
                     observation["response_size"] = len(response)
                     observation["value"] = _value(command, response)
@@ -106,6 +119,10 @@ class BleInspection:
                     # Unknown bytes can contain credentials/identifiers. Keep size
                     # and classification, not unparsed text/hex in support evidence.
                     observation["status"] = "unrecognized_reply"
+                finally:
+                    # Preserve evidence even when the outer deadline cancels a
+                    # write or response wait. Never export payload or exception text.
+                    observation["transport"] = diagnostics.snapshot()
                 if command == "DTUPN" and observation["status"] == "received":
                     self.identity_status = (
                         "matched" if self.expected_pn == observation["value"] else "mismatch"
@@ -114,17 +131,21 @@ class BleInspection:
                         self.error = "collector_identity_mismatch"
                         break
         except asyncio.CancelledError:
+            if self.connection_status == "connecting":
+                self.connection_status = "cancelled"
             self.error = "cancelled"
             if self.observations and self.observations[-1]["status"] == "pending":
                 self.observations[-1]["status"] = "cancelled"
             raise
         except TimeoutError:
+            self.connection_status = "timeout"
             self.error = "ble_connect_timeout"
         except Exception:
             if self.observations and self.observations[-1]["status"] == "pending":
                 self.observations[-1]["status"] = "transport_error"
                 self.error = "ble_transport_error"
             else:
+                self.connection_status = "failed"
                 self.error = "ble_connection_failed"
 
     def result(self, *, address: str) -> DiagnosticRunResult:
@@ -143,6 +164,7 @@ class BleInspection:
             "cleanup_error": self.cleanup_error,
             "settings_changed": False, "endpoint_restoration_verified": False,
             "unparsed_replies_included": False,
+            "connection": {"status": self.connection_status, "elapsed_ms": self.connection_elapsed_ms},
         }
         lines = [f"Identity: {self.identity_status}", f"Result: {error or 'complete'}"]
         for item in self.observations:

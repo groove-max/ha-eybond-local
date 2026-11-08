@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, Mock
 
 import pytest
+from homeassistant.setup import async_setup_component
 
 from custom_components.eybond_local.collector.smartess_ble import VENDOR_LAYOUT
 from custom_components.eybond_local.runtime import ble_inspection as runtime
@@ -29,6 +30,7 @@ class Link:
         self.disconnect_release = None
         self.fail_disconnect = False
         self.callback = None
+        self.reply_mode = "complete"
 
     async def connect(self):
         self.connected = True
@@ -58,7 +60,15 @@ class Link:
         command = payload.decode().strip()
         values = {"AT+DTUPN?": self.pn, "AT+FWVER?": "1.2.3",
                   "AT+ATVER?": "2.0", "AT+CLDSRVHOST1?": "example.invalid,18899,TCP"}
-        self.callback((command[:-1] + ":" + values[command]).encode())
+        reply = (command[:-1] + ":" + values[command]).encode()
+        if self.reply_mode == "unrelated":
+            self.callback(b"AT+PASS:private-password-in-notification\r\n")
+        elif self.reply_mode == "split":
+            reply += b"\r\n"
+            self.callback(reply[:4])
+            self.callback(reply[4:])
+        else:
+            self.callback(reply)
 
     async def read(self, uuid):
         return b""
@@ -157,6 +167,52 @@ async def test_removed_route_no_fallback_and_refresh_or_done_without_selection(h
         assert result["step_id"] == "diagnostics"
     finally:
         options.async_abort(flow_id)
+
+
+@pytest.mark.parametrize("mode", ["split", "unrelated"])
+async def test_transport_evidence_survives_shareable_export_even_without_identity(
+    hass, hass_client_no_auth, collector_entry, ble, monkeypatch, mode,
+):
+    from custom_components.eybond_local.support import ble_inspection
+
+    monkeypatch.setattr(ble_inspection, "QUERY_TIMEOUT", .15)
+    ble.link.reply_mode = mode
+    before = (dict(collector_entry.data), dict(collector_entry.options))
+    assert await async_setup_component(hass, "http", {})
+    result = await runtime.async_inspect_collector_ble(
+        hass, collector_entry, address=ADDRESS, append_crlf=False, publish_download=True,
+    )
+    assert result["success"] is (mode == "split")
+    assert result["download_url"], result
+    client = await hass_client_no_auth()  # Start serving after download views are registered.
+    response = await client.get(result["download_url"])
+    assert response.status == 200
+    text = await response.text()
+    assert "private-password" not in text
+    assert ADDRESS not in text
+    assert collector_entry.data["collector_pn"] not in text
+    artifact = json.loads(text)
+    assert artifact["context"]["connection"]["status"] == "ready"
+    assert not artifact["context"]["settings_changed"]
+    assert len(artifact["results"]) == 4
+    for item in artifact["results"]:
+        trace = item["transport"]
+        assert trace["write_completed"]
+        assert trace["notifications_received"] == (2 if mode == "split" else 1)
+        assert trace["notifications_consumed"] == trace["notifications_received"]
+        assert trace["phase"] == ("reply_complete" if mode == "split" else "receiving")
+        assert (trace["matched_notify_bytes"] > 0) is (mode == "split")
+    status, members = load_diagnostic_evidence(
+        Path(hass.config.config_dir), collector_entry.entry_id, runtime.inspection_scope(collector_entry),
+    )
+    if mode == "split":
+        assert status["status"] == "included"
+    else:
+        assert result["cache_status"] == "identity_unavailable_or_changed"
+        assert members == {}  # Unbound identity must not attach to the collector.
+    assert (dict(collector_entry.data), dict(collector_entry.options)) == before
+    assert not ble.link.connected
+    assert ble.link.commands == [b"AT+DTUPN?", b"AT+FWVER?", b"AT+ATVER?", b"AT+CLDSRVHOST1?"]
 
 
 async def test_flow_abort_drains_cleanup_and_does_not_free_slot_early(hass, collector_entry, ble):

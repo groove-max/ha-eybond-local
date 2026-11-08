@@ -27,10 +27,16 @@ class BleInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("bluetooth", manifest["dependencies"])
 
     async def test_fixed_queries_only_over_existing_session(self):
+        class QueryReplyLink(_FakeBleLink):
+            async def write(self, characteristic_uuid, data, *, response=False):
+                await super().write(characteristic_uuid, data, response=response)
+                # A ReadValue snapshot may be read repeatedly while settling;
+                # replies belong to commands, not to successive read calls.
+                self._read_results = [REPLIES[len(self.write_calls)-1].encode()]
+
         for crlf in (False, True):
             with self.subTest(crlf=crlf):
-                link = _FakeBleLink([VENDOR_LAYOUT.service_uuid],
-                                    read_results=[value.encode() for value in REPLIES])
+                link = QueryReplyLink([VENDOR_LAYOUT.service_uuid])
                 session = SmartEssBleSession(link)
                 attempt = BleInspection(PN, append_crlf=crlf)
                 try:

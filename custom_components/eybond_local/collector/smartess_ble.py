@@ -12,6 +12,9 @@ import logging
 import re
 from typing import Any, Protocol
 
+from .ble_diagnostics import BleExchangeDiagnostics
+from .ble_response import VendorAtReply
+
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +131,7 @@ _DEFAULT_REFRESH_DEVICE_LOOKUP_TIMEOUT = 2.0
 _BLE_CLEANUP_TIMEOUT = 5.0
 _BLE_READ_QUERY_ATTEMPTS = 4
 _VENDOR_NOTIFY_POLL_TIMEOUT = 0.25
+_VENDOR_READ_POLL_TIMEOUT = 0.25
 _VENDOR_FRAGMENT_SETTLE_TIMEOUT = 0.5
 _DEFAULT_RESTART_REQUIRED_FW_VERSIONS = frozenset(
     {
@@ -441,24 +445,6 @@ def parse_wifi_scan_response(response: str) -> tuple[SmartEssBleWifiNetwork, ...
     return tuple(networks)
 
 
-def _command_response_marker(command: str) -> str:
-    text = str(command or "").strip()
-    if not text:
-        return ""
-    if text.startswith("AT+INTPARA") and text.endswith("?"):
-        suffix = text.removeprefix("AT+INTPARA")[:-1]
-        if suffix.isdigit():
-            return f"AT+INTPARA:{suffix}"
-    if "=" in text:
-        return f"{text.split('=', 1)[0]}:"
-    return text.rstrip("?")
-
-
-def _is_vendor_placeholder_payload(text: str) -> bool:
-    stripped = str(text or "").strip()
-    return not stripped or "-----" in stripped
-
-
 def _safe_ble_log_preview(text: str, *, max_len: int = 160) -> str:
     """Return a log preview with known credential readbacks removed."""
 
@@ -468,46 +454,6 @@ def _safe_ble_log_preview(text: str, *, max_len: int = 160) -> str:
     if marker_index >= 0:
         value = f"{value[: marker_index + len(marker)]}<redacted>"
     return value[:max_len]
-
-
-def _is_wifi_scan_response_payload(text: str) -> bool:
-    stripped = str(text or "").strip()
-    return any(
-        marker in stripped
-        for marker in (
-            "AT+INTPARA:49",
-            "AT+INTPARA49:",
-            "49,",
-        )
-    )
-
-
-def _is_possible_vendor_response_fragment(text: str, expected_marker: str) -> bool:
-    """Return whether *text* may be an incomplete response for *expected_marker*."""
-
-    value = str(text or "").strip()
-    marker = str(expected_marker or "").strip()
-    if not value or not marker:
-        return False
-    if marker in value:
-        return True
-    # Vendor BLE payloads can be split at arbitrary positions. A first fragment
-    # such as "AT+WFLKA" must not be treated as a complete response for
-    # AT+WFLKAP=...; wait for the next read/notify fragment instead.
-    if marker.startswith(value):
-        return True
-    return value.startswith(marker)
-
-
-def _can_return_vendor_fragments(text: str, expected_marker: str) -> bool:
-    """Return whether buffered vendor fragments are a complete response."""
-
-    marker = str(expected_marker or "").strip()
-    if not marker:
-        return True
-    if marker == "AT+INTPARA:49":
-        return True
-    return marker in str(text or "")
 
 
 def extract_at_status_code(response: str, prefix: str) -> str:
@@ -1098,6 +1044,14 @@ class BleakSmartEssBleLink:
         self._client: _BleakClientLike | None = None
         self._lifecycle_lock = asyncio.Lock()
 
+    @property
+    def connected(self) -> bool | None:
+        """Backend connection state; injected links may not expose it."""
+        if self._client is None:
+            return False
+        state = getattr(self._client, "is_connected", None)
+        return state if type(state) is bool else None
+
     async def connect(self) -> Sequence[str]:
         async with self._lifecycle_lock:
             return await self._connect_locked()
@@ -1226,12 +1180,16 @@ class SmartEssBleSession:
         self._notifications: asyncio.Queue[bytes] = asyncio.Queue()
         self._lifecycle_lock = asyncio.Lock()
         self._notify_generation: object | None = None
+        self._exchange_lock = asyncio.Lock()
+        self._notification_error: str | None = None
+        self._exchange_diagnostics: BleExchangeDiagnostics | None = None
 
     @property
     def connected(self) -> bool:
         """Return whether the session has an active BLE link."""
 
-        return self._connected
+        return (self._connected and self._notification_error is None
+                and getattr(self._link, "connected", None) is not False)
 
     @property
     def layout(self) -> SmartEssBleUuidLayout:
@@ -1260,6 +1218,7 @@ class SmartEssBleSession:
                 self._layout.name,
             )
             self._drain_notifications()
+            self._notification_error = None
             generation = self._notify_generation = object()
 
             def notify(payload: bytes) -> None:
@@ -1289,6 +1248,7 @@ class SmartEssBleSession:
         layout, self._layout = self._layout, None
         self._connected = False
         self._notify_generation = None
+        self._notification_error = None
         self._drain_notifications()
 
         async def cleanup() -> None:
@@ -1305,7 +1265,7 @@ class SmartEssBleSession:
     async def send_bytes(self, payload: bytes, *, response: bool = False) -> None:
         """Write one raw payload using the negotiated write characteristic."""
 
-        if not self._connected or self._layout is None:
+        if not self.connected or self._layout is None:
             raise SmartEssBleError("ble_not_connected")
         await self._link.write(self._layout.write_uuid, bytes(payload), response=response)
 
@@ -1340,161 +1300,192 @@ class SmartEssBleSession:
         append_crlf: bool = True,
         response: bool = False,
         drain_before_send: bool = True,
+        allow_read_fallback: bool = True,
+        diagnostics: BleExchangeDiagnostics | None = None,
     ) -> str:
-        """Send one text command and decode the next notify payload as text."""
+        """Serialize commands; metadata may use ReadValue, transition proof may not.
 
-        if drain_before_send:
-            self._drain_notifications()
-        await self.send_bytes(
-            build_ble_text_payload(command, append_crlf=append_crlf),
-            response=response,
-        )
-        if self._layout is not None and self._layout.name == VENDOR_LAYOUT.name:
-            return await self._exchange_vendor_text(command, timeout=timeout)
-        payload = await self.wait_for_notification(timeout=timeout)
-        return decode_ble_text_payload(payload)
+        ``allow_read_fallback=False`` requires notification evidence. A cached
+        matching characteristic value is not a reply to a new transition query.
+        The owner must retire an uncertain session rather than repeat a setter.
+        """
 
-    async def _exchange_vendor_text(self, command: str, *, timeout: float) -> str:
+        started = asyncio.get_running_loop().time()
+        try:
+            async with self._exchange_lock:
+                if drain_before_send:
+                    self._drain_notifications()
+                self._exchange_diagnostics = diagnostics
+                try:
+                    generation = self._notify_generation
+                    if diagnostics is not None:
+                        diagnostics.phase = "writing"
+                    await self.send_bytes(
+                        build_ble_text_payload(command, append_crlf=append_crlf),
+                        response=response,
+                    )
+                    if diagnostics is not None:
+                        diagnostics.write_completed = True
+                        diagnostics.phase = "receiving"
+                    if generation is not self._notify_generation:
+                        raise SmartEssBleError("ble_not_connected")
+                    if self._layout is not None and self._layout.name == VENDOR_LAYOUT.name:
+                        result = await self._exchange_vendor_text(command, timeout=timeout,
+                                                                 allow_read_fallback=allow_read_fallback)
+                    else:
+                        payload = await self.wait_for_notification(timeout=timeout)
+                        if generation is not self._notify_generation:
+                            raise SmartEssBleError("ble_not_connected")
+                        result = decode_ble_text_payload(payload)
+                        if diagnostics is not None:
+                            diagnostics.notifications_consumed += 1
+                            diagnostics.reply_source = "notify"
+                    if diagnostics is not None:
+                        diagnostics.phase = "reply_complete"
+                    return result
+                finally:
+                    self._exchange_diagnostics = None
+        finally:
+            if diagnostics is not None:
+                diagnostics.elapsed_ms = max(0, int((asyncio.get_running_loop().time() - started) * 1000))
+
+    async def _exchange_vendor_text(self, command: str, *, timeout: float,
+                                    allow_read_fallback: bool = True) -> str:
         if not self._connected or self._layout is None:
             raise SmartEssBleError("ble_not_connected")
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max(0.0, float(timeout))
-        expected_marker = _command_response_marker(command)
-        fragments: list[str] = []
-        last_fragment_at: float | None = None
-        read_attempts = 0
-        read_errors = 0
-        last_source = "none"
+        reply = VendorAtReply(command)
+        generation = self._notify_generation
+        diagnostics = self._exchange_diagnostics
+
+        def feed(payload: bytes, source: str) -> None:
+            if diagnostics is not None and source == "notify":
+                diagnostics.notifications_consumed += 1
+            reply.feed(payload, source=source, now=loop.time())
+            if diagnostics is not None:
+                diagnostics.matched_notify_bytes = max(diagnostics.matched_notify_bytes, len(reply.notify.data))
+                diagnostics.matched_read_bytes = max(diagnostics.matched_read_bytes, len(reply.read.data))
 
         while True:
+            if not self.connected or generation is not self._notify_generation:
+                raise SmartEssBleError(self._notification_error or "ble_not_connected")
             remaining = deadline - loop.time()
+            result = reply.result(
+                now=loop.time(), settle=_VENDOR_FRAGMENT_SETTLE_TIMEOUT,
+                deadline=remaining <= 0,
+            )
+            if result is not None:
+                if diagnostics is not None:
+                    diagnostics.reply_source = "notify" if reply.notify.data else "read"
+                return result
             if remaining <= 0:
-                if fragments:
-                    combined = "".join(fragments)
-                    if _can_return_vendor_fragments(combined, expected_marker):
-                        return combined
                 logger.debug(
-                    "SmartESS BLE vendor response timed out command=%s marker=%s read_attempts=%d "
-                    "read_errors=%d last_source=%s",
-                    command,
-                    expected_marker or "none",
-                    read_attempts,
-                    read_errors,
-                    last_source,
+                    "SmartESS BLE vendor response timed out marker=%s",
+                    reply.prefix.decode("ascii"),
                 )
                 raise SmartEssBleError("ble_notification_timeout")
 
-            text, source = await self._poll_vendor_text_response(
+            payload, source = await self._poll_vendor_text_response(
                 timeout=remaining,
-                prefer_read=bool(fragments),
+                prefer_read=bool(reply.read.data),
+                notify_only=not allow_read_fallback or bool(reply.notify.data),
             )
-            last_source = source
-            if source in {"read", "read_empty", "read_error"}:
-                read_attempts += 1
-            if source == "read_error":
-                read_errors += 1
-            if text is None:
-                if (
-                    fragments
-                    and last_fragment_at is not None
-                    and loop.time() - last_fragment_at >= _VENDOR_FRAGMENT_SETTLE_TIMEOUT
-                ):
-                    combined = "".join(fragments)
-                    if _can_return_vendor_fragments(combined, expected_marker):
-                        return combined
+            if payload is None:
                 continue
-
-            if command == "AT+ATVER?" and not text:
-                return text
-
-            if _is_vendor_placeholder_payload(text):
-                if fragments:
-                    return "".join(fragments)
-                continue
-
-            if expected_marker == "AT+INTPARA:49":
-                if _is_wifi_scan_response_payload(text):
-                    fragments.append(text)
-                    last_fragment_at = loop.time()
-                    continue
-                if fragments:
-                    if "[" in text and "]" in text:
-                        fragments.append(text)
-                        last_fragment_at = loop.time()
-                        continue
-                    return "".join(fragments)
-                logger.debug(
-                    "SmartESS BLE ignoring non-Wi-Fi vendor response while waiting for scan payload preview=%s",
-                    _safe_ble_log_preview(text),
-                )
-                continue
-
-            if expected_marker and expected_marker in text:
-                return text
-            if expected_marker:
-                combined = "".join(fragments) + text if fragments else text
-                if expected_marker in combined:
-                    return combined
-                if _is_possible_vendor_response_fragment(combined, expected_marker):
-                    fragments.append(text)
-                    last_fragment_at = loop.time()
-                    continue
-                logger.debug(
-                    "SmartESS BLE ignoring unrelated vendor response while waiting for marker=%s preview=%s",
-                    expected_marker,
-                    _safe_ble_log_preview(text),
-                )
-                continue
-            if text:
-                return text
+            try:
+                if source == "read":
+                    # A read can race with several notifications. Feed those
+                    # first but retain the independent snapshot if all of them
+                    # belong to other commands. Matching notify evidence wins.
+                    while not self._notifications.empty():
+                        feed(self._notifications.get_nowait(), "notify")
+                feed(payload, source)
+            except ValueError as exc:
+                raise SmartEssBleError(str(exc)) from exc
 
     async def _poll_vendor_text_response(
         self,
         *,
         timeout: float,
         prefer_read: bool = False,
-    ) -> tuple[str | None, str]:
-        notify_timeout = 0.0 if prefer_read else min(_VENDOR_NOTIFY_POLL_TIMEOUT, timeout)
+        notify_only: bool = False,
+    ) -> tuple[bytes | None, str]:
+        # Always consume queued notifications, even when continuing a fragmented
+        # reply. ReadValue is a fallback snapshot, never a notification fragment.
+        if not self._notifications.empty():
+            return self._notifications.get_nowait(), "notify"
+        if notify_only:
+            # Once a response starts on notify, finish that stream without
+            # probing a second mutable firmware buffer via ReadValue.
+            try:
+                payload = await asyncio.wait_for(
+                    self._notifications.get(),
+                    timeout=min(timeout, _VENDOR_FRAGMENT_SETTLE_TIMEOUT),
+                )
+            except asyncio.TimeoutError:
+                return None, "none"
+            return payload, "notify"
+        # Leave a bounded part of the remaining budget for read-only firmware.
+        notify_timeout = 0.0 if prefer_read else min(_VENDOR_NOTIFY_POLL_TIMEOUT, timeout / 2)
+        started = asyncio.get_running_loop().time()
         if notify_timeout > 0:
             try:
                 payload = await asyncio.wait_for(self._notifications.get(), timeout=notify_timeout)
             except asyncio.TimeoutError:
                 payload = None
             if payload is not None:
-                text = decode_ble_text_payload(payload)
-                logger.debug(
-                    "SmartESS BLE vendor response via notify layout=%s preview=%s",
-                    self._layout.name if self._layout is not None else "unknown",
-                    _safe_ble_log_preview(text),
-                )
-                return text, "notify"
+                return payload, "notify"
 
-        read_timeout = max(0.0, min(timeout, _VENDOR_NOTIFY_POLL_TIMEOUT))
+        remaining = timeout - (asyncio.get_running_loop().time() - started)
+        read_timeout = max(0.0, min(remaining, _VENDOR_READ_POLL_TIMEOUT))
         if read_timeout <= 0 or self._layout is None:
             return None, "none"
+        diagnostics = self._exchange_diagnostics
+        if diagnostics is not None:
+            diagnostics.read_attempts += 1
         try:
             payload = await self.read_bytes(timeout=read_timeout)
+            if diagnostics is not None:
+                diagnostics.read_completed += 1
+                diagnostics.read_bytes += len(payload)
+                diagnostics.read_empty += not bool(payload)
         except asyncio.TimeoutError:
-            return None, "none"
+            if diagnostics is not None:
+                diagnostics.read_timeouts += 1
+            payload = None
         except Exception as exc:
+            if diagnostics is not None:
+                diagnostics.read_errors += 1
             logger.debug(
                 "SmartESS BLE vendor read failed layout=%s error=%s",
-                self._layout.name,
-                exc,
+                self._layout.name if self._layout is not None else "unknown",
+                type(exc).__name__,
             )
-            return None, "read_error"
-        text = decode_ble_text_payload(payload)
-        if text:
-            logger.debug(
-                "SmartESS BLE vendor response via read layout=%s preview=%s",
-                self._layout.name,
-                _safe_ble_log_preview(text),
-            )
-            return text, "read"
-        return None, "read_empty"
+            payload = None
+        # A matching notify queued during the read takes precedence in the
+        # assembler. An unrelated notify must not discard a valid read fallback.
+        if payload is None and not self._notifications.empty():
+            return self._notifications.get_nowait(), "notify"
+        if not payload:
+            # Empty cached reads can return immediately; avoid a hot retry loop.
+            await asyncio.sleep(min(0.01, max(0.0, remaining)))
+            return None, "none"
+        return payload, "read"
 
     def _handle_notification(self, payload: bytes) -> None:
+        diagnostics = self._exchange_diagnostics
+        if diagnostics is not None:
+            diagnostics.notifications_received += 1
+            diagnostics.notification_bytes += len(payload)
+        # Bound memory even between operations on a persistent connection.
+        # Do not silently drop excess bytes and continue with a plausible frame.
+        if self._notification_error is not None:
+            return
+        if len(payload) > 16384 or self._notifications.qsize() >= 32:
+            self._notification_error = "ble_notification_overflow"
+            return
         self._notifications.put_nowait(bytes(payload))
 
     def _drain_notifications(self) -> None:

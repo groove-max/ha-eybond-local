@@ -32,6 +32,15 @@ queries. Missing firmware, port or protocol values are not filled with defaults.
 Reading an endpoint does **not** verify TCP callback or endpoint restoration.
 Closing the dialog cancels the attempt and completes connection cleanup.
 
+On newer main builds, the JSON records connection readiness and per-query
+transport evidence: whether the GATT write returned, notification counts/byte
+counts, candidate reply lengths, GATT read results/errors, the response source,
+and elapsed time. This distinguishes a write-stage timeout from silence,
+unrelated traffic or an incomplete reply. A completed GATT write does not prove
+that firmware processed the command; received bytes do not prove identity or
+freshness. Raw payloads and backend exception messages are not added to this
+evidence. The same four queries and time limits are retained.
+
 Optionally request a short-lived JSON download. The redacted result is also
 saved as the latest diagnostic attempt for a matching, unchanged device identity
 and can be included in a subsequent Support Archive. It replaces the previous
@@ -39,6 +48,10 @@ command/Bluetooth diagnostic attempt; download older evidence first if needed.
 Unknown reply text is not exported. Bluetooth addresses are omitted from the
 shareable copy; collector identifiers use the existing masking. Private raw
 result files remain local. An export error is shown separately from query results.
+If PN could not be confirmed, the result is not attached to that collector's
+Support Archive. The separate `.share.json` still remains under
+`/config/eybond_local/diagnostic_runs/` after a successful export. Download or
+attach that shareable copy when requested, not the raw `.json` or `.txt`.
 
 ### Free-form diagnostic commands
 
