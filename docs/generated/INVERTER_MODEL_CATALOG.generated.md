@@ -151,6 +151,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Validation: hardware captured, telemetry confirmed, controls partial
 - Coverage: runtime device_scoped_overlay, cloud device_scoped_overlay, vendor map documented
   - Coverage notes:
+    - The November 8 follow-up to #88 confirms the owner's patched HA writes for battery type (322/FC06, six choices) and LCD acceptance of the momentary EQ command (425/FC06), with the battery disconnected. These built-in controls remain untested and opt-in; an EQ charging cycle was not validated.
     - Issue #88 adds a model-scoped, still-untested built-in overlay from the single-output 24 V owner's LCD/control report. It does not promote the layout-11 Anenji 4200 or all 0925 devices.
     - The common runtime surface comes from the documented classic SMG RS232 V1 map; the observed register-184 value 1 is separate runtime identity evidence.
     - Full cloud shadow-learning correlated 77 cloud write attempts and activated eight device-scoped learned controls; writes were captured but intentionally not applied.
@@ -162,12 +163,13 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `anenji_4200` → surface `anenji_4200_protocol_1_full` (driver modbus_smg, variant anenji_4200_protocol_1)
       - Protocol: modbus_smg | Detection: fingerprint (layout 1, model 13569, rated 4200)
       - Tier: full | Read-only: no | Profile: modbus_smg/models/anenji_4200_protocol_1.json | Schema: modbus_smg/models/anenji_4200_protocol_1.json
-      - Capabilities: 37 (untested 37); support tiers: conditional 25, standard 12 | Telemetry: 100 measurements, 18 binary sensors
+      - Capabilities: 39 (untested 39); support tiers: conditional 27, standard 12 | Telemetry: 100 measurements, 18 binary sensors
 - Known limitations:
-  - Issue #88 nominal output voltage/frequency controls are selectors and editable only in Standby; existing number entities are replaced. Equalization controls are unavailable for lithium. Battery-type writes and immediate equalization are not added from the ambiguous patch.
+  - Issue #88 nominal output voltage/frequency controls are selectors and editable only in Standby; existing number entities are replaced. Equalization controls are unavailable for explicit lithium battery modes; the integration cannot infer chemistry when User is selected. Battery type and immediate EQ require Full Control and explicit entity activation.
+  - Voltage/SOC dependency formulas still need verification against the original manual. Program 46 uses the owner's observed 0-500 A LCD range, not a universal SMG limit. Unknown programs 25/42 remain unmapped.
   - Runtime telemetry is confirmed by user support archives.
   - Full shadow-learning completed and activated eight device-scoped learned controls; the learning proxy intentionally captured but did not apply cloud writes, so direct Home Assistant write/readback validation is still pending.
-- Evidence: 7 source(s)
+- Evidence: 8 source(s)
 
 ### Anenji — ANJ-6200-48PL (`anenji_anj_6200_48pl`)
 

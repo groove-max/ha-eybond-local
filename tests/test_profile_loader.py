@@ -155,7 +155,7 @@ class ProfileLoaderTests(unittest.TestCase):
             )
         )
         self.assertEqual(len(profile.groups), 4)
-        self.assertEqual(len(profile.capabilities), 37)
+        self.assertEqual(len(profile.capabilities), 39)
         self.assertEqual(len(profile.presets), 0)
         self.assertEqual(sum(capability.tested for capability in profile.capabilities), 0)
         self.assertFalse(profile.get_capability("charge_source_priority").tested)

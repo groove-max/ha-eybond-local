@@ -85,15 +85,20 @@ async def test_upgrade_replaces_numeric_controls_and_applies_live_conditions(has
     for domain, key in (
         ("select", "output_rating_voltage"), ("select", "output_rating_frequency"),
         ("number", "battery_equalization_time"), ("switch", "battery_equalization_mode"),
+        ("select", "battery_type"), ("button", "equalization_activate_now"),
     ):
         entity_id = registry.async_get_entity_id(domain, DOMAIN, f"{entry.entry_id}_{domain}_{key}")
         assert entity_id is not None
+        if key in ("battery_type", "equalization_activate_now"):
+            assert registry.async_get(entity_id).disabled_by is er.RegistryEntryDisabler.INTEGRATION
         ids[key] = entity_id
         registry.async_update_entity(entity_id, disabled_by=None)
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
     assert hass.states.get(ids["output_rating_voltage"]).state == "230 V"
     assert hass.states.get(ids["output_rating_frequency"]).state == "50 Hz"
+    assert hass.states.get(ids["battery_type"]).state == "Li4"
+    assert hass.states.get(ids["equalization_activate_now"]).state == "unavailable"
     assert hass.states.get(ids["battery_equalization_time"]).state == "unavailable"
     assert hass.states.get(ids["battery_equalization_mode"]).state == "unavailable"
     for mode in ("Line", "Fault", "Power On", None, "Standby"):
@@ -108,6 +113,14 @@ async def test_upgrade_replaces_numeric_controls_and_applies_live_conditions(has
     await hass.async_block_till_done()
     assert float(hass.states.get(ids["battery_equalization_time"]).state) == 60
     assert hass.states.get(ids["battery_equalization_mode"]).state == "off"
+    assert hass.states.get(ids["equalization_activate_now"]).state == "unavailable"
+    for battery in ("Flooded", "User", "AGM", "Li2", "Li4", "LiB", None):
+        for enabled in (False, True, None):
+            values.update(battery_type=battery, battery_equalization_enabled=enabled)
+            await entry.runtime_data.async_refresh()
+            await hass.async_block_till_done()
+            allowed = battery in ("Flooded", "User") and enabled is True
+            assert (hass.states.get(ids["equalization_activate_now"]).state != "unavailable") is allowed
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
     assert registry.async_get(retained.entity_id).disabled_by is er.RegistryEntryDisabler.USER

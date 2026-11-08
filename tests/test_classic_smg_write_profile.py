@@ -194,7 +194,7 @@ class ClassicSmgWriteProfileTests(unittest.TestCase):
         expected = {
             "modbus_smg/default.json": (33, 25, 2),
             "modbus_smg/models/smg_6200.json": (38, 30, 2),
-            "modbus_smg/models/anenji_4200_protocol_1.json": (37, 0, 0),
+            "modbus_smg/models/anenji_4200_protocol_1.json": (39, 0, 0),
             "modbus_smg/models/smg_variant_4200.json": (43, 21, 0),
             "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json": (35, 22, 0),
             "modbus_smg/models/anenji_op2_6200.json": (37, 25, 2),
@@ -222,7 +222,7 @@ class ClassicSmgWriteProfileTests(unittest.TestCase):
 
         self.assertEqual(
             {item.register for item in profile.capabilities},
-            DOCUMENTED_WRITE_REGISTERS | {330, 338, 339, 341, 342, 343, 351},
+            DOCUMENTED_WRITE_REGISTERS | {322, 330, 338, 339, 341, 342, 343, 351, 425},
         )
         self.assertTrue(all(not item.tested for item in profile.capabilities))
         self.assertEqual(

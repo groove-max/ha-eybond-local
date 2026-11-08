@@ -13,6 +13,13 @@
     "hybrid_pv_with_grid_backup"
   ],
   "conditions": {
+    "anenji_equalization_enabled": {
+      "key": "battery_equalization_enabled",
+      "operator": "eq",
+      "value": true,
+      "effect": "disable",
+      "reason": "Enable program 33 before requesting a one-shot equalization."
+    },
     "anenji_standby_only": {
       "key": "operating_mode",
       "operator": "eq",
@@ -39,6 +46,48 @@
     }
   },
   "capabilities": [
+    {
+      "key": "battery_type",
+      "register": 322,
+      "value_kind": "enum",
+      "write_function": 6,
+      "title": "Battery Type",
+      "group": "battery",
+      "order": 180,
+      "enabled_default": false,
+      "advanced": true,
+      "requires_confirm": true,
+      "unsafe_while_running": true,
+      "choices": [
+        {"value": 0, "label": "AGM"},
+        {"value": 1, "label": "Flooded"},
+        {"value": 2, "label": "User"},
+        {"value": 4, "label": "Li2"},
+        {"value": 6, "label": "Li4"},
+        {"value": 8, "label": "LiB"}
+      ],
+      "change_summary": "Changes battery chemistry/BMS mode and may reset charge or cut-off settings. Review all related settings after a deliberate change; they are not restored automatically.",
+      "note": "Program 05: issue #88 owner confirmed all six choices through an HA patch declaring FC06, with LCD and register-322 readback, battery disconnected. No wire capture or FC16 comparison was provided. Uses the same enum labels as normal telemetry.",
+      "support_notes": "Owner-observed write/readback with a local patch, not a maintainer hardware test of this built-in overlay. Full Control and explicit entity activation are required; no automatic battery-type change."
+    },
+    {
+      "key": "equalization_activate_now",
+      "register": 425,
+      "value_kind": "action",
+      "action_value": 1,
+      "write_function": 6,
+      "title": "Equalization Now",
+      "group": "battery",
+      "order": 440,
+      "enabled_default": false,
+      "advanced": true,
+      "requires_confirm": true,
+      "visible_if": ["anenji_equalization_battery"],
+      "editable_if": ["anenji_equalization_enabled"],
+      "change_summary": "Requests one equalization cycle. Only for a suitable Flooded/User battery with equalization enabled; never use for lithium, including a lithium battery configured as User. Acceptance does not confirm a completed cycle.",
+      "note": "Program 39: issue #88 owner observed AdS -> AEN -> AdS on LCD after FC06 to 425 with Flooded selected and program 33 enabled. Battery was disconnected; no completed equalization cycle was tested. This is a one-shot action, not a persistent on/off setting.",
+      "support_notes": "Reported command acceptance only. Retained as untested and opt-in; inherited checks apply to both HA availability and the pre-write refresh."
+    },
     {
       "key": "output_source_priority",
       "choices": [
@@ -231,6 +280,8 @@
       "key": "max_discharge_current_protection",
       "register": 351,
       "value_kind": "u16",
+      "minimum": 0,
+      "maximum": 500,
       "title": "Maximum Discharge Current Protection",
       "unit": "A",
       "group": "battery",
@@ -238,7 +289,7 @@
       "enabled_default": false,
       "advanced": true,
       "requires_confirm": true,
-      "note": "Program 46: 0 = OFF, reported in issue #88. No maximum setpoint has been established; only the wire encoding limit is imposed."
+      "note": "Program 46: 0 = OFF (disables protection). The issue #88 owner reports an LCD selection range of 0-500 A and successful LCD readback at both endpoints. This is a model-specific LCD range, not a documented wire rejection threshold or a recommendation for battery current; values beyond 500 A were not tested."
     },
     {
       "key": "max_charge_current",

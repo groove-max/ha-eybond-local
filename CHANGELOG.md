@@ -13,13 +13,18 @@ RC1 below; newer model features remain here.
 
 ### Added
 
-- Add seven model-scoped controls for the single-output Anenji 4200 24 V
+- Add nine model-scoped controls for the single-output Anenji 4200 24 V
   (layout 1, model 0x3501) from the owner's report in #88, retaining untested
   status and explicit entity activation. Add SUF and correct its Auto Bypass
   labels. Use discrete output-voltage/frequency selectors under the existing
   capability keys, editable only in Standby; obsolete number entities are
-  replaced, so review automations referring to those entities. Do not infer
-  battery-type writes, immediate equalization or unknown activation registers.
+  replaced, so review automations referring to those entities. The owner's
+  follow-up supports FC06 battery-type selection and a one-shot EQ command;
+  both remain opt-in and untested in the built-in overlay. EQ requires
+  Flooded/User plus enabled equalization; no completed EQ cycle is claimed.
+  Program 46 uses the reported 0–500 A LCD range (0 disables protection), not
+  a universal SMG limit. Do not infer voltage dependencies, unknown activation
+  registers or compatibility with a similarly named 120 V AC variant.
 
 - Add a manually selected experimental `EyeBond 099E / VPHB` read-only driver
   for the common status fields investigated in #82. Decode ten measurements

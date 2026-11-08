@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_88_anenji_4200_followup",
+  "kind": "github_issue",
+  "title": "Anenji 4200 Protocol 1 owner write clarification",
+  "reference": "https://github.com/groove-max/ha-eybond-local/issues/88#issuecomment-6715312130",
+  "captured_at": "2026-11-08",
+  "visibility": "public",
+  "summary": "The owner reports successful HA writes and LCD/register-322 readback for AGM/Flooded/User/Li2/Li4/LiB with a patch explicitly declaring FC06. The disconnected-battery test also showed program 39 AdS -> AEN -> AdS after the patch's 425/FC06 action with Flooded and EQ enabled. This confirms reported command acceptance, not a completed equalization cycle or maintainer testing. Program 46 LCD selection endpoints 0/OFF and 500 A were observed; rejection of 501 A was not tested or requested. The proposed voltage/SOC formulas and attached original manual have not yet been independently verified, so no new voltage bounds or dynamic validators are derived from them.",
+  "assertions": ["control_behavior", "write_validation"]
+}
