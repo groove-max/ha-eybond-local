@@ -33,7 +33,9 @@ from .common import (
     _is_default_broadcast_alias_candidate,
     _is_hairpin_alias_candidate,
     _is_ipv4_broadcast_placeholder,
+    _leading_at_lines_end,
     _mask_identity_token,
+    _runtime_eybond_header_error,
     _seed_connection_collector_pn,
     _spawn_tracked_task,
 )
@@ -2427,20 +2429,25 @@ class _SharedEybondListener:
         if not chunk:
             return chunk, True
 
-        if len(chunk) >= HEADER_SIZE:
+        # Complete leading AT lines can share this read with the frame that
+        # follows them; finish that frame at its own boundary, never later.
+        frame_start = _leading_at_lines_end(chunk) or 0
+        if len(chunk) >= frame_start + HEADER_SIZE:
             try:
-                header = decode_header(chunk[:HEADER_SIZE])
+                header = decode_header(chunk[frame_start : frame_start + HEADER_SIZE])
             except Exception:
+                header = None
+            if header is not None and frame_start and _runtime_eybond_header_error(header):
                 header = None
             if header is not None:
                 frame_len = HEADER_SIZE + max(int(header.payload_len), 0)
                 if (
                     HEADER_SIZE <= frame_len <= HEADER_SIZE + _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN
-                    and len(chunk) < frame_len
+                    and len(chunk) < frame_start + frame_len
                 ):
                     try:
                         chunk += await asyncio.wait_for(
-                            pending.reader.readexactly(frame_len - len(chunk)),
+                            pending.reader.readexactly(frame_start + frame_len - len(chunk)),
                             timeout=0.5,
                         )
                     except asyncio.IncompleteReadError as exc:

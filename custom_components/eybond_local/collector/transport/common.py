@@ -300,14 +300,41 @@ def _framed_pn_at_offset(payload: bytes, offset: int) -> tuple[str, str]:
         return "", ""
     if offset and _runtime_eybond_header_error(header):
         return "", ""
-    available_payload = window[HEADER_SIZE : HEADER_SIZE + max(header.payload_len, 0)]
+    payload_len = max(header.payload_len, 0)
+    # A short frame is not a PN: cutting bytes off an FC2 PN can still leave a
+    # valid-looking shorter PN. The caller keeps the bytes for the next read.
+    if len(window) < HEADER_SIZE + payload_len:
+        return "", ""
+    frame_payload = window[HEADER_SIZE : HEADER_SIZE + payload_len]
     if header.fcode == FC_HEARTBEAT:
-        collector_pn = parse_heartbeat_pn(available_payload)
+        collector_pn = parse_heartbeat_pn(frame_payload)
         return (collector_pn, "framed_heartbeat") if collector_pn else ("", "")
     if header.fcode == FC_QUERY_COLLECTOR:
-        collector_pn = _parse_fc2_collector_pn(available_payload)
+        collector_pn = _parse_fc2_collector_pn(frame_payload)
         return (collector_pn, "fc2_parameter_2") if collector_pn else ("", "")
     return "", ""
+
+
+def _leading_at_lines_end(payload: bytes) -> int | None:
+    """Return the offset just past the complete AT lines that start payload.
+
+    A line is AT+ and an uppercase command letter at the current offset, ended
+    by its first newline. Anything else ends the walk, so newlines inside a
+    later frame or arbitrary text are never boundaries. None means the walk
+    stopped on an AT line that is not complete yet.
+    """
+
+    offset = 0
+    while payload.startswith(b"AT+", offset):
+        if len(payload) <= offset + 3:
+            return None
+        if not 0x41 <= payload[offset + 3] <= 0x5A:
+            break
+        newline = payload.find(b"\n", offset + 4)
+        if newline < 0:
+            return None
+        offset = newline + 1
+    return offset
 
 
 def _collector_pn_from_initial_chunk(chunk: bytes) -> tuple[str, str]:
@@ -325,18 +352,11 @@ def _collector_pn_from_initial_chunk(chunk: bytes) -> tuple[str, str]:
     if pn:
         return pn, source
     # A non-DTUPN AT line can share the first read with the heartbeat or FC2
-    # that follows it. The frame is not at byte 0, so the offset above misses it.
-    if not _looks_like_at_traffic(payload):
+    # that follows it. Only the frame directly after those lines can carry it.
+    frame_start = _leading_at_lines_end(payload)
+    if not frame_start:
         return "", ""
-    search_from = 0
-    while True:
-        newline = payload.find(b"\n", search_from)
-        if newline < 0:
-            return "", ""
-        pn, source = _framed_pn_at_offset(payload, newline + 1)
-        if pn:
-            return pn, source
-        search_from = newline + 1
+    return _framed_pn_at_offset(payload, frame_start)
 
 
 def _bounded_write_timeout(request_timeout: float) -> float:

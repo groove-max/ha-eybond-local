@@ -485,6 +485,11 @@ the GitHub release body should be rendered from the matching version section her
   unidentified and an IP-only claim could take a named collector. AT+DTUPN
   still wins when both are present. A lone AT line still has no PN.
 
+- Only a complete frame directly after complete AT lines gives that PN. A
+  newline inside a following frame, non-AT bytes before the frame, or a short
+  declared frame is not a collector PN. The remaining bytes stay for the
+  normal read, which finishes a split frame before identity is decided.
+
 - A callback whose first bytes already carry a strong PN is no longer also
   stored under that peer IP. An IP-only entry on the same address was sending
   on the named collectors socket. The PN owner still receives that socket.

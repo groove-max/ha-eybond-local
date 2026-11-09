@@ -164,6 +164,14 @@ class TransportModuleBoundaryTests(unittest.TestCase):
             for node in _tree(_TRANSPORT / "common.py").body
         ), 1)
         definitions.remove(framed_pn)
+        # The parser and the first-read reader share one leading AT line walk.
+        at_lines_end = ("FunctionDef", "_leading_at_lines_end")
+        self.assertEqual(definitions.count(at_lines_end), 1)
+        self.assertEqual(sum(
+            isinstance(node, ast.FunctionDef) and node.name == at_lines_end[1]
+            for node in _tree(_TRANSPORT / "common.py").body
+        ), 1)
+        definitions.remove(at_lines_end)
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()
