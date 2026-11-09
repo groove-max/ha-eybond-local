@@ -643,6 +643,19 @@ class MpptOptionalReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.state[HEALTH_KEY].state, HEALTH_POISONED)
         self.assertEqual(unsupported_commands(self.state), ())
 
+    async def test_framing_poison_blocks_0200_after_optional_state_is_cleared(self):
+        """A reconnect drops OptionalReads. The poison must still block 0200."""
+        await self.test_ambiguous_aux_disconnect_backs_off_without_retry()
+        health = self.state[HEALTH_KEY]
+        sent = len(self.transport.aux_requests)
+        self.state.clear()
+        self.state[ADMIT_OPTION_KEY] = True
+        self.state[HEALTH_KEY] = health
+        result = await self.read(5)
+        self.assertNotIn("pv_power", result.values)
+        self.assertEqual(len(self.transport.aux_requests), sent)
+        self.assertTrue(health.is_poisoned())
+
     async def test_mppt_timeouts_never_blacklist_as_unsupported(self):
         """Aux 0200 contention must not persist short_ascii:MPPT forever."""
         await self._prime_through_rh()
@@ -694,7 +707,7 @@ class MpptOptionalReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"RB\x01\r", self.transport.requests)
         self.assertEqual(result.values["pv_power"], 370)
 
-    async def test_structural_typeerror_backs_off_without_retry(self):
+    async def test_at_facade_typeerror_backs_off_without_retry(self):
         await self._prime_through_rh()
         for sample in self.state[STATE_KEY].samples:
             if sample.command != "MPPT":

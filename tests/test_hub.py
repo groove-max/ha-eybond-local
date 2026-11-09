@@ -2960,6 +2960,37 @@ class HubWriteBlockerTests(unittest.TestCase):
             command_skipped_as_unsupported(hub._runtime_read_state, "QPIWS")
         )
 
+    def test_mppt_poison_survives_runtime_state_reset(self) -> None:
+        from custom_components.eybond_local.drivers.short_ascii_mppt_optional import (
+            HEALTH_KEY,
+            MpptHealth,
+        )
+
+        hub = EybondHub(
+            connection=EybondConnectionSpec(
+                server_ip="192.168.1.10",
+                collector_ip="192.168.1.14",
+                tcp_port=8899,
+                udp_port=58899,
+                discovery_target="192.168.1.255",
+                discovery_interval=30,
+                heartbeat_interval=60,
+                request_timeout=5.0,
+            ),
+        )
+        hub._admit_short_ascii_mppt = True
+        health = MpptHealth()
+        health.mark_poisoned(mono=1_000.0)
+        hub._runtime_read_state[HEALTH_KEY] = health
+        hub._runtime_read_state["short_ascii_optional"] = object()
+
+        hub._reset_runtime_read_state()
+
+        self.assertIs(hub._runtime_read_state[HEALTH_KEY], health)
+        self.assertTrue(health.is_poisoned(1_050.0))
+        self.assertNotIn("short_ascii_optional", hub._runtime_read_state)
+        self.assertTrue(hub._runtime_read_state.get("admit_short_ascii_mppt"))
+
     def _metadata_hub(self) -> "EybondHub":
         return EybondHub(
             connection=EybondConnectionSpec(

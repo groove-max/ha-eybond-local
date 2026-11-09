@@ -22,7 +22,7 @@ from .common import (
 )
 
 from ...drivers.short_ascii_bms_held import STATE_KEY as _SHORT_ASCII_BMS_HELD_STATE_KEY
-from ...drivers.short_ascii_mppt_optional import ADMIT_OPTION_KEY
+from ...drivers.short_ascii_mppt_optional import ADMIT_OPTION_KEY, HEALTH_KEY as _SHORT_ASCII_MPPT_HEALTH_KEY
 
 
 def _is_labelled_held_mirror(key: str) -> bool:
@@ -640,9 +640,13 @@ class HubRefreshMixin:
 
         Short-ASCII BMS held estimates are also kept: reconnect often returns
         voltage before current, and wiping the hold cache opens sub-TTL gaps.
+        MPPT channel poison is kept for the same reason. A framing kill closes
+        the socket, and the next refresh resets this state. Dropping the poison
+        would solicit 0200 again on that reconnect.
         """
 
         held_bms = self._runtime_read_state.get(_SHORT_ASCII_BMS_HELD_STATE_KEY)
+        mppt_health = self._runtime_read_state.get(_SHORT_ASCII_MPPT_HEALTH_KEY)
         self._runtime_read_state.clear()
         if self._persistent_unsupported_commands:
             seed_unsupported_commands(
@@ -653,6 +657,8 @@ class HubRefreshMixin:
             self._runtime_read_state[ADMIT_OPTION_KEY] = True
         if held_bms is not None:
             self._runtime_read_state[_SHORT_ASCII_BMS_HELD_STATE_KEY] = held_bms
+        if mppt_health is not None:
+            self._runtime_read_state[_SHORT_ASCII_MPPT_HEALTH_KEY] = mppt_health
 
     def _record_inverter_detection_probe_log(
         self,
