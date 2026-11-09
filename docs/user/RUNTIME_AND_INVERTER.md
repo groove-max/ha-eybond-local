@@ -200,6 +200,17 @@ reads the relevant configuration again. An acknowledgement alone is not proof
 that the setting changed: an old value or missing readback is reported as
 unconfirmed. Confirmation may read twice, but does not resend the setting.
 
+## Unconfirmed Modbus writes
+
+If a sent FC06/FC16 setting command returns a short or malformed reply,
+`write_response_unconfirmed` reports its function, register, received byte count
+and parser reason. This is not a confirmed inverter rejection: the command
+may have reached the device. The integration does not automatically resend it
+because of that malformed reply, nor create a permanent control blocker.
+Check the actual setting before another write. For support, keep the debug log
+around the failure and any subsequent normal command; do not repeat a one-shot
+action such as battery equalization just to reproduce the error.
+
 ## MUST PV/PH18 power and energy corrections
 
 The unreleased test build corrects several readings in the MUST PV/PH18 map:

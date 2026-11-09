@@ -51,7 +51,7 @@
       "register": 322,
       "value_kind": "enum",
       "write_function": 6,
-      "title": "Battery Type",
+      "title": "05 Battery Type",
       "group": "battery",
       "order": 180,
       "enabled_default": false,
@@ -76,7 +76,7 @@
       "value_kind": "action",
       "action_value": 1,
       "write_function": 6,
-      "title": "Equalization Now",
+      "title": "39 Equalization Activated Immediately",
       "group": "battery",
       "order": 440,
       "enabled_default": false,
@@ -90,6 +90,7 @@
     },
     {
       "key": "output_source_priority",
+      "title": "01 Output Source Priority",
       "choices": [
         {
           "value": 0,
@@ -116,6 +117,7 @@
     },
     {
       "key": "charge_source_priority",
+      "title": "16 Charger Source Priority",
       "choices": [
         {
           "value": 1,
@@ -134,6 +136,7 @@
     },
     {
       "key": "output_rating_voltage",
+      "title": "08 Output Voltage",
       "value_kind": "enum",
       "divisor": null,
       "multiplier": null,
@@ -163,6 +166,7 @@
     },
     {
       "key": "output_rating_frequency",
+      "title": "09 Output Frequency",
       "value_kind": "enum",
       "divisor": null,
       "multiplier": null,
@@ -190,7 +194,7 @@
       "key": "automatic_mains_output_enabled",
       "register": 338,
       "value_kind": "enum",
-      "title": "Automatic Mains Output",
+      "title": "10 Auto Bypass",
       "group": "system",
       "order": 150,
       "enabled_default": false,
@@ -212,7 +216,7 @@
       "key": "constant_voltage_to_float_time",
       "register": 330,
       "value_kind": "u16",
-      "title": "Constant Voltage to Float Time",
+      "title": "32 Bulk Charging Time (C.V Stage)",
       "unit": "min",
       "minimum": 0,
       "maximum": 900,
@@ -231,7 +235,7 @@
       "key": "lithium_auto_activation",
       "register": 339,
       "value_kind": "enum",
-      "title": "Lithium Automatic Activation",
+      "title": "41 Automatic Activation for Lithium Battery",
       "group": "battery",
       "order": 280,
       "enabled_default": false,
@@ -251,6 +255,7 @@
     },
     {
       "key": "low_dc_protection_soc_grid_mode",
+      "title": "43 Back to Utility SOC",
       "template": "low_dc_protection_soc_grid_mode",
       "register": 341,
       "minimum": 5,
@@ -260,6 +265,7 @@
     },
     {
       "key": "solar_battery_utility_return_soc_threshold",
+      "title": "44 Back to Battery SOC",
       "template": "solar_battery_utility_return_soc_threshold",
       "register": 342,
       "minimum": 60,
@@ -269,6 +275,7 @@
     },
     {
       "key": "low_dc_cutoff_soc",
+      "title": "45 Low DC Cut-Off SOC",
       "template": "low_dc_cutoff_soc",
       "register": 343,
       "minimum": 3,
@@ -282,7 +289,7 @@
       "value_kind": "u16",
       "minimum": 0,
       "maximum": 500,
-      "title": "Maximum Discharge Current Protection",
+      "title": "46 Maximum Discharge Current Protection",
       "unit": "A",
       "group": "battery",
       "order": 290,
@@ -293,57 +300,68 @@
     },
     {
       "key": "max_charge_current",
+      "title": "02 Maximum Charging Current",
       "maximum": 1000,
       "note": "Program 02: up to 100 A (raw tenths), reported for the single-output 24 V unit in issue #88. Must not be less than utility charge current; the inverter validates the combination."
     },
     {
       "key": "max_ac_charge_current",
+      "title": "11 Maximum Utility Charging Current",
       "minimum": 20,
       "maximum": 800,
       "note": "Program 11: 2–80 A (raw tenths), reported for the single-output 24 V unit in issue #88. Must not exceed total charge current."
     },
     {
       "key": "battery_equalization_mode",
+      "title": "33 Battery Equalization",
       "visible_if": [
         "anenji_equalization_battery"
       ]
     },
     {
       "key": "battery_equalization_time",
+      "title": "35 Battery Equalized Time",
       "visible_if": [
         "anenji_equalization_battery"
       ]
     },
     {
       "key": "battery_equalization_timeout",
+      "title": "36 Battery Equalized Timeout",
       "visible_if": [
         "anenji_equalization_battery"
       ]
     },
     {
       "key": "battery_equalization_interval",
+      "title": "37 Equalization Interval",
       "visible_if": [
         "anenji_equalization_battery"
       ]
     },
     {
       "key": "battery_bulk_voltage",
+      "title": "26 Bulk Charging Voltage (C.V Voltage)",
       "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
     },
     {
       "key": "battery_float_voltage",
+      "title": "27 Floating Charging Voltage",
       "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
     },
     {
       "key": "battery_under_voltage",
+      "title": "12 Back to Utility Voltage",
       "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
     },
     {
       "key": "battery_under_voltage_off_grid",
+      "title": "29 Low DC Cut-Off Voltage",
       "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
     },
     {
       "key": "battery_redischarge_voltage",
+      "title": "13 Back to Battery Voltage",
       "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
     },
     {
@@ -352,8 +370,37 @@
     },
     {
       "key": "battery_equalization_voltage",
+      "title": "34 Battery Equalization Voltage",
       "visible_if": ["anenji_equalization_battery"],
       "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
+    },
+    {
+      "key": "input_voltage_range",
+      "title": "03 AC Input Voltage Range"
+    },
+    {
+      "key": "overload_restart_mode",
+      "title": "06 Auto Restart on Overload"
+    },
+    {
+      "key": "over_temperature_restart_mode",
+      "title": "07 Auto Restart on Over Temperature"
+    },
+    {
+      "key": "buzzer_mode",
+      "title": "18 Buzzer Mode"
+    },
+    {
+      "key": "lcd_auto_return_mode",
+      "title": "19 Auto Return to Default Display"
+    },
+    {
+      "key": "lcd_backlight_mode",
+      "title": "20 Backlight Control"
+    },
+    {
+      "key": "overload_bypass_mode",
+      "title": "23 Overload Bypass"
     }
   ]
 }

@@ -17,6 +17,21 @@ class ModbusError(Exception):
     """Raised when a Modbus RTU response cannot be decoded."""
 
 
+class ModbusWriteResponseError(ModbusError):
+    """A sent write has no valid acknowledgement; its device outcome is unknown.
+
+    Keep the original parser reason for existing callers. The bounded context
+    contains neither the requested value nor response payload/identity bytes.
+    This is not a Modbus exception reply or permission to retry the write.
+    """
+
+    def __init__(self, reason: str, *, function: int, address: int, response_length: int) -> None:
+        super().__init__(reason)
+        self.function = function
+        self.address = address
+        self.response_length = response_length
+
+
 @dataclass(frozen=True, slots=True)
 class ModbusReadRequestFrame:
     """Decoded Modbus RTU read request frame (function 0x03 or 0x04)."""
@@ -453,12 +468,19 @@ class ModbusSession:
             )
         except asyncio.TimeoutError as exc:
             raise ModbusError("request_timeout") from exc
-        parse_write_multiple_response(
-            response,
-            slave_id=self._slave_id,
-            address=address,
-            register_count=len(values),
-        )
+        try:
+            parse_write_multiple_response(
+                response,
+                slave_id=self._slave_id,
+                address=address,
+                register_count=len(values),
+            )
+        except ModbusError as exc:
+            if str(exc).startswith("exception_code:"):
+                raise  # A valid device rejection retains its existing policy.
+            raise ModbusWriteResponseError(
+                str(exc), function=0x10, address=address, response_length=len(response),
+            ) from exc
 
     async def write_single_holding(self, address: int, value: int) -> int:
         """Write one holding register using Modbus function code 0x06."""
@@ -472,11 +494,18 @@ class ModbusSession:
             )
         except asyncio.TimeoutError as exc:
             raise ModbusError("request_timeout") from exc
-        return parse_write_single_response(
-            response,
-            slave_id=self._slave_id,
-            address=address,
-        )
+        try:
+            return parse_write_single_response(
+                response,
+                slave_id=self._slave_id,
+                address=address,
+            )
+        except ModbusError as exc:
+            if str(exc).startswith("exception_code:"):
+                raise
+            raise ModbusWriteResponseError(
+                str(exc), function=0x06, address=address, response_length=len(response),
+            ) from exc
 
 
 def _is_retryable_read_error(error: ModbusError) -> bool:

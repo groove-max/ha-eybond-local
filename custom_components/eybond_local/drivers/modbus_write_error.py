@@ -12,14 +12,19 @@ Semantics are preserved exactly from the previous in-hub implementation:
 * code 3 -> non-persistent user-facing ``illegal_data_value`` error;
 * code 7 -> ``mode_restricted`` (unsafe while running in an unsafe mode) or
   ``unsupported_or_locked`` blocker;
+* malformed write acknowledgement -> unconfirmed-outcome error, no blocker/retry;
 * any other / non-Modbus error -> empty classification (hub re-raises original).
 """
 
 from __future__ import annotations
 
+import logging
+
 from ..models import CapabilityBlocker, WriteCapability
-from ..payload.modbus import ModbusError
+from ..payload.modbus import ModbusError, ModbusWriteResponseError
 from .write_error import EMPTY_WRITE_ERROR_CLASSIFICATION, WriteErrorClassification
+
+logger = logging.getLogger(__name__)
 
 
 def _modbus_exception_code(exc: BaseException) -> int | None:
@@ -147,6 +152,22 @@ def classify_modbus_write_error(
     operating_mode: object,
 ) -> WriteErrorClassification:
     """Classify a failed Modbus capability write into a neutral verdict."""
+
+    if isinstance(exc, ModbusWriteResponseError):
+        logger.warning(
+            "Unconfirmed Modbus write capability=%s function=%d register=%d "
+            "response_bytes=%d reason=%s; outcome unknown, no automatic resend",
+            capability.key, exc.function, exc.address, exc.response_length, str(exc),
+        )
+        return WriteErrorClassification(user_error=ValueError(
+            f"write_response_unconfirmed:{capability.key}:"
+            f"No valid acknowledgement for {capability.display_name!r} "
+            f"(FC{exc.function:02d}, register {exc.address}, "
+            f"{exc.response_length} response bytes; {exc}). "
+            "The command may have reached the inverter; it was not resent. "
+            "Check the actual device state before another write. "
+            "This error does not establish a setting limit or permanently lock the control."
+        ))
 
     exception_code = _modbus_exception_code(exc)
     if exception_code is None:

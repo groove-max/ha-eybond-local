@@ -10,7 +10,7 @@ from custom_components.eybond_local.fixtures.transport import FixtureTransport
 from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
 from custom_components.eybond_local.models import DetectedInverter, ProbeTarget, RuntimeSnapshot
 from custom_components.eybond_local.runtime.hub.management import HubManagementMixin
-from custom_components.eybond_local.schema import capability_write_exposure_allowed
+from custom_components.eybond_local.schema import capability_write_exposure_allowed, serialize_capability
 
 
 PROFILE = "modbus_smg/models/anenji_4200_protocol_1.json"
@@ -20,6 +20,16 @@ class Anenji4200ControlTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.profile = load_driver_profile(PROFILE)
 
+    def test_manual_program_labels_are_model_only_without_changing_capability_keys(self):
+        expected = {"battery_type": "05 Battery Type", "output_rating_voltage": "08 Output Voltage",
+                    "constant_voltage_to_float_time": "32 Bulk Charging Time (C.V Stage)",
+                    "equalization_activate_now": "39 Equalization Activated Immediately"}
+        for key, title in expected.items():
+            self.assertEqual(self.profile.get_capability(key).display_name, title)
+        classic = load_driver_profile("modbus_smg/protocols/classic_smg_rs232_v1.json")
+        self.assertEqual(classic.get_capability("output_rating_voltage").display_name, "Output Rating Voltage")
+        self.assertEqual(len(self.profile.capabilities), 39)
+
     def inverter(self):
         return DetectedInverter(
             driver_key="modbus_smg", protocol_family="modbus_smg",
@@ -28,6 +38,14 @@ class Anenji4200ControlTests(unittest.IsolatedAsyncioTestCase):
             profile_name=PROFILE, register_schema_name=PROFILE,
             capabilities=self.profile.capabilities,
         )
+
+    def test_hidden_equalization_retains_observed_value_without_allowing_edit(self):
+        cap = self.profile.get_capability("battery_equalization_voltage")
+        values = {"battery_type": "Li4", cap.value_key: 29.2}
+        result = serialize_capability(cap, self.inverter(), values)
+        self.assertEqual(result["current_value"], 29.2)
+        self.assertEqual(result["status"], "hidden")
+        self.assertFalse(cap.runtime_state(values).editable)
 
     def test_model_only_controls_do_not_expand_other_4200_or_family_maps(self):
         registers = {
