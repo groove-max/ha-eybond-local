@@ -5769,7 +5769,17 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
         pending.sniff_task = sniff
 
         await asyncio.sleep(0.3)
-        self.assertIn("203.0.113.10", listener._at_connections)
+        # AT text selects the AT connection. A strong PN is not also published
+        # under the peer IP, or an IP-only entry would send on this socket.
+        self.assertEqual(listener._session_inventory["s1"].state, "routed_at_text")
+        self.assertIn("s1", listener._session_at_connections)
+        self.assertNotIn("s1", listener._session_payload_connections)
+        self.assertNotIn("203.0.113.10", listener._at_connections)
+        self.assertNotIn("203.0.113.10", listener._connections)
+        self.assertIs(
+            listener._at_connections_by_pn["E5000020000000"],
+            listener._session_at_connections["s1"],
+        )
 
         reader.feed_eof()
         await asyncio.wait_for(sniff, timeout=2.0)

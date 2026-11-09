@@ -33,7 +33,9 @@ from .common import (
     _is_default_broadcast_alias_candidate,
     _is_hairpin_alias_candidate,
     _is_ipv4_broadcast_placeholder,
+    _leading_at_lines_end,
     _mask_identity_token,
+    _runtime_eybond_header_error,
     _seed_connection_collector_pn,
     _spawn_tracked_task,
 )
@@ -2461,20 +2463,39 @@ class _SharedEybondListener:
         if not chunk:
             return chunk, True
 
-        if len(chunk) >= HEADER_SIZE:
+        # Complete leading AT lines can share this read with the frame that
+        # follows them; finish that frame at its own boundary, never later.
+        # An unfinished AT line has no boundary yet, and its text is not a
+        # header.
+        frame_start = _leading_at_lines_end(chunk)
+        if frame_start is None:
+            return chunk, False
+        # A rejected or overlong AT line also starts with AT+ and a letter.
+        # Offset 0 skips the runtime header check, so those bytes must not
+        # become a length that reads into a later frame.
+        if (
+            frame_start == 0
+            and len(chunk) >= 4
+            and chunk.startswith(b"AT+")
+            and 0x41 <= chunk[3] <= 0x5A
+        ):
+            return chunk, False
+        if len(chunk) >= frame_start + HEADER_SIZE:
             try:
-                header = decode_header(chunk[:HEADER_SIZE])
+                header = decode_header(chunk[frame_start : frame_start + HEADER_SIZE])
             except Exception:
+                header = None
+            if header is not None and frame_start and _runtime_eybond_header_error(header):
                 header = None
             if header is not None:
                 frame_len = HEADER_SIZE + max(int(header.payload_len), 0)
                 if (
                     HEADER_SIZE <= frame_len <= HEADER_SIZE + _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN
-                    and len(chunk) < frame_len
+                    and len(chunk) < frame_start + frame_len
                 ):
                     try:
                         chunk += await asyncio.wait_for(
-                            pending.reader.readexactly(frame_len - len(chunk)),
+                            pending.reader.readexactly(frame_start + frame_len - len(chunk)),
                             timeout=0.5,
                         )
                     except asyncio.CancelledError:
@@ -2885,9 +2906,9 @@ class _SharedEybondListener:
                     initial_pn,
                     self._at_connections_by_pn,
                 )
-            if connection is None and not initial_pn:
+            if connection is None and not identity_can_route:
                 connection = self._at_connections.get(pending.remote_ip)
-            if connection is None and not initial_pn:
+            if connection is None and not identity_can_route:
                 connection = self._resolve_public_placeholder_alias(
                     pending.remote_ip,
                     connections=self._at_connections,
@@ -2897,7 +2918,7 @@ class _SharedEybondListener:
                 self._session_at_connections,
             ):
                 has_ip_owner = bool(
-                    not initial_pn
+                    not identity_can_route
                     and self._has_owner_for_remote_ip(
                         self._at_owner_counts,
                         pending.remote_ip,
@@ -2923,7 +2944,10 @@ class _SharedEybondListener:
                 )
             else:
                 connection.set_write_timeout(1.5)
-            self._at_connections[pending.remote_ip] = connection
+            # A strong PN already selected this connection. Publishing it under
+            # the peer IP would let an IP-only entry send on that collector.
+            if not (initial_pn and identity_can_route):
+                self._at_connections[pending.remote_ip] = connection
             if pending.session_id:
                 self._session_at_connections[pending.session_id] = connection
                 if initial_pn:
@@ -2991,7 +3015,10 @@ class _SharedEybondListener:
         else:
             connection.set_heartbeat_interval(60.0)
             connection.set_write_timeout(1.5)
-        self._connections[pending.remote_ip] = connection
+        # A strong PN already selected this connection. Publishing it under
+        # the peer IP would let an IP-only entry send on that collector.
+        if not (initial_pn and identity_can_route):
+            self._connections[pending.remote_ip] = connection
         if pending.session_id:
             self._session_payload_connections[pending.session_id] = connection
             if initial_pn:

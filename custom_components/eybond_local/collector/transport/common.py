@@ -225,6 +225,7 @@ _AT_TEXT_RESPONSE_IDLE_TIMEOUT = 0.2
 _AT_QUERY_STATUS_COMPLETION_TIMEOUT = 2.0
 _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN = MAX_EYBOND_PAYLOAD_SIZE
 _AT_TEXT_MIXED_FRAME_FCODES = RUNTIME_EYBOND_FCODES
+_AT_LINE_MAX_LEN = 512
 
 
 def _runtime_eybond_header_error(header: EybondHeader) -> str:
@@ -288,6 +289,64 @@ def _parse_fc2_collector_pn(payload: bytes) -> str:
     return validated_collector_pn(candidate)
 
 
+def _framed_pn_at_offset(payload: bytes, offset: int) -> tuple[str, str]:
+    """Return a heartbeat or FC2 PN whose header starts at offset."""
+
+    window = payload[offset:]
+    if len(window) < HEADER_SIZE:
+        return "", ""
+    try:
+        header = decode_header(window[:HEADER_SIZE])
+    except Exception:
+        return "", ""
+    if offset and _runtime_eybond_header_error(header):
+        return "", ""
+    payload_len = max(header.payload_len, 0)
+    # A short frame is not a PN: cutting bytes off an FC2 PN can still leave a
+    # valid-looking shorter PN. The caller keeps the bytes for the next read.
+    if len(window) < HEADER_SIZE + payload_len:
+        return "", ""
+    frame_payload = window[HEADER_SIZE : HEADER_SIZE + payload_len]
+    if header.fcode == FC_HEARTBEAT:
+        collector_pn = parse_heartbeat_pn(frame_payload)
+        return (collector_pn, "framed_heartbeat") if collector_pn else ("", "")
+    if header.fcode == FC_QUERY_COLLECTOR:
+        collector_pn = _parse_fc2_collector_pn(frame_payload)
+        return (collector_pn, "fc2_parameter_2") if collector_pn else ("", "")
+    return "", ""
+
+
+def _leading_at_lines_end(payload: bytes) -> int | None:
+    """Return the offset just past the complete AT lines that start payload.
+
+    A line is AT+ and an uppercase command letter at the current offset, then
+    only printable ASCII or CR, ended by a newline within _AT_LINE_MAX_LEN
+    bytes. Anything else ends the walk, so newlines inside a later frame or
+    arbitrary text are never boundaries. None means the walk stopped on an AT
+    line that is not complete yet.
+    """
+
+    offset = 0
+    while payload.startswith(b"AT+", offset):
+        if len(payload) <= offset + 3:
+            return None
+        if not 0x41 <= payload[offset + 3] <= 0x5A:
+            break
+        limit = min(len(payload), offset + _AT_LINE_MAX_LEN)
+        newline = -1
+        for index in range(offset + 4, limit):
+            byte = payload[index]
+            if byte == 0x0A:
+                newline = index
+                break
+            if byte != 0x0D and not 0x20 <= byte <= 0x7E:
+                return offset
+        if newline < 0:
+            return None if limit < offset + _AT_LINE_MAX_LEN else offset
+        offset = newline + 1
+    return offset
+
+
 def _collector_pn_from_initial_chunk(chunk: bytes) -> tuple[str, str]:
     payload = bytes(chunk or b"")
     if not payload:
@@ -299,20 +358,15 @@ def _collector_pn_from_initial_chunk(chunk: bytes) -> tuple[str, str]:
         if collector_pn:
             return collector_pn, "at_dtupn"
 
-    if len(payload) < HEADER_SIZE:
+    pn, source = _framed_pn_at_offset(payload, 0)
+    if pn:
+        return pn, source
+    # A non-DTUPN AT line can share the first read with the heartbeat or FC2
+    # that follows it. Only the frame directly after those lines can carry it.
+    frame_start = _leading_at_lines_end(payload)
+    if not frame_start:
         return "", ""
-    try:
-        header = decode_header(payload[:HEADER_SIZE])
-    except Exception:
-        return "", ""
-    available_payload = payload[HEADER_SIZE : HEADER_SIZE + max(header.payload_len, 0)]
-    if header.fcode == FC_HEARTBEAT:
-        collector_pn = parse_heartbeat_pn(available_payload)
-        return (collector_pn, "framed_heartbeat") if collector_pn else ("", "")
-    if header.fcode == FC_QUERY_COLLECTOR:
-        collector_pn = _parse_fc2_collector_pn(available_payload)
-        return (collector_pn, "fc2_parameter_2") if collector_pn else ("", "")
-    return "", ""
+    return _framed_pn_at_offset(payload, frame_start)
 
 
 def _bounded_write_timeout(request_timeout: float) -> float:
