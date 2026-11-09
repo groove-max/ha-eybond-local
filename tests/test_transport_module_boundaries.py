@@ -177,6 +177,13 @@ class TransportModuleBoundaryTests(unittest.TestCase):
         definitions = [
             item for item in definitions if item not in (aux_facade, at_aux_resolve)
         ]
+        for latch_name in (
+            "peek_mppt_framing_failure_latch",
+            "take_mppt_framing_failure_latch",
+        ):
+            latch = ("FunctionDef", latch_name)
+            self.assertEqual(definitions.count(latch), 4)
+            definitions = [item for item in definitions if item != latch]
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()
