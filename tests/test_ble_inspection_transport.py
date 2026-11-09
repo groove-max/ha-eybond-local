@@ -10,6 +10,7 @@ from custom_components.eybond_local.collector.smartess_ble import SmartEssBleSes
 from custom_components.eybond_local.support.ble_inspection import BleInspection
 from custom_components.eybond_local.support.diagnostic_export import build_shareable_payload
 from test_smartess_ble import _FakeBleLink
+from test_ble_diagnostics import rtu_reply
 
 
 PN = "E50000200000000001"
@@ -26,6 +27,7 @@ class InspectLink(_FakeBleLink):
         super().__init__([VENDOR_LAYOUT.service_uuid])
         self.mode = mode
         self.reply = b""
+        self.binary_read = False
 
     async def write(self, uuid, data, *, response=False):
         await super().write(uuid, data, response=response)
@@ -43,6 +45,8 @@ class InspectLink(_FakeBleLink):
             self.push_notification(self.reply[:4])
         elif self.mode == "unrelated":
             self.push_notification(b"AT+PASS:private-password-from-notify\r\n")
+        elif self.mode == "binary_then_silent" and len(self.write_calls) == 1:
+            self.push_notification(b"11111111" + rtu_reply())
         elif self.mode.startswith("pn_"):
             is_pn = data == b"AT+DTUPN?"
             first = len(self.write_calls) == 1
@@ -61,6 +65,11 @@ class InspectLink(_FakeBleLink):
 
     async def read(self, uuid):
         self.read_calls.append(uuid)
+        if self.mode == "binary_then_silent":
+            if not self.binary_read:
+                self.binary_read = True
+                return b"11111111" + rtu_reply()
+            return b"------------------"
         if self.mode == "read_error":
             raise RuntimeError("private-password-from-read-error")
         if self.mode == "read_timeout":
@@ -71,6 +80,20 @@ class InspectLink(_FakeBleLink):
 
 
 class BleInspectionTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_binary_first_reply_and_later_silence_do_not_trigger_identity_retry(self):
+        result, link = await self.inspect("binary_then_silent")
+        self.assertEqual(len(link.write_calls), 4)
+        self.assertEqual(result["error"], "partial_or_unbound")
+        self.assertEqual(result["context"]["identity_status"], "unavailable")
+        self.assertFalse(result["context"]["unparsed_replies_included"])
+        for index, row in enumerate(result["results"]):
+            self.assertEqual(row["status"], "timeout")
+            self.assertEqual(row["transport"]["matched_notify_bytes"], 0)
+            self.assertEqual(row["transport"]["matched_read_bytes"], 0)
+            expected = {"vendor_prefixed_rtu_read": 1} if index == 0 else {}
+            self.assertEqual(row["transport"]["binary_notify_shapes"], expected)
+            self.assertEqual(row["transport"]["binary_read_shapes"], expected)
+
     async def inspect(self, mode):
         link = InspectLink(mode)
         session = SmartEssBleSession(link)

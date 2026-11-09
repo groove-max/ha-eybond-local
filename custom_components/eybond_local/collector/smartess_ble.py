@@ -1368,6 +1368,8 @@ class SmartEssBleSession:
                 if disposition != "accepted":
                     ignored = diagnostics.ignored_notify if source == "notify" else diagnostics.ignored_read
                     ignored[disposition] = ignored.get(disposition, 0) + 1
+                    if disposition == "binary_or_control":
+                        diagnostics.observe_binary(payload, source=source)
                 diagnostics.matched_notify_bytes = max(diagnostics.matched_notify_bytes, len(reply.notify.data))
                 diagnostics.matched_read_bytes = max(diagnostics.matched_read_bytes, len(reply.read.data))
 

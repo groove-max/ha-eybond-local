@@ -51,6 +51,16 @@ evidence. A late response to the first PN query cannot be distinguished from a
 response to the recheck; this read-only identity evidence is not proof of a
 fresh response to a settings change or of a working TCP callback.
 
+Discarded binary fragments also have payload-free shape counters
+(`binary_notify_shapes` / `binary_read_shapes`). A complete Modbus FC03/04
+read reply with matching length and CRC is distinguished from an AT marker
+mixed with control bytes or other unknown data. The known eight-byte vendor
+envelope is checked separately. No register values, raw bytes or fingerprints
+are retained. These counters do not accept the fragment as an AT response,
+identify its sender, change the protocol or trigger more queries. A split,
+coalesced or unrecognized fragment can remain unclassified; this does not
+rule out that protocol. Older exports cannot be reclassified from byte counts.
+
 Optionally request a short-lived JSON download. The redacted result is also
 saved as the latest diagnostic attempt for a matching, unchanged device identity
 and can be included in a subsequent Support Archive. It replaces the previous
