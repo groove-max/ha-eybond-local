@@ -245,6 +245,20 @@ class BestAvailableAcLoadEstimateUnitTests(unittest.TestCase):
             best_available_ac_load_estimate_values({"battery_power": 50.0}),
             {},
         )
+        # Silent Q1 (0 W) plus a charging or idle pack is still that hole.
+        silent_q1 = {
+            "load_percent": 0,
+            "short_ascii_rated_voltage": 52.0,
+            "short_ascii_rated_current": 100.0,
+        }
+        self.assertEqual(
+            best_available_ac_load_estimate_values({**silent_q1, "battery_power": 156.0}),
+            {},
+        )
+        self.assertEqual(
+            best_available_ac_load_estimate_values({**silent_q1, "battery_power": 0.0}),
+            {},
+        )
 
 
 class EstimatedAcLoadDriverTests(unittest.IsolatedAsyncioTestCase):

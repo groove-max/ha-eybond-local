@@ -10,7 +10,8 @@ dashboards:
     ``P_house ≈ max(0, P_pv − P_battery)`` with pack sign +charge / −discharge
     → ``bms_dc`` / ``bms_dc_plus_pv`` / ``pv_minus_charge`` / ``pv_idle``;
 (3) else PV alone if BMS watts missing → ``pv_only``;
-(4) else Q1 including 0 W, or omit.
+(4) else Q1 including 0 W when the pack watts are unknown, or omit.
+    A charging or idle pack with no PV reading is a hole, not a Q1 zero.
 
 BMS watts use live ``battery_power`` only. A missing ``pv_power`` is not
 treated as 0 W: discharge may omit the PV term, and charge/idle without PV
@@ -118,6 +119,10 @@ def best_available_ac_load_estimate_values(values: dict[str, object]) -> dict[st
             "best_available_ac_load_estimate": round(pv_w, 1),
             "best_available_ac_load_estimate_source": "pv_only",
         }
+
+    if battery_w is not None and battery_w >= 0 and pv_w is None:
+        # Charge or idle, and PV was not read. Q1 0 W would publish that hole.
+        return {}
 
     if q1_w is not None:
         return {
