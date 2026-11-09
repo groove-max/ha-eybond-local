@@ -438,6 +438,13 @@ def catalog_model_name(
     model_number = values.get("model_number")
     if isinstance(model_number, str) and model_number.strip():
         return model_number.strip()
+    return catalog_power_model_name(protocol_key=base_name, values=values)
+
+
+def catalog_power_model_name(*, protocol_key: str, values: Mapping[str, object]) -> str:
+    """Generate the generic protocol/power label, never a retail model identity."""
+
+    base_name = protocol_key.upper()
     rated_power = values.get("output_rating_active_power")
     if isinstance(rated_power, int) and rated_power > 0:
         return f"{base_name} {rated_power}"

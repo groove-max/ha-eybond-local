@@ -412,6 +412,23 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.register_schema_name, "pi30_ascii/models/pi30_max.json")
         self.assertEqual(inverter.details["output_rating_active_power"], 6200)
 
+        from custom_components.eybond_local.runtime.hub.common import _inverter_identities_conflict
+
+        # This support replay used to keep the generated power label forever
+        # when no canonical serial was stored (#6). The QMN label is stronger
+        # evidence, but does not authorize selecting another control surface.
+        old_responses = {key: value for key, value in transport._responses.items() if key[2] != "QMN"}
+        generic = await driver.async_probe(_FakeTransport(old_responses), target)
+        self.assertIsNotNone(generic)
+        self.assertEqual(generic.model_name, "PI30 6200")
+        self.assertEqual(generic.profile_name, inverter.profile_name)
+        durable = replace(generic, serial_number="", details={})
+        live = replace(inverter, serial_number="")
+        self.assertFalse(_inverter_identities_conflict(durable, live))
+        self.assertTrue(_inverter_identities_conflict(
+            durable, replace(live, profile_name="pi30_ascii/models/vmii_nxpw5kw.json"),
+        ))
+
         values = await _read_values(driver, transport, inverter)
         self.assertEqual(values["operating_mode"], "Line")
         self.assertEqual(values["output_active_power"], 210)

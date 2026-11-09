@@ -26,6 +26,7 @@ from ..models import (
     BinarySensorDescription,
     CapabilityGroup,
     CapabilityPreset,
+    DetectedInverter,
     MeasurementDescription,
     WriteCapability,
     decimals_for_divisor,
@@ -113,6 +114,33 @@ def support_marker(
     except KeyError:
         return None
     return driver.support_marker(variant_key=variant_key, profile_name=profile_name)
+
+
+def model_name_refines(current: object, candidate: object) -> bool:
+    """Ask the owning driver about a label-only, same-binding refinement.
+
+    Equal power or a collector identity is never sufficient. Unknown/missing
+    bindings, a changed surface, and loss of an existing serial fail closed.
+    This is directional: it cannot turn a missed optional query into permission
+    to downgrade a concrete model to a generic label.
+    """
+
+    if not isinstance(current, DetectedInverter) or not isinstance(candidate, DetectedInverter):
+        return False
+    for key in (
+        "driver_key", "protocol_family", "variant_key", "profile_name",
+        "register_schema_name",
+    ):
+        value = getattr(current, key)
+        if not value or value != getattr(candidate, key):
+            return False
+    if current.serial_number and current.serial_number != candidate.serial_number:
+        return False
+    try:
+        driver = get_driver(current.driver_key)
+    except KeyError:
+        return False
+    return driver.model_name_refines(current, candidate)
 
 
 def driver_options() -> list[str]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 import asyncio
@@ -4076,6 +4077,37 @@ class RuntimeStateMachineTests(unittest.TestCase):
             self.assertEqual(snapshot.values["runtime_driver_state"], "driver_bound")
             self.assertEqual(snapshot.values["runtime_inverter_state"], "provisional")
             self.assertEqual(snapshot.last_error, "modbus_catalog:probe_timeout")
+
+        asyncio.run(_run())
+
+    def test_generated_pi30_label_promotes_with_same_control_surface(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            profile = load_driver_profile("pi30_ascii/models/pi30_max.json")
+            durable = DetectedInverter(
+                driver_key="pi30", protocol_family="pi30", model_name="PI30 6200",
+                serial_number="", probe_target=ProbeTarget(0x0994, 0xFF, 0),
+                variant_key="pi30_max", profile_name="pi30_ascii/models/pi30_max.json",
+                register_schema_name="pi30_ascii/models/pi30_max.json",
+                capabilities=profile.capabilities,
+                details={"runtime_detection_status": "startup_persisted_identity"},
+            )
+            live = replace(durable, model_name="OEM-PLATFORM-X", details={
+                "model_number": "OEM-PLATFORM-X", "output_rating_active_power": 6200,
+            })
+            hub.set_initial_inverter_binding(_SuccessDriver(), durable)
+            with patch(
+                "custom_components.eybond_local.runtime.hub.detection.async_detect_inverter",
+                new=self._fake_detection(live, _SuccessDriver()),
+            ):
+                snapshot = await hub.async_refresh(poll_interval=3.0)
+
+            self.assertEqual(snapshot.inverter.model_name, live.model_name)
+            self.assertEqual(snapshot.inverter.profile_name, durable.profile_name)
+            self.assertEqual(snapshot.inverter.capabilities, durable.capabilities)
+            self.assertEqual(snapshot.values["runtime_inverter_state"], "live_confirmed")
+            self.assertNotIn("runtime_identity_conflict", snapshot.values)
+            self.assertFalse(hub._inverter_binding_needs_live_detection_refresh)
 
         asyncio.run(_run())
 

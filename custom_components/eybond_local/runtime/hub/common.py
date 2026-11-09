@@ -56,7 +56,7 @@ from ...drivers.command_support import (
     clear_unsupported_commands,
     seed_unsupported_commands,
 )
-from ...drivers.registry import iter_drivers
+from ...drivers.registry import iter_drivers, model_name_refines
 from ..driver_detection import (
     DetectedDriverContext,
     DriverSweepNoMatch,
@@ -190,7 +190,8 @@ def _inverter_identities_conflict(current: object, candidate: object) -> bool:
 
     Serial number is the strongest signal: two non-empty different serials are a
     conflict. When a serial is unavailable, a different driver_key or model is a
-    conflict. Same identity, or a refinement of a missing field, is NOT a conflict.
+    conflict. Declared aliases and driver-proven, same-binding refinements of a
+    generated model label are not conflicts. A known serial is never bypassed.
     """
 
     cur_serial = str(getattr(current, "serial_number", "") or "").strip()
@@ -208,6 +209,7 @@ def _inverter_identities_conflict(current: object, candidate: object) -> bool:
         and cand_model
         and cur_model != cand_model
         and not model_names_share_catalog_identity(cur_model, cand_model)
+        and not model_name_refines(current, candidate)
     ):
         return True
     return False

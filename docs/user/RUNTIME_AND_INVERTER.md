@@ -59,6 +59,15 @@ delete and add the device again. A custom name set in Home Assistant is retained
 The model catalog lists confirmed retail models separately; it does not turn a
 shared firmware identifier into a unique brand match.
 
+Another older label, such as **PI30 6200**, can be generated from the protocol
+and rated power when the model query is unavailable. A later successful `QMN`
+read may refine it without deleting the integration, provided the driver,
+protocol family, variant, profile and register map remain the same and `QPIRI`
+still explains the original power label. A conflicting known serial or a change
+between two concrete model names is not accepted by this refinement. This
+updates identification only; it does not fix callback/cloud communication or
+change inverter settings.
+
 ## Brand and model on the enclosure
 
 In current `main`, open **Settings → Devices & Services → EyeBond Local →

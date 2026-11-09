@@ -61,6 +61,7 @@ from .catalog_probe import (
     async_probe_ascii_catalog,
     async_probe_ascii_catalog_signature,
     catalog_model_name,
+    catalog_power_model_name,
     evidence_providers_from_transport,
 )
 from .command_support import (
@@ -412,6 +413,30 @@ class Pi30Driver(InverterDriver):
             session=session,
             parsers=_CATALOG_PARSERS,
         )
+
+    def model_name_refines(
+        self, current: DetectedInverter, candidate: DetectedInverter,
+    ) -> bool:
+        """Recognize a generated PI30 power label enriched by a live QMN read.
+
+        No Yingfa/VMII alias or inferred power rating: QPIRI must reproduce the
+        old generated label and QMN must supply the candidate's actual name.
+        The caller additionally requires the same profile/schema/variant.
+        """
+
+        reported_model = candidate.details.get("model_number")
+        power = candidate.details.get("output_rating_active_power")
+        if (
+            not isinstance(reported_model, str)
+            or not reported_model.strip()
+            or candidate.model_name != reported_model.strip()
+            or current.details.get("model_number")
+            or type(power) is not int
+            or power <= 0
+        ):
+            return False
+        fallback = catalog_power_model_name(protocol_key=self.key, values=candidate.details)
+        return current.model_name == fallback and candidate.model_name != fallback
 
     async def async_probe(self, transport, target: ProbeTarget) -> DetectedInverter | None:
         started = time.monotonic()

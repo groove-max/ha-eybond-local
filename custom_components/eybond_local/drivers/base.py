@@ -103,6 +103,19 @@ class InverterDriver(ABC):
 
         return True
 
+    def model_name_refines(
+        self, current: DetectedInverter, candidate: DetectedInverter,
+    ) -> bool:
+        """Whether live evidence replaces this driver's generated fallback label.
+
+        Opt-in, pure policy: never probe or infer a physical identity from a
+        collector PN. The registry checks the unchanged technical binding and
+        retained serial first; the driver must prove its exact fallback naming
+        rule and the newly observed model. Other model changes stay conflicts.
+        """
+
+        return False
+
     @property
     def profile_metadata(self):
         """Return effective declarative capability metadata when available."""

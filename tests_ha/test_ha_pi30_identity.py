@@ -14,9 +14,11 @@ from custom_components.eybond_local.runtime.hub.common import _inverter_identiti
 from synthetic import SYNTHETIC_COLLECTOR_IP, SYNTHETIC_COLLECTOR_PN, SYNTHETIC_SERVER_IP
 
 
-@pytest.mark.parametrize("saved_metadata", [False, True])
+@pytest.mark.parametrize("legacy_label,saved_metadata", [
+    ("PowMr 4.2kW", False), ("PowMr 4.2kW", True), ("PI30 6200", True),
+])
 async def test_vmii_legacy_label_preserves_entities_and_user_names(
-    hass, fake_runtime, monkeypatch, saved_metadata,
+    hass, fake_runtime, monkeypatch, legacy_label, saved_metadata,
 ):
     from conftest import FakeRuntimeManager
 
@@ -31,6 +33,16 @@ async def test_vmii_legacy_label_preserves_entities_and_user_names(
         "QVFW": "VERFW:00021.12", "QVFW2": "VERFW2:00000.00",
         "QVFW3": "NAK", "QET": "NAK", "QLT": "NAK", "QT": "NAK",
     }
+    power_label = legacy_label == "PI30 6200"
+    expected_variant = "pi30_max" if power_label else "vmii_nxpw5kw"
+    expected_model = "VMII-NXPW5KW" if power_label else "PI30 VMII-NXPW5KW"
+    if power_label:
+        target = ProbeTarget(0x0994, 0xFF, 0)
+        replies.update({
+            "QPIRI": "230.0 26.9 230.0 50.0 26.9 6200 6200 48.0 46.0 42.0 56.4 54.0 2 030 010 1 1 1 1 01 0 0 54.0 0 1 46.0 10 44.0",
+            "QVFW": "VERFW:00074.09", "QID": "55355535553555", "QSID": "NAK",
+            "QFLAG": "ExzDabjkuvygld",
+        })
 
     class ReadOnlyTransport(FixtureTransport):
         async def async_send_payload(self, payload, *, route):
@@ -44,10 +56,13 @@ async def test_vmii_legacy_label_preserves_entities_and_user_names(
     )
     driver = Pi30Driver()
     inverter = await driver.async_probe(transport, target)
-    assert inverter.model_name == "PI30 VMII-NXPW5KW"
+    assert inverter.model_name == expected_model
+    assert inverter.variant_key == expected_variant
+    if power_label:
+        assert inverter.serial_number == ""
     # Even without a trustworthy serial, a declared display-name migration
     # must not trigger the different-physical-inverter guard.
-    legacy = replace(inverter, model_name="PowMr 4.2kW", serial_number="")
+    legacy = replace(inverter, model_name=legacy_label, serial_number="", details={})
     assert not _inverter_identities_conflict(legacy, replace(inverter, serial_number=""))
     assert _inverter_identities_conflict(legacy, replace(inverter, model_name="Unrelated model", serial_number=""))
 
@@ -59,6 +74,7 @@ async def test_vmii_legacy_label_preserves_entities_and_user_names(
     async def refresh(self, *, poll_interval=None):
         if not live:
             return RuntimeSnapshot(connected=False, values={})
+        assert not _inverter_identities_conflict(self.initial_binding, inverter)
         values = (await driver.async_read_values(transport, inverter)).values
         return RuntimeSnapshot(
             connected=True, inverter=inverter, values=values,
@@ -76,12 +92,12 @@ async def test_vmii_legacy_label_preserves_entities_and_user_names(
             "collector_pn": SYNTHETIC_COLLECTOR_PN, "tcp_port": 8899, "udp_port": 58899,
             "driver_hint": "auto", "control_mode": "full",
             "connection_strategy": "callback_on_demand", "endpoint_control_policy": "external",
-            "detected_driver": "pi30", "detected_model": "PowMr 4.2kW",
+            "detected_driver": "pi30", "detected_model": legacy_label,
             "detected_serial": "", "detection_confidence": "high",
         },
         options={"poll_interval": 30, "poll_mode": "auto"} | ({
             "effective_metadata_snapshot": {
-                "effective_owner_key": "pi30", "variant_key": "vmii_nxpw5kw",
+                "effective_owner_key": "pi30", "variant_key": expected_variant,
                 "profile_name": inverter.profile_name,
                 "register_schema_name": inverter.register_schema_name, "confidence": "high",
             },
@@ -91,7 +107,7 @@ async def test_vmii_legacy_label_preserves_entities_and_user_names(
     devices = dr.async_get(hass)
     old_device = devices.async_get_or_create(
         config_entry_id=entry.entry_id, identifiers={(DOMAIN, entry.entry_id)},
-        name="PowMr 4.2kW", model="PowMr 4.2kW",
+        name=legacy_label, model=legacy_label,
     )
     devices.async_update_device(old_device.id, name_by_user="My Victor")
     entities = er.async_get(hass)
@@ -104,7 +120,10 @@ async def test_vmii_legacy_label_preserves_entities_and_user_names(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert fake_runtime[-1].initial_binding.profile_name == inverter.profile_name
-    assert fake_runtime[-1].initial_binding.variant_key == "vmii_nxpw5kw"
+    assert fake_runtime[-1].initial_binding.variant_key == expected_variant
+    assert fake_runtime[-1].initial_binding.model_name == legacy_label
+    original_data = dict(entry.data)
+    original_options = dict(entry.options)
 
     def inverter_entities():
         return {e.unique_id: e.entity_id for e in er.async_entries_for_config_entry(entities, entry.entry_id)
@@ -118,6 +137,14 @@ async def test_vmii_legacy_label_preserves_entities_and_user_names(
     await hass.async_block_till_done()
     assert entry.data["detected_model"] == inverter.model_name
     assert entry.data["control_mode"] == "full"
+    for key in ("driver_hint", "connection_strategy", "endpoint_control_policy", "collector_pn"):
+        assert entry.data[key] == original_data[key]
+    for key in ("poll_interval", "poll_mode"):
+        assert entry.options[key] == original_options[key]
+    saved = entry.options["effective_metadata_snapshot"]
+    assert saved["profile_name"] == inverter.profile_name
+    assert saved["register_schema_name"] == inverter.register_schema_name
+    assert saved["variant_key"] == expected_variant
     assert devices.async_get(old_device.id).model == inverter.model_name
     assert devices.async_get(old_device.id).name_by_user == "My Victor"
     assert inverter_entities() == before
@@ -125,6 +152,8 @@ async def test_vmii_legacy_label_preserves_entities_and_user_names(
 
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
+    assert fake_runtime[-1].initial_binding.model_name == expected_model
+    assert fake_runtime[-1].initial_binding.profile_name == inverter.profile_name
     assert inverter_entities() == before
     assert devices.async_get(old_device.id).name_by_user == "My Victor"
     assert entities.async_get(old_entity.entity_id).name == "My priority"
