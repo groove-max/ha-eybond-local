@@ -16,6 +16,7 @@ from ...const import (
     DOMAIN,
 )
 from ...models import RuntimeSnapshot
+from ...inverter_display import with_inverter_display_labels
 from ..device_projection import (
     build_collector_device_info_payload,
     build_inverter_device_info_payload,
@@ -249,6 +250,13 @@ def _reconcile_inverter_children(hass: object, entry_id: str) -> None:
 class CoordinatorDeviceRegistryMixin:
     """Project runtime identity into Home Assistant's device registry."""
 
+    def async_set_inverter_display_labels(self, values: Mapping[str, object]) -> None:
+        """Save presentation-only options and sync HA without restarting transport."""
+
+        options = with_inverter_display_labels(self.config_entry.options, values)
+        self._async_update_entry_without_reload(options=options)
+        self.async_sync_device_registry()
+
     def device_registry_diagnostics(self) -> dict[str, object]:
         """Return a redacted topology view for support packages.
 
@@ -419,6 +427,7 @@ class CoordinatorDeviceRegistryMixin:
             detected_model=self.config_entry.data.get(CONF_DETECTED_MODEL),
             detected_serial=self.config_entry.data.get(CONF_DETECTED_SERIAL),
             inverter=snapshot.inverter,
+            entry_options=self.config_entry.options,
         )
         identifier = (DOMAIN, f"{entry_id}:collector")
         if "via_device_id" in getattr(DeviceInfo, "__annotations__", {}):

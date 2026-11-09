@@ -59,6 +59,34 @@ delete and add the device again. A custom name set in Home Assistant is retained
 The model catalog lists confirmed retail models separately; it does not turn a
 shared firmware identifier into a unique brand match.
 
+## Brand and model on the enclosure
+
+In current `main`, open **Settings → Devices & Services → EyeBond Local →
+Configure → Inverter display** to enter an optional **Brand on the enclosure**
+and **Model on the enclosure**. For example, an Anenji-branded inverter can keep
+the detected Sandisolar / Protocol 4 technical profile while showing its retail
+brand and model in Home Assistant. Do not select another driver just to change
+the name.
+
+These are presentation-only labels, not verified hardware identity. The screen
+also shows the detected model, technical profile and register map. Saving does
+not send device commands or restart the collector connection, and works while
+the device is offline. It does not change telemetry, controls, permissions,
+learning, serial verification, entity IDs or recorded history.
+
+An overridden model also becomes the default device name. A name you set on the
+Home Assistant device page always takes priority and is preserved. You do not
+need to recreate entity IDs or delete/re-add the integration. Clearing either
+field restores its automatic value; this does not clear a custom HA device name.
+The fields belong to this installation entry: review them if you physically
+replace the inverter. They do not propagate to other devices with the same
+technical profile.
+
+Use only public brand/model labels (up to 128 characters per field), not personal
+information or serial numbers. Support packages record these labels separately
+as user-declared display overrides; the detected identity and technical profile
+remain available for troubleshooting.
+
 ## Polling and inverter detection
 
 Open **Settings → Devices & Services → EyeBond Local → Configure → Polling and

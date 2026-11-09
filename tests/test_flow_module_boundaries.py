@@ -31,6 +31,7 @@ OPTIONS_RUNTIME = OPTIONS_IMPLEMENTATION / "runtime.py"
 OPTIONS_MODULES = {
     "flows/options/base.py": "OptionsFlowBase",
     "flows/options/runtime.py": "RuntimeOptionsMixin",
+    "flows/options/inverter_display.py": "InverterDisplayOptionsMixin",
     "flows/options/strategy.py": "StrategyTransitionOptionsMixin",
     "flows/options/local_register_observation.py": (
         "LocalRegisterObservationOptionsMixin"
@@ -394,6 +395,7 @@ class OptionsFlowDecompositionBoundaryTests(unittest.TestCase):
     EXPECTED_MRO = [
         "StrategyTransitionOptionsMixin",
         "RuntimeOptionsMixin",
+        "InverterDisplayOptionsMixin",
         "LocalRegisterObservationOptionsMixin",
         "ShadowLearningRunMixin",
         "ShadowLearningReviewMixin",

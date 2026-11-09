@@ -398,6 +398,7 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
                 "diagnostics",
             ]
 
+        menu_options.insert(menu_options.index("runtime") + 1, "inverter_display")
         if self._cloud_tools_menu_available():
             menu_options.insert(menu_options.index("diagnostics"), "cloud_tools")
         local_observation_visible = getattr(

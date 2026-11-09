@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..const import LOCAL_METADATA_DIR, LOCAL_SUPPORT_PACKAGES_DIR
+from ..inverter_display import inverter_display_diagnostics
 from ..telemetry import TypedTelemetryFrame
 
 
@@ -566,6 +567,7 @@ def build_support_bundle_payload(
         },
         "source_metadata": source_metadata,
         "device_registry": device_registry or {"available": False},
+        "inverter_display": inverter_display_diagnostics(options),
         "runtime": runtime_payload,
         "roles": _build_role_payloads(
             collector=collector,

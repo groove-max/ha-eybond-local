@@ -10,7 +10,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from ..collector.capabilities import collector_capability_profile_from_runtime
-from ..const import DOMAIN
+from ..const import (
+    CONF_INVERTER_DISPLAY_MANUFACTURER,
+    CONF_INVERTER_DISPLAY_MODEL,
+    DOMAIN,
+)
+from ..inverter_display import inverter_display_labels
 from ..naming import collector_display_name
 from ..serial_identity import (
     SerialIdentityTrust,
@@ -25,6 +30,7 @@ def build_inverter_device_info_payload(
     detected_model: object,
     detected_serial: object,
     inverter: object | None,
+    entry_options: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Build stable metadata for the inverter-side HA device."""
 
@@ -68,10 +74,16 @@ def build_inverter_device_info_payload(
         if persisted_serial:
             serial_number = persisted_serial
 
+    labels = inverter_display_labels(entry_options)
+    # HA's name_by_user remains authoritative; these labels never flow back
+    # into detected identity, profile selection, or entity unique IDs.
+    if display_model := labels.get(CONF_INVERTER_DISPLAY_MODEL):
+        model = display_model
+        name = display_model
     payload: dict[str, object] = {
         "identifiers": {(DOMAIN, entry_id)},
         "name": name,
-        "manufacturer": "OEM / EyeBond",
+        "manufacturer": labels.get(CONF_INVERTER_DISPLAY_MANUFACTURER, "OEM / EyeBond"),
     }
     if model:
         payload["model"] = model

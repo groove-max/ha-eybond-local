@@ -373,6 +373,7 @@
   },
   "options": {
     "error": {
+      "invalid_inverter_display_label": "Use one line of up to 128 characters, or leave blank for automatic display.",
       "ble_inspection_device_unavailable": "No selected connectable collector is available through Home Assistant Bluetooth. Check the adapter or an active ESPHome Bluetooth Proxy near the collector, close the vendor app, then refresh.",
       "ble_inspection_busy": "Another Bluetooth inspection is still using this collector. Wait for its cleanup to finish.",
       "ble_inspection_failed": "Bluetooth inspection could not complete. No settings were changed.",
@@ -443,6 +444,7 @@
         "menu_options": {
           "connection": "Collector connection and cloud",
           "collector_endpoint": "Home Assistant connection address",
+          "inverter_display": "Inverter display",
           "runtime": "Polling and inverter detection",
           "cloud_tools": "Expand device support",
           "local_register_observation": "Local read-only observation",
@@ -453,6 +455,18 @@
           "strategy_transition_repair": "Finish the connection switch (recovery required)",
           "strategy_transition_activation_retry": "Load the verified connection",
           "strategy_transition_cancel": "Cancel"
+        }
+      },
+      "inverter_display": {
+        "title": "Inverter display",
+        "description": "These optional labels change only how the inverter appears in Home Assistant. Leave a field blank to use its automatic value. No protocol, register map, controls or collector connection will change. Rename the device on its Home Assistant device page if you want a custom name. Labels belong to this entry; review them if you replace the inverter.\n\nDetected model: {detected_model}\nTechnical profile: {profile}\nRegister map: {schema}",
+        "data": {
+          "inverter_display_manufacturer": "Brand on the enclosure",
+          "inverter_display_model": "Model on the enclosure"
+        },
+        "data_description": {
+          "inverter_display_manufacturer": "Enter only the public brand/model from the label, not a serial number or personal information. Up to 128 characters; included in support packages as user-declared labels.",
+          "inverter_display_model": "Enter only the public brand/model from the label, not a serial number or personal information. Up to 128 characters; included in support packages as user-declared labels."
         }
       },
       "cloud_tools": {

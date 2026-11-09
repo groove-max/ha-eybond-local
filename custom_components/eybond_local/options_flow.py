@@ -5,6 +5,7 @@ from __future__ import annotations
 from .flows.options.base import OptionsFlowBase
 from .flows.options.ble_inspection import BleInspectionOptionsMixin
 from .flows.options.diagnostics import DiagnosticsOptionsMixin
+from .flows.options.inverter_display import InverterDisplayOptionsMixin
 from .flows.options.local_register_observation import LocalRegisterObservationOptionsMixin
 from .flows.options.proxy import ProxyCaptureOptionsMixin
 from .flows.options.runtime import RuntimeOptionsMixin
@@ -18,6 +19,7 @@ from .flows.options.strategy import StrategyTransitionOptionsMixin
 class EybondLocalOptionsFlow(
     StrategyTransitionOptionsMixin,
     RuntimeOptionsMixin,
+    InverterDisplayOptionsMixin,
     LocalRegisterObservationOptionsMixin,
     ShadowLearningRunMixin,
     ShadowLearningReviewMixin,
