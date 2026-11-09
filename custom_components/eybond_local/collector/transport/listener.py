@@ -2431,7 +2431,11 @@ class _SharedEybondListener:
 
         # Complete leading AT lines can share this read with the frame that
         # follows them; finish that frame at its own boundary, never later.
-        frame_start = _leading_at_lines_end(chunk) or 0
+        # An unfinished AT line has no boundary yet, and its text is not a
+        # header.
+        frame_start = _leading_at_lines_end(chunk)
+        if frame_start is None:
+            return chunk, False
         if len(chunk) >= frame_start + HEADER_SIZE:
             try:
                 header = decode_header(chunk[frame_start : frame_start + HEADER_SIZE])
