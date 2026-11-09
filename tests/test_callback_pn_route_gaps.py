@@ -24,6 +24,7 @@ from custom_components.eybond_local.collector.transport import (
     _SharedEybondListener,
 )
 from custom_components.eybond_local.collector.transport.common import (
+    _AT_LINE_MAX_LEN,
     _collector_pn_from_initial_chunk,
     _leading_at_lines_end,
 )
@@ -266,6 +267,45 @@ class PnRouteGapTests(unittest.IsolatedAsyncioTestCase):
         entry = listener._session_inventory["sock-1"]
         self.assertNotEqual(entry.collector_pn, NESTED_PN)
         self.assertEqual(entry.state, "parked_no_at_owner")
+        self.assertEqual(pending.initial_bytes, first)
+
+    async def test_overlong_at_line_is_not_read_as_a_frame_header(self):
+        listener = self.listener()
+        listener.register_at_pn_owner(NESTED_PN)
+        owned = listener.ensure_at_connection("", 0.5, NESTED_PN)
+        first = b"AT+X\r " + b"B" * (_AT_LINE_MAX_LEN - len(b"AT+X\r "))
+        self.assertEqual(len(first), _AT_LINE_MAX_LEN)
+        self.assertEqual(_leading_at_lines_end(first), 0)
+        header = decode_header(first[:HEADER_SIZE])
+        self.assertLess(header.payload_len, 4096)
+        rest = b"\n" + _fc2(NESTED_PN)
+        rest += b"D" * (HEADER_SIZE + header.payload_len - len(first) - len(rest))
+        pending = self.pending(listener, first)
+        pending.reader.feed_data(rest)
+        pending.reader.feed_eof()
+
+        with (
+            patch.object(owned, "run", new=AsyncMock()) as run,
+            patch.object(
+                pending.reader,
+                "readexactly",
+                wraps=pending.reader.readexactly,
+            ) as readexactly,
+            patch.object(
+                listener,
+                "_mark_session_identity",
+                wraps=listener._mark_session_identity,
+            ) as mark,
+            patch.object(
+                listener, "_watch_parked_pending_socket", new=AsyncMock(),
+            ),
+        ):
+            await listener._sniff_pending_socket(pending)
+
+        readexactly.assert_not_called()
+        run.assert_not_awaited()
+        recorded = [call.args[1] for call in mark.call_args_list]
+        self.assertNotIn(NESTED_PN, recorded)
         self.assertEqual(pending.initial_bytes, first)
 
     async def test_weak_pn_after_an_at_line_uses_the_ip_at_owner(self):

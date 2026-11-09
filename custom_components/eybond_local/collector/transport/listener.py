@@ -2436,6 +2436,16 @@ class _SharedEybondListener:
         frame_start = _leading_at_lines_end(chunk)
         if frame_start is None:
             return chunk, False
+        # A rejected or overlong AT line also starts with AT+ and a letter.
+        # Offset 0 skips the runtime header check, so those bytes must not
+        # become a length that reads into a later frame.
+        if (
+            frame_start == 0
+            and len(chunk) >= 4
+            and chunk.startswith(b"AT+")
+            and 0x41 <= chunk[3] <= 0x5A
+        ):
+            return chunk, False
         if len(chunk) >= frame_start + HEADER_SIZE:
             try:
                 header = decode_header(chunk[frame_start : frame_start + HEADER_SIZE])

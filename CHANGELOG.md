@@ -488,7 +488,11 @@ the GitHub release body should be rendered from the matching version section her
 - Only a complete frame directly after complete AT lines gives that PN. A
   newline inside a following frame, non-AT bytes before the frame, or a short
   declared frame is not a collector PN. The remaining bytes stay for the
-  normal read, which finishes a split frame before identity is decided.
+  normal read, which finishes a split frame before identity is decided. An
+  unfinished or overlong AT line is not read as a frame header.
+
+- A weak heartbeat PN after an AT line does not block the IP-only AT owner.
+  A strong PN still selects its named owner and stays off the peer IP map.
 
 - A callback whose first bytes already carry a strong PN is no longer also
   stored under that peer IP. An IP-only entry on the same address was sending
