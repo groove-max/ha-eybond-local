@@ -1,0 +1,9 @@
+{
+  "profile_key": "srne_modbus/smx_ii.json",
+  "title": "EASUN SMX-II 24 V (legacy read-only compatibility)",
+  "driver_key": "srne_modbus",
+  "protocol_family": "srne_modbus",
+  "groups": [],
+  "capabilities": [],
+  "presets": []
+}

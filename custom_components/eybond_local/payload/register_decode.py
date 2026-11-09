@@ -13,6 +13,7 @@ kept here as an explicit ``ascii_style`` argument:
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from ..models import RegisterValueSpec, decimals_for_divisor
@@ -70,6 +71,17 @@ def decode_raw_value(
                 decode_ascii_word(registers.get(spec.register + offset, 0), style=ascii_style)
             )
         return "".join(chars).strip()
+    if spec.combine == "srne_datetime":
+        words = [registers.get(spec.register + offset, 0) for offset in range(spec.word_count)]
+        if len(words) != 3:
+            raise ValueError(f"srne_datetime_word_count:{spec.key}:{len(words)}")
+        octets = [byte for word in words for byte in ((word >> 8) & 0xFF, word & 0xFF)]
+        year, month_zero_based, day, hour, minute, second = octets
+        try:
+            parsed = datetime(1970 + year, month_zero_based + 1, day, hour, minute, second)
+        except ValueError:
+            return "Unknown (" + "".join(f"{word:04X}" for word in words) + ")"
+        return parsed.isoformat(sep=" ")
     if spec.word_count >= 2:
         high = registers.get(spec.register, 0)
         low = registers.get(spec.register + 1, 0)
