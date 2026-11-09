@@ -29,6 +29,8 @@ from custom_components.eybond_local.collector.transport.common import (
 PN = "V001107SYN82291016"
 PEER = "192.0.2.8"
 NESTED_PN = "E50000200000000001"
+WEAK_PN = "E5000020000000"
+OTHER_PN = "E50000200000000003"
 AT_PREFIX = b"AT+INFO\r\n"
 
 
@@ -221,6 +223,102 @@ class PnRouteGapTests(unittest.IsolatedAsyncioTestCase):
         entry = listener._session_inventory["sock-1"]
         self.assertEqual(entry.collector_pn, NESTED_PN)
         self.assertEqual(entry.collector_identity_source, "fc2_parameter_2")
+
+    async def test_weak_pn_after_an_at_line_uses_the_ip_at_owner(self):
+        listener = self.listener()
+        listener.register_at_owner(PEER)
+        ip_only = listener.ensure_at_connection(PEER, 0.5)
+        pending = self.pending(listener, AT_PREFIX + _heartbeat(WEAK_PN))
+        pending.reader.feed_eof()
+
+        with (
+            patch.object(ip_only, "run", new=AsyncMock()) as run,
+            patch.object(
+                listener,
+                "_park_unclaimed_pending_socket",
+                wraps=listener._park_unclaimed_pending_socket,
+            ) as park,
+        ):
+            await listener._sniff_pending_socket(pending)
+
+        park.assert_not_called()
+        run.assert_awaited_once()
+        self.assertIs(listener._at_connections[PEER], ip_only)
+        self.assertIs(listener._session_at_connections["sock-1"], ip_only)
+        entry = listener._session_inventory["sock-1"]
+        self.assertEqual(entry.state, "routed_at_text")
+        self.assertNotIn(
+            entry.collector_identity_source, ("fc2_parameter_2", "at_dtupn"),
+        )
+
+    async def test_strong_fc2_after_an_at_line_keeps_its_pn_owner(self):
+        listener = self.listener()
+        listener.register_at_pn_owner(PN)
+        listener.register_at_owner(PEER)
+        owned = listener.ensure_at_connection("", 0.5, PN)
+        ip_only = listener.ensure_at_connection(PEER, 0.5)
+        pending = self.pending(listener, AT_PREFIX + _fc2(PN))
+        pending.reader.feed_eof()
+
+        with (
+            patch.object(owned, "run", new=AsyncMock()) as owned_run,
+            patch.object(ip_only, "run", new=AsyncMock()) as ip_run,
+        ):
+            await listener._sniff_pending_socket(pending)
+
+        owned_run.assert_awaited_once()
+        ip_run.assert_not_awaited()
+        self.assertIs(listener._at_connections[PEER], ip_only)
+        self.assertIs(listener._at_connections_by_pn[PN], owned)
+        entry = listener._session_inventory["sock-1"]
+        self.assertEqual(entry.collector_pn, PN)
+        self.assertEqual(entry.collector_identity_source, "fc2_parameter_2")
+
+    async def test_weak_pn_after_an_at_line_skips_another_pn_owner(self):
+        for with_ip_owner in (True, False):
+            with self.subTest(with_ip_owner=with_ip_owner):
+                listener = self.listener()
+                listener.register_at_pn_owner(OTHER_PN)
+                owned = listener.ensure_at_connection("", 0.5, OTHER_PN)
+                ip_only = None
+                if with_ip_owner:
+                    listener.register_at_owner(PEER)
+                    ip_only = listener.ensure_at_connection(PEER, 0.5)
+                pending = self.pending(listener, AT_PREFIX + _heartbeat(WEAK_PN))
+                pending.reader.feed_eof()
+
+                with (
+                    patch.object(owned, "run", new=AsyncMock()) as owned_run,
+                    patch.object(
+                        listener,
+                        "_park_unclaimed_pending_socket",
+                        wraps=listener._park_unclaimed_pending_socket,
+                    ) as park,
+                ):
+                    if ip_only is None:
+                        await listener._sniff_pending_socket(pending)
+                    else:
+                        with patch.object(
+                            ip_only, "run", new=AsyncMock(),
+                        ) as ip_run:
+                            await listener._sniff_pending_socket(pending)
+                        ip_run.assert_awaited_once()
+
+                owned_run.assert_not_awaited()
+                self.assertIs(listener._at_connections_by_pn[OTHER_PN], owned)
+                self.assertIsNot(
+                    listener._session_at_connections.get("sock-1"), owned,
+                )
+                if with_ip_owner:
+                    park.assert_not_called()
+                    entry = listener._session_inventory["sock-1"]
+                    self.assertEqual(entry.state, "routed_at_text")
+                else:
+                    park.assert_called_once()
+                    self.assertEqual(
+                        park.call_args.kwargs["session_state"],
+                        "parked_no_at_owner",
+                    )
 
 
 class InitialChunkPnTests(unittest.TestCase):

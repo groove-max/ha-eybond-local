@@ -2854,9 +2854,9 @@ class _SharedEybondListener:
                     initial_pn,
                     self._at_connections_by_pn,
                 )
-            if connection is None and not initial_pn:
+            if connection is None and not identity_can_route:
                 connection = self._at_connections.get(pending.remote_ip)
-            if connection is None and not initial_pn:
+            if connection is None and not identity_can_route:
                 connection = self._resolve_public_placeholder_alias(
                     pending.remote_ip,
                     connections=self._at_connections,
@@ -2866,7 +2866,7 @@ class _SharedEybondListener:
                 self._session_at_connections,
             ):
                 has_ip_owner = bool(
-                    not initial_pn
+                    not identity_can_route
                     and self._has_owner_for_remote_ip(
                         self._at_owner_counts,
                         pending.remote_ip,
