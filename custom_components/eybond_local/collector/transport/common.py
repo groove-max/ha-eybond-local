@@ -225,6 +225,7 @@ _AT_TEXT_RESPONSE_IDLE_TIMEOUT = 0.2
 _AT_QUERY_STATUS_COMPLETION_TIMEOUT = 2.0
 _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN = MAX_EYBOND_PAYLOAD_SIZE
 _AT_TEXT_MIXED_FRAME_FCODES = RUNTIME_EYBOND_FCODES
+_AT_LINE_MAX_LEN = 512
 
 
 def _runtime_eybond_header_error(header: EybondHeader) -> str:
@@ -318,10 +319,11 @@ def _framed_pn_at_offset(payload: bytes, offset: int) -> tuple[str, str]:
 def _leading_at_lines_end(payload: bytes) -> int | None:
     """Return the offset just past the complete AT lines that start payload.
 
-    A line is AT+ and an uppercase command letter at the current offset, ended
-    by its first newline. Anything else ends the walk, so newlines inside a
-    later frame or arbitrary text are never boundaries. None means the walk
-    stopped on an AT line that is not complete yet.
+    A line is AT+ and an uppercase command letter at the current offset, then
+    only printable ASCII or CR, ended by a newline within _AT_LINE_MAX_LEN
+    bytes. Anything else ends the walk, so newlines inside a later frame or
+    arbitrary text are never boundaries. None means the walk stopped on an AT
+    line that is not complete yet.
     """
 
     offset = 0
@@ -330,9 +332,17 @@ def _leading_at_lines_end(payload: bytes) -> int | None:
             return None
         if not 0x41 <= payload[offset + 3] <= 0x5A:
             break
-        newline = payload.find(b"\n", offset + 4)
+        limit = min(len(payload), offset + _AT_LINE_MAX_LEN)
+        newline = -1
+        for index in range(offset + 4, limit):
+            byte = payload[index]
+            if byte == 0x0A:
+                newline = index
+                break
+            if byte != 0x0D and not 0x20 <= byte <= 0x7E:
+                return offset
         if newline < 0:
-            return None
+            return None if limit < offset + _AT_LINE_MAX_LEN else offset
         offset = newline + 1
     return offset
 

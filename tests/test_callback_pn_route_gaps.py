@@ -23,6 +23,7 @@ from custom_components.eybond_local.collector.transport import (
 )
 from custom_components.eybond_local.collector.transport.common import (
     _collector_pn_from_initial_chunk,
+    _leading_at_lines_end,
 )
 
 PN = "V001107SYN82291016"
@@ -161,6 +162,34 @@ class PnRouteGapTests(unittest.IsolatedAsyncioTestCase):
         entry = listener._session_inventory["sock-1"]
         self.assertNotEqual(entry.collector_pn, NESTED_PN)
 
+    async def test_frame_newline_after_unterminated_at_text_selects_no_owner(self):
+        for at_text in (b"AT+INFO", b"AT+INFO\r"):
+            with self.subTest(at_text=at_text):
+                listener = self.listener()
+                listener.register_at_pn_owner(NESTED_PN)
+                owned = listener.ensure_at_connection("", 0.5, NESTED_PN)
+                pending = self.pending(
+                    listener, at_text + _fc4(b"\n" + _fc2(NESTED_PN)),
+                )
+                pending.reader.feed_eof()
+
+                with (
+                    patch.object(owned, "run", new=AsyncMock()) as run,
+                    patch.object(
+                        listener,
+                        "_mark_session_identity",
+                        wraps=listener._mark_session_identity,
+                    ) as mark,
+                ):
+                    await listener._sniff_pending_socket(pending)
+
+                run.assert_not_awaited()
+                self.assertIs(listener._at_connections_by_pn[NESTED_PN], owned)
+                recorded = [call.args[1] for call in mark.call_args_list]
+                self.assertNotIn(NESTED_PN, recorded)
+                entry = listener._session_inventory["sock-1"]
+                self.assertNotEqual(entry.collector_pn, NESTED_PN)
+
     async def test_split_frame_after_an_at_line_reads_only_the_full_pn(self):
         listener = self.listener()
         listener.register_at_pn_owner(NESTED_PN)
@@ -272,4 +301,40 @@ class InitialChunkPnTests(unittest.TestCase):
         self.assertEqual(
             _collector_pn_from_initial_chunk(b"AT+INFO" + _fc2(NESTED_PN)),
             ("", ""),
+        )
+
+    def test_frame_newline_does_not_end_an_unterminated_at_line(self):
+        for at_text in (b"AT+INFO", b"AT+INFO\r"):
+            for nested in (_fc2(NESTED_PN), _heartbeat(NESTED_PN[:14])):
+                with self.subTest(at_text=at_text, nested=nested):
+                    self.assertEqual(
+                        _collector_pn_from_initial_chunk(
+                            at_text + _fc4(b"\n" + nested)
+                        ),
+                        ("", ""),
+                    )
+
+    def test_at_lines_with_printable_text_are_still_boundaries(self):
+        for line in (
+            b"AT+CSQ=20\r\n",
+            b"AT+VER:1.0\n",
+            b"AT+INFO " + b"X" * (512 - 9) + b"\n",
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(
+                    _leading_at_lines_end(line + _fc2(NESTED_PN)), len(line),
+                )
+                self.assertEqual(
+                    _collector_pn_from_initial_chunk(line + _fc2(NESTED_PN)),
+                    (NESTED_PN, "fc2_parameter_2"),
+                )
+
+    def test_at_line_end_rejects_non_text_and_overlong_lines(self):
+        self.assertIsNone(_leading_at_lines_end(b"AT+INFO\r"))
+        self.assertIsNone(_leading_at_lines_end(b"AT+INFO " + b"X" * 400))
+        self.assertEqual(_leading_at_lines_end(b"AT+INFO\x00\n"), 0)
+        self.assertEqual(_leading_at_lines_end(b"AT+INFO" + b"X" * 600 + b"\n"), 0)
+        self.assertEqual(
+            _leading_at_lines_end(AT_PREFIX + b"AT+INFO" + _fc4(b"\n")),
+            len(AT_PREFIX),
         )
