@@ -1,0 +1,35 @@
+{
+  "description": "Sanitized numeric words from a passive BLE capture of the vendor app talking to the inverter through an EyeBond dongle, 2026-08-09. Decoded register values only: no serial, no account, no address, no collection id, no timestamps. Charge thresholds read 40/480/420/552/544 V in this capture.",
+  "identity": {
+    "16646": 6,
+    "16650": 552
+  },
+  "mains_start": 80,
+  "mains": [
+    2280,
+    857,
+    4999
+  ],
+  "output_start": 88,
+  "output": [
+    2290,
+    795,
+    4999,
+    1821,
+    1826,
+    280
+  ],
+  "battery_start": 128,
+  "battery": [
+    546,
+    0
+  ],
+  "input_power_start": 33290,
+  "input_power": [
+    1863
+  ],
+  "energy_daily_a": 1416,
+  "energy_total_a": 8771,
+  "energy_daily_b": 1408,
+  "energy_total_b": 7050
+}

@@ -197,6 +197,7 @@ class HubRefreshMixin:
     async def async_refresh(self, *, poll_interval: float | None = None) -> RuntimeSnapshot:
         """Refresh the current runtime snapshot."""
 
+        self._configure_runtime_measurement_freshness(poll_interval)
         if not self._link_manager.connected:
             self._reset_runtime_read_state()
             ok = await self._async_try_connect_for_session_lifecycle(
@@ -692,6 +693,9 @@ class HubRefreshMixin:
         self._runtime_measurement_last_mode = ""
         self._runtime_measurement_fresh_count = 0
         self._runtime_measurement_reused_count = 0
+        self._runtime_measurement_deadline = None
+        self._runtime_measurement_budget_at_read = 60.0
+        self._runtime_measurement_expired_keys.clear()
 
     def _accept_inverter_binding_identity(self) -> None:
         """The single binding/cache lifecycle boundary.
@@ -728,6 +732,9 @@ class HubRefreshMixin:
         never re-derived here.
         """
 
+        # Expire before accepting a late DELTA: one new value must not revive
+        # unrelated measurements carried through a long complete outage.
+        self._expire_runtime_measurements()
         fresh_keys = set(result.values)
         self._runtime_measurement_telemetry = fold_driver_telemetry(
             self._runtime_measurement_telemetry,
@@ -751,6 +758,12 @@ class HubRefreshMixin:
         self._runtime_measurement_last_mode = result.mode.value
         self._runtime_measurement_fresh_count = len(fresh_keys)
         self._runtime_measurement_reused_count = reused
+        self._runtime_measurement_expired_keys.difference_update(fresh_keys)
+        if any(
+            point.key in fresh_keys and point.value is not None
+            for point in self._runtime_measurement_telemetry.points
+        ):
+            self._renew_runtime_measurement_freshness()
         return dict(self._runtime_measurement_values)
 
     def _runtime_measurement_diagnostics(self) -> dict[str, object]:

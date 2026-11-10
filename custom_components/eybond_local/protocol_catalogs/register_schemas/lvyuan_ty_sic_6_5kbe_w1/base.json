@@ -261,9 +261,8 @@
       "name": "Daily Energy Counter A",
       "unit": "kWh",
       "device_class": "energy",
-      "state_class": "total",
       "suggested_display_precision": 2,
-      "diagnostic": false,
+      "diagnostic": true,
       "enabled_default": true,
       "icon": "mdi:counter"
     },
@@ -272,9 +271,8 @@
       "name": "Total Energy Counter A",
       "unit": "kWh",
       "device_class": "energy",
-      "state_class": "total",
       "suggested_display_precision": 2,
-      "diagnostic": false,
+      "diagnostic": true,
       "enabled_default": true,
       "icon": "mdi:counter"
     },
@@ -283,9 +281,8 @@
       "name": "Daily Energy Counter B",
       "unit": "kWh",
       "device_class": "energy",
-      "state_class": "total",
       "suggested_display_precision": 2,
-      "diagnostic": false,
+      "diagnostic": true,
       "enabled_default": true,
       "icon": "mdi:counter"
     },
@@ -294,9 +291,8 @@
       "name": "Total Energy Counter B",
       "unit": "kWh",
       "device_class": "energy",
-      "state_class": "total",
       "suggested_display_precision": 2,
-      "diagnostic": false,
+      "diagnostic": true,
       "enabled_default": true,
       "icon": "mdi:counter"
     }

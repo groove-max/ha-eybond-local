@@ -11,14 +11,17 @@ class BoundDiagnosticTransport:
     """No reconnect, fallback, wire learning or permanent metadata changes."""
 
     def __init__(self, connection, current_connection, *, wire: str, timeout: float) -> None:
-        if wire not in ("fc4", "raw_modbus"):
+        if wire not in ("fc4", "raw_modbus", "raw_pi30"):
             raise ValueError("diagnostic_wire_unsupported")
         if connection is None:
             raise ConnectionError("collector_not_connected")
         self._connection = connection
         self._current_connection = current_connection
         self._owner = SocketSendOwner.capture(connection)
-        self._raw_session = connection._diagnostic_modbus
+        self._raw_protocol = {"raw_modbus": "modbus_rtu", "raw_pi30": "pi30_ascii"}.get(wire, "")
+        self._raw_session = (
+            connection._diagnostic_pi30 if wire == "raw_pi30" else connection._diagnostic_modbus
+        )
         self.wire = wire
         self._timeout = timeout
         self._trace: SocketRequestTrace | None = None
@@ -38,13 +41,13 @@ class BoundDiagnosticTransport:
 
     @property
     def diagnostic_received_hex(self) -> str:
-        if self.wire == "raw_modbus" and self._trace is not None and self._trace.write_started:
+        if self._raw_protocol and self._trace is not None and self._trace.write_started:
             return self._raw_session.received.hex()
         return ""
 
     @property
     def diagnostic_failure_reason(self) -> str:
-        if self.wire == "raw_modbus" and self._trace is not None and self._trace.write_started:
+        if self._raw_protocol and self._trace is not None and self._trace.write_started:
             return self._raw_session.failure_reason
         return ""
 
@@ -54,10 +57,10 @@ class BoundDiagnosticTransport:
 
     def select_payload_route(self, route, *, payload_family=""):
         self._check()
-        if self.wire == "raw_modbus":
-            if payload_family != "modbus_rtu":
-                raise TypeError("diagnostic_raw_modbus_requires_modbus")
-            return RawSerialLinkRoute(protocol="modbus_rtu")
+        if self._raw_protocol:
+            if payload_family != self._raw_protocol:
+                raise TypeError(f"diagnostic_{self.wire}_requires_{self._raw_protocol}")
+            return RawSerialLinkRoute(protocol=self._raw_protocol)
         if not isinstance(route, EybondLinkRoute):
             raise TypeError("diagnostic_fc4_requires_eybond_route")
         return route
@@ -67,9 +70,9 @@ class BoundDiagnosticTransport:
         self._check()
         timeout = self._timeout if request_timeout is None else float(request_timeout)
         connection = self._connection
-        if self.wire == "raw_modbus":
-            if not isinstance(route, RawSerialLinkRoute) or route.protocol != "modbus_rtu":
-                raise TypeError("diagnostic_raw_modbus_requires_modbus")
+        if self._raw_protocol:
+            if not isinstance(route, RawSerialLinkRoute) or route.protocol != self._raw_protocol:
+                raise TypeError(f"diagnostic_{self.wire}_requires_{self._raw_protocol}")
             return await self._raw_session.send(connection, self._owner, payload, timeout, trace=trace)
         if not isinstance(route, EybondLinkRoute):
             raise TypeError("diagnostic_fc4_requires_eybond_route")

@@ -106,12 +106,15 @@ class CoordinatorPollingMixin:
             )
             self._poll_last_cycle_started_monotonic = cycle_started
             self._runtime_poll_task = asyncio.current_task()
+            poll_done = self._runtime_poll_done = loop.create_future()
             try:
                 snapshot = await self._async_update_data_with_runtime_lock(
                     poll_interval_seconds=poll_interval
                 )
             finally:
                 self._runtime_poll_task = None
+                self._runtime_poll_done = None
+                poll_done.set_result(None)
             cycle_duration = max(0.0, loop.time() - cycle_started)
             self._update_poll_scheduler_policy_from_snapshot(snapshot)
             runtime_driver_state = _runtime_driver_state_from_snapshot(snapshot)

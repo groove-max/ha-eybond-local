@@ -112,7 +112,7 @@ Optional directives must appear before the first command:
 | Directive | Meaning |
 |---|---|
 | `driver <key>` | Command codec: `modbus`, `modbus_smg`, `pi30`, `pi18`, `eybond_g_ascii`, or diagnostic-only `raw`. |
-| `wire <auto\|fc4\|raw_modbus>` | Use normal routing (default), an EyeBond FC4 envelope, or bare Modbus RTU on the existing TCP stream. |
+| `wire <auto\|fc4\|raw_modbus\|raw_pi30>` | Use normal routing (default), EyeBond FC4, bare Modbus RTU, or CRC-protected PI30 on the existing TCP stream. |
 | `devcode <number>` | Override the run-scoped inverter device code. |
 | `collector_addr <number>` | Override the collector-side address. |
 | `device_addr <number>` | Override the inverter address. |
@@ -157,6 +157,12 @@ decimal and `0x` hexadecimal notation are accepted.
   It requires `driver modbus` or `modbus_smg`, and a `device_addr` from 1 to 247.
   EyeBond `devcode` and `collector_addr` are unused and may be omitted.
   Broadcast writes are not supported.
+- `wire raw_pi30` requires `driver pi30` and sends CRC-protected PI30 directly
+  on that socket, without FC4 or AT bootstrap. EyeBond addresses are unused and
+  may be omitted. Replies require `(`, printable ASCII, valid PI30 CRC and CR,
+  with a 1 KiB frame limit. A CRC-valid `NAK` is a received negative reply, not
+  a timeout or a successful setting change. Bare unframed `NAK` text is not
+  accepted as a CRC-protected PI30 reply.
 
 Explicit overrides are available on the shared framed/AT collector transports;
 an unsupported transport is rejected before sending anything. They **do not**
@@ -170,12 +176,48 @@ connection after a reconnect. Each explicit-wire exchange is attempted once,
 with no implicit retry or fallback. Its default command timeout is 10 seconds,
 with a maximum of 120 seconds. Normal `auto` read retry behavior is unchanged.
 
-For bare RTU, a timeout, cancellation, invalid CRC, mismatched write echo or an
+For bare RTU or PI30, a timeout, cancellation, invalid CRC, mismatched write echo or an
 ambiguous frame closes that diagnostic socket. This prevents a late reply from
 being attributed to a later command; wait for normal reconnection before a new
 run. It does not restore or change an endpoint because none was changed. Short
 RTU replies are matched by the explicitly selected slave, function, length and
 CRC; this is an operator-selected protocol, not automatic detection.
+
+### Bounded PI30 transport comparison
+
+Use only when a maintainer requests it. This works over an already connected
+collector, including a routed/NAT callback; network rediscovery is unnecessary.
+Keep the configured inverter profile. Run each scenario separately and download
+its shareable JSON. The two queries below are reads, but the tool still requires
+the existing confirmation checkbox because arbitrary `ascii` commands can write.
+
+```text
+driver pi30
+wire raw_pi30
+operation_timeout 5
+stop_on_error true
+ascii QPI
+ascii QMOD
+```
+
+For the FC4 comparison, replace `wire raw_pi30` with `wire fc4` and specify the
+**maintainer-confirmed** `devcode`, `collector_addr` and `device_addr`; do not
+borrow another inverter's route. CRCs are added automatically in either case.
+`wire auto` is not an independent transport test: it retains normal routing.
+
+A timeout may briefly disconnect HA while the collector reconnects. Wait for
+normal recovery before another run; if it does not recover, stop and share the
+first JSON instead of repeatedly sending commands. Do not switch modes, change
+UART or reset the collector during a scenario. An agreed HA-only/Cloud+HA
+comparison requires separate runs with the mode recorded for each; the exported
+`connection_context_before/after` reports configured connection strategy and
+endpoint policy, not proof of actual cloud telemetry. Normal automatic local
+polling is serialized with the scenario; independent cloud activity is not.
+
+These protocols have no raw transaction ID. A valid reply is evidence for the
+tested session and format, not proof of a model, cloud compatibility or support
+on every connection. A silent attempt is inconclusive. A full protocol scan
+does not independently sweep all wire formats or initialize raw passthrough.
 
 Writes still require confirmation regardless of the selected format. A valid
 write acknowledgement is **not** proof of the final setting: include a known

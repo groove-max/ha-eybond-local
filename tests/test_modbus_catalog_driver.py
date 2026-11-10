@@ -1021,7 +1021,7 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("output_power", keys)
 
     def test_unverified_energy_counters_stay_raw_support_evidence(self) -> None:
-        """Counters with unproven direction must not claim a monotonic series."""
+        """Counters with unproven direction must not create energy statistics."""
 
         from custom_components.eybond_local.metadata.register_schema_loader import (
             load_register_schema,
@@ -1032,8 +1032,9 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         # The capture proves the scale (0.01 kWh per count) and that the counters
         # form the pairs (448, 454) and (546, 552), but it cannot prove which
         # pair is input and which is output: both pairs advance on nearly the
-        # same cycles. Naming them after a direction would be a guess, and
-        # "total_increasing" would let statistics assume an unproven series.
+        # same cycles. Any state_class would make Home Assistant derive energy
+        # statistics from an unproven series, so these stay raw diagnostic
+        # values with no statistics at all, and the names carry no direction.
         expected = {
             "energy_counter_448": "Daily Energy Counter A",
             "energy_counter_454": "Total Energy Counter A",
@@ -1044,7 +1045,8 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(key=key):
                 description = schema.measurement_description(key)
                 self.assertEqual(description.name, name)
-                self.assertEqual(description.state_class, "total")
+                self.assertIsNone(description.state_class)
+                self.assertTrue(description.diagnostic)
                 self.assertEqual(description.unit, "kWh")
                 self.assertEqual(description.device_class, "energy")
 

@@ -54,6 +54,7 @@ Ukrainian readers can also use the [Ukrainian README](../README.uk.md).
 If you are extending or maintaining the project, use [../CONTRIBUTING.md](../CONTRIBUTING.md).
 
 - [Adding Drivers](maintainer/ADDING_DRIVERS.md) — driver structure, registration, tests, and documentation updates
+- [LVYUAN Evidence](maintainer/LVYUAN_EVIDENCE.md) — what a passive capture proves, infers and cannot establish for the TY-SIC-6.5KBE-W1 pack
 - [Validation](maintainer/VALIDATION.md) — focused tests, quality gate, and Home Assistant compatibility lanes
 - [Releasing](maintainer/RELEASING.md) — maintainer-only release preparation and publication checklist
 - [Issue Triage](maintainer/ISSUE_TRIAGE.md) — manual status labels, evidence requests, retest handling, and closing rules

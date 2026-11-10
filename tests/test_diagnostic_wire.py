@@ -88,9 +88,9 @@ class WirePeer:
 
 
 @asynccontextmanager
-async def stream(*, at=False, mode="raw_modbus", reply=True):
+async def stream(*, at=False, mode="raw_modbus", reply=True, peer_factory=WirePeer):
     reader = asyncio.StreamReader()
-    peer = WirePeer(reader, mode=mode, reply=reply)
+    peer = peer_factory(reader, mode=mode, reply=reply)
     if at:
         connection = _CollectorAtConnection(remote_ip_hint="192.0.2.43", write_timeout=.1,
                                              raw_passthrough_bootstrap="uart_write_same_value")

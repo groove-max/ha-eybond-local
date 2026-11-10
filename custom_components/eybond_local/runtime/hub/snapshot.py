@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from .common import (
     CONNECTION_TYPE_EYBOND,
     RUNTIME_COLLECTOR_STATE_IDENTIFIED,
@@ -22,6 +24,7 @@ from .common import (
     RUNTIME_SESSION_STATE_OFFLINE,
     RUNTIME_SESSION_STATE_ONLINE,
     RuntimeSnapshot,
+    TypedTelemetryFrame,
     _PROVISIONAL_INVERTER_DETECTION_STATUSES,
     _VOLATILE_COLLECTOR_VALUE_KEYS,
     _callback_owner_label,
@@ -45,6 +48,43 @@ from .common import (
 
 class HubSnapshotMixin:
     """Methods owned by HubSnapshotMixin."""
+
+    def _configure_runtime_measurement_freshness(self, poll_interval: float | None) -> None:
+        """Set the budget for the NEXT successful read, not extend old data."""
+
+        interval = (
+            float(poll_interval)
+            if type(poll_interval) in (int, float) and math.isfinite(poll_interval)
+            else 0.0
+        )
+        self._runtime_measurement_max_age_seconds = max(60.0, 3.0 * interval)
+
+    def _renew_runtime_measurement_freshness(self) -> None:
+        """Only newly observed scalar inverter values renew the stream budget."""
+
+        self._runtime_measurement_budget_at_read = self._runtime_measurement_max_age_seconds
+        self._runtime_measurement_deadline = (
+            monotonic() + self._runtime_measurement_max_age_seconds
+        )
+
+    def _expire_runtime_measurements(self) -> None:
+        """Retire a completely silent stream without changing link ownership.
+
+        Keep ever-observed key ownership: detection details or a carried broad
+        snapshot must not re-seed expired values. A later DELTA restores only
+        the fields it actually supplies. Individual slow-field cadence remains
+        the driver's responsibility while other fresh measurements arrive.
+        """
+
+        deadline = self._runtime_measurement_deadline
+        if deadline is None or monotonic() < deadline:
+            return
+        self._runtime_measurement_expired_keys.update(self._runtime_measurement_values)
+        self._runtime_measurement_values.clear()
+        self._runtime_measurement_telemetry = TypedTelemetryFrame.empty()
+        self._runtime_measurement_fresh_count = 0
+        self._runtime_measurement_reused_count = 0
+        self._runtime_measurement_deadline = None
 
     def _recovery_backoff_delay(self) -> float:
         base = max(2.0, float(self._connection.request_timeout))
@@ -201,6 +241,7 @@ class HubSnapshotMixin:
         connected: bool | None = None,
         preserve_inverter_values: bool = False,
     ) -> RuntimeSnapshot:
+        self._expire_runtime_measurements()
         generated_canonical_keys: set[str] = set()
         runtime_owned_keys: set[str] = set()
         if self._inverter is not None and not preserve_inverter_values:
@@ -602,6 +643,14 @@ class HubSnapshotMixin:
             values.pop("collector_signal_strength_source", None)
 
         if self._inverter is not None:
+            # Carried extra_values can include both old raw measurements and
+            # their canonical projections. Purge them BEFORE recomputing from
+            # currently available sources, including after a partial recovery.
+            for key in self._runtime_measurement_expired_keys:
+                values.pop(key, None)
+            if self._runtime_measurement_expired_keys:
+                for key in generated_canonical_keys - self._runtime_measurement_values.keys():
+                    values.pop(key, None)
             apply_canonical_measurements(
                 self._inverter.driver_key,
                 values,
@@ -611,6 +660,9 @@ class HubSnapshotMixin:
         values["runtime_recovery_streak"] = self._recovery_streak
         values["runtime_reconnect_count"] = self._reconnect_count
         values["runtime_backoff_seconds"] = round(self._recovery_backoff_remaining(), 1)
+        values["runtime_measurement_expired_count"] = len(self._runtime_measurement_expired_keys)
+        values["runtime_measurement_max_age_seconds"] = self._runtime_measurement_budget_at_read
+        values.update(self._runtime_measurement_diagnostics())
         if self._last_success_monotonic is not None:
             values["runtime_last_success_age_seconds"] = round(
                 max(0.0, monotonic() - self._last_success_monotonic),

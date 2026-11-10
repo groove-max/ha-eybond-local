@@ -18,6 +18,7 @@ from custom_components.eybond_local.const import DOMAIN, SERVICE_RUN_DIAGNOSTIC_
 from custom_components.eybond_local.fixtures.transport import FixtureTransport
 from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
 from custom_components.eybond_local.models import CollectorInfo, ProbeTarget
+from custom_components.eybond_local.payload.pi30 import build_request as pi30_request
 from test_ha_config_flow import collector_entry
 from synthetic import SYNTHETIC_OTHER_COLLECTOR_PN
 
@@ -77,6 +78,74 @@ class PayloadDevice(Device):
         if self.wait is not None:
             await self.wait.wait()
         return self.response
+
+
+class Pi30Device(Device):
+    def create_diagnostic_transport(self, wire, *, timeout):
+        assert wire == "raw_pi30"
+        assert timeout == 10
+        return self
+
+    def select_payload_route(self, route, *, payload_family):
+        assert payload_family == "pi30_ascii"
+        return RawSerialLinkRoute(protocol="pi30_ascii")
+
+    async def async_send_payload(self, payload, *, route, request_timeout=None):
+        assert self.coordinator._diagnostic_active
+        assert self.coordinator._runtime_operation_lock.locked()
+        assert route == RawSerialLinkRoute(protocol="pi30_ascii")
+        self.requests.append(payload)
+        return pi30_request("(PI30" if payload == pi30_request("QPI") else "(B")
+
+
+@pytest.mark.parametrize("through_ui", [False, True])
+async def test_raw_pi30_uses_existing_ui_service_and_redacted_download(
+    hass, hass_client_no_auth, collector_entry, fake_runtime, monkeypatch, through_ui,
+):
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = collector_entry.runtime_data
+    device = Pi30Device(coordinator)
+    monkeypatch.setattr(coordinator, "_diagnostic_link_transport", lambda: device)
+    before = (dict(collector_entry.data), dict(collector_entry.options))
+    script = "driver pi30\nwire raw_pi30\nascii QPI\nascii QMOD"
+    flow_id = None
+    try:
+        if through_ui:
+            options = hass.config_entries.options
+            flow_id = (await options.async_init(collector_entry.entry_id))["flow_id"]
+            flow = options._progress[flow_id]
+            await flow.async_step_diagnostic_commands({
+                "diagnostic_commands": script, "diagnostic_confirm_write": True,
+                "diagnostic_publish_download_copy": True,
+            })
+            url = flow._diagnostic_commands_download_url
+        else:
+            response = await hass.services.async_call(
+                DOMAIN, SERVICE_RUN_DIAGNOSTIC_COMMANDS,
+                {"entry_id": collector_entry.entry_id, "commands": script,
+                 "confirm_write": True, "publish_download_copy": True},
+                blocking=True, return_response=True,
+            )
+            assert response["success"]
+            url = response["download_url"]
+        client = await hass_client_no_auth()
+        response = await client.get(url)
+        assert response.status == 200
+        artifact = json.loads(await response.text())
+        assert artifact["success"]
+        assert artifact["context"]["requested_wire"] == "raw_pi30"
+        assert artifact["context"]["connection_context_before"] == artifact["context"]["connection_context_after"]
+        assert artifact["context"]["connection_context_before"]["configured_strategy"] == coordinator.connection_strategy
+        assert [step["response"]["payload"] for step in artifact["results"]] == ["PI30", "B"]
+        assert device.requests == [pi30_request("QPI"), pi30_request("QMOD")]
+        assert not coordinator._diagnostic_active
+        assert not coordinator._runtime_operation_lock.locked()
+        assert (dict(collector_entry.data), dict(collector_entry.options)) == before
+    finally:
+        if flow_id:
+            hass.config_entries.options.async_abort(flow_id)
+        await hass.config_entries.async_unload(collector_entry.entry_id)
 
 
 @pytest.mark.parametrize("through_ui", [False, True])

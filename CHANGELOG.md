@@ -29,6 +29,18 @@ RC1 below; newer model features remain here.
   one specific vendor family, which reads as "this driver is the Aohai one"
   and misleads users whose model is detected automatically. Updated in
   `strings.json`, all three translations and the runtime fallback.
+- Expire cached inverter measurements after a complete read outage lasting
+  three poll intervals (at least 60 seconds), independently of the collector's
+  TCP/heartbeat status. Preserve short misses and healthy DELTA/slow-field
+  cadence; after a long gap only newly read fields return. Prevent carried
+  snapshots/detection details from restoring expired values and stop derived
+  energy accumulation when its power source expires. This addresses the stale
+  availability part of #92, not the cause of its malformed wire traffic.
+- Bound ordinary poll draining during unload to ten seconds, then cancel and
+  join the exact owned poll before route/listener cleanup. Preserve cooperative
+  transport cleanup and shielded endpoint restoration under cancellation. This
+  covers a reproduced shutdown wait behind a blocked poll; #92's reported
+  reload hang still needs its full log for root-cause confirmation.
 
 - Preserve framed collector sessions when an idle-ended AT value is followed by
   its delayed CR/LF and a complete EyeBond frame. Handle only that reader-local
@@ -59,9 +71,10 @@ RC1 below; newer model features remain here.
   dongle (6.5 kW / 48 V hybrid, Modbus RTU FC3 slave 1 at 9600 8N1 through the
   transparent tunnel). The register map was recovered from a passive btsnoop
   capture of the vendor app: 1068 CRC-valid exchanges, 125 distinct registers,
-  no write function codes present, so the pack exposes monitoring only. Twelve
-  runtime entities are cross-checked against the ValueCloud snapshot for the
-  same hardware. Adds the matching model-catalog entry with two private
+  no write function codes present, so the pack exposes monitoring only. The
+  entities are cross-checked against the ValueCloud snapshot for the same
+  hardware, and the count grows to seventeen in the follow-up entries below.
+  Adds the matching model-catalog entry with two private
   sources, the support-capture policy and the modbus_catalog probe action that
   reads the rating block for detection.
 
@@ -83,8 +96,12 @@ RC1 below; newer model features remain here.
   and only grow. Which source is input and which is output is not provable
   from a passive capture whose increments are nearly simultaneous, so the
   entities are named Daily/Total Energy Counter A and B rather than claiming a
-  direction, and they use state_class 'total' rather than 'total_increasing'
-  so statistics never assume a monotonic series.
+  direction. Because the direction and word width are not proven, they carry no
+  state_class at all and are marked diagnostic: Home Assistant then keeps them
+  as readable raw values instead of creating energy statistics that would assert
+  a monotonic series. Register 33290 is likewise not published as canonical grid
+  power, since a passive capture cannot establish its sign or whether it is grid
+  import, export or a bus figure.
   Adds canonical mappings for grid voltage/frequency/power, output power, load
   and battery power/percent.
 
@@ -93,6 +110,13 @@ RC1 below; newer model features remain here.
   devaddr) plus the normalized cloud readings for one collector PN. It logs
   in and reads only; it never writes to the collector, reroutes it or sends a
   control command to the inverter.
+- Add explicit `wire raw_pi30` to the existing diagnostic command tool on
+  framed and AT collector sockets. Keep the normal driver, wire selection,
+  endpoint and UART unchanged; validate bounded CRC-protected replies on the
+  single reader and close an uncertain diagnostic socket without retrying.
+  Preserve confirmation for free-form ASCII commands and export wire evidence
+  plus configured connection axes before/after the run. This enables targeted
+  transport comparison, not automatic detection or a confirmed #6 repair.
 
 - Add nine model-scoped controls for the single-output Anenji 4200 24 V
   (layout 1, model 0x3501) from the owner's report in #88, retaining untested

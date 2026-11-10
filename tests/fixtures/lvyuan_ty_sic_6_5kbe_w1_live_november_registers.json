@@ -1,0 +1,35 @@
+{
+  "description": "Sanitized numeric words from the same inverter read live over the EyeBond tunnel on 2026-11-10. Same hardware as the August capture, but the installer changed the user-settable charge thresholds (30/488/480/552/534 V), which is the state that broke the original equals-480 anchor. No serial, account, address or timestamps.",
+  "identity": {
+    "16646": 6,
+    "16650": 552
+  },
+  "mains_start": 80,
+  "mains": [
+    2298,
+    861,
+    4998
+  ],
+  "output_start": 88,
+  "output": [
+    2302,
+    801,
+    4998,
+    1497,
+    1502,
+    231
+  ],
+  "battery_start": 128,
+  "battery": [
+    552,
+    1
+  ],
+  "input_power_start": 33290,
+  "input_power": [
+    1490
+  ],
+  "energy_daily_a": 1491,
+  "energy_total_a": 64227,
+  "energy_daily_b": 1487,
+  "energy_total_b": 58887
+}

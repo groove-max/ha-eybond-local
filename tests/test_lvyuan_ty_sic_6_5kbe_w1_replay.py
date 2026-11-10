@@ -1,0 +1,179 @@
+"""Replay checks for the LVYUAN TY-SIC-6.5KBE-W1 pack.
+
+The fixtures are sanitized numeric words taken from a passive BLE capture of the
+vendor app (2026-08-09) plus one live read of the same unit (2026-11-10). They
+carry no serial, account, address or collection id.
+
+They exist because the original fingerprint pinned a user-settable charge
+threshold (word 16648 == 480 V) and the installer later changed it, which made a
+live unit with a healthy transport fail detection. These tests replay the two
+observed configurations and a synthetic 96 V negative case so the matcher cannot
+silently regress to a settable value.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+import sys
+import unittest
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+
+from custom_components.eybond_local.drivers.modbus_catalog import ModbusCatalogDriver  # noqa: E402
+from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
+    DriverReadMode,
+    DriverReadResult,
+)
+from custom_components.eybond_local.fixtures.transport import FixtureTransport  # noqa: E402
+from custom_components.eybond_local.models import ProbeTarget  # noqa: E402
+
+FIXTURES = Path(__file__).parent / "fixtures"
+AUGUST = json.loads(
+    (FIXTURES / "lvyuan_ty_sic_6_5kbe_w1_august_registers.json").read_text(encoding="utf-8")
+)
+NOVEMBER = json.loads(
+    (FIXTURES / "lvyuan_ty_sic_6_5kbe_w1_live_november_registers.json").read_text(encoding="utf-8")
+)
+NEGATIVE_96V = json.loads(
+    (FIXTURES / "lvyuan_ty_sic_6_5kbe_w1_96v_negative_registers.json").read_text(encoding="utf-8")
+)
+
+IDENTITY_START = 16640
+IDENTITY_COUNT = 16
+
+
+def _target() -> ProbeTarget:
+    return ProbeTarget(devcode=23711, collector_addr=1, device_addr=1)
+
+
+def _registers(fixture: dict) -> dict[int, int]:
+    """Expand a fixture into the flat register map the transport replays."""
+
+    registers: dict[int, int] = {}
+    for start, count, words in (
+        (fixture["mains_start"], len(fixture["mains"]), fixture["mains"]),
+        (fixture["output_start"], len(fixture["output"]), fixture["output"]),
+        (fixture["battery_start"], len(fixture["battery"]), fixture["battery"]),
+    ):
+        for offset, word in enumerate(words):
+            registers[start + offset] = word
+
+    # The energy blocks are read as (start, count) spans that also cover the
+    # zero words around each counter, so replay every word of the span.
+    for start, count in ((445, 4), (453, 2), (545, 2), (551, 2)):
+        for offset in range(count):
+            registers[start + offset] = 0
+    for key, word in (
+        ("energy_daily_a", 448),
+        ("energy_total_a", 454),
+        ("energy_daily_b", 546),
+        ("energy_total_b", 552),
+    ):
+        registers[word] = fixture[key]
+
+    registers[fixture["input_power_start"]] = fixture["input_power"][0]
+
+    # The rating block is what the probe action reads. Everything the vendor app
+    # does not poll stays absent, so a matcher that needs it would see nothing.
+    for offset in range(IDENTITY_COUNT):
+        registers[IDENTITY_START + offset] = 0
+    for raw, value in fixture["identity"].items():
+        registers[int(raw)] = value
+    return registers
+
+
+def _transport(fixture: dict) -> FixtureTransport:
+    return FixtureTransport(
+        registers=_registers(fixture),
+        input_registers=None,
+        command_responses=None,
+        probe_target=_target(),
+    )
+
+
+class LvyuanIdentityReplayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_august_capture_resolves_the_exact_model(self) -> None:
+        driver = ModbusCatalogDriver()
+
+        inverter = await driver.async_probe(_transport(AUGUST), _target())
+
+        assert inverter is not None
+        self.assertEqual(inverter.variant_key, "lvyuan_ty_sic_6_5kbe_w1")
+        self.assertEqual(
+            inverter.register_schema_name, "lvyuan_ty_sic_6_5kbe_w1/base.json"
+        )
+
+    async def test_live_unit_with_edited_thresholds_still_resolves(self) -> None:
+        """The regression that broke detection on the real inverter.
+
+        Both fixtures carry the same hardware identity. Only the user-settable
+        charge thresholds differ, because the installer changed them between
+        August and November. Detection must not depend on those words.
+        """
+
+        driver = ModbusCatalogDriver()
+
+        inverter = await driver.async_probe(_transport(NOVEMBER), _target())
+
+        assert inverter is not None
+        self.assertEqual(inverter.variant_key, "lvyuan_ty_sic_6_5kbe_w1")
+
+        self.assertEqual(AUGUST["identity"], NOVEMBER["identity"])
+        self.assertEqual(
+            AUGUST["identity"]["16646"], 6, "power-class word must be the 6 kW class"
+        )
+
+    async def test_96v_platform_is_refused_despite_the_same_power_class(self) -> None:
+        """Word 16646 reads 6 on any 6 kW unit, so it cannot stand alone.
+
+        The negative fixture keeps the power class and moves the charge ceiling
+        onto a 96 V platform. The matcher must not claim this exact model.
+        """
+
+        driver = ModbusCatalogDriver()
+
+        inverter = await driver.async_probe(_transport(NEGATIVE_96V), _target())
+
+        self.assertIsNone(inverter)
+
+
+class LvyuanTelemetryReplayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_confirmed_telemetry_decodes_from_the_capture(self) -> None:
+        driver = ModbusCatalogDriver()
+        transport = _transport(AUGUST)
+
+        inverter = await driver.async_probe(transport, _target())
+        assert inverter is not None
+
+        result = await driver.async_read_values(transport, inverter)
+        self.assertIs(type(result), DriverReadResult)
+        self.assertIs(result.mode, DriverReadMode.FULL)
+        values = result.values
+
+        # Mains and output are direct FC3 words divided by ten.
+        self.assertEqual(values["mains_voltage"], 228.0)
+        self.assertEqual(values["mains_current"], 8.57)
+        self.assertEqual(values["mains_frequency"], 49.99)
+        self.assertEqual(values["output_voltage"], 229.0)
+        self.assertEqual(values["output_active_power"], 1821)
+        self.assertEqual(values["output_apparent_power"], 1826)
+        self.assertEqual(values["load_percent"], 28)
+
+        # 33290 is exposed as input active power, not as an unattributed word.
+        self.assertEqual(values["input_active_power"], 1863)
+
+        # Counters decode as hundredths of a kWh.
+        self.assertEqual(values["energy_counter_448"], 14.16)
+        self.assertEqual(values["energy_counter_454"], 87.71)
+        self.assertEqual(values["energy_counter_546"], 14.08)
+        self.assertEqual(values["energy_counter_552"], 70.50)
+
+
+if __name__ == "__main__":
+    unittest.main()

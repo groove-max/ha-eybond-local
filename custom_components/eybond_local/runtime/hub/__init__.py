@@ -162,6 +162,12 @@ class EybondHub(
         self._runtime_measurement_last_mode: str = ""
         self._runtime_measurement_fresh_count: int = 0
         self._runtime_measurement_reused_count: int = 0
+        # Whole-stream read-outage budget, independent of collector heartbeats.
+        # DELTA cadence remains driver-owned while fresh reads keep arriving.
+        self._runtime_measurement_max_age_seconds = 60.0
+        self._runtime_measurement_budget_at_read = 60.0
+        self._runtime_measurement_deadline: float | None = None
+        self._runtime_measurement_expired_keys: set[str] = set()
         self._persistent_unsupported_commands: tuple[str, ...] = ()
         # Collector-metadata TELEMETRY ownership lives entirely in the service:
         # the generic hub owns neither the wire, the cadence, the caches, nor the

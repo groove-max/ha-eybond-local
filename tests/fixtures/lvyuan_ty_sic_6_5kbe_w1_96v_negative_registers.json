@@ -1,0 +1,35 @@
+{
+  "description": "Synthetic negative fixture: a 6 kW-class unit whose power-class word 16646 also reads 6, but whose charge ceiling sits on a 96 V platform. Used to prove the matcher does not claim an exact model from the power class alone.",
+  "identity": {
+    "16646": 6,
+    "16650": 1056
+  },
+  "mains_start": 80,
+  "mains": [
+    2280,
+    857,
+    4999
+  ],
+  "output_start": 88,
+  "output": [
+    2290,
+    795,
+    4999,
+    1821,
+    1826,
+    280
+  ],
+  "battery_start": 128,
+  "battery": [
+    546,
+    0
+  ],
+  "input_power_start": 33290,
+  "input_power": [
+    1863
+  ],
+  "energy_daily_a": 1416,
+  "energy_total_a": 8771,
+  "energy_daily_b": 1408,
+  "energy_total_b": 7050
+}

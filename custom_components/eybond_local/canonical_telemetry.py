@@ -445,12 +445,12 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("grid_port_power",),
                 compute="negate",
             ),
-            CanonicalTelemetryVariant(
-                driver_keys=("modbus_catalog",),
-                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
-                source_keys=("input_active_power",),
-                compute="passthrough",
-            ),
+            # LVYUAN register 33290 is not mapped here on purpose. It tracks an
+            # input-side power, but a passive capture cannot prove its sign or
+            # whether it is grid import, grid export or a bus figure. Publishing
+            # it as canonical grid power would assert an import direction the
+            # evidence does not carry, so it stays an opt-in raw sensor until a
+            # signed reading is observed.
         ),
     ),
     CanonicalTelemetryDescription(

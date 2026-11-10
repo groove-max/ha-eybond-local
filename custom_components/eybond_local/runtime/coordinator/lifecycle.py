@@ -11,6 +11,8 @@ from ...const import CONF_COLLECTOR_PN, DOMAIN
 
 logger = logging.getLogger(__name__)
 
+_RUNTIME_POLL_SHUTDOWN_GRACE_SECONDS = 10.0
+
 
 class CoordinatorLifecycleMixin:
     """Own coordinator startup and teardown sequencing."""
@@ -201,6 +203,34 @@ class CoordinatorLifecycleMixin:
             registry.owner_for_pn(collector_pn) == entry_id
         )
 
+    async def _async_drain_runtime_poll(self, *, shutdown_task=None) -> None:
+        """Bound normal poll draining, then cancel/join its active operation.
+
+        Route finalization needs the same runtime lock. Waiting for that lock
+        before stopping a stuck poll can wedge unload indefinitely. A regular
+        in-flight read gets a grace period; cancellation still joins its own
+        transport cleanup before any route or listener teardown begins.
+        The calling task may continue with unrelated work after a refresh, so
+        wait for the poll boundary, never for that task's entire lifetime.
+        """
+
+        task = getattr(self, "_runtime_poll_task", None)
+        poll_done = getattr(self, "_runtime_poll_done", None)
+        if (
+            task is None or poll_done is None
+            or task is asyncio.current_task() or task is shutdown_task
+        ):
+            return
+        done, _pending = await asyncio.wait(
+            {poll_done}, timeout=_RUNTIME_POLL_SHUTDOWN_GRACE_SECONDS,
+        )
+        # The operation may finish at the timeout boundary. Do not cancel its
+        # caller once it has left our poll, or a later task using the same slot.
+        if not done and not poll_done.done() and self._runtime_poll_done is poll_done:
+            logger.warning("Cancelling stalled runtime poll before collector shutdown")
+            task.cancel()
+        await asyncio.shield(poll_done)
+
     async def async_shutdown(self) -> None:
         """Stop the underlying hub."""
 
@@ -208,6 +238,7 @@ class CoordinatorLifecycleMixin:
             if self._shutdown_complete:
                 return
             self._shutdown_complete = True
+            shutdown_task = asyncio.current_task()
             # Do not let cancellation during a long endpoint restore leave the
             # link/debouncer alive with _shutdown_complete already set. Finish
             # the remaining teardown before propagating that cancellation.
@@ -229,6 +260,10 @@ class CoordinatorLifecycleMixin:
             await self._async_cancel_diagnostic_run()
             await self._support_package_flight.cancel()
             await self._local_register_collection.async_shutdown()
+            _result, poll_cancel = await self._run_finalization_shielded(
+                lambda: self._async_drain_runtime_poll(shutdown_task=shutdown_task)
+            )
+            preparation_cancel = preparation_cancel or poll_cancel
             self._cancel_proxy_capture_deadline_refresh()
             set_snapshot_observer = getattr(
                 self._runtime,

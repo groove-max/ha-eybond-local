@@ -209,9 +209,9 @@ def _apply_directive(
     line: int,
 ) -> None:
     if keyword == "wire":
-        _require_args(args, 1, line=line, usage="wire <auto|fc4|raw_modbus>")
-        if args[0] not in {"auto", "fc4", "raw_modbus"}:
-            raise ScenarioError("wire must be auto, fc4 or raw_modbus", line=line)
+        _require_args(args, 1, line=line, usage="wire <auto|fc4|raw_modbus|raw_pi30>")
+        if args[0] not in {"auto", "fc4", "raw_modbus", "raw_pi30"}:
+            raise ScenarioError("wire must be auto, fc4, raw_modbus or raw_pi30", line=line)
         builder["wire"] = args[0]
         return
     if keyword == "driver":
