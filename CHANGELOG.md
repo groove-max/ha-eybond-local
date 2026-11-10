@@ -13,6 +13,23 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Anchor LVYUAN detection on stable identity words instead of the charge
+  thresholds. The rating block is NOT constant: words 16645 and 16648-16651
+  are user-settable charge limits and read 40/480/420/552/544 V in the August
+  2026 capture versus 30/488/480/552/534 V on the same unit in November 2026.
+  Pinning `fingerprint.layout_code` to `equals 480` therefore made a live unit
+  fail detection and surface `driver_unbound` with an empty driver. Detection
+  now binds word 16646 (6 kW class, constant across all captured cycles) and
+  word 16650 as a 500-600 range, which resolves both the captured and the live
+  values; a regression harness confirms no other device in the catalog changes
+  its detection outcome.
+
+- Relabel the `modbus_catalog` driver from "Device Catalog / Modbus (Aohai
+  FSA...)" to "Device Catalog / Modbus (detected model)". The old label named
+  one specific vendor family, which reads as "this driver is the Aohai one"
+  and misleads users whose model is detected automatically. Updated in
+  `strings.json`, all three translations and the runtime fallback.
+
 - Preserve framed collector sessions when an idle-ended AT value is followed by
   its delayed CR/LF and a complete EyeBond frame. Handle only that reader-local
   boundary; retain valid binary headers, strict frame validation and bounded
@@ -37,6 +54,22 @@ RC1 below; newer model features remain here.
   or validate that collector's endpoint management.
 
 ### Added
+
+- Add the LVYUAN TY-SIC-6.5KBE-W1 read-only telemetry pack behind an EyeBond
+  dongle (6.5 kW / 48 V hybrid, Modbus RTU FC3 slave 1 at 9600 8N1 through the
+  transparent tunnel). The register map was recovered from a passive btsnoop
+  capture of the vendor app: 1068 CRC-valid exchanges, 125 distinct registers,
+  no write function codes present, so the pack exposes monitoring only. Twelve
+  runtime entities are cross-checked against the ValueCloud snapshot for the
+  same hardware. Adds the matching model-catalog entry with two private
+  sources, the support-capture policy and the modbus_catalog probe action that
+  reads the rating block for detection.
+
+- Add `tools/valuecloud_probe.py`, a read-only ValueCloud (SmartValue) probe
+  that prints the identity fields the local integration needs (devcode /
+  devaddr) plus the normalized cloud readings for one collector PN. It logs
+  in and reads only; it never writes to the collector, reroutes it or sends a
+  control command to the inverter.
 
 - Add nine model-scoped controls for the single-output Anenji 4200 24 V
   (layout 1, model 0x3501) from the owner's report in #88, retaining untested
