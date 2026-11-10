@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "model_key": "lvyuan_ty_sic_6_5kbe_w1",
+  "manufacturer": "LVYUAN",
+  "model": "TY-SIC-6.5KBE-W1",
+  "aliases": [
+    "TY-SIC-6.5KBE",
+    "LVYUAN TY-SIC-6.5KBE-W1"
+  ],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "lvyuan_ty_sic_6_5kbe_w1",
+      "label": "EyeBond BLE-bridge Modbus RTU read-only telemetry profile",
+      "device_descriptor_keys": [
+        "lvyuan_ty_sic_6_5kbe_w1"
+      ],
+      "known_firmware": [
+        "collector AT 8-50-18-3",
+        "inverter register map from passive BLE capture"
+      ]
+    }
+  ],
+  "validation": {
+    "hardware": "captured",
+    "telemetry": "confirmed",
+    "controls": "none"
+  },
+  "coverage": {
+    "runtime_control_surface": "read_only",
+    "smartess_control_surface": "unknown",
+    "vendor_register_map": "documented",
+    "notes": [
+      "Runtime support is derived from a passive btsnoop capture of the vendor SmartValue app talking to the EyeBond dongle over BLE: 1068 CRC-valid Modbus RTU FC03 exchanges with slave 1 on 9600 8N1, covering 125 distinct registers polled every 14.4 s.",
+      "The pack is read-only by construction: the capture contains no FC06/FC16 traffic, so no control surface can be inferred from it.",
+      "Identity is anchored on word 16646, which reads 6 (6 kW power class) in every one of the 37 captured cycles, plus word 16650 (55.2 V bulk ceiling). Words 16645 and 16648-16651 are USER-SETTABLE charge thresholds, not hardware fingerprints: they read 40/480/420/552/544 V in the August capture and 30/488/480/552/534 V on the same unit in November 2026.",
+      "Twelve runtime entities are exposed, all cross-checked against the ValueCloud device snapshot for the same hardware."
+    ]
+  },
+  "known_limitations": [
+    "Read-only: there is no captured evidence of any write function code, so controls are not offered.",
+    "The inverter reaches Home Assistant only through the EyeBond TCP tunnel; the integration has no native BLE polling support.",
+    "Register 33290 (0x820A) varies but is not identified and is therefore not exposed.",
+    "Registers 136-142 always read 32767 (0x7FFF) and are treated as the unavailable sentinel.",
+    "Controls validation is 'none' rather than 'partial' because no write path was ever captured for this pack."
+  ],
+  "knowledge_summary": "LVYUAN TY-SIC-6.5KBE-W1 is a 6.5 kW / 48 V hybrid inverter shipped behind an EyeBond Wi-Fi dongle and the SmartValue (ValueCloud) app. A passive BLE capture of the app-to-dongle link recovered the inverter-facing protocol: plain Modbus RTU, function 3, slave address 1, 9600 8N1, tunnelled through a transparent GATT bridge. The register map is fully enumerated, 12 telemetry entities are exposed read-only, and detection is anchored on word 16646 and the 55.2 V bulk ceiling so the pack cannot be confused with the SMG, Deye, Solis, Growatt, Aohai or Sumry families that share the same transport.",
+  "source_keys": [
+    "capture_btsnoop_lvyuan_ty_sic_6_5kbe_w1_20260809",
+    "cloud_snapshot_valuecloud_lvyuan_ty_sic_6_5kbe_w1"
+  ]
+}
