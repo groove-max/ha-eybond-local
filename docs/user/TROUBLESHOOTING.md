@@ -33,6 +33,16 @@ For intermittent gaps, retain automatic polling or increase an overly short
 manual interval. **Poll Duration**, **Poll Utilization** and **Recommended Poll
 Interval** help explain whether requests fit. Faster polling is not a general fix.
 
+Development builds after 0.3.0-rc.1 expire cached inverter measurements after
+a complete read outage of three poll intervals, with a minimum of 60 seconds.
+Expiry is applied when the runtime next builds a snapshot; a collector heartbeat
+alone does not renew it. The collector may therefore remain connected while its
+inverter readings become unavailable. Short misses and healthy partial updates
+are tolerated; after a long gap, only newly received fields return. Estimated
+energy stops accumulating when its source power expires. This does not itself
+repair the lost inverter stream. Save a Support Archive and the existing log
+before requesting a callback if practical; do not deliberately prolong an outage.
+
 <a id="cloud-updates-stop"></a>
 ## Cloud updates stop while HA works
 

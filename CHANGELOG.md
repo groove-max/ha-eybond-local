@@ -13,6 +13,19 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Expire cached inverter measurements after a complete read outage lasting
+  three poll intervals (at least 60 seconds), independently of the collector's
+  TCP/heartbeat status. Preserve short misses and healthy DELTA/slow-field
+  cadence; after a long gap only newly read fields return. Prevent carried
+  snapshots/detection details from restoring expired values and stop derived
+  energy accumulation when its power source expires. This addresses the stale
+  availability part of #92, not the cause of its malformed wire traffic.
+- Bound ordinary poll draining during unload to ten seconds, then cancel and
+  join the exact owned poll before route/listener cleanup. Preserve cooperative
+  transport cleanup and shielded endpoint restoration under cancellation. This
+  covers a reproduced shutdown wait behind a blocked poll; #92's reported
+  reload hang still needs its full log for root-cause confirmation.
+
 - Preserve framed collector sessions when an idle-ended AT value is followed by
   its delayed CR/LF and a complete EyeBond frame. Handle only that reader-local
   boundary; retain valid binary headers, strict frame validation and bounded
