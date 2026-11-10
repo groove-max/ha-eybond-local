@@ -5023,7 +5023,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "SMG / Modbus",
                 "SRNE / Modbus",
                 "MUST PV/PH18",
-                "Каталог пристроїв / Modbus (Aohai FSA…)",
+                "Каталог пристроїв / Modbus (модель визначається автоматично)",
                 "PI30",
                 "EyeBond G-ASCII",
                 "SmartESS 0925 / Modbus",

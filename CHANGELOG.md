@@ -65,6 +65,23 @@ RC1 below; newer model features remain here.
   sources, the support-capture policy and the modbus_catalog probe action that
   reads the rating block for detection.
 
+  Seventeen runtime entities are now exposed, all taken from blocks the vendor
+  app already polls, so enabling them adds no traffic to the dongle: mains
+  voltage/current/frequency, output voltage/current/frequency, output active
+  and apparent power, load percent, battery voltage/current/SoC, input active
+  power, and four energy counters. Register 33290 is the mains/input active
+  power: across the capture it averages 1842 W against 1825 W at the output
+  register, a 99.1% ratio consistent with conversion loss, and it leads the
+  output reading by one cycle (+0.28 lag-1 correlation). Counters at
+  448/454/546/552 are hundredths of a kWh: each advanced 27 counts (0.27 kWh)
+  over 546 s against 0.277 kWh integrated from measured output power, a 2.5%
+  discrepancy. The pairs split into today (448/546, values fell between the
+  August capture and November) and lifetime totals (454/552, grew by 550 and
+  514 kWh); input sits above output within each pair. They are named after
+  their registers because the two pairs cannot yet be told apart by meaning.
+  Adds canonical mappings for grid voltage/frequency/power, output power, load
+  and battery power/percent.
+
 - Add `tools/valuecloud_probe.py`, a read-only ValueCloud (SmartValue) probe
   that prints the identity fields the local integration needs (devcode /
   devaddr) plus the normalized cloud readings for one collector PN. It logs

@@ -427,7 +427,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `lvyuan_ty_sic_6_5kbe_w1` → surface `lvyuan_ty_sic_6_5kbe_w1_read_only` (driver modbus_catalog, variant lvyuan_ty_sic_6_5kbe_w1)
       - Protocol: modbus_catalog | Detection: anchors (fingerprint.model_code=6; identity.lvyuan_charge_profile_high_raw=)
       - Tier: partial | Read-only: yes | Profile: — | Schema: lvyuan_ty_sic_6_5kbe_w1/base.json
-      - Capabilities: no model-specific profile | Telemetry: 12 measurements, 0 binary sensors
+      - Capabilities: no model-specific profile | Telemetry: 17 measurements, 0 binary sensors
 - Known limitations:
   - Read-only: there is no captured evidence of any write function code, so controls are not offered.
   - The inverter reaches Home Assistant only through the EyeBond TCP tunnel; the integration has no native BLE polling support.
