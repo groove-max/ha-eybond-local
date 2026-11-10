@@ -75,10 +75,16 @@ RC1 below; newer model features remain here.
   output reading by one cycle (+0.28 lag-1 correlation). Counters at
   448/454/546/552 are hundredths of a kWh: each advanced 27 counts (0.27 kWh)
   over 546 s against 0.277 kWh integrated from measured output power, a 2.5%
-  discrepancy. The pairs split into today (448/546, values fell between the
-  August capture and November) and lifetime totals (454/552, grew by 550 and
-  514 kWh); input sits above output within each pair. They are named after
-  their registers because the two pairs cannot yet be told apart by meaning.
+  discrepancy. They form two source pairs, (448, 454) and (546, 552): within
+  a pair both counters advance on the same 94% of cycles, while across pairs
+  agreement drops to 78-89%. The low member of each pair is the daily counter
+  and the high member the lifetime total, because 448/546 read 14.x kWh and
+  fell between August and November, whereas 454/552 read several hundred kWh
+  and only grow. Which source is input and which is output is not provable
+  from a passive capture whose increments are nearly simultaneous, so the
+  entities are named Daily/Total Energy Counter A and B rather than claiming a
+  direction, and they use state_class 'total' rather than 'total_increasing'
+  so statistics never assume a monotonic series.
   Adds canonical mappings for grid voltage/frequency/power, output power, load
   and battery power/percent.
 

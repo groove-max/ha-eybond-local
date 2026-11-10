@@ -418,8 +418,8 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - Runtime support is derived from a passive btsnoop capture of the vendor SmartValue app talking to the EyeBond dongle over BLE: 1068 CRC-valid Modbus RTU FC03 exchanges with slave 1 on 9600 8N1, covering 125 distinct registers polled every 14.4 s.
     - The pack is read-only by construction: the capture contains no FC06/FC16 traffic, so no control surface can be inferred from it.
     - Identity is anchored on word 16646, which reads 6 (6 kW power class) in every one of the 37 captured cycles, plus word 16650 (55.2 V bulk ceiling). Words 16645 and 16648-16651 are USER-SETTABLE charge thresholds, not hardware fingerprints: they read 40/480/420/552/544 V in the August capture and 30/488/480/552/534 V on the same unit in November 2026.
-    - Twelve runtime entities are exposed, all cross-checked against the ValueCloud device snapshot for the same hardware.
-- Summary: LVYUAN TY-SIC-6.5KBE-W1 is a 6.5 kW / 48 V hybrid inverter shipped behind an EyeBond Wi-Fi dongle and the SmartValue (ValueCloud) app. A passive BLE capture of the app-to-dongle link recovered the inverter-facing protocol: plain Modbus RTU, function 3, slave address 1, 9600 8N1, tunnelled through a transparent GATT bridge. The register map is fully enumerated, 12 telemetry entities are exposed read-only, and detection is anchored on word 16646 and the 55.2 V bulk ceiling so the pack cannot be confused with the SMG, Deye, Solis, Growatt, Aohai or Sumry families that share the same transport.
+    - Seventeen runtime entities are exposed, all cross-checked against the ValueCloud device snapshot for the same hardware. Four of them are energy counters that form two source pairs: within a pair both counters advance on the same 94 percent of cycles, while across pairs agreement drops to 78-89 percent. The low member of each pair is the daily counter and the high member the lifetime total. Which source is input and which is output is not provable from a passive capture, so they are named Daily/Total Energy Counter A and B and carry state_class 'total' rather than 'total_increasing'.
+- Summary: LVYUAN TY-SIC-6.5KBE-W1 is a 6.5 kW / 48 V hybrid inverter shipped behind an EyeBond Wi-Fi dongle and the SmartValue (ValueCloud) app. A passive BLE capture of the app-to-dongle link recovered the inverter-facing protocol: plain Modbus RTU, function 3, slave address 1, 9600 8N1, tunnelled through a transparent GATT bridge. The register map is fully enumerated, 17 telemetry entities are exposed read-only, and detection is anchored on word 16646 and the 55.2 V bulk ceiling so the pack cannot be confused with the SMG, Deye, Solis, Growatt, Aohai or Sumry families that share the same transport.
 - Variants:
   - `lvyuan_ty_sic_6_5kbe_w1` — EyeBond BLE-bridge Modbus RTU read-only telemetry profile
     - Descriptors: lvyuan_ty_sic_6_5kbe_w1
@@ -431,7 +431,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Known limitations:
   - Read-only: there is no captured evidence of any write function code, so controls are not offered.
   - The inverter reaches Home Assistant only through the EyeBond TCP tunnel; the integration has no native BLE polling support.
-  - Register 33290 (0x820A) varies but is not identified and is therefore not exposed.
+  - Register 33290 (0x820A) is input/mains active power and is exposed as such: its mean, 1842 W, sits just above the 1825 W output mean, consistent with inverter efficiency, and it leads output power by one poll cycle. The vendor already polls it every cycle, so exposing it costs no extra dongle traffic.
   - Registers 136-142 always read 32767 (0x7FFF) and are treated as the unavailable sentinel.
   - Controls validation is 'none' rather than 'partial' because no write path was ever captured for this pack.
 - Evidence: 2 source(s)

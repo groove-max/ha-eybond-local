@@ -258,47 +258,47 @@
     },
     {
       "key": "energy_counter_448",
-      "name": "Energy Counter 448 (Daily A)",
+      "name": "Daily Energy Counter A",
       "unit": "kWh",
       "device_class": "energy",
-      "state_class": "total_increasing",
+      "state_class": "total",
       "suggested_display_precision": 2,
       "diagnostic": false,
       "enabled_default": true,
-      "icon": "mdi:transmission-tower-import"
+      "icon": "mdi:counter"
     },
     {
       "key": "energy_counter_454",
-      "name": "Energy Counter 454 (Total A)",
+      "name": "Total Energy Counter A",
       "unit": "kWh",
       "device_class": "energy",
-      "state_class": "total_increasing",
+      "state_class": "total",
       "suggested_display_precision": 2,
       "diagnostic": false,
       "enabled_default": true,
-      "icon": "mdi:transmission-tower-import"
+      "icon": "mdi:counter"
     },
     {
       "key": "energy_counter_546",
-      "name": "Energy Counter 546 (Daily B)",
+      "name": "Daily Energy Counter B",
       "unit": "kWh",
       "device_class": "energy",
-      "state_class": "total_increasing",
+      "state_class": "total",
       "suggested_display_precision": 2,
       "diagnostic": false,
       "enabled_default": true,
-      "icon": "mdi:home-lightning-bolt"
+      "icon": "mdi:counter"
     },
     {
       "key": "energy_counter_552",
-      "name": "Energy Counter 552 (Total B)",
+      "name": "Total Energy Counter B",
       "unit": "kWh",
       "device_class": "energy",
-      "state_class": "total_increasing",
+      "state_class": "total",
       "suggested_display_precision": 2,
       "diagnostic": false,
       "enabled_default": true,
-      "icon": "mdi:home-lightning-bolt"
+      "icon": "mdi:counter"
     }
   ],
   "support_read_plan": {
