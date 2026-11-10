@@ -1,6 +1,6 @@
 {
  "schema_version": 2,
- "catalog_version": "2026.10.21",
+ "catalog_version": "2026.10.22",
  "description": "Universal offline inverter catalog with reusable protocol actions, runtime surfaces, and deterministic identity evidence.",
  "protocols": [
   {
@@ -975,6 +975,21 @@
        "words": 1
       }
      ]
+    },
+    {
+     "key": "modbus_catalog.lvyuan_identity_ratings",
+     "kind": "modbus_read",
+     "register": 16640,
+     "count": 16,
+     "function": 3,
+     "cost": 2,
+     "optional": true,
+     "evidence_fields": [
+      {"key": "fingerprint.layout_code", "source_key": "lvyuan_layout_code", "register": 16648},
+      {"key": "fingerprint.model_code", "source_key": "lvyuan_model_code", "register": 16646},
+      {"key": "identity.lvyuan_profile_word", "source_key": "lvyuan_profile_word", "register": 16640},
+      {"key": "identity.lvyuan_charge_profile_high_raw", "source_key": "lvyuan_charge_profile_high_raw", "register": 16650}
+     ]
     }
    ],
    "layouts": [],
@@ -986,6 +1001,14 @@
   }
  ],
  "support_capture_policies": {
+  "lvyuan_ty_sic_6_5kbe_w1": {
+   "ranges": [[0, 16], [26, 1], [56, 4], [65, 1], [69, 5], [80, 3], [88, 6], [128, 2], [132, 1], [136, 7], [144, 3], [150, 3], [439, 2], [445, 4], [453, 2], [545, 2], [551, 2], [629, 2], [635, 2], [864, 6], [16640, 16], [16659, 7], [16670, 6], [16677, 1], [16679, 4], [16684, 14], [16706, 1], [16715, 1], [33290, 1]],
+   "notes": [
+    "LVYUAN TY-SIC-6.5KBE-W1 behind an EyeBond BLE bridge: 37 clean FC03 read cycles decoded from a passive btsnoop capture, every request and response CRC-verified; 125 distinct registers, no write function codes present.",
+    "Read-only evidence only. The capture contains no FC06/FC16 traffic, so the control surface is unverified by construction and this pack must not offer writes.",
+    "Register 33290 (0x820A) varies but does not correlate with any identified quantity; it is captured for evidence and deliberately left unlabelled."
+   ]
+  },
   "hopewind_0237": {
    "ranges": [[40500, 71], [40571, 29], [40600, 51]],
    "notes": ["Manufacturer Hopewind protocol 567 / 0237: read-only FC03 evidence; identity block can contain a serial number."]
@@ -1503,6 +1526,17 @@
  },
  "surfaces": [
   {
+   "key": "lvyuan_ty_sic_6_5kbe_w1_read_only",
+   "protocol_key": "modbus_catalog",
+   "driver_key": "modbus_catalog",
+   "variant_key": "lvyuan_ty_sic_6_5kbe_w1",
+   "profile_name": "",
+   "register_schema_name": "lvyuan_ty_sic_6_5kbe_w1/base.json",
+   "tier": "partial",
+   "read_only": true,
+   "support_capture_policy": "lvyuan_ty_sic_6_5kbe_w1"
+  },
+  {
    "key": "smg_6200_full",
    "protocol_key": "modbus_smg",
    "driver_key": "modbus_smg",
@@ -1997,6 +2031,31 @@
   }
  ],
  "devices": [
+  {
+   "entry_key": "lvyuan_ty_sic_6_5kbe_w1",
+   "model_name": "LVYUAN TY-SIC-6.5KBE-W1",
+   "aliases": [
+    "TY-SIC-6.5KBE-W1",
+    "TY-SIC-6.5KBE",
+    "LVYUAN TY-SIC-6.5KBE"
+   ],
+   "surface_key": "lvyuan_ty_sic_6_5kbe_w1_read_only",
+   "priority": 120,
+   "family_fallback": false,
+   "anchors": [
+    {"key": "fingerprint.model_code", "equals": 6, "cost": 1},
+    {"key": "identity.lvyuan_charge_profile_high_raw", "min": 500, "max": 600, "cost": 2}
+   ],
+   "provenance": {
+    "sources": [
+     "Passive BLE btsnoop capture of the SmartValue app (2026-08-09): 1068 CRC-valid Modbus RTU FC03 exchanges with slave 1 behind the EyeBond GATT bridge exposed a 125-register map polled every 14.4 s.",
+     "Word 16646 reads 6 across all 37 captured cycles and is the only word in the rating block that identifies the power class; it is bound to fingerprint.model_code. Word 16650 reads 55.2 V (bulk/absorption ceiling) and is bound to identity.lvyuan_charge_profile_high_raw. Words 16645 and 16648-16651 are USER-SETTABLE charge thresholds, not hardware fingerprints: they read 40/480/420/552/544 V in the August capture and 30/488/480/552/534 V on the same unit in November 2026, so any hardware matcher must not pin them to an exact captured value.",
+     "Word 93 is load percent x10 and reproduces word 91 active power against the 6.5 kW nameplate with a mean absolute error of 2.0 W over 37 samples, which independently confirms the 6.5 kW class.",
+     "Cross-checked against the ValueCloud device snapshot for the same hardware: mains 230.9 V, load active power 1231 W, battery 54.1 V at 98 percent map onto words 80, 91, 128 and 132."
+    ],
+    "confidence": "capture-confirmed-read-only"
+   }
+  },
   {
    "entry_key": "smg_6200",
    "fingerprint": {
