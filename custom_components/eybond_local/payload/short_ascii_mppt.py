@@ -3,7 +3,8 @@
 This module cannot find a TCP boundary, admit a session or send a query. AABB
 and EyeBond can overlap on the wire; the caller must establish the grammar
 independently. Offline tooling may explicitly assume it and label that choice.
-No fields here are merged into live inverter telemetry yet.
+An optional driver module may merge decoded keys into runtime FULL results;
+this payload module itself still does not solicit, admit, or send.
 """
 
 from __future__ import annotations
@@ -29,6 +30,22 @@ class MpptFault(IntEnum):
     BATTERY_OVERVOLTAGE = 5
     BATTERY_UNDERVOLTAGE = 6
     DC_LOAD_OVERCURRENT = 7
+
+
+# 19B4 segment-4 MPPT errcode labels (vendor wording preserved).
+MPPT_ERROR_LABELS = {
+    0: "normal",
+    1: "MPPT internal temperature is too high",
+    2: "Automatic recognition of battery voltage level failed",
+    3: "PV input overvoltage",
+    5: "Battery voltage is too high",
+    6: "Battery voltage is too low",
+    7: "LOAD DC output overcurrent",
+}
+
+
+def mppt_error_label(code: int) -> str:
+    return MPPT_ERROR_LABELS.get(code, f"unknown({code})")
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,3 +119,11 @@ def parse_mppt_runtime(frame: BinaryFrame) -> MpptRuntimeSample:
         total_energy_kwh=word(17) / 10,
         fault_code=wire[19],
     )
+
+
+def parse_mppt_runtime_wire(wire: bytes) -> MpptRuntimeSample:
+    """Decode raw AABB/0200 reply bytes without drivers naming the grammar."""
+
+    if type(wire) is not bytes:
+        raise ValueError("mppt_frame_contract_invalid")
+    return parse_mppt_runtime(BinaryFrame(BinaryGrammar.AABB, wire))

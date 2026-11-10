@@ -203,6 +203,10 @@ DEFAULT_ENDPOINT_CONTROL_POLICY = ENDPOINT_CONTROL_EXTERNAL
 CONF_PROXY_ENABLED = "proxy_enabled"
 DEFAULT_PROXY_ENABLED = False
 
+# Short-ASCII aux 0200 / PV admission (default off; gates the request).
+CONF_ADMIT_SHORT_ASCII_MPPT = "admit_short_ascii_mppt"
+DEFAULT_ADMIT_SHORT_ASCII_MPPT = False
+
 # Endpoint provenance for integration-managed control. The opaque "previous"
 # endpoint is the existing CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT; these two
 # record what the integration itself last wrote and when.

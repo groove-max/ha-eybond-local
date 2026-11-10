@@ -65,9 +65,6 @@ class TransportModuleBoundaryTests(unittest.TestCase):
     def test_original_definition_multiset_is_preserved_exactly_once(self) -> None:
         definitions = [item for path in _FAMILY for item in _definitions(path)]
         # Explicit extension, not a relaxation of the decomposition baseline.
-        extension = ("AsyncFunctionDef", "async_send_auxiliary_read")
-        self.assertEqual(definitions.count(extension), 2)
-        definitions = [item for item in definitions if item != extension]
         identity_extension = ("AsyncFunctionDef", "async_probe_identity")
         self.assertEqual(definitions.count(identity_extension), 2)
         definitions = [item for item in definitions if item != identity_extension]
@@ -172,6 +169,21 @@ class TransportModuleBoundaryTests(unittest.TestCase):
             for node in _tree(_TRANSPORT / "common.py").body
         ), 1)
         definitions.remove(at_lines_end)
+        aux_facade = ("AsyncFunctionDef", "async_send_auxiliary_read")
+        at_aux_resolve = ("AsyncFunctionDef", "_active_connection_for_auxiliary_send")
+        # Two socket owners + SharedEybondTransport + SharedCollectorAtTransport.
+        self.assertEqual(definitions.count(aux_facade), 4)
+        self.assertEqual(definitions.count(at_aux_resolve), 1)
+        definitions = [
+            item for item in definitions if item not in (aux_facade, at_aux_resolve)
+        ]
+        for latch_name in (
+            "peek_mppt_framing_failure_latch",
+            "take_mppt_framing_failure_latch",
+        ):
+            latch = ("FunctionDef", latch_name)
+            self.assertEqual(definitions.count(latch), 4)
+            definitions = [item for item in definitions if item != latch]
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()
@@ -204,6 +216,68 @@ class TransportModuleBoundaryTests(unittest.TestCase):
             ("connections.py", "_CollectorConnection"),
             ("shared_framed.py", "SharedEybondTransport"),
         ])
+
+    def test_framed_facade_exposes_auxiliary_read_as_delegate_only(self) -> None:
+        framed = _tree(_TRANSPORT / "shared_framed.py")
+        method = None
+        for node in framed.body:
+            if isinstance(node, ast.ClassDef) and node.name == "SharedEybondTransport":
+                for child in node.body:
+                    if (
+                        isinstance(child, ast.AsyncFunctionDef)
+                        and child.name == "async_send_auxiliary_read"
+                    ):
+                        method = child
+                        break
+        self.assertIsNotNone(method)
+        assert method is not None
+        source = ast.unparse(method)
+        self.assertIn("async_send_auxiliary_read", source)
+        self.assertIn("_active_connection_for_send", source)
+        self.assertNotIn("BinaryGrammar", source)
+        self.assertNotIn("auxiliary_session", source)
+        self.assertNotIn("AA BB", source)
+        self.assertNotIn("\\xaa\\xbb", source)
+
+    def test_at_facade_exposes_auxiliary_read_as_delegate_only(self) -> None:
+        at_mod = _tree(_TRANSPORT / "shared_at.py")
+        method = None
+        for node in at_mod.body:
+            if isinstance(node, ast.ClassDef) and node.name == "SharedCollectorAtTransport":
+                for child in node.body:
+                    if (
+                        isinstance(child, ast.AsyncFunctionDef)
+                        and child.name == "async_send_auxiliary_read"
+                    ):
+                        method = child
+                        break
+        self.assertIsNotNone(method)
+        assert method is not None
+        source = ast.unparse(method)
+        self.assertIn("async_send_auxiliary_read", source)
+        self.assertIn("_active_connection_for_auxiliary_send", source)
+        self.assertNotIn("BinaryGrammar", source)
+        self.assertNotIn("auxiliary_session", source)
+        self.assertNotIn("AA BB", source)
+        self.assertNotIn("\\xaa\\xbb", source)
+
+    def test_drivers_must_not_infer_or_call_auxiliary_reads(self) -> None:
+        drivers_root = _COLLECTOR.parent / "drivers"
+        forbidden = (
+            "async_send_auxiliary_read",
+            "auxiliary_session",
+            "BinaryGrammar.AABB",
+            "\\xaa\\xbb",
+            "AA BB",
+        )
+        for path in sorted(drivers_root.glob("*.py")):
+            source = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                self.assertNotIn(
+                    token,
+                    source,
+                    msg=f"{path.name} must not infer or call aux via {token!r}",
+                )
 
     def test_concrete_authorities_have_one_owner_module(self) -> None:
         expected = {
@@ -271,6 +345,69 @@ class TransportModuleBoundaryTests(unittest.TestCase):
         self.assertIs(transport.SharedProxyCaptureRoute, SharedProxyCaptureRoute)
         self.assertIs(transport.SharedCollectorAtTransport, SharedCollectorAtTransport)
         self.assertIs(transport.SharedEybondTransport, SharedEybondTransport)
+        self.assertTrue(callable(SharedEybondTransport.async_send_auxiliary_read))
+        self.assertTrue(callable(SharedCollectorAtTransport.async_send_auxiliary_read))
+
+
+
+class FramedFacadeAuxiliaryAdmissionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_facade_delegates_auxiliary_read_timeout_and_payload(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.eybond_local.collector.transport.shared_framed import (
+            SharedEybondTransport,
+        )
+
+        transport = SharedEybondTransport(
+            host="127.0.0.1",
+            port=18899,
+            request_timeout=3.0,
+            heartbeat_interval=60.0,
+            collector_ip="192.0.2.10",
+        )
+        connection = MagicMock()
+        connection.async_send_auxiliary_read = AsyncMock(return_value=b"\xaa\xbb")
+        transport._active_connection_for_send = AsyncMock(return_value=connection)
+
+        query = b"\x5a\xa5\x02\x00" + bytes(16) + bytes([0x02])
+        reply = await transport.async_send_auxiliary_read(query, request_timeout=1.5)
+
+        self.assertEqual(reply, b"\xaa\xbb")
+        connection.async_send_auxiliary_read.assert_awaited_once_with(
+            query,
+            request_timeout=1.5,
+        )
+
+
+class AtFacadeAuxiliaryAdmissionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_at_facade_delegates_auxiliary_read_timeout_and_payload(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from custom_components.eybond_local.collector.transport.shared_at import (
+            SharedCollectorAtTransport,
+        )
+
+        transport = SharedCollectorAtTransport(
+            host="127.0.0.1",
+            port=18899,
+            request_timeout=3.0,
+            collector_ip="192.0.2.10",
+            collector_session_protocol="at_text",
+        )
+        connection = MagicMock()
+        connection.async_send_auxiliary_read = AsyncMock(return_value=b"\xaa\xbb")
+        transport._active_connection_for_auxiliary_send = AsyncMock(
+            return_value=connection,
+        )
+
+        query = b"\x5a\xa5\x02\x00" + bytes(16) + bytes([0x02])
+        reply = await transport.async_send_auxiliary_read(query, request_timeout=1.5)
+
+        self.assertEqual(reply, b"\xaa\xbb")
+        connection.async_send_auxiliary_read.assert_awaited_once_with(
+            query,
+            request_timeout=1.5,
+        )
 
 
 if __name__ == "__main__":

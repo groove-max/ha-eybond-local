@@ -591,10 +591,24 @@ Support and validation remain specific to the collector, protocol and firmware.
   or inverter controls are inferred.
 
 - Short-ASCII devices can also expose documented BMS and rated readings through
-  optional read-only RB/F queries. These entities are disabled by default.
+  optional read-only RB/F/RH queries. These entities are disabled by default.
   Missing, invalid or expired BMS samples remove their old values without
-  interrupting basic telemetry. BMS current scaling and PV remain unqualified;
-  this is not full device or control support (#45).
+  interrupting basic telemetry. Charge/discharge currents and measured
+  `battery_power` publish at 19B4 segment-7 `multiply=0.1` only while optional
+  RH reports BMS current display accuracy `1` (with decimals) and F ratings are
+  present for I/P bounds; RH `0`, unread or failed RH omits those keys. RH=1 is
+  the discriminator (no retail-model gate). One live family member has
+  SmartValue correlation for that path; other members (e.g. Maxinn) are not
+  separately live-proven. This is not full device or control support (#45).
+
+- Optional short-ASCII **live PV/MPPT** uses the documented auxiliary `0200`
+  runtime read, gated by config-entry option `admit_short_ascii_mppt` (stock
+  installs do not poll until admitted). Live PV/MPPT measurement sensors stay
+  **disabled by default**. Quiet fault diagnostics `q1_error_code`, `q1_error`,
+  `ups_fault`, `mppt_error_code`, and `mppt_error` are `enabled_default: true`
+  (entity state only — no per-poll WARNING spam). `q1_error_code` and
+  `ups_fault` replace the 0.3.0-rc.1 keys `short_ascii_fault_code` and
+  `inverter_fault`. History on those old ids does not move.
 
 ### Fixed
 

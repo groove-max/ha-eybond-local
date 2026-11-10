@@ -129,7 +129,8 @@ async def test_family_telemetry_reload_and_read_failure_without_guessed_identity
     assert all(entity.domain not in {"select", "number", "switch", "text", "time"} for entity in entities)
     assert not any(entity.unique_id.endswith("_sync_inverter_clock") for entity in entities)
     assert registry.async_get(sensor_id("battery_soc")).disabled_by is er.RegistryEntryDisabler.INTEGRATION
-    for key in ("battery_voltage", "grid_frequency", "output_power", "pv_power", "serial_number"):
+    assert registry.async_get(sensor_id("pv_power")).disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    for key in ("battery_voltage", "grid_frequency", "output_power", "serial_number"):
         assert sensor_id(key) is None, key
 
     assert await hass.config_entries.async_reload(entry.entry_id)

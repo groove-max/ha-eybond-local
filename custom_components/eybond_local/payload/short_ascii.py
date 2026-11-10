@@ -16,9 +16,12 @@ from ..link_transport import PayloadLinkTransport, async_send_payload
 
 
 BASE_READ_COMMANDS = ("MP", "Q1", "MD")
-READ_COMMANDS = (*BASE_READ_COMMANDS, "F", "RB")
+READ_COMMANDS = (*BASE_READ_COMMANDS, "F", "RH", "RB")
 PROTOCOL_ID = "EYBOND_SHORT_ASCII"
 WIRE_DIALECT = "urtu1920_checksum"
+# RB charge/discharge keys published only when optional RH reports decimals (RH=1).
+RB_CURRENT_KEYS = ("bms_charging_current", "bms_discharging_current")
+RB_CURRENT_POWER_KEYS = (*RB_CURRENT_KEYS, "battery_power")
 
 
 class ShortAsciiError(ValueError):
@@ -76,12 +79,33 @@ def parse_f(frame: bytes) -> dict[str, object]:
     }
 
 
+def parse_rh(frame: bytes) -> dict[str, object]:
+    """Qualified RH settings block: 27-byte body, sum8, trailing CR.
+
+    Live proxy captures match vendor 19B4 segment-5 length/checksum. Only the
+    BMS current-display-accuracy enum (``rh_crtu_39``) is decoded: ``0`` =
+    without decimals, ``1`` = with decimals. Other RH fields stay unpublished.
+    """
+    _envelope(frame, length=30, status=True)
+    body = frame[1:-2]
+    if sum(body) & 0xFF != frame[-2]:
+        raise ShortAsciiError("short_ascii_rh_checksum")
+    accuracy = body[8]
+    if accuracy not in (0, 1):
+        raise ShortAsciiError("short_ascii_rh_field")
+    return {"short_ascii_bms_current_display_accuracy": accuracy}
+
+
 def parse_rb(frame: bytes) -> dict[str, object]:
     """Qualified RB dialect: 25 documented bytes, 12 zero padding bytes, sum8.
 
     This checksum differs from Q1. Only this exact captured layout is accepted;
     the XML describes the first 25 bytes, not arbitrary future extensions.
-    Currents remain raw evidence: RH's precision setting has separate authority.
+
+    Charge/discharge raw words use 19B4 segment-7 ``multiply=0.1`` (``/10``).
+    Optional runtime code publishes those keys only when RH reports decimals
+    (accuracy ``1``) and F ratings are available for I/P scaling bounds.
+    Battery DC watts are derived outside this parser.
     """
     _envelope(frame, length=40, status=True)
     body = frame[1:-2]
@@ -107,6 +131,8 @@ def parse_rb(frame: bytes) -> dict[str, object]:
         "short_ascii_bms_discharge_path_enabled": body[24] == 1,
     }
     for key, offset, divisor in (
+        ("bms_charging_current", 3, 10),
+        ("bms_discharging_current", 5, 10),
         ("bms_cell_temperature", 7, 10),
         ("bms_cycle_count", 9, 1),
         ("bms_internal_temperature", 11, 10),
@@ -126,6 +152,29 @@ def _decimal(field: bytes, pattern: bytes) -> float:
     return float(field.decode("ascii"))
 
 
+# 19B4 segment-1 Q1 trailer errcode labels (vendor wording preserved).
+Q1_ERROR_LABELS = {
+    0: "normal",
+    1: "Battery low",
+    2: "High battery voltage",
+    3: "Low battery voltage",
+    4: "power amplifier is reversed",
+    5: "Inverter startup fault",
+    6: "Output load short circuit",
+    7: "output voltage is too low or overloaded",
+    8: "excess temperature",
+    9: "Output low voltage",
+    11: "temperature is too low or the temperature control fails",
+    14: "Open fan circuit",
+    15: "mains input relay is faulty",
+    16: "mains input is too high",
+}
+
+
+def q1_error_label(code: int) -> str:
+    return Q1_ERROR_LABELS.get(code, f"unknown({code})")
+
+
 def parse_q1(frame: bytes) -> dict[str, object]:
     _envelope(frame, length=51, status=True)
     # Sum of unsigned body bytes, excluding status, checksum and final CR.
@@ -142,6 +191,7 @@ def parse_q1(frame: bytes) -> dict[str, object]:
     flags = body[37:44]
     if re.fullmatch(rb"[01]{7}", flags) is None:
         raise ShortAsciiError("short_ascii_q1_flags")
+    error_code = body[44]
     return {
         "short_ascii_q1_length": len(frame),
         "grid_voltage": _decimal(body[0:5], rb"[0-9]{3}\.[0-9]"),
@@ -151,8 +201,10 @@ def parse_q1(frame: bytes) -> dict[str, object]:
         "battery_reference_voltage": _decimal(body[27:31], rb"[0-9]{2}\.[0-9]"),
         "temperature": _decimal(body[32:36], rb"(?:[0-9]{2}|-[0-9])\.[0-9]"),
         "short_ascii_status_flags": flags.decode("ascii"),
-        "short_ascii_fault_code": body[44],
-        "inverter_fault": flags[1] == 49,
+        "q1_error_code": error_code,
+        "q1_error": q1_error_label(error_code),
+        # Q11: flags[1]=='1' is the UPS/inverter fault bit (19B4).
+        "ups_fault": flags[1] == 49,
         "grid_available": flags[2] == 48,
         "short_ascii_mains_input_connected": flags[3] == 48,
         "battery_low": flags[4] == 49,

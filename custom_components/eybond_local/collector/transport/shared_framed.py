@@ -104,6 +104,22 @@ class SharedEybondTransport:
             CollectorInfo(remote_ip=self._collector_ip, collector_pn=self._collector_pn)
         )
 
+    def peek_mppt_framing_failure_latch(self) -> str:
+        """Read the live MIXED framing-kill latch without clearing it."""
+
+        connection = self._connection(create_placeholder=False)
+        if connection is None:
+            return ""
+        return connection.peek_mppt_framing_failure_latch()
+
+    def take_mppt_framing_failure_latch(self) -> str:
+        """Take-clear the live MIXED framing-kill latch from the active socket."""
+
+        connection = self._connection(create_placeholder=False)
+        if connection is None:
+            return ""
+        return connection.take_mppt_framing_failure_latch()
+
     async def start(self) -> None:
         if self._listener is not None:
             return
@@ -449,6 +465,26 @@ class SharedEybondTransport:
             devcode=devcode,
             collector_addr=collector_addr,
             request_timeout=self._request_timeout,
+        )
+
+    async def async_send_auxiliary_read(
+        self,
+        payload: bytes,
+        *,
+        request_timeout: float,
+    ) -> bytes:
+        """Delegate the internal read-only side channel; never infer from magic.
+
+        Ownership, documented-query gating, and framing stay on the socket
+        connection. This facade only resolves the active connection so callers
+        need not touch ``connections.py``. Driver/catalog admission for live PV
+        remains separate work.
+        """
+
+        connection = await self._active_connection_for_send()
+        return await connection.async_send_auxiliary_read(
+            payload,
+            request_timeout=request_timeout,
         )
 
     async def async_send_payload(
