@@ -10,7 +10,7 @@ from time import monotonic
 from ...const import CONF_COLLECTOR_PN, CONF_DRIVER_HINT, DRIVER_HINT_AUTO
 from ...support.diagnostic_evidence import DiagnosticEvidenceScope, diagnostic_evidence_scope
 from ...support.diagnostic_export import export_diagnostic_run
-from ...support.diagnostic_projection import build_runtime_transport_debug
+from ...support.diagnostic_projection import build_configured_connection_debug, build_runtime_transport_debug
 from ...support.diagnostic_runner import DiagnosticRuntimeContext, run_scenario
 from ...support.download import sign_diagnostic_run_download_url
 
@@ -222,7 +222,16 @@ class CoordinatorDiagnosticsMixin:
                 # result to a device that replaced it during that wait or exchange.
                 if device_scope != self._diagnostic_evidence_scope():
                     device_scope = None
+                connection_before = build_configured_connection_debug(
+                    getattr(self, "connection_strategy", ""),
+                    getattr(self, "endpoint_control_policy", ""),
+                )
                 result = await run_scenario(commands, context)
+                result.context["connection_context_before"] = connection_before
+                result.context["connection_context_after"] = build_configured_connection_debug(
+                    getattr(self, "connection_strategy", ""),
+                    getattr(self, "endpoint_control_policy", ""),
+                )
                 if device_scope != self._diagnostic_evidence_scope():
                     device_scope = None
                 result.context["coordinator_timing"] = {

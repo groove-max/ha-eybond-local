@@ -8,6 +8,14 @@ must never let an unavailable or malformed diagnostic surface block a run.
 from __future__ import annotations
 
 
+def build_configured_connection_debug(strategy: object, endpoint_policy: object) -> dict[str, str]:
+    """Export configured axes as observations, not entry update instructions."""
+    return {
+        "configured_strategy": str(strategy or ""),
+        "configured_endpoint_policy": str(endpoint_policy or ""),
+    }
+
+
 def build_runtime_transport_debug(transport: object | None) -> dict[str, object]:
     """Return transport internals needed to diagnose raw command routing."""
 

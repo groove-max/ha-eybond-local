@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from ..models import ProbeTarget
+from ..collector.transport.diagnostic_pi30 import DiagnosticPi30Session
+from ..payload.pi30 import build_request as build_pi30_request
 from .diagnostic_commands import (
     AsciiCommand,
     Command,
@@ -169,10 +171,12 @@ def _resolve_probe_target(
     devcode = pick("devcode", directives.devcode)
     collector_addr = pick("collector_addr", directives.collector_addr)
     device_addr = pick("device_addr", directives.device_addr)
-    if directives.wire == "raw_modbus":
-        # A raw payload has a slave id, but no EyeBond envelope addresses.
+    if directives.wire in {"raw_modbus", "raw_pi30"}:
+        # Raw RTU has a slave id; PI30 has none. Neither uses EyeBond addresses.
         devcode = 0 if devcode is None else devcode
         collector_addr = 0 if collector_addr is None else collector_addr
+        if directives.wire == "raw_pi30":
+            device_addr = 0 if device_addr is None else device_addr
 
     for name, value in (
         ("devcode", devcode),
@@ -316,6 +320,15 @@ def _prepare(text: str, context: DiagnosticRuntimeContext) -> _PreparedRun:
     ):
         raise ScenarioError("operation_timeout must be finite and positive")
     wire = scenario.directives.wire
+    if wire == "raw_pi30" and driver_key != "pi30":
+        raise ScenarioError("raw_pi30 requires driver pi30")
+    if wire == "raw_pi30":
+        for command in scenario.commands:
+            if isinstance(command, AsciiCommand):
+                try:
+                    DiagnosticPi30Session.validate_request(build_pi30_request(command.command))
+                except ValueError as exc:
+                    raise ScenarioError(str(exc), line=command.line) from exc
     if wire == "raw_modbus":
         if driver_key not in {"modbus", "modbus_smg"}:
             raise ScenarioError("raw_modbus requires driver modbus or modbus_smg")

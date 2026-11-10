@@ -36,6 +36,7 @@ from ..protocol import (
 )
 from .auxiliary_session import AuxiliaryReadSession
 from .diagnostic_modbus import DiagnosticModbusSession, ModbusDiagnosticClaim
+from .diagnostic_pi30 import DiagnosticPi30Session
 from .send_ownership import SocketSendOwner, finish_request_future
 from .request_trace import SocketRequestTrace
 from .binary_framing import (
@@ -102,6 +103,7 @@ class _CollectorConnection:
         self._run_epoch = 0
         self._auxiliary_session = AuxiliaryReadSession()
         self._diagnostic_modbus = DiagnosticModbusSession()
+        self._diagnostic_pi30 = DiagnosticPi30Session()
 
     @property
     def connected(self) -> bool:
@@ -395,6 +397,7 @@ class _CollectorConnection:
         self.last_framed_exchange_monotonic = None
         self._auxiliary_session = AuxiliaryReadSession()
         self._diagnostic_modbus = DiagnosticModbusSession()
+        self._diagnostic_pi30 = DiagnosticPi30Session()
         self._reader = reader
         self._writer = writer
         self._session_id = str(session_id or "").strip()
@@ -540,6 +543,7 @@ class _CollectorConnection:
             reader = _PrefixedAsyncReader(reader)
         auxiliary = self._auxiliary_session
         diagnostic = self._diagnostic_modbus
+        pi30_diagnostic = self._diagnostic_pi30
         read = auxiliary.read
         try:
             while not auxiliary.closed:
@@ -553,6 +557,10 @@ class _CollectorConnection:
                     self._handle_at_response(status)
                     continue
                 if await diagnostic.consume(
+                    reader, first, auxiliary, self._record_session_exchange,
+                ):
+                    continue
+                if await pi30_diagnostic.consume(
                     reader, first, auxiliary, self._record_session_exchange,
                 ):
                     continue
@@ -841,6 +849,7 @@ class _CollectorConnection:
         writer = self._writer
         self._auxiliary_session.close()
         self._diagnostic_modbus.close()
+        self._diagnostic_pi30.close()
         self._reader = None
         self._writer = None
         self._connected.clear()
@@ -935,6 +944,7 @@ class _CollectorAtConnection:
         self._run_epoch = 0
         self._auxiliary_session = AuxiliaryReadSession()
         self._diagnostic_modbus = DiagnosticModbusSession()
+        self._diagnostic_pi30 = DiagnosticPi30Session()
         self._runtime_modbus = DiagnosticModbusSession(
             strict_write_echo=False, reason_prefix="raw_modbus",
         )
@@ -1390,6 +1400,7 @@ class _CollectorAtConnection:
         self._collector.last_disconnect_reason = ""
         self._auxiliary_session = AuxiliaryReadSession()
         self._diagnostic_modbus = DiagnosticModbusSession()
+        self._diagnostic_pi30 = DiagnosticPi30Session()
         self._runtime_modbus = DiagnosticModbusSession(
             strict_write_echo=False, reason_prefix="raw_modbus",
         )
@@ -1476,6 +1487,7 @@ class _CollectorAtConnection:
         try:
             buffered_prefix = b""
             diagnostic = self._diagnostic_modbus
+            pi30_diagnostic = self._diagnostic_pi30
             runtime_modbus = self._runtime_modbus
             while not auxiliary.closed:
                 auxiliary.at_boundary = not buffered_prefix
@@ -1502,6 +1514,10 @@ class _CollectorAtConnection:
                 # Each delivery hook runs after the guarded read that proves this
                 # physical session still owns the pending reply.
                 if not buffered_prefix and await diagnostic.consume(
+                    reader, first, auxiliary, self._record_session_exchange,
+                ):
+                    continue
+                if not buffered_prefix and await pi30_diagnostic.consume(
                     reader, first, auxiliary, self._record_session_exchange,
                 ):
                     continue
@@ -1561,7 +1577,8 @@ class _CollectorAtConnection:
                         ) if auxiliary.enabled else tail
                     )
                     buffered_prefix = b""
-                if not auxiliary.enabled and prefix.startswith((b"(", b"^")):
+                if (not auxiliary.enabled and prefix.startswith((b"(", b"^"))
+                        and not pi30_diagnostic.framed_header_pending):
                     terminator = prefix.find(b"\r")
                     if terminator >= 0:
                         line = prefix[: terminator + 1]
@@ -1870,6 +1887,7 @@ class _CollectorAtConnection:
         writer = self._writer
         self._auxiliary_session.close()
         self._diagnostic_modbus.close()
+        self._diagnostic_pi30.close()
         self._runtime_modbus.close()
         self._reader = None
         self._writer = None

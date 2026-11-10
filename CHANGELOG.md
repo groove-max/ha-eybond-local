@@ -38,6 +38,14 @@ RC1 below; newer model features remain here.
 
 ### Added
 
+- Add explicit `wire raw_pi30` to the existing diagnostic command tool on
+  framed and AT collector sockets. Keep the normal driver, wire selection,
+  endpoint and UART unchanged; validate bounded CRC-protected replies on the
+  single reader and close an uncertain diagnostic socket without retrying.
+  Preserve confirmation for free-form ASCII commands and export wire evidence
+  plus configured connection axes before/after the run. This enables targeted
+  transport comparison, not automatic detection or a confirmed #6 repair.
+
 - Add nine model-scoped controls for the single-output Anenji 4200 24 V
   (layout 1, model 0x3501) from the owner's report in #88, retaining untested
   status and explicit entity activation. Add SUF and correct its Auto Bypass
