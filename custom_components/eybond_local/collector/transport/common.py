@@ -495,6 +495,11 @@ class _PrefixedAsyncReader:
         self._recent_from_prefix = bytearray()
         self._line_live = 0
         self._at_query_echo = b""
+        self._position = 0
+        # One possible trailing terminator at the exact idle-ended AT boundary.
+        # The position prevents reuse after diagnostic/raw reads bypass this
+        # framed-prefix parser. This evidence belongs only to this reader.
+        self._at_idle_boundary: tuple[int, bytes] | None = None
 
     def begin_line(self) -> None:
         """Start a response whose prefix-vs-socket origin is still unknown."""
@@ -515,6 +520,7 @@ class _PrefixedAsyncReader:
         count = len(data)
         if count <= 0:
             return
+        self._position -= count
         if count <= len(self._recent_from_prefix):
             origins = self._recent_from_prefix[-count:]
             del self._recent_from_prefix[-count:]
@@ -529,6 +535,7 @@ class _PrefixedAsyncReader:
     def _remember(self, origins: bytes) -> None:
         if not origins:
             return
+        self._position += len(origins)
         self._line_live += origins.count(0)
         self._recent_from_prefix += origins
         if len(self._recent_from_prefix) > 8192:
@@ -568,18 +575,47 @@ class _PrefixedAsyncReader:
     async def read_framed_prefix(self, first: bytes) -> bytes:
         """Read a bounded EyeBond/AT prefix at an established frame boundary.
 
-        A leading CR/LF is a separator ONLY before AT+ and an uppercase command
-        letter. That letter occupies the binary function-code position, where
-        no supported EyeBond function is an ASCII letter. Otherwise preserve
-        every byte, including valid binary TID 0x0D0A and devcode 0x4154.
-        Never scan ahead or skip arbitrary whitespace. The caller owns the
-        first-byte header deadline and cancellation for the whole lookahead.
+        CR/LF before AT+ and an uppercase command letter cannot be a supported
+        binary header (its encoded length exceeds the payload bound). Otherwise
+        preserve every byte, including valid binary TID 0x0D0A/devcode 0x4154.
+
+        After an idle-ended ASCII value only, a delayed terminator may precede
+        ONE complete legal EyeBond frame. Require an invalid unshifted header;
+        a valid original always wins. Never scan or skip arbitrary whitespace,
+        repair AABB, or grant another attempt after intervening bytes. The
+        caller's first-byte deadline/cancellation covers the whole lookahead.
         """
+        boundary, self._at_idle_boundary = self._at_idle_boundary, None
+        separator = (
+            boundary[1] if boundary is not None
+            and self._position == boundary[0] + len(first) else b""
+        )
         prefix = first + await self.readexactly(2)
         if prefix == b"\r\nA":
             prefix += await self.readexactly(3)
             if prefix[:5] == b"\r\nAT+" and 0x41 <= prefix[5] <= 0x5A:
                 return prefix[2:]
+        if separator == b"\n" and prefix == b"\nAT":
+            prefix += await self.readexactly(2)
+            if prefix[:4] == b"\nAT+" and 0x41 <= prefix[4] <= 0x5A:
+                return prefix[1:]
+        if separator and prefix.startswith(separator):
+            prefix += await self.readexactly(HEADER_SIZE - len(prefix))
+            if _looks_like_eybond_frame_start(prefix):
+                return prefix
+            extra = await self.readexactly(len(separator))
+            candidate = prefix[len(separator):] + extra
+            if candidate.startswith(b"\xaa\xbb") or not _looks_like_eybond_frame_start(candidate):
+                self.unread(extra)
+                return prefix
+            header = decode_header(candidate)
+            payload = await self.readexactly(header.payload_len)
+            self.unread(payload)
+            logger.debug(
+                "Consumed delayed AT terminator before complete EyeBond frame bytes=%d",
+                len(separator),
+            )
+            return candidate
         return prefix
 
     async def read_at_query_status(self, first: bytes) -> bytes | None:
@@ -625,6 +661,7 @@ class _PrefixedAsyncReader:
 
         data = bytearray()
         self._at_query_echo = b""
+        self._at_idle_boundary = None
         binary_suspected = False
         while len(data) < _AT_TEXT_MAX_MIXED_FRAME_PAYLOAD_LEN:
             try:
@@ -633,6 +670,15 @@ class _PrefixedAsyncReader:
                     timeout=_AT_TEXT_RESPONSE_IDLE_TIMEOUT,
                 )
             except asyncio.TimeoutError:
+                # Only a syntactically complete ASCII value grants this narrow
+                # continuation. Query echoes, binary tails, LF-only completed
+                # lines and malformed text must not authorize resynchronization.
+                if not binary_suspected and re.fullmatch(
+                    rb"AT\+[A-Z][A-Z0-9]{0,31}:[\x20-\x7e\t]*\r?", prefix + data,
+                ):
+                    self._at_idle_boundary = (
+                        self._position, b"\n" if data.endswith(b"\r") else b"\r\n",
+                    )
                 return bytes(data)
 
             data.extend(byte)

@@ -13,6 +13,12 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Preserve framed collector sessions when an idle-ended AT value is followed by
+  its delayed CR/LF and a complete EyeBond frame. Handle only that reader-local
+  boundary; retain valid binary headers, strict frame validation and bounded
+  cancellation/timeouts. Covers a synthetic reproduction of #6's reported
+  malformed header, not a confirmed fix for the collector's Cloud+HA limitations.
+
 - Recheck a timed-out first BLE identity query once after the other three fixed
   metadata queries succeed. Keep both attempts in diagnostics, require a notify
   response for the recheck, and retain mismatch/cancellation/cleanup boundaries.
