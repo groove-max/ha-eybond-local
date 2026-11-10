@@ -262,7 +262,6 @@
       "unit": "kWh",
       "device_class": "energy",
       "suggested_display_precision": 2,
-      "diagnostic": true,
       "enabled_default": true,
       "icon": "mdi:counter"
     },
@@ -272,7 +271,6 @@
       "unit": "kWh",
       "device_class": "energy",
       "suggested_display_precision": 2,
-      "diagnostic": true,
       "enabled_default": true,
       "icon": "mdi:counter"
     },
@@ -282,7 +280,6 @@
       "unit": "kWh",
       "device_class": "energy",
       "suggested_display_precision": 2,
-      "diagnostic": true,
       "enabled_default": true,
       "icon": "mdi:counter"
     },
@@ -292,7 +289,6 @@
       "unit": "kWh",
       "device_class": "energy",
       "suggested_display_precision": 2,
-      "diagnostic": true,
       "enabled_default": true,
       "icon": "mdi:counter"
     }

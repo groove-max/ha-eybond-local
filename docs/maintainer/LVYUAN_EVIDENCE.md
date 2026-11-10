@@ -63,10 +63,18 @@ These are the claims that must not harden into assertions.
 
 ## Consequences in the pack
 
-- The four counters declare **no `state_class`** and are marked diagnostic, so
-  Home Assistant stores raw values and derives no energy statistics from an
-  unproven series. `total` would still create statistics; only omitting
-  `state_class` avoids them.
+- The four counters declare **no `state_class`**, so Home Assistant stores raw
+  values and derives no energy statistics from an unproven series. `total`
+  would still create statistics; only omitting `state_class` avoids them. They
+  are *not* diagnostics: `diagnostic` only moves a sensor into the device's
+  Diagnostics section, so marking them that way hid real telemetry without
+  disabling statistics.
+- `grid_voltage` and `grid_frequency` are shared canonical aliases that mark
+  themselves diagnostic for the families where they are an internal
+  cross-check. On a grid-tied unit they are first-class telemetry, so this pack
+  sets `diagnostic_override=False` on its variants. The override applies only
+  when the caller names the pack; the driver-wide surface and every other pack
+  keep the shared flag.
 - 33290 has no canonical mapping for the same reason.
 - Detection anchors on word 16646 (exact) and word 16650 as a 500-600 range, so
   a user editing a charge threshold cannot break detection. A 96 V negative

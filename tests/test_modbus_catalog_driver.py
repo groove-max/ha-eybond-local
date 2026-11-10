@@ -1033,8 +1033,13 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
         # form the pairs (448, 454) and (546, 552), but it cannot prove which
         # pair is input and which is output: both pairs advance on nearly the
         # same cycles. Any state_class would make Home Assistant derive energy
-        # statistics from an unproven series, so these stay raw diagnostic
-        # values with no statistics at all, and the names carry no direction.
+        # statistics from an unproven series, so these declare none and the
+        # names carry no direction.
+        #
+        # They are ordinary runtime measurements, not diagnostics: the
+        # diagnostic flag only moves a sensor into the device's Diagnostics
+        # section, it does not control statistics. Leaving it set hid real
+        # telemetry behind an extra click.
         expected = {
             "energy_counter_448": "Daily Energy Counter A",
             "energy_counter_454": "Total Energy Counter A",
@@ -1046,7 +1051,10 @@ class ModbusCatalogDriverTests(unittest.IsolatedAsyncioTestCase):
                 description = schema.measurement_description(key)
                 self.assertEqual(description.name, name)
                 self.assertIsNone(description.state_class)
-                self.assertTrue(description.diagnostic)
+                self.assertFalse(
+                    description.diagnostic,
+                    "counters are runtime telemetry, not diagnostics",
+                )
                 self.assertEqual(description.unit, "kWh")
                 self.assertEqual(description.device_class, "energy")
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .models import MeasurementDescription
@@ -32,6 +32,14 @@ class CanonicalTelemetryVariant:
     # semantics (source-key meaning, sign conventions) on every future pack
     # served by the same generic driver.
     variant_keys: tuple[str, ...] = ()
+    # Optional per-pack override of the shared description's diagnostic flag.
+    # A canonical alias is one description shared by every driver, but whether
+    # a value is "diagnostic" depends on the pack: a grid-tied unit reports
+    # grid voltage as a first-class measurement, while for another family the
+    # same alias may be an internal cross-check. Overriding here keeps the
+    # shared flag honest for the other drivers instead of forcing one pack's
+    # presentation on all of them.
+    diagnostic_override: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +103,10 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
                 source_keys=("mains_voltage",),
                 compute="passthrough",
+                # A grid-tied unit reports mains voltage as first-class
+                # telemetry, so it belongs next to the output values rather
+                # than under Diagnostics.
+                diagnostic_override=False,
             ),
         ),
     ),
@@ -124,6 +136,7 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
                 source_keys=("mains_frequency",),
                 compute="passthrough",
+                diagnostic_override=False,
             ),
         ),
     ),
@@ -445,12 +458,26 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("grid_port_power",),
                 compute="negate",
             ),
-            # LVYUAN register 33290 is not mapped here on purpose. It tracks an
-            # input-side power, but a passive capture cannot prove its sign or
-            # whether it is grid import, grid export or a bus figure. Publishing
-            # it as canonical grid power would assert an import direction the
-            # evidence does not carry, so it stays an opt-in raw sensor until a
-            # signed reading is observed.
+            # LVYUAN register 33290 reads the power the unit draws from the
+            # mains. The mapping is restricted to this one pack because that
+            # meaning is specific to it, and it is import-positive on the wire,
+            # which already matches the canonical convention.
+            #
+            # The evidence is a passive capture only: the word never went
+            # negative in 36 cycles (min 1811 W, max 1899 W) and never exceeded
+            # the mains apparent power computed from registers 80/81 (0 of 36
+            # cycles), so it cannot be an export or a bus figure. What the
+            # capture cannot show is a genuine export cycle, so a negative
+            # reading has never been observed. That is why downstream energy
+            # sensors derived from this value stay estimated rather than
+            # metered, and why the four raw counters are still published
+            # without any statistics.
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("input_active_power",),
+                compute="passthrough",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -640,19 +667,41 @@ def canonical_measurements_for_driver(
 
     if not driver_key:
         return ()
-    return tuple(
-        spec.description
-        for spec in _CANONICAL_TELEMETRY
-        if any(
-            driver_key in variant.driver_keys
+    resolved: list[MeasurementDescription] = []
+    for spec in _CANONICAL_TELEMETRY:
+        matching = [
+            variant
+            for variant in spec.variants
+            if driver_key in variant.driver_keys
             and (
                 not variant.variant_keys
                 or variant_key is None
                 or variant_key in variant.variant_keys
             )
-            for variant in spec.variants
+        ]
+        if not matching:
+            continue
+        # A presentation override is pack-specific, so it only applies when
+        # the caller named that pack. Without a variant_key the surface is
+        # driver-wide, shared by every pack the driver serves, and inheriting
+        # one pack's presentation there would leak it onto the others.
+        override = (
+            next(
+                (
+                    variant.diagnostic_override
+                    for variant in matching
+                    if variant.diagnostic_override is not None
+                ),
+                None,
+            )
+            if variant_key is not None
+            else None
         )
-    )
+        description = spec.description
+        if override is not None and override != description.diagnostic:
+            description = replace(description, diagnostic=override)
+        resolved.append(description)
+    return tuple(resolved)
 
 
 def apply_canonical_measurements(

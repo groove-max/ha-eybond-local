@@ -13,6 +13,18 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Show LVYUAN grid and energy readings in the main sensor section instead of
+  Diagnostics. The four raw counters carried `diagnostic: true`, and the
+  shared `grid_voltage`/`grid_frequency` aliases mark themselves diagnostic for
+  the driver families where they are only an internal cross-check. On a
+  grid-tied unit mains voltage, mains frequency and the counters are ordinary
+  telemetry, so they now sit next to the output values. The counters still
+  declare no `state_class`, so no energy statistics are derived from a series
+  whose input/output direction is unproven. Canonical aliases gained an
+  optional per-pack `diagnostic_override`; it applies only when the caller
+  names the pack, so the driver-wide surface and every other pack keep the
+  shared flag.
+
 - Anchor LVYUAN detection on stable identity words instead of the charge
   thresholds. The rating block is NOT constant: words 16645 and 16648-16651
   are user-settable charge limits and read 40/480/420/552/544 V in the August
