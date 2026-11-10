@@ -90,6 +90,12 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("ac_input_voltage",),
                 compute="passthrough",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("mains_voltage",),
+                compute="passthrough",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -111,6 +117,12 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
             CanonicalTelemetryVariant(
                 driver_keys=("smartess_local",),
                 source_keys=("ac_input_frequency",),
+                compute="passthrough",
+            ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("mains_frequency",),
                 compute="passthrough",
             ),
         ),
@@ -154,6 +166,12 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 ),
                 compute="sum",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("output_active_power",),
+                compute="passthrough",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -173,6 +191,12 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
             CanonicalTelemetryVariant(
                 driver_keys=("eybond_g_ascii",),
                 source_keys=("output_load_percentage",),
+                compute="passthrough",
+            ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("load_percent",),
                 compute="passthrough",
             ),
         ),
@@ -318,6 +342,12 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("battery_capacity",),
                 compute="passthrough",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("battery_percent",),
+                compute="passthrough",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -389,6 +419,12 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("battery_power_magnitude", "battery_current_direction"),
                 compute="magnitude_with_direction",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("battery_voltage", "battery_current"),
+                compute="multiply",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -408,6 +444,12 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 variant_keys=("solis_esinv",),
                 source_keys=("grid_port_power",),
                 compute="negate",
+            ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("input_active_power",),
+                compute="passthrough",
             ),
         ),
     ),

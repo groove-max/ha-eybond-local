@@ -23,9 +23,45 @@
       "function": 3
     },
     {
-      "key": "battery",
+      "key": "battery_voltage_current",
       "start": 128,
-      "count": 5,
+      "count": 2,
+      "function": 3
+    },
+    {
+      "key": "battery_soc",
+      "start": 132,
+      "count": 1,
+      "function": 3
+    },
+    {
+      "key": "energy_a",
+      "start": 445,
+      "count": 4,
+      "function": 3
+    },
+    {
+      "key": "energy_b",
+      "start": 453,
+      "count": 2,
+      "function": 3
+    },
+    {
+      "key": "energy_c",
+      "start": 545,
+      "count": 2,
+      "function": 3
+    },
+    {
+      "key": "energy_d",
+      "start": 551,
+      "count": 2,
+      "function": 3
+    },
+    {
+      "key": "input_active_power",
+      "start": 33290,
+      "count": 1,
       "function": 3
     }
   ],
@@ -90,11 +126,41 @@
       {
         "key": "battery_current",
         "register": 129,
-        "signed": true
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
       },
       {
         "key": "battery_percent",
         "register": 132
+      },
+      {
+        "key": "input_active_power",
+        "register": 33290
+      },
+      {
+        "key": "energy_counter_448",
+        "register": 448,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "energy_counter_454",
+        "register": 454,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "energy_counter_546",
+        "register": 546,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "energy_counter_552",
+        "register": 552,
+        "divisor": 100,
+        "decimals": 2
       }
     ]
   },
@@ -182,6 +248,100 @@
       "unit": "%",
       "device_class": "battery",
       "state_class": "measurement"
+    },
+    {
+      "key": "input_active_power",
+      "name": "Input Active Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "energy_counter_448",
+      "name": "Energy Counter 448 (Daily A)",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing",
+      "suggested_display_precision": 2,
+      "diagnostic": false,
+      "enabled_default": true,
+      "icon": "mdi:transmission-tower-import"
+    },
+    {
+      "key": "energy_counter_454",
+      "name": "Energy Counter 454 (Total A)",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing",
+      "suggested_display_precision": 2,
+      "diagnostic": false,
+      "enabled_default": true,
+      "icon": "mdi:transmission-tower-import"
+    },
+    {
+      "key": "energy_counter_546",
+      "name": "Energy Counter 546 (Daily B)",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing",
+      "suggested_display_precision": 2,
+      "diagnostic": false,
+      "enabled_default": true,
+      "icon": "mdi:home-lightning-bolt"
+    },
+    {
+      "key": "energy_counter_552",
+      "name": "Energy Counter 552 (Total B)",
+      "unit": "kWh",
+      "device_class": "energy",
+      "state_class": "total_increasing",
+      "suggested_display_precision": 2,
+      "diagnostic": false,
+      "enabled_default": true,
+      "icon": "mdi:home-lightning-bolt"
     }
-  ]
+  ],
+  "support_read_plan": {
+    "source": "passive-ble-capture",
+    "purpose": "Probe register slots the SmartValue app never polls, to find extra read-only telemetry on this firmware.",
+    "timeout_seconds": 8,
+    "blocks": [
+      {
+        "key": "probe_mains_tail",
+        "start": 83,
+        "count": 5,
+        "function": 3
+      },
+      {
+        "key": "probe_battery_tail",
+        "start": 130,
+        "count": 6,
+        "function": 3
+      },
+      {
+        "key": "probe_energy_a_tail",
+        "start": 447,
+        "count": 6,
+        "function": 3
+      },
+      {
+        "key": "probe_energy_b_tail",
+        "start": 547,
+        "count": 6,
+        "function": 3
+      },
+      {
+        "key": "probe_misc_b_tail",
+        "start": 631,
+        "count": 2,
+        "function": 3
+      },
+      {
+        "key": "probe_rtc_tail",
+        "start": 870,
+        "count": 2,
+        "function": 3
+      }
+    ]
+  }
 }

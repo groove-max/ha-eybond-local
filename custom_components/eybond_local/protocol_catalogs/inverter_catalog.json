@@ -919,8 +919,16 @@
      "cost": 2,
      "optional": true,
      "evidence_fields": [
-      {"key": "identity.hopewind_rated_kw", "source_key": "hopewind_rated_kw", "register": 40646},
-      {"key": "identity.hopewind_rated_voltage", "source_key": "hopewind_rated_voltage", "register": 40647}
+      {
+       "key": "identity.hopewind_rated_kw",
+       "source_key": "hopewind_rated_kw",
+       "register": 40646
+      },
+      {
+       "key": "identity.hopewind_rated_voltage",
+       "source_key": "hopewind_rated_voltage",
+       "register": 40647
+      }
      ]
     },
     {
@@ -932,8 +940,16 @@
      "cost": 2,
      "optional": true,
      "evidence_fields": [
-      {"key": "identity.hopewind_switch", "source_key": "hopewind_switch", "register": 40546},
-      {"key": "identity.hopewind_state", "source_key": "hopewind_state", "register": 40547}
+      {
+       "key": "identity.hopewind_switch",
+       "source_key": "hopewind_switch",
+       "register": 40546
+      },
+      {
+       "key": "identity.hopewind_state",
+       "source_key": "hopewind_state",
+       "register": 40547
+      }
      ]
     },
     {
@@ -985,10 +1001,26 @@
      "cost": 2,
      "optional": true,
      "evidence_fields": [
-      {"key": "fingerprint.layout_code", "source_key": "lvyuan_layout_code", "register": 16648},
-      {"key": "fingerprint.model_code", "source_key": "lvyuan_model_code", "register": 16646},
-      {"key": "identity.lvyuan_profile_word", "source_key": "lvyuan_profile_word", "register": 16640},
-      {"key": "identity.lvyuan_charge_profile_high_raw", "source_key": "lvyuan_charge_profile_high_raw", "register": 16650}
+      {
+       "key": "fingerprint.layout_code",
+       "source_key": "lvyuan_layout_code",
+       "register": 16648
+      },
+      {
+       "key": "fingerprint.model_code",
+       "source_key": "lvyuan_model_code",
+       "register": 16646
+      },
+      {
+       "key": "identity.lvyuan_profile_word",
+       "source_key": "lvyuan_profile_word",
+       "register": 16640
+      },
+      {
+       "key": "identity.lvyuan_charge_profile_high_raw",
+       "source_key": "lvyuan_charge_profile_high_raw",
+       "register": 16650
+      }
      ]
     }
    ],
@@ -1002,16 +1034,148 @@
  ],
  "support_capture_policies": {
   "lvyuan_ty_sic_6_5kbe_w1": {
-   "ranges": [[0, 16], [26, 1], [56, 4], [65, 1], [69, 5], [80, 3], [88, 6], [128, 2], [132, 1], [136, 7], [144, 3], [150, 3], [439, 2], [445, 4], [453, 2], [545, 2], [551, 2], [629, 2], [635, 2], [864, 6], [16640, 16], [16659, 7], [16670, 6], [16677, 1], [16679, 4], [16684, 14], [16706, 1], [16715, 1], [33290, 1]],
+   "ranges": [
+    [
+     0,
+     16
+    ],
+    [
+     26,
+     1
+    ],
+    [
+     56,
+     4
+    ],
+    [
+     65,
+     1
+    ],
+    [
+     69,
+     5
+    ],
+    [
+     80,
+     3
+    ],
+    [
+     88,
+     6
+    ],
+    [
+     128,
+     2
+    ],
+    [
+     132,
+     1
+    ],
+    [
+     136,
+     7
+    ],
+    [
+     144,
+     3
+    ],
+    [
+     150,
+     3
+    ],
+    [
+     439,
+     2
+    ],
+    [
+     445,
+     4
+    ],
+    [
+     453,
+     2
+    ],
+    [
+     545,
+     2
+    ],
+    [
+     551,
+     2
+    ],
+    [
+     629,
+     2
+    ],
+    [
+     635,
+     2
+    ],
+    [
+     864,
+     6
+    ],
+    [
+     16640,
+     16
+    ],
+    [
+     16659,
+     7
+    ],
+    [
+     16670,
+     6
+    ],
+    [
+     16677,
+     1
+    ],
+    [
+     16679,
+     4
+    ],
+    [
+     16684,
+     14
+    ],
+    [
+     16706,
+     1
+    ],
+    [
+     16715,
+     1
+    ],
+    [
+     33290,
+     1
+    ]
+   ],
    "notes": [
     "LVYUAN TY-SIC-6.5KBE-W1 behind an EyeBond BLE bridge: 37 clean FC03 read cycles decoded from a passive btsnoop capture, every request and response CRC-verified; 125 distinct registers, no write function codes present.",
     "Read-only evidence only. The capture contains no FC06/FC16 traffic, so the control surface is unverified by construction and this pack must not offer writes.",
-    "Register 33290 (0x820A) varies but does not correlate with any identified quantity; it is captured for evidence and deliberately left unlabelled."
+    "Register 33290 (0x820A) is input/mains active power: mean 1842 W versus output register 91 mean 1825 W (99.1 percent, matching inverter efficiency), 151 W below mains apparent power 1940 VA at 0.95 PF, and it leads output power by one poll cycle (time-aligned correlation 0.58 with mains V times I, 0.50 with mains current). The vendor already polls it every cycle, so reading it costs no extra dongle traffic."
    ]
   },
   "hopewind_0237": {
-   "ranges": [[40500, 71], [40571, 29], [40600, 51]],
-   "notes": ["Manufacturer Hopewind protocol 567 / 0237: read-only FC03 evidence; identity block can contain a serial number."]
+   "ranges": [
+    [
+     40500,
+     71
+    ],
+    [
+     40571,
+     29
+    ],
+    [
+     40600,
+     51
+    ]
+   ],
+   "notes": [
+    "Manufacturer Hopewind protocol 567 / 0237: read-only FC03 evidence; identity block can contain a serial number."
+   ]
   },
   "smg_protocol_1": {
    "ranges": [
@@ -1261,11 +1425,15 @@
   },
   "eybond_short_ascii": {
    "ranges": [],
-   "notes": ["Bounded read-only MP/Q1/MD/F/RB FC4 evidence only. F/RB are optional runtime reads, not detection prerequisites. No raw UART, auxiliary query or write command."]
+   "notes": [
+    "Bounded read-only MP/Q1/MD/F/RB FC4 evidence only. F/RB are optional runtime reads, not detection prerequisites. No raw UART, auxiliary query or write command."
+   ]
   },
   "eybond_09c1": {
    "ranges": [],
-   "notes": ["Bounded read-only Q1/QF/PV?/F/G? FC4 capture. G? and PV energy remain raw evidence; no writes or inferred retail identity."]
+   "notes": [
+    "Bounded read-only Q1/QF/PV?/F/G? FC4 capture. G? and PV energy remain raw evidence; no writes or inferred retail identity."
+   ]
   },
   "eybond_g_ascii": {
    "ranges": [],
@@ -1418,7 +1586,7 @@
     ]
    ],
    "notes": [
-    "Deye single-phase LV storage/hybrid map: everything is holding registers (function 3 only; writes use function 16). 32-bit counters are low-word-first; temperatures are (raw-1000)*0.1 degC. Registers 150-218 are the STORAGE meaning of an address space that string inverters reuse differently — device type (register 0) must be 0x0300. Modbus RTU 9600, slave address in register 1 (default 1)."
+    "Deye single-phase LV storage/hybrid map: everything is holding registers (function 3 only; writes use function 16). 32-bit counters are low-word-first; temperatures are (raw-1000)*0.1 degC. Registers 150-218 are the STORAGE meaning of an address space that string inverters reuse differently \u2014 device type (register 0) must be 0x0300. Modbus RTU 9600, slave address in register 1 (default 1)."
    ]
   },
   "deye_3ph_high_80kw": {
@@ -2043,8 +2211,17 @@
    "priority": 120,
    "family_fallback": false,
    "anchors": [
-    {"key": "fingerprint.model_code", "equals": 6, "cost": 1},
-    {"key": "identity.lvyuan_charge_profile_high_raw", "min": 500, "max": 600, "cost": 2}
+    {
+     "key": "fingerprint.model_code",
+     "equals": 6,
+     "cost": 1
+    },
+    {
+     "key": "identity.lvyuan_charge_profile_high_raw",
+     "min": 500,
+     "max": 600,
+     "cost": 2
+    }
    ],
    "provenance": {
     "sources": [
@@ -2125,7 +2302,7 @@
    },
    "provenance": {
     "sources": [
-     "corpus:own-device …9645 (16 captures, 2026-04..06)",
+     "corpus:own-device \u20269645 (16 captures, 2026-04..06)",
      "identity anchors: reg171 device_type/model_code=0x1E00, reg184 protocol/layout=1, reg643 rated_power=6200",
      "commercial name Sandisolar SD-HYM-4862HWP is source-backed; local SMG registers expose only the generic fingerprint"
     ],
@@ -2276,7 +2453,7 @@
    },
    "provenance": {
     "sources": [
-     "corpus:donor …5865 (5 captures)"
+     "corpus:donor \u20265865 (5 captures)"
     ],
     "confidence": "capture-derived"
    }
@@ -2402,7 +2579,7 @@
    },
    "provenance": {
     "sources": [
-     "corpus:donor …4544 (3 captures)",
+     "corpus:donor \u20264544 (3 captures)",
      "catalog-migration:anenji_anj_11kw_48v_wifi_p"
     ],
     "confidence": "capture-derived"
@@ -2679,7 +2856,7 @@
    },
    "provenance": {
     "sources": [
-     "corpus:donor …5481 (single-output capture, 2026-06-12)",
+     "corpus:donor \u20265481 (single-output capture, 2026-06-12)",
      "fw 3700_A6250424v1 (reg626 hex == model_code 14080)",
      "donor ran smg_modbus.json profile bound as SMG 6200 (same layout 1 as the verified smg_6200): full SMG control set read back correct values (developer-witnessed 2026-06-12)"
     ],
@@ -2750,7 +2927,7 @@
    "provenance": {
     "sources": [
      "github:issue#3 Aninerel ANL-4200T-24L-W-PRO",
-     "corpus:donor …GVB2 (3 captures, 2026-06-15)",
+     "corpus:donor \u2026GVB2 (3 captures, 2026-06-15)",
      "fingerprint layout=11 model_code=30723 rated_power=4200"
     ],
     "confidence": "capture-derived-partial"
@@ -2824,7 +3001,7 @@
    "provenance": {
     "sources": [
      "github:issue#8 Anenji ANJ-6200-48PL",
-     "corpus:donor …57E (capture, 2026-06-15)",
+     "corpus:donor \u202657E (capture, 2026-06-15)",
      "fingerprint layout=2 model_code=8960 rated_power=6200",
      "github:issue#51 register 301 enum correction; ANJ-6200-48PL manual F1-01 and GM6200 Communication Protocol 2",
      "SUB/SBU/SUF/ZEC selection user-confirmed in issue #51 on 2026-09-29; grid-export/CT operation not validated; remaining historical SMG 6200 surface unchanged"
@@ -2882,14 +3059,31 @@
    "model_name": "PI30 VMII-NXPW5KW 6200",
    "priority": 260,
    "anchors": [
-    {"key": "protocol.protocol_id", "equals": "PI30"},
-    {"key": "identity.model_number", "equals": "VMII-NXPW5KW"},
-    {"key": "identity.main_firmware", "equals": "VERFW:00031.07"},
-    {"key": "identity.rated_power", "equals": 6200},
-    {"key": "shape.qpiri_field_count", "equals": 28}
+    {
+     "key": "protocol.protocol_id",
+     "equals": "PI30"
+    },
+    {
+     "key": "identity.model_number",
+     "equals": "VMII-NXPW5KW"
+    },
+    {
+     "key": "identity.main_firmware",
+     "equals": "VERFW:00031.07"
+    },
+    {
+     "key": "identity.rated_power",
+     "equals": 6200
+    },
+    {
+     "key": "shape.qpiri_field_count",
+     "equals": 28
+    }
    ],
    "provenance": {
-    "sources": ["project-issue:62"],
+    "sources": [
+     "project-issue:62"
+    ],
     "confidence": "capture-derived"
    }
   },
@@ -3085,8 +3279,14 @@
    "model_name": "MUST PV3300",
    "priority": 220,
    "anchors": [
-    {"key": "protocol.protocol_id", "equals": "MUST_PV_PH18"},
-    {"key": "identity.model_number", "equals": "PV3300"}
+    {
+     "key": "protocol.protocol_id",
+     "equals": "MUST_PV_PH18"
+    },
+    {
+     "key": "identity.model_number",
+     "equals": "PV3300"
+    }
    ],
    "provenance": {
     "sources": [
@@ -3102,8 +3302,14 @@
    "model_name": "MUST PV3900",
    "priority": 220,
    "anchors": [
-    {"key": "protocol.protocol_id", "equals": "MUST_PV_PH18"},
-    {"key": "identity.model_number", "equals": "PV3900"}
+    {
+     "key": "protocol.protocol_id",
+     "equals": "MUST_PV_PH18"
+    },
+    {
+     "key": "identity.model_number",
+     "equals": "PV3900"
+    }
    ],
    "provenance": {
     "sources": [
@@ -3361,13 +3567,47 @@
    "priority": 110,
    "family_fallback": true,
    "anchors": [
-    {"key": "identity.hopewind_rated_kw", "min": 3, "max": 80, "cost": 2},
-    {"key": "identity.hopewind_rated_voltage", "min": 100, "max": 800, "cost": 2},
-    {"key": "identity.hopewind_switch", "one_of": [0, 1], "cost": 2},
-    {"key": "identity.hopewind_state", "one_of": [1, 2, 4, 8, 16, 32, 64, 128, 256], "cost": 2}
+    {
+     "key": "identity.hopewind_rated_kw",
+     "min": 3,
+     "max": 80,
+     "cost": 2
+    },
+    {
+     "key": "identity.hopewind_rated_voltage",
+     "min": 100,
+     "max": 800,
+     "cost": 2
+    },
+    {
+     "key": "identity.hopewind_switch",
+     "one_of": [
+      0,
+      1
+     ],
+     "cost": 2
+    },
+    {
+     "key": "identity.hopewind_state",
+     "one_of": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64,
+      128,
+      256
+     ],
+     "cost": 2
+    }
    ],
    "provenance": {
-    "sources": ["manufacturer Hopewind protocol 567 / 0237 V100B002D000", "github:issue#23 three successful local FC03 blocks"],
+    "sources": [
+     "manufacturer Hopewind protocol 567 / 0237 V100B002D000",
+     "github:issue#23 three successful local FC03 blocks"
+    ],
     "confidence": "documented-with-register-capture"
    }
   },
@@ -3495,7 +3735,7 @@
    ],
    "provenance": {
     "sources": [
-     "Deye Modbus RTU protocol V1.18 (storage/string/micro) and V1.19 (one-phase) — same register map; SUN-xK-SG04LP1-class single-phase LV hybrids. Device type 0x0300 (768) selects the storage meaning of the overloaded 150-218 register area; rated power anchor reads the low word of the 0.1 W u32 (covers units up to 6.5 kW)."
+     "Deye Modbus RTU protocol V1.18 (storage/string/micro) and V1.19 (one-phase) \u2014 same register map; SUN-xK-SG04LP1-class single-phase LV hybrids. Device type 0x0300 (768) selects the storage meaning of the overloaded 150-218 register area; rated power anchor reads the low word of the 0.1 W u32 (covers units up to 6.5 kW)."
     ],
     "confidence": "datasheet-unconfirmed"
    }
