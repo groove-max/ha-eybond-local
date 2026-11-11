@@ -458,26 +458,17 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("grid_port_power",),
                 compute="negate",
             ),
-            # LVYUAN register 33290 reads the power the unit draws from the
-            # mains. The mapping is restricted to this one pack because that
-            # meaning is specific to it, and it is import-positive on the wire,
-            # which already matches the canonical convention.
-            #
-            # The evidence is a passive capture only: the word never went
-            # negative in 36 cycles (min 1811 W, max 1899 W) and never exceeded
-            # the mains apparent power computed from registers 80/81 (0 of 36
-            # cycles), so it cannot be an export or a bus figure. What the
-            # capture cannot show is a genuine export cycle, so a negative
-            # reading has never been observed. That is why downstream energy
-            # sensors derived from this value stay estimated rather than
-            # metered, and why the four raw counters are still published
-            # without any statistics.
-            CanonicalTelemetryVariant(
-                driver_keys=("modbus_catalog",),
-                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
-                source_keys=("input_active_power",),
-                compute="passthrough",
-            ),
+            # LVYUAN register 33290 is deliberately NOT mapped onto this
+            # canonical key. It reads the power the unit draws from the mains
+            # (min 1811 W, max 1899 W over 36 captured cycles, never negative,
+            # never above the mains apparent power from registers 80/81), but
+            # no genuine export cycle was ever captured, the sign convention on
+            # an export is therefore unobserved, and the pack has a single
+            # passive operating period behind it. Publishing it as "Grid
+            # Power" would assert a direction the fixture cannot establish and
+            # would silently drive grid-import statistics from an unproven
+            # sign. The pack exposes it as its own provisional measurement,
+            # "Input Active Power", instead.
         ),
     ),
     CanonicalTelemetryDescription(

@@ -13,6 +13,15 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Retire desynchronized mixed AT/binary collector sessions on invalid headers
+  or incomplete binary frames instead of repeatedly discarding eight-byte
+  fragments and losing subsequent valid responses (#89). Fail pending requests
+  through the existing disconnect/recovery path; preserve request ownership
+  across replacement sockets. Keep idle connections open and use binary
+  completion budgets rather than a 50 ms text gap for fragmented binary replies.
+  Validated with offline log replay and synthetic TCP reconnects; the original
+  on-device cause of the malformed stream is not yet established.
+
 - Show LVYUAN grid and energy readings in the main sensor section instead of
   Diagnostics. The four raw counters carried `diagnostic: true`, and the
   shared `grid_voltage`/`grid_frequency` aliases mark themselves diagnostic for
@@ -31,10 +40,22 @@ RC1 below; newer model features remain here.
   2026 capture versus 30/488/480/552/534 V on the same unit in November 2026.
   Pinning `fingerprint.layout_code` to `equals 480` therefore made a live unit
   fail detection and surface `driver_unbound` with an empty driver. Detection
-  now binds word 16646 (6 kW class, constant across all captured cycles) and
-  word 16650 as a 500-600 range, which resolves both the captured and the live
-  values; a regression harness confirms no other device in the catalog changes
-  its detection outcome.
+  now binds word 16646 (6 kW class, constant across all captured cycles), and
+  the pack is explicitly provisional. Word 16650 is NOT identity evidence: it is
+  one of the user-settable charge thresholds above, and it read 55.2 V in both
+  observations only because it was never edited. Pinning it, even as a wide
+  500-600 V range, still made an automatic exact-model claim rest on a value the
+  installer can change, so it is no longer read, bound or anchored.
+  The catalog entry now declares `provisional_identity`: detection still binds
+  the read-only surface, but the resolution is downgraded to a `family` match at
+  `medium` confidence, the flag rides along in `catalog_detection`, and
+  `resolve_unique_persisted_model_surface` fails closed instead of reconstructing
+  a durable startup choice from an unproven identity. The only plausibility guard
+  left is the measured 48 V battery platform at word 128 (40-70 V window), which
+  is a measurement rather than a setting, so a synthetic 96 V unit of the same
+  6 kW class is refused. Regression tests assert the provisional label, the
+  absence of any exact/high claim, and the 96 V refusal; a harness confirms no
+  other device in the catalog changes its detection outcome.
 
 - Relabel the `modbus_catalog` driver from "Device Catalog / Modbus (Aohai
   FSA...)" to "Device Catalog / Modbus (detected model)". The old label named

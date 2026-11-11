@@ -1015,11 +1015,22 @@
        "key": "identity.lvyuan_profile_word",
        "source_key": "lvyuan_profile_word",
        "register": 16640
-      },
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.lvyuan_identity_platform",
+     "kind": "modbus_read",
+     "register": 128,
+     "count": 1,
+     "function": 3,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
       {
-       "key": "identity.lvyuan_charge_profile_high_raw",
-       "source_key": "lvyuan_charge_profile_high_raw",
-       "register": 16650
+       "key": "identity.lvyuan_battery_platform_voltage",
+       "source_key": "lvyuan_battery_platform_voltage",
+       "register": 128
       }
      ]
     }
@@ -2210,6 +2221,8 @@
    "surface_key": "lvyuan_ty_sic_6_5kbe_w1_read_only",
    "priority": 120,
    "family_fallback": false,
+   "provisional_identity": true,
+   "provisional_reason": "The only non-settable identity word in the captured rating block is 16646 == 6, which identifies the 6 kW power class and is shared by every 6 kW unit of this protocol. Every other word in that block is a user-set charge threshold, including 16650: it happened to read 55.2 V in both of our observations because it was never edited, which is not evidence of a hardware fingerprint. Without a stable per-model discriminator, automatic exact-model selection is not justified, so this profile stays explicitly provisional.",
    "anchors": [
     {
      "key": "fingerprint.model_code",
@@ -2217,16 +2230,17 @@
      "cost": 1
     },
     {
-     "key": "identity.lvyuan_charge_profile_high_raw",
-     "min": 500,
-     "max": 600,
-     "cost": 2
+     "key": "identity.lvyuan_battery_platform_voltage",
+     "min": 400,
+     "max": 700,
+     "cost": 1,
+     "required": true
     }
    ],
    "provenance": {
     "sources": [
      "Passive BLE btsnoop capture of the SmartValue app (2026-08-09): 1068 CRC-valid Modbus RTU FC03 exchanges with slave 1 behind the EyeBond GATT bridge exposed a 125-register map polled every 14.4 s.",
-     "Word 16646 reads 6 across all 37 captured cycles and is the only word in the rating block that identifies the power class; it is bound to fingerprint.model_code. Word 16650 reads 55.2 V (bulk/absorption ceiling) and is bound to identity.lvyuan_charge_profile_high_raw. Words 16645 and 16648-16651 are USER-SETTABLE charge thresholds, not hardware fingerprints: they read 40/480/420/552/544 V in the August capture and 30/488/480/552/534 V on the same unit in November 2026, so any hardware matcher must not pin them to an exact captured value.",
+     "Word 16646 reads 6 across all 37 captured cycles and identifies the 6 kW power class; it is bound to fingerprint.model_code. The pack is a 48 V-battery platform, so word 128 (the measured battery voltage, 54.6 V in the same capture) must stay inside the 40-70 V window; that is a measurement, not a setting, and it is bound to identity.lvyuan_battery_platform_voltage as a plausibility guard, not as a model discriminator. Words 16645 and 16648-16651 are USER-SETTABLE charge thresholds, not hardware fingerprints: they read 40/480/420/552/544 V in the August capture and 30/488/480/552/534 V on the same unit in November 2026, so no matcher, fingerprint or anchor may pin any of them - 16650 happened to read 55.2 V in both observations only because it was never edited, and an earlier revision of this entry wrongly treated that as a hardware fingerprint. Because no stable non-settable per-model discriminator was captured, this entry declares provisional_identity and can never resolve to an automatic exact/high match.",
      "Word 93 is load percent x10 and reproduces word 91 active power against the 6.5 kW nameplate with a mean absolute error of 2.0 W over 37 samples, which independently confirms the 6.5 kW class.",
      "Cross-checked against the ValueCloud device snapshot for the same hardware: mains 230.9 V, load active power 1231 W, battery 54.1 V at 98 percent map onto words 80, 91, 128 and 132."
     ],

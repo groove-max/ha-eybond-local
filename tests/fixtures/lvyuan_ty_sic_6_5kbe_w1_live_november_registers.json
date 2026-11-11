@@ -1,8 +1,12 @@
 {
-  "description": "Sanitized numeric words from the same inverter read live over the EyeBond tunnel on 2026-11-10. Same hardware as the August capture, but the installer changed the user-settable charge thresholds (30/488/480/552/534 V), which is the state that broke the original equals-480 anchor. No serial, account, address or timestamps.",
+  "description": "Sanitized numeric words from the same inverter read live over the EyeBond tunnel on 2026-11-10. Same hardware as the August capture; the installer had changed the user-settable charge thresholds, which is the state that broke the original equals-480 anchor. The whole rating block is preserved here so every word that actually differs is visible to the matcher instead of being zero-filled by the replay helper. Only words that were actually read are listed; the replay helper still zero-fills the rest. No serial, account, address or timestamps.",
   "identity": {
+    "16645": 30,
     "16646": 6,
-    "16650": 552
+    "16648": 488,
+    "16649": 480,
+    "16650": 552,
+    "16651": 534
   },
   "mains_start": 80,
   "mains": [

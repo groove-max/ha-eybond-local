@@ -4022,7 +4022,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
             await connection.disconnect()
             run_task.cancel()
 
-    async def test_valuecloud_plain_line_partial_unknown_fragment_does_not_stall_reader(self) -> None:
+    async def test_valuecloud_plain_line_partial_unknown_fragment_retires_reader(self) -> None:
         reader = asyncio.StreamReader()
         writer = _FakeWriter()
         connection = _CollectorAtConnection(
@@ -4038,27 +4038,20 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         try:
             self.assertTrue(await connection.wait_until_connected(0.2))
 
-            reader.feed_data(b"#22")
-            deadline = monotonic() + 1.0
-            while connection.collector_info.raw_last_parser != "mixed_frame_header_timeout":
-                if monotonic() >= deadline:
-                    break
-                await asyncio.sleep(0.01)
+            with patch(
+                "custom_components.eybond_local.collector.transport.connections."
+                "_FRAMED_HEADER_COMPLETION_TIMEOUT", .02,
+            ):
+                reader.feed_data(b"#22")
+                await asyncio.wait_for(run_task, .5)
             self.assertEqual(
-                connection.collector_info.raw_last_parser,
-                "mixed_frame_header_timeout",
+                connection.collector_info.last_disconnect_reason,
+                "collector_frame_header_timeout",
             )
-
-            gmod_task = asyncio.create_task(
-                connection.async_send_raw_payload(
-                    build_ascii_line_request("GMOD"),
-                    request_timeout=1.0,
-                )
-            )
-            await _wait_for_writer_buffer(writer, b"GMOD\r")
-            reader.feed_data(b"(B\r")
-            self.assertEqual(await gmod_task, b"(B\r")
-            self.assertEqual(connection.collector_info.raw_response_count, 1)
+            self.assertFalse(connection.connected)
+            self.assertTrue(writer.closed)
+            with self.assertRaises(ConnectionError):
+                await connection.async_send_raw_payload(b"GMOD\r", request_timeout=.1)
         finally:
             await connection.disconnect()
             run_task.cancel()

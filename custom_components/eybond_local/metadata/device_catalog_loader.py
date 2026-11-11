@@ -275,6 +275,13 @@ class DeviceCatalogEntry:
     priority: int = 100
     family_fallback: bool = False
     detection_supersedes_protocols: tuple[str, ...] = ()
+    # A provisional profile is backed by capture evidence that is sound for
+    # telemetry but NOT sufficient to claim automatic exact-model identity:
+    # its only non-settable identity word is not unique in the protocol family.
+    # Detection may still bind it (explicitly labelled), but the resolution is
+    # downgraded to ``family``/``medium`` and it must never be presented as an
+    # exact, high-confidence auto match.
+    provisional_identity: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -919,6 +926,7 @@ def _parse_device(
         priority=int(raw.get("priority", 100)),
         family_fallback=bool(raw.get("family_fallback", False)),
         detection_supersedes_protocols=tuple(detection_supersedes_protocols),
+        provisional_identity=bool(raw.get("provisional_identity", False)),
     )
 
 

@@ -119,6 +119,11 @@ class CompiledDeviceDescriptor:
     priority: int = 100
     detection_supersedes_protocols: tuple[str, ...] = ()
     revision: str = ""
+    # Capture evidence is sufficient for telemetry but not for automatic
+    # exact-model identity. Such a descriptor still binds its read-only
+    # surface, yet the resolution is downgraded to family/medium so nothing
+    # downstream can present it as an exact, high-confidence match.
+    provisional_identity: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,12 +219,17 @@ class CompiledDetectionCatalog:
             )
         if len(candidates) == 1:
             descriptor = candidates[0]
+            # A provisional descriptor is bound from capture evidence that is
+            # sound for telemetry but not sufficient for automatic exact-model
+            # identity, so it is reported like a family match and can never
+            # reach the exact/high path with a single captured data point.
+            downgraded = descriptor.family_fallback or descriptor.provisional_identity
             return self._build_resolution(
                 protocol_key=protocol_key,
-                resolution=RESOLUTION_FAMILY if descriptor.family_fallback else RESOLUTION_EXACT,
+                resolution=RESOLUTION_FAMILY if downgraded else RESOLUTION_EXACT,
                 candidates=candidates,
                 surface_key=descriptor.surface_key,
-                confidence="medium" if descriptor.family_fallback else "high",
+                confidence="medium" if downgraded else "high",
                 evidence=evidence,
                 decision_path=decision_path,
             )
@@ -319,7 +329,15 @@ def resolve_unique_persisted_model_surface(
     if len(device_keys) != 1:
         return None
     descriptor = resolved.devices.get(device_keys[0])
-    if descriptor is None or descriptor.family_fallback:
+    # A provisional descriptor is a deliberate, still-experimental binding.
+    # Reconstructing a durable startup metadata choice from it would launder
+    # an unproven identity into a persisted one, so it fails closed here just
+    # like a family fallback; such entries keep their live detection path.
+    if (
+        descriptor is None
+        or descriptor.family_fallback
+        or descriptor.provisional_identity
+    ):
         return None
     surface = resolved.surfaces.get(descriptor.surface_key)
     if (
@@ -406,6 +424,7 @@ def compile_detection_catalog(
                 descriptor.detection_supersedes_protocols
             ),
             revision=_descriptor_revision(descriptor),
+            provisional_identity=descriptor.provisional_identity,
         )
 
     devices_by_protocol = _group_device_keys(
@@ -710,6 +729,7 @@ def _descriptor_revision(descriptor: DetectionDeviceDescriptor) -> str:
         "detection_supersedes_protocols": (
             descriptor.detection_supersedes_protocols
         ),
+        "provisional_identity": descriptor.provisional_identity,
         "anchors": [
             {
                 "key": anchor.key,

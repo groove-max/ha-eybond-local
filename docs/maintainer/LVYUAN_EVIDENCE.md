@@ -31,6 +31,20 @@ whole analysis.
 | Within each pair, the **low member is the daily counter and the high member the lifetime total** | 448/546 read 14.x kWh and fell between August and November; 454/552 read several hundred kWh and only grow |
 | The rating block is **not constant** | words 16645 and 16648-16651 are user-settable charge thresholds: 40/480/420/552/544 V in August versus 30/488/480/552/534 V live |
 | Word **16646 = 6** is stable across all 37 cycles | single value, every cycle; it is the 6 kW power class |
+| The unit is a **48 V platform** | measured battery voltage at word 128 reads 54.6 V across the capture, not the ~105 V a 96 V platform would show; this is a measurement, not a setting |
+| Word **16650 = 552 is NOT a fingerprint** | it is one of the user-settable charge thresholds above; it read 55.2 V in both observations only because it was never edited, so it carries no model information |
+
+## Deliberately not claimed
+
+An earlier revision of the device-catalog entry pinned the settable word
+16650 (500-600 V window) as a hardware fingerprint and resolved the pack to an
+automatic **exact** model match at **high** confidence. That was wrong twice
+over: the word is user-editable, and a value that happens to be unchanged
+between two reads is not evidence of stability. The entry now declares
+`provisional_identity`, resolves as a `family` match at `medium` confidence, and
+`resolve_unique_persisted_model_surface` refuses to reconstruct a durable
+startup choice from it. The 48 V platform check at word 128 is a plausibility
+guard against a 96 V unit of the same power class, not a model discriminator.
 
 ## Inferred, not proven
 

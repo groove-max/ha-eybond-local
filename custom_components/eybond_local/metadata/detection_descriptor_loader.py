@@ -146,6 +146,7 @@ class DetectionDeviceDescriptor:
     source_catalog: str = ""
     read_only: bool = False
     family_fallback: bool = False
+    provisional_identity: bool = False
     priority: int = 100
     detection_supersedes_protocols: tuple[str, ...] = ()
 
@@ -387,6 +388,7 @@ def _descriptor_from_device_entry(entry: DeviceCatalogEntry) -> DetectionDeviceD
         source_catalog="device_catalog",
         read_only=not bool(entry.binding.profile_name),
         family_fallback=entry.family_fallback,
+        provisional_identity=entry.provisional_identity,
         priority=entry.priority,
         detection_supersedes_protocols=entry.detection_supersedes_protocols,
     )

@@ -25,6 +25,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+from custom_components.eybond_local.canonical_telemetry import (  # noqa: E402
+    canonical_measurements_for_driver,
+)
 from custom_components.eybond_local.drivers.modbus_catalog import ModbusCatalogDriver  # noqa: E402
 from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
     DriverReadMode,
@@ -112,9 +115,9 @@ class LvyuanIdentityReplayTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_unit_with_edited_thresholds_still_resolves(self) -> None:
         """The regression that broke detection on the real inverter.
 
-        Both fixtures carry the same hardware identity. Only the user-settable
-        charge thresholds differ, because the installer changed them between
-        August and November. Detection must not depend on those words.
+        Both fixtures describe the same unit. The user-settable charge
+        thresholds differ, because the installer changed them between August
+        and November. Detection must not depend on those words.
         """
 
         driver = ModbusCatalogDriver()
@@ -124,16 +127,61 @@ class LvyuanIdentityReplayTests(unittest.IsolatedAsyncioTestCase):
         assert inverter is not None
         self.assertEqual(inverter.variant_key, "lvyuan_ty_sic_6_5kbe_w1")
 
-        self.assertEqual(AUGUST["identity"], NOVEMBER["identity"])
+        # The two fixtures are deliberately NOT identical. Pinning the whole
+        # rating block equal would hide exactly the drift that broke the
+        # previous fingerprint, so assert the stable word and the drift
+        # separately.
         self.assertEqual(
             AUGUST["identity"]["16646"], 6, "power-class word must be the 6 kW class"
         )
+        self.assertEqual(
+            NOVEMBER["identity"]["16646"], 6, "power class must not drift"
+        )
+        moved = {
+            word
+            for word in set(AUGUST["identity"]) | set(NOVEMBER["identity"])
+            if AUGUST["identity"].get(word) != NOVEMBER["identity"].get(word)
+        }
+        self.assertEqual(
+            moved,
+            {"16645", "16648", "16649", "16651"},
+            "the threshold block is what moved; the matcher must survive it",
+        )
+        # 16650 stayed put in this pair of reads, which is precisely why it is
+        # NOT evidence of a stable fingerprint: it is one of the settable words
+        # and simply was not edited between these two observations.
+        self.assertIn("16650", AUGUST["identity"])
+        self.assertIn("16648", moved)
+
+    async def test_detection_is_labelled_provisional_and_never_exact(self) -> None:
+        """The pack must never be sold as an automatic exact-model match.
+
+        No stable non-settable per-model discriminator was captured, so the
+        binding is explicitly provisional: the resolution is reported as a
+        family match at medium confidence, and the provisional flag rides
+        along in the detection details.
+        """
+
+        driver = ModbusCatalogDriver()
+
+        inverter = await driver.async_probe(_transport(AUGUST), _target())
+        assert inverter is not None
+
+        detection = inverter.details["catalog_detection"]
+        self.assertEqual(detection["resolution"], "family")
+        self.assertNotEqual(detection["resolution"], "exact")
+        self.assertEqual(detection["confidence"], "medium")
+        self.assertNotEqual(detection["confidence"], "high")
+        self.assertIs(detection["provisional_identity"], True)
 
     async def test_96v_platform_is_refused_despite_the_same_power_class(self) -> None:
         """Word 16646 reads 6 on any 6 kW unit, so it cannot stand alone.
 
-        The negative fixture keeps the power class and moves the charge ceiling
-        onto a 96 V platform. The matcher must not claim this exact model.
+        The negative fixture keeps the power class AND keeps the settable
+        charge words inside the 500-600 V window the old fingerprint pinned,
+        but its measured battery platform is 96 V instead of 48 V. The
+        matcher must not claim this model: the platform voltage is a
+        measurement, not a user setting, so it cannot be edited away.
         """
 
         driver = ModbusCatalogDriver()
@@ -173,6 +221,34 @@ class LvyuanTelemetryReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["energy_counter_454"], 87.71)
         self.assertEqual(values["energy_counter_546"], 14.08)
         self.assertEqual(values["energy_counter_552"], 70.50)
+
+
+class LvyuanCanonicalSurfaceTests(unittest.TestCase):
+    """Register 33290 must stay a provisional measurement, not grid power."""
+
+    def test_input_active_power_is_not_aliased_onto_grid_power(self) -> None:
+        descriptions = canonical_measurements_for_driver(
+            "modbus_catalog",
+            variant_key="lvyuan_ty_sic_6_5kbe_w1",
+        )
+        keys = {description.key for description in descriptions}
+
+        # The pack publishes 33290 as its own measurement...
+        self.assertNotIn(
+            "grid_power",
+            keys,
+            "33290 has no captured export cycle, so its sign convention is "
+            "unobserved and it must not be published as canonical grid power",
+        )
+
+    def test_driver_wide_surface_does_not_need_the_alias_either(self) -> None:
+        descriptions = canonical_measurements_for_driver("modbus_catalog")
+        keys = {description.key for description in descriptions}
+
+        # Solis still owns the canonical grid-power key on the driver-wide
+        # surface; this assertion exists so a future LVYUAN re-introduction is
+        # caught here rather than in a live statistics change.
+        self.assertIn("grid_power", keys)
 
 
 if __name__ == "__main__":
