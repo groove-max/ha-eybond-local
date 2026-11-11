@@ -28,6 +28,7 @@ if str(REPO_ROOT) not in sys.path:
 from custom_components.eybond_local.canonical_telemetry import (  # noqa: E402
     _CANONICAL_TELEMETRY,
     _compute_variant,
+    apply_canonical_measurements,
     canonical_measurements_for_driver,
 )
 from custom_components.eybond_local.drivers.modbus_catalog import ModbusCatalogDriver  # noqa: E402
@@ -191,6 +192,36 @@ class LvyuanIdentityReplayTests(unittest.IsolatedAsyncioTestCase):
         inverter = await driver.async_probe(_transport(NEGATIVE_96V), _target())
 
         self.assertIsNone(inverter)
+
+    async def test_input_active_power_is_not_canonical_grid_power(self) -> None:
+        """Word 33290 stays a separate provisional measurement.
+
+        A reviewer reproduced a spurious alias: supplying only
+        input_active_power produced grid_power. Similar magnitude and
+        correlation in one passive operating period do not establish the
+        measurement boundary or direction in other modes, so the pack must
+        not feed the canonical grid power. Feed the same value and assert the
+        alias is absent.
+        """
+
+        values: dict[str, object] = {"input_active_power": 1863}
+
+        apply_canonical_measurements(
+            "modbus_catalog",
+            values,
+            variant_key="lvyuan_ty_sic_6_5kbe_w1",
+        )
+
+        self.assertNotIn(
+            "grid_power",
+            values,
+            "33290 must not alias canonical grid power until its direction is "
+            "independently supported",
+        )
+        self.assertNotIn("grid_import_power", values)
+        self.assertNotIn("pv_to_grid_power", values)
+        # The raw measurement must survive untouched.
+        self.assertEqual(values["input_active_power"], 1863)
 
 
 class LvyuanTelemetryReplayTests(unittest.IsolatedAsyncioTestCase):

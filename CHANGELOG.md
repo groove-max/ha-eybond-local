@@ -13,6 +13,17 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Preserve the August rating-block words that actually differ in the LVYUAN
+  fixtures. The saved capture documented the 40/480/420/552/544 V thresholds in
+  prose but stored only `{16646: 6, 16650: 552}`, so the replay helper
+  zero-filled the drifted words the fixtures were meant to exercise. Both
+  positive fixtures now carry the full observed block, so a matcher that pins a
+  settable threshold fails the replay instead of passing on fabricated zeros.
+  Add a regression test asserting that word 33290 does not alias canonical grid
+  power: supplying only `input_active_power` must leave `grid_power` absent,
+  because magnitude and correlation in one passive period do not establish the
+  measurement direction in other modes.
+
 - Retire desynchronized mixed AT/binary collector sessions on invalid headers
   or incomplete binary frames instead of repeatedly discarding eight-byte
   fragments and losing subsequent valid responses (#89). Fail pending requests

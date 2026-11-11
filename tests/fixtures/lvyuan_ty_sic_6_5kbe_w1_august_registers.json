@@ -1,8 +1,12 @@
 {
   "description": "Sanitized numeric words from a passive BLE capture of the vendor app talking to the inverter through an EyeBond dongle, 2026-08-09. Decoded register values only: no serial, no account, no address, no collection id, no timestamps. Charge thresholds read 40/480/420/552/544 V in this capture.",
   "identity": {
+    "16645": 40,
     "16646": 6,
-    "16650": 552
+    "16648": 480,
+    "16649": 420,
+    "16650": 552,
+    "16651": 544
   },
   "mains_start": 80,
   "mains": [
