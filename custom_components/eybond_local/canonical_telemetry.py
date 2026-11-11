@@ -891,7 +891,9 @@ def _compute_variant(
             if numeric is None:
                 return None
             product *= numeric
-        return round(-product, 4)
+        # Normalize -0.0 so an idle pack reports "0.0 W", not "-0.0 W".
+        result = round(-product, 4)
+        return result if result else 0.0
 
     if variant.compute == "negate":
         value = values.get(variant.source_keys[0])

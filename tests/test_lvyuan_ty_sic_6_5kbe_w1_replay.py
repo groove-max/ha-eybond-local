@@ -291,11 +291,13 @@ class LvyuanCanonicalSurfaceTests(unittest.TestCase):
         )
         self.assertAlmostEqual(charging, 338.56, places=1)
 
-        # Zero stays zero, and a missing input stays unavailable.
-        self.assertEqual(
-            _compute_variant(variant, {"battery_voltage": 53.3, "battery_current": 0.0}),
-            0.0,
+        # Zero stays zero (and must not surface as -0.0), and a missing input
+        # stays unavailable.
+        idle = _compute_variant(
+            variant, {"battery_voltage": 53.3, "battery_current": 0.0}
         )
+        self.assertEqual(idle, 0.0)
+        self.assertEqual(str(idle), "0.0", "an idle pack must not render -0.0 W")
         self.assertIsNone(
             _compute_variant(variant, {"battery_voltage": 53.3})
         )
