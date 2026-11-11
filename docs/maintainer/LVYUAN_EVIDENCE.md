@@ -95,9 +95,15 @@ These are the claims that must not harden into assertions.
   when the caller names the pack; the driver-wide surface and every other pack
   keep the shared flag.
 - 33290 has no canonical mapping for the same reason.
-- Detection anchors on word 16646 (exact) and word 16650 as a 500-600 range, so
-  a user editing a charge threshold cannot break detection. A 96 V negative
-  fixture proves the matcher refuses a same-power-class unit.
+- Detection anchors on word 16646 (the 6 kW power class) and on the measured
+  battery platform at word 128, which must stay inside 400-700. Word 128 is a
+  measurement, so no user setting can move it, and a 96 V negative fixture
+  proves the matcher refuses a same-power-class unit. No anchor references a
+  user-settable threshold: 16645 and 16648-16651 are never pinned, and 16650
+  appears only in the reasoning prose. Because word 16646 is shared by every
+  6 kW unit of this protocol, the entry declares `provisional_identity`: it
+  resolves as a family match at medium confidence and can never become an
+  automatic exact/high match.
 - Adding the pack creates Home Assistant poll cycles on top of the vendor app's
   own traffic. The registers are already polled, so no new dongle request shape
   is introduced, but HA does read them independently.
