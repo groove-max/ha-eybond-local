@@ -1527,12 +1527,7 @@ class _CollectorAtConnection:
                     self._collector.raw_last_parser = "raw_modbus_rtu"
                     continue
                 if first == b"A":
-                    tail = reader.readexactly(2)
-                    prefix = first + await read(
-                        asyncio.wait_for(
-                            tail, timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
-                        ) if auxiliary.enabled else tail
-                    )
+                    prefix = first + await read(self._read_mixed_frame_tail(reader, 2))
                     if prefix == b"AT+":
                         line = prefix + await read(reader.read_at_response(prefix=prefix))
                         self._handle_at_response_line(
@@ -1570,12 +1565,9 @@ class _CollectorAtConnection:
                     prefix = buffered_prefix[:3]
                     buffered_prefix = buffered_prefix[3:]
                 else:
-                    tail = reader.readexactly(3 - len(buffered_prefix))
-                    prefix = buffered_prefix + await read(
-                        asyncio.wait_for(
-                            tail, timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
-                        ) if auxiliary.enabled else tail
-                    )
+                    prefix = buffered_prefix + await read(self._read_mixed_frame_tail(
+                        reader, 3 - len(buffered_prefix),
+                    ))
                     buffered_prefix = b""
                 if (not auxiliary.enabled and prefix.startswith((b"(", b"^"))
                         and not pi30_diagnostic.framed_header_pending):
@@ -1622,15 +1614,10 @@ class _CollectorAtConnection:
                             reader,
                             HEADER_SIZE - len(prefix),
                         ))
-                        if header_tail is None:
-                            self._record_unhandled_raw_fragment(
-                                prefix,
-                                parser="mixed_frame_header_timeout",
-                            )
-                            continue
                         header_bytes = prefix + header_tail
                         header = decode_header(header_bytes)
                         if not self._looks_like_mixed_frame_header(header):
+                            header_error = _runtime_eybond_header_error(header)
                             if (
                                 self._raw_passthrough_frame_format == "plain_line"
                                 and _looks_like_plain_raw_response_start(header_bytes[:1])
@@ -1640,31 +1627,32 @@ class _CollectorAtConnection:
                                         reader.readuntil(b"\r"),
                                         timeout=_AT_TEXT_MIXED_FRAME_READ_TIMEOUT,
                                     ))
-                                except asyncio.TimeoutError:
+                                except asyncio.TimeoutError as exc:
                                     self._record_unhandled_raw_fragment(
                                         header_bytes,
                                         parser="raw_plain_line_stale_timeout",
                                     )
-                                    continue
+                                    raise BinaryFramingError("raw_plain_line_stale_timeout") from exc
                                 self._handle_raw_ascii_line(line, parser="raw_plain_line_stale")
                                 continue
                             self._record_unhandled_raw_fragment(
                                 header_bytes,
                                 parser="mixed_frame_header_invalid",
                             )
-                            continue
+                            # No boundary remains after an invalid header. In
+                            # #89, discarding eight bytes repeatedly swallowed
+                            # subsequent CRC-valid FC4 replies at shifted offsets.
+                            # Retire this physical stream; never scan for a TID
+                            # or infer a frame from a pending request.
+                            raise BinaryFramingError(header_error)
                         payload = b""
                         if header.payload_len > 0:
                             payload = await read(self._read_mixed_frame_tail(
                                 reader,
                                 header.payload_len,
+                                timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
+                                reason="collector_frame_payload_timeout",
                             ))
-                            if payload is None:
-                                self._record_unhandled_raw_fragment(
-                                    header_bytes,
-                                    parser="mixed_frame_payload_timeout",
-                                )
-                                continue
                     if header.fcode == FC_HEARTBEAT:
                         pn = parse_heartbeat_pn(payload)
                         if pn:
@@ -1735,20 +1723,27 @@ class _CollectorAtConnection:
 
     async def _read_mixed_frame_tail(
         self,
-        reader: asyncio.StreamReader,
+        reader: _PrefixedAsyncReader,
         size: int,
-    ) -> bytes | None:
+        *,
+        timeout: float | None = None,
+        reason: str = "collector_frame_header_timeout",
+    ) -> bytes:
+        """Complete one structural part or retire the stream, for every AT mode.
+
+        Idle silence is unlimited; a started binary prefix/header/payload is
+        not. Use the framed transport's budgets, not the plain-text idle gap.
+        The caller wraps this entire wait in the physical-session read guard.
+        """
         if size <= 0:
             return b""
-        if self._raw_passthrough_frame_format != "plain_line":
-            return await reader.readexactly(size)
         try:
             return await asyncio.wait_for(
                 reader.readexactly(size),
-                timeout=_AT_TEXT_MIXED_FRAME_READ_TIMEOUT,
+                timeout=(_FRAMED_HEADER_COMPLETION_TIMEOUT if timeout is None else timeout),
             )
-        except asyncio.TimeoutError:
-            return None
+        except asyncio.TimeoutError as exc:
+            raise BinaryFramingError(reason) from exc
 
     def _looks_like_mixed_frame_header(self, header: EybondHeader) -> bool:
         return _runtime_eybond_header_error(header) == ""

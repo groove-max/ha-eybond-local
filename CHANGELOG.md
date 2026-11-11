@@ -13,6 +13,15 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Retire desynchronized mixed AT/binary collector sessions on invalid headers
+  or incomplete binary frames instead of repeatedly discarding eight-byte
+  fragments and losing subsequent valid responses (#89). Fail pending requests
+  through the existing disconnect/recovery path; preserve request ownership
+  across replacement sockets. Keep idle connections open and use binary
+  completion budgets rather than a 50 ms text gap for fragmented binary replies.
+  Validated with offline log replay and synthetic TCP reconnects; the original
+  on-device cause of the malformed stream is not yet established.
+
 - Expire cached inverter measurements after a complete read outage lasting
   three poll intervals (at least 60 seconds), independently of the collector's
   TCP/heartbeat status. Preserve short misses and healthy DELTA/slow-field
