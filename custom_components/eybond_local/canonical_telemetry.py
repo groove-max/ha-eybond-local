@@ -432,11 +432,21 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("battery_power_magnitude", "battery_current_direction"),
                 compute="magnitude_with_direction",
             ),
+            # LVYUAN register 129 is signed, but its polarity is the opposite
+            # of the canonical convention: DISCHARGE is positive on the wire
+            # and charge is negative. Measured on the live unit (2026-11-11):
+            #   +29.8 A / 52.5 V -> AC input 0 W, load 1400 W (pack supplying)
+            #    -6.4 A / 52.9 V -> AC input 1839 W, load 1488 W (pack
+            #                       absorbing; the +351 W surplus matches
+            #                       |V*I| = 339 W)
+            # The magnitude is right but the sign must be flipped. A plain
+            # multiply reported a charging pack as discharging, and
+            # estimated_battery_discharge_energy accumulated that error.
             CanonicalTelemetryVariant(
                 driver_keys=("modbus_catalog",),
                 variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
                 source_keys=("battery_voltage", "battery_current"),
-                compute="multiply",
+                compute="multiply_negate",
             ),
         ),
     ),
@@ -870,6 +880,18 @@ def _compute_variant(
 
     if variant.compute == "eybond_g_ascii_battery_power":
         return _compute_eybond_g_ascii_battery_power(values, variant)
+
+    if variant.compute == "multiply_negate":
+        # Multiply the sources, then flip the sign. Used when a pack reports a
+        # magnitude-proportional quantity on a wire whose sign convention is
+        # the opposite of the canonical one (charge > 0).
+        product = 1.0
+        for key in variant.source_keys:
+            numeric = _numeric(values.get(key))
+            if numeric is None:
+                return None
+            product *= numeric
+        return round(-product, 4)
 
     if variant.compute == "negate":
         value = values.get(variant.source_keys[0])

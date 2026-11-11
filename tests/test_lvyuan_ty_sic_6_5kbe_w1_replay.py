@@ -26,6 +26,8 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.canonical_telemetry import (  # noqa: E402
+    _CANONICAL_TELEMETRY,
+    _compute_variant,
     canonical_measurements_for_driver,
 )
 from custom_components.eybond_local.drivers.modbus_catalog import ModbusCatalogDriver  # noqa: E402
@@ -249,6 +251,67 @@ class LvyuanCanonicalSurfaceTests(unittest.TestCase):
         # surface; this assertion exists so a future LVYUAN re-introduction is
         # caught here rather than in a live statistics change.
         self.assertIn("grid_power", keys)
+
+    def test_battery_power_is_charge_positive(self) -> None:
+        """Register 129 is discharge-positive on the wire; canonical is
+        charge-positive.
+
+        Measured on the live unit on 2026-11-11:
+          +29.8 A -> AC input 0 W while the load drew 1400 W (pack supplying)
+           -6.4 A -> AC input 1839 W against a 1488 W load (pack absorbing;
+                     the +351 W surplus matches |52.9 V * -6.4 A| = 339 W)
+
+        A plain multiply therefore reported a charging pack as discharging.
+        """
+        variant = _lvyuan_battery_power_variant()
+        self.assertIsNotNone(variant, "the pack must publish battery_power")
+
+        # A raw +29.8 A reading means the pack is SUPPLYING, so the canonical
+        # value must come out negative (charge > 0 is the canonical sign).
+        discharging = _compute_variant(
+            variant, {"battery_voltage": 52.5, "battery_current": 29.8}
+        )
+        self.assertIsNotNone(discharging)
+        self.assertLess(
+            discharging,
+            0,
+            "a discharge-positive wire reading must not surface as charging",
+        )
+        self.assertAlmostEqual(discharging, -1564.5, places=1)
+
+        # A raw negative current is the pack ABSORBING: canonical -> positive.
+        charging = _compute_variant(
+            variant, {"battery_voltage": 52.9, "battery_current": -6.4}
+        )
+        self.assertIsNotNone(charging)
+        self.assertGreater(
+            charging,
+            0,
+            "an absorbing pack must surface as charging (positive)",
+        )
+        self.assertAlmostEqual(charging, 338.56, places=1)
+
+        # Zero stays zero, and a missing input stays unavailable.
+        self.assertEqual(
+            _compute_variant(variant, {"battery_voltage": 53.3, "battery_current": 0.0}),
+            0.0,
+        )
+        self.assertIsNone(
+            _compute_variant(variant, {"battery_voltage": 53.3})
+        )
+
+
+def _lvyuan_battery_power_variant():
+    """Return the canonical battery_power variant bound to the LVYUAN pack."""
+    for spec in _CANONICAL_TELEMETRY:
+        if spec.description.key != "battery_power":
+            continue
+        for variant in spec.variants:
+            if "modbus_catalog" not in variant.driver_keys:
+                continue
+            if "lvyuan_ty_sic_6_5kbe_w1" in variant.variant_keys:
+                return variant
+    return None
 
 
 if __name__ == "__main__":

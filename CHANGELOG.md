@@ -57,6 +57,21 @@ RC1 below; newer model features remain here.
   absence of any exact/high claim, and the 96 V refusal; a harness confirms no
   other device in the catalog changes its detection outcome.
 
+- Report LVYUAN battery power with the canonical sign (charge > 0). Register
+  129 is signed on the wire but uses the opposite polarity: DISCHARGE is
+  positive and charge is negative. Measured on the live unit on 2026-11-11,
+  +29.8 A coincided with the AC input dropping to 0 W while the load still drew
+  1400 W (the pack was supplying), and -6.4 A coincided with a 1839 W input
+  against a 1488 W load, a +351 W surplus that matches |52.9 V * -6.4 A| =
+  339 W (the pack was absorbing). A plain `multiply` therefore surfaced a
+  charging pack as discharging, which is what the energy card drew as a
+  discharge arrow, and `estimated_battery_discharge_energy_today` accumulated
+  that error (0.0022 kWh while charging). The new `multiply_negate` compute
+  mode keeps the magnitude and flips the sign, so `battery_power`, the
+  charge/discharge energy splits and the card agree with the physical flow.
+  Regression test asserts a raw +29.8 A surfaces as negative and a raw -6.4 A
+  as positive.
+
 - Relabel the `modbus_catalog` driver from "Device Catalog / Modbus (Aohai
   FSA...)" to "Device Catalog / Modbus (detected model)". The old label named
   one specific vendor family, which reads as "this driver is the Aohai one"

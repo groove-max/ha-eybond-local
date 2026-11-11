@@ -33,6 +33,11 @@ whole analysis.
 | Word **16646 = 6** is stable across all 37 cycles | single value, every cycle; it is the 6 kW power class |
 | The unit is a **48 V platform** | measured battery voltage at word 128 reads 54.6 V across the capture, not the ~105 V a 96 V platform would show; this is a measurement, not a setting |
 | Word **16650 = 552 is NOT a fingerprint** | it is one of the user-settable charge thresholds above; it read 55.2 V in both observations only because it was never edited, so it carries no model information |
+| Register 129 is signed and **discharge-positive** (canonical is charge-positive) | on the live unit 2026-11-11, +29.8 A coincided with AC input 0 W while the load drew 1400 W, i.e. the pack was supplying; -6.4 A coincided with 1839 W input against a 1488 W load, a +351 W surplus matching \|52.9 V x -6.4 A\| = 339 W, i.e. the pack was absorbing |
+
+- note: the same polarity is visible in the August capture, where register 129
+  reads 65532-65534 (two's complement -0.4 .. -0.2 A) on 5 of the 37 cycles
+  while the pack sits at 100 % SoC under a float charge, never positive.
 
 ## Deliberately not claimed
 
