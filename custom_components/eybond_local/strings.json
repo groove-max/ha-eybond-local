@@ -454,7 +454,8 @@
           "diagnostics": "Diagnostics and service tools",
           "strategy_transition_repair": "Finish the connection switch (recovery required)",
           "strategy_transition_activation_retry": "Load the verified connection",
-          "strategy_transition_cancel": "Cancel"
+          "strategy_transition_cancel": "Cancel",
+          "experimental_map": "Choose experimental inverter map"
         }
       },
       "inverter_display": {
@@ -789,6 +790,16 @@
           "strategy_transition_activation_retry": "Retry loading the integration",
           "strategy_transition_cancel": "Close"
         }
+      },
+      "experimental_map": {
+        "title": "Choose experimental inverter map",
+        "description": "This integration knows {count} inverter map(s) that carry confirmed telemetry but no non-settable identity word, so automatic detection cannot tell them apart from a sibling model. Such a map never binds on its own. Select the exact model below only if you know the inverter is that model; leave it empty to keep automatic detection.",
+        "data": {
+          "device_catalog_entry_key": "Experimental inverter map"
+        },
+        "data_description": {
+          "device_catalog_entry_key": "Only choose a map here when you are certain of the model. An empty choice keeps the normal automatic detection, which will not bind these experimental maps."
+        }
       }
     },
     "progress": {
@@ -798,7 +809,8 @@
     },
     "abort": {
       "already_configured": "That collector is already set up in another entry."
-    }
+    },
+    "experimental_map_none_option": "Automatic detection (do not bind an experimental map)"
   },
   "entity": {
     "select": {
@@ -1026,7 +1038,7 @@
         "modbus_smg": "SMG / Modbus",
         "srne_modbus": "SRNE / Modbus",
         "must_pv_ph18": "MUST PV/PH18",
-        "modbus_catalog": "Device Catalog / Modbus (Aohai FSA…)",
+        "modbus_catalog": "Device Catalog / Modbus (detected model)",
         "smartess_local": "SmartESS 0925 / Modbus",
         "marsrock_grid_tie": "MarsRock grid-tie (manual; read-only)",
         "pi30": "PI30",

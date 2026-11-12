@@ -58,7 +58,7 @@ DRIVER_DISPLAY_LABELS: dict[str, str] = {
     "modbus_smg": "SMG / Modbus",
     "srne_modbus": "SRNE / Modbus",
     "must_pv_ph18": "MUST PV/PH18",
-    "modbus_catalog": "Device Catalog / Modbus",
+    "modbus_catalog": "Device Catalog / Modbus (detected model)",
     "smartess_local": "SmartESS 0925 / Modbus",
     "pi30": "PI30",
     "eybond_g_ascii": "EyeBond G-ASCII",

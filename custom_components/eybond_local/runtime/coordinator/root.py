@@ -18,6 +18,7 @@ from ...const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_CONNECTION_MODE,
     CONF_DETECTED_DRIVER,
+    CONF_DEVICE_CATALOG_ENTRY,
     CONF_DRIVER_DETECTION_STRATEGY,
     CONF_DRIVER_HINT,
     CONF_POLL_INTERVAL,
@@ -137,9 +138,20 @@ class EybondLocalCoordinator(
         self._cloud_learning_mutation_fence = CloudLearningMutationFence(
             Path(hass.config.config_dir), connection_spec.collector_pn,
         )
+        # An experimental catalog entry may only bind when the user named it.
+        # Passing it here keeps that choice attached to the runtime's probes
+        # instead of widening the shared detection API with a label.
+        explicit_catalog_entry_key = str(
+            entry.options.get(
+                CONF_DEVICE_CATALOG_ENTRY,
+                entry.data.get(CONF_DEVICE_CATALOG_ENTRY, ""),
+            )
+            or ""
+        ).strip()
         self._runtime: RuntimeManager = create_runtime_manager(
             connection_spec,
             driver_hint=runtime_driver_key,
+            explicit_catalog_entry_key=explicit_catalog_entry_key,
             **({"inverter_probe_target": selected_probe_target(
                 entry.options[PROBE_ROUTE_OPTION], driver_intent,
             )} if PROBE_ROUTE_OPTION in entry.options else {}),

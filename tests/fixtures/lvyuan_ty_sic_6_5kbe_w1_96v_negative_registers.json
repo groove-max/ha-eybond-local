@@ -1,0 +1,35 @@
+{
+  "description": "Synthetic negative fixture: a 6 kW-class unit whose power-class word 16646 also reads 6, whose settable charge thresholds even read the same 500-600 V window the old fingerprint pinned, but whose measured battery platform is 96 V rather than 48 V. Used to prove the matcher refuses the model from the power class and the settable words alone.",
+  "identity": {
+    "16646": 6,
+    "16650": 552
+  },
+  "mains_start": 80,
+  "mains": [
+    2280,
+    857,
+    4999
+  ],
+  "output_start": 88,
+  "output": [
+    2290,
+    795,
+    4999,
+    1821,
+    1826,
+    280
+  ],
+  "battery_start": 128,
+  "battery": [
+    1056,
+    0
+  ],
+  "input_power_start": 33290,
+  "input_power": [
+    1863
+  ],
+  "energy_daily_a": 1416,
+  "energy_total_a": 8771,
+  "energy_daily_b": 1408,
+  "energy_total_b": 7050
+}

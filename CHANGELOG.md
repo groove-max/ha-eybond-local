@@ -13,6 +13,17 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Preserve the August rating-block words that actually differ in the LVYUAN
+  fixtures. The saved capture documented the 40/480/420/552/544 V thresholds in
+  prose but stored only `{16646: 6, 16650: 552}`, so the replay helper
+  zero-filled the drifted words the fixtures were meant to exercise. Both
+  positive fixtures now carry the full observed block, so a matcher that pins a
+  settable threshold fails the replay instead of passing on fabricated zeros.
+  Add a regression test asserting that word 33290 does not alias canonical grid
+  power: supplying only `input_active_power` must leave `grid_power` absent,
+  because magnitude and correlation in one passive period do not establish the
+  measurement direction in other modes.
+
 - Decode SMG-family 4200 battery type and automatic mains-output settings with
   their model enum tables in full config polls (#94). Keep selectors and mirror
   sensors consistent without changing shared labels, entity IDs or write policy;
@@ -34,6 +45,61 @@ RC1 below; newer model features remain here.
   Validated with offline log replay and synthetic TCP reconnects; the original
   on-device cause of the malformed stream is not yet established.
 
+- Show LVYUAN grid and energy readings in the main sensor section instead of
+  Diagnostics. The four raw counters carried `diagnostic: true`, and the
+  shared `grid_voltage`/`grid_frequency` aliases mark themselves diagnostic for
+  the driver families where they are only an internal cross-check. On a
+  grid-tied unit mains voltage, mains frequency and the counters are ordinary
+  telemetry, so they now sit next to the output values. The counters still
+  declare no `state_class`, so no energy statistics are derived from a series
+  whose input/output direction is unproven. Canonical aliases gained an
+  optional per-pack `diagnostic_override`; it applies only when the caller
+  names the pack, so the driver-wide surface and every other pack keep the
+  shared flag.
+
+- Anchor LVYUAN detection on stable identity words instead of the charge
+  thresholds. The rating block is NOT constant: words 16645 and 16648-16651
+  are user-settable charge limits and read 40/480/420/552/544 V in the August
+  2026 capture versus 30/488/480/552/534 V on the same unit in November 2026.
+  Pinning `fingerprint.layout_code` to `equals 480` therefore made a live unit
+  fail detection and surface `driver_unbound` with an empty driver. Detection
+  now binds word 16646 (6 kW class, constant across all captured cycles), and
+  the pack is explicitly provisional. Word 16650 is NOT identity evidence: it is
+  one of the user-settable charge thresholds above, and it read 55.2 V in both
+  observations only because it was never edited. Pinning it, even as a wide
+  500-600 V range, still made an automatic exact-model claim rest on a value the
+  installer can change, so it is no longer read, bound or anchored.
+  The catalog entry now declares `provisional_identity`: detection still binds
+  the read-only surface, but the resolution is downgraded to a `family` match at
+  `medium` confidence, the flag rides along in `catalog_detection`, and
+  `resolve_unique_persisted_model_surface` fails closed instead of reconstructing
+  a durable startup choice from an unproven identity. The only plausibility guard
+  left is the measured 48 V battery platform at word 128 (40-70 V window), which
+  is a measurement rather than a setting, so a synthetic 96 V unit of the same
+  6 kW class is refused. Regression tests assert the provisional label, the
+  absence of any exact/high claim, and the 96 V refusal; a harness confirms no
+  other device in the catalog changes its detection outcome.
+
+- Report LVYUAN battery power with the canonical sign (charge > 0). Register
+  129 is signed on the wire but uses the opposite polarity: DISCHARGE is
+  positive and charge is negative. Measured on the live unit on 2026-11-11,
+  +29.8 A coincided with the AC input dropping to 0 W while the load still drew
+  1400 W (the pack was supplying), and -6.4 A coincided with a 1839 W input
+  against a 1488 W load, a +351 W surplus that matches |52.9 V * -6.4 A| =
+  339 W (the pack was absorbing). A plain `multiply` therefore surfaced a
+  charging pack as discharging, which is what the energy card drew as a
+  discharge arrow, and `estimated_battery_discharge_energy_today` accumulated
+  that error (0.0022 kWh while charging). The new `multiply_negate` compute
+  mode keeps the magnitude and flips the sign, so `battery_power`, the
+  charge/discharge energy splits and the card agree with the physical flow.
+  Regression test asserts a raw +29.8 A surfaces as negative and a raw -6.4 A
+  as positive.
+
+- Relabel the `modbus_catalog` driver from "Device Catalog / Modbus (Aohai
+  FSA...)" to "Device Catalog / Modbus (detected model)". The old label named
+  one specific vendor family, which reads as "this driver is the Aohai one"
+  and misleads users whose model is detected automatically. Updated in
+  `strings.json`, all three translations and the runtime fallback.
 - Expire cached inverter measurements after a complete read outage lasting
   three poll intervals (at least 60 seconds), independently of the collector's
   TCP/heartbeat status. Preserve short misses and healthy DELTA/slow-field
@@ -72,6 +138,49 @@ RC1 below; newer model features remain here.
 
 ### Added
 
+- Add the LVYUAN TY-SIC-6.5KBE-W1 read-only telemetry pack behind an EyeBond
+  dongle (6.5 kW / 48 V hybrid, Modbus RTU FC3 slave 1 at 9600 8N1 through the
+  transparent tunnel). The register map was recovered from a passive btsnoop
+  capture of the vendor app: 1068 CRC-valid exchanges, 125 distinct registers,
+  no write function codes present, so the pack exposes monitoring only. The
+  entities are cross-checked against the ValueCloud snapshot for the same
+  hardware, and the count grows to seventeen in the follow-up entries below.
+  Adds the matching model-catalog entry with two private
+  sources, the support-capture policy and the modbus_catalog probe action that
+  reads the rating block for detection.
+
+  Seventeen runtime entities are now exposed, all taken from blocks the vendor
+  app already polls, so enabling them adds no traffic to the dongle: mains
+  voltage/current/frequency, output voltage/current/frequency, output active
+  and apparent power, load percent, battery voltage/current/SoC, input active
+  power, and four energy counters. Register 33290 is the mains/input active
+  power: across the capture it averages 1842 W against 1825 W at the output
+  register, a 99.1% ratio consistent with conversion loss, and it leads the
+  output reading by one cycle (+0.28 lag-1 correlation). Counters at
+  448/454/546/552 are hundredths of a kWh: each advanced 27 counts (0.27 kWh)
+  over 546 s against 0.277 kWh integrated from measured output power, a 2.5%
+  discrepancy. They form two source pairs, (448, 454) and (546, 552): within
+  a pair both counters advance on the same 94% of cycles, while across pairs
+  agreement drops to 78-89%. The low member of each pair is the daily counter
+  and the high member the lifetime total, because 448/546 read 14.x kWh and
+  fell between August and November, whereas 454/552 read several hundred kWh
+  and only grow. Which source is input and which is output is not provable
+  from a passive capture whose increments are nearly simultaneous, so the
+  entities are named Daily/Total Energy Counter A and B rather than claiming a
+  direction. Because the direction and word width are not proven, they carry no
+  state_class at all and are marked diagnostic: Home Assistant then keeps them
+  as readable raw values instead of creating energy statistics that would assert
+  a monotonic series. Register 33290 is likewise not published as canonical grid
+  power, since a passive capture cannot establish its sign or whether it is grid
+  import, export or a bus figure.
+  Adds canonical mappings for grid voltage/frequency/power, output power, load
+  and battery power/percent.
+
+- Add `tools/valuecloud_probe.py`, a read-only ValueCloud (SmartValue) probe
+  that prints the identity fields the local integration needs (devcode /
+  devaddr) plus the normalized cloud readings for one collector PN. It logs
+  in and reads only; it never writes to the collector, reroutes it or sends a
+  control command to the inverter.
 - Add explicit `wire raw_pi30` to the existing diagnostic command tool on
   framed and AT collector sockets. Keep the normal driver, wire selection,
   endpoint and UART unchanged; validate bounded CRC-protected replies on the
@@ -128,6 +237,39 @@ RC1 below; newer model features remain here.
   or change normal polling; physical-device verification is still needed.
 
 ### Changed
+
+- Require an explicit choice before an experimental inverter map may bind.
+  A catalog device can now declare explicit_selection_only, and such a
+  device is filtered out of every automatic sweep at the single point where a
+  provisional descriptor becomes bindable, so Auto reports unresolved instead
+  of adopting a map on plausible evidence. The LVYUAN TY-SIC-6.5KBE-W1 entry
+  declares it: its rating-block words identify the model family but cannot
+  separate it from a sibling, and the maintainer reproduced Auto binding it on
+  zero-filled identity words and then failing on the next read. The choice is
+  carried to the detection pass out of band, so the shared detection signature
+  and the driver registry are unchanged, and naming the entry is what the user
+  does in the new Experimental map options step; leaving it automatic removes
+  the stored key. Startup restores the bind from that stored choice alone, and
+  an empty or unknown key stays unresolved. Abandoning a sweep-only label keeps
+  the boundary enforced rather than described: the flag is fail-closed in the
+  resolver, and the replay suite pins the negative case with Auto refusing the
+  minimal-evidence fixture and the positive case through the explicit path.
+  Four further routes into the same map are closed, because each could
+  bind it with no user statement at all: a persisted snapshot no longer
+  rebuilds the bind from its surface key, since that snapshot records the
+  automatic match the boundary refuses and a restart would otherwise
+  reinstate it on every boot; switching the driver intent clears a stored
+  catalog entry instead of leaving a pair startup rejects and the UI no
+  longer shows; and the options dropdown gains an explicit automatic value,
+  because a select has no empty value and the old blank option could never
+  be submitted. The choice also scopes the whole detection pass, not one sweep:
+  when the first sweep matches nothing, the full-scan follower
+  retries at other UART speeds, and that retry is a second detection that
+  could otherwise bind the map without the user naming it. The catalog
+  notes and the LVYUAN evidence document describe
+  explicit-selection-only rather than a medium-confidence family match, and
+  a strings.json parity test now fails when a key exists only in
+  translations/en.json.
 
 - Support explicit model-scoped `preset_removals` without changing the additive
   meaning of an empty inherited list. Anenji #88 equalization controls become

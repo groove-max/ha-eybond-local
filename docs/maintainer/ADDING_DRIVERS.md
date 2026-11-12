@@ -513,7 +513,8 @@ confirmed, do not turn them into controls or poll them continuously. A register
 schema can instead declare an optional `support_read_plan` with `source`,
 `purpose`, `timeout_seconds`, and `blocks` (each with `key`, `start`, `count`).
 The generic Modbus catalog driver executes it only while creating a Support
-Archive. See `hopewind_0237/base.json` for a concrete example.
+Archive. See `lvyuan_ty_sic_6_5kbe_w1/base.json` for a concrete example; `hopewind_0237/base.json`
+declares none, so inherited plans can legitimately be absent.
 
 This plan supports FC03 only, at most eight blocks, sixteen words per block,
 sixty-four words total and fifteen seconds for the whole plan. An explicit

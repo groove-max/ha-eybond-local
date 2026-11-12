@@ -1,6 +1,7 @@
 """HubDetectionMixin ownership slice for the runtime hub."""
 
 from __future__ import annotations
+from functools import wraps
 
 from .common import (
     DRIVER_DETECTION_FULL_SCAN,
@@ -24,6 +25,34 @@ from .common import (
     monotonic,
     resolve_catalog_driver_candidate_overlap,
 )
+from ...metadata.explicit_selection import explicit_catalog_entry
+
+
+def _scoped_to_explicit_catalog_entry(func):
+    """Run one detection pass with the user's explicit map choice in scope.
+
+    The choice has to cover the WHOLE pass, not only the primary sweep. When
+    the first sweep matches nothing, the full-scan follower retries at other
+    UART speeds, and that retry is a second, independent detection that could
+    otherwise bind an experimental map the user never named.
+
+    A decorator rather than a wrapper method on purpose: this mixin's method
+    inventory is pinned by the hub composition boundary test, and a boundary
+    fix is not a reason to grow the hub's surface.
+    """
+
+    @wraps(func)
+    async def _scoped(self, *args, **kwargs):
+        selection = str(
+            getattr(self, "_explicit_catalog_entry_key", "") or ""
+        ).strip()
+        if selection:
+            with explicit_catalog_entry(selection):
+                return await func(self, *args, **kwargs)
+        return await func(self, *args, **kwargs)
+
+    _scoped.__eybond_explicit_scope__ = True
+    return _scoped
 
 
 async def _async_capture_task_outcome(task: asyncio.Task) -> tuple[bool, object]:
@@ -241,6 +270,7 @@ class HubDetectionMixin:
             if token is not None:
                 COLLECTOR_ENDPOINT_OPERATION_AUTHORITY.release(entry_id, token)
 
+    @_scoped_to_explicit_catalog_entry
     async def _async_detect_driver(self) -> str:
         detection_generation = self._owned_session_generation()
         existing_driver_key = str(
@@ -266,21 +296,22 @@ class HubDetectionMixin:
             detection_hint == DRIVER_HINT_AUTO
             and self._driver_detection_strategy == DRIVER_DETECTION_FULL_SCAN
         )
-        detection_task = asyncio.create_task(
-            (
-                async_detect_inverter_candidates(
+        async def _detect():
+            if detect_all_candidates:
+                return await async_detect_inverter_candidates(
                     self._link_manager.transport,
                     driver_hint=DRIVER_HINT_AUTO,
                 )
-                if detect_all_candidates
-                else async_detect_inverter(
-                    self._link_manager.transport,
-                    driver_hint=detection_hint,
-                    **({"probe_target": self._inverter_probe_target}
-                       if getattr(self, "_inverter_probe_target", None) is not None
-                       and detection_hint == self._driver_hint else {}),
-                )
-            ),
+            return await async_detect_inverter(
+                self._link_manager.transport,
+                driver_hint=detection_hint,
+                **({"probe_target": self._inverter_probe_target}
+                   if getattr(self, "_inverter_probe_target", None) is not None
+                   and detection_hint == self._driver_hint else {}),
+            )
+
+        detection_task = asyncio.create_task(
+            _detect(),
             name="eybond_inverter_detection",
         )
         detection_outcome_task = asyncio.create_task(

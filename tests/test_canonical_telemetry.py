@@ -708,6 +708,42 @@ class CanonicalTelemetryTests(unittest.TestCase):
         self.assertEqual(values["grid_to_home_power"], 0.0)
         self.assertEqual(values["grid_to_battery_power"], 0.0)
 
+    def test_pack_diagnostic_override_stays_scoped_to_its_pack(self) -> None:
+        """A presentation override must never leak onto other surfaces.
+
+        The LVYUAN pack promotes grid voltage and frequency out of Diagnostics
+        because a grid-tied unit reports them as first-class telemetry. Those
+        are shared canonical descriptions, so the override is only allowed
+        when the caller names the pack. The driver-wide surface and the other
+        pi30 family keep the shared diagnostic flag.
+        """
+
+        def grid_flags(variant_key: str | None, driver_key: str = "modbus_catalog"):
+            return {
+                description.key: description.diagnostic
+                for description in canonical_measurements_for_driver(
+                    driver_key, variant_key=variant_key
+                )
+                if description.key in {"grid_voltage", "grid_frequency"}
+            }
+
+        self.assertEqual(
+            grid_flags("lvyuan_ty_sic_6_5kbe_w1"),
+            {"grid_voltage": False, "grid_frequency": False},
+        )
+        # Naming no pack leaves the shared surface untouched.
+        self.assertEqual(
+            grid_flags(None),
+            {"grid_voltage": True, "grid_frequency": True},
+        )
+        # A different pack served by the same driver is unaffected.
+        self.assertNotIn("grid_voltage", grid_flags("growatt_spf"))
+        # And so is another driver family.
+        self.assertEqual(
+            grid_flags(None, driver_key="pi30"),
+            {"grid_voltage": True, "grid_frequency": True},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
