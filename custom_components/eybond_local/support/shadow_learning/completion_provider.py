@@ -9,6 +9,8 @@ from __future__ import annotations
 from hashlib import sha256
 from urllib.parse import parse_qs
 
+from ...collector.protocol import build_collector_request
+from ...payload.modbus import crc16_modbus
 from ...smartess_cloud import ApiEnvelope, SmartEssActionRejectedError
 from ...dessmonitor_cloud import DessMonitorApiEnvelope, build_device_control_action
 
@@ -35,7 +37,12 @@ class WireEchoProvider:
         if type(dat) is not dict or type(dat.get("status")) is not int or dat["status"] != 0:
             raise ValueError("completion_api_status")
         echo = dat.get("dat")
-        if type(echo) is not str or len(echo) > 2080 or bytes.fromhex(echo) != response:
+        if type(echo) is not str or len(echo) > 2080:
+            raise ValueError("completion_api_echo_mismatch")
+        return self._wire_echo_receipt(bytes.fromhex(echo), response)
+
+    def _wire_echo_receipt(self, echo: bytes, response: bytes):
+        if echo != response:
             raise ValueError("completion_api_echo_mismatch")
         return {"kind": "wire_echo", "response_hex": response.hex()}
 
@@ -57,13 +64,33 @@ class DessMonitorCompletionProvider(WireEchoProvider):
 
 class SmartEssCompletionProvider(WireEchoProvider):
     @staticmethod
+    def _wrapped_modbus_refusal(echo: bytes, response: bytes):
+        # Issue #94: SmartESS returned a synthetic FC4 envelope around our
+        # bare RTU refusal (90 observed FC16 exchanges). This is API framing,
+        # NOT the collector route/TID. Accept only this exact wrapper and a
+        # complete Modbus write refusal; never strip an arbitrary header or
+        # accept a suffix match. The ledger still validates the actual route,
+        # request/response pair, single-flight epoch and completed HTTP call.
+        if (len(response) != 5 or not 1 <= response[0] <= 247
+                or response[1] not in (0x86, 0x90) or response[2] != 1
+                or crc16_modbus(response[:-2]) != int.from_bytes(response[-2:], "little")
+                or echo != build_collector_request(
+                    0, response, devcode=1, collector_addr=255, fcode=4)):
+            raise ValueError("completion_api_wrapper_mismatch")
+        return {"kind": "smartess_fc4_refusal_echo", "response_hex": response.hex(),
+                "api_response_hex": echo.hex()}
+
+    def _wire_echo_receipt(self, echo: bytes, response: bytes):
+        if echo == response:
+            return super()._wire_echo_receipt(echo, response)
+        return self._wrapped_modbus_refusal(echo, response)
+
+    @staticmethod
     def _readonly_receipt(response):
         # Qualified on SMG6200's bare FC16 exchange: cloud parses our Modbus
         # exception instead of echoing bytes. Generic ERR_FAIL/timeout/acceptance
         # cannot stand in for this exact device-refusal result. The common wire
         # validator separately binds this reply to the single captured request.
-        from ...payload.modbus import crc16_modbus
-
         if (len(response) != 5 or not 1 <= response[0] <= 247
                 or response[1:3] != b"\x90\x01"
                 or crc16_modbus(response[:-2]) != int.from_bytes(response[-2:], "little")):
@@ -78,6 +105,12 @@ class SmartEssCompletionProvider(WireEchoProvider):
         return super().terminal_receipt(envelope, response)
 
     def validate_receipt(self, receipt, response):
+        if type(receipt) is dict and receipt.get("kind") == "smartess_fc4_refusal_echo":
+            echo = receipt.get("api_response_hex")
+            if (type(echo) is not str or len(echo) != 26
+                    or receipt != self._wrapped_modbus_refusal(bytes.fromhex(echo), response)):
+                raise ValueError("completion_terminal_receipt_invalid")
+            return
         if type(receipt) is dict and receipt.get("kind") == "device_refusal":
             if receipt != self._readonly_receipt(response):
                 raise ValueError("completion_terminal_receipt_invalid")

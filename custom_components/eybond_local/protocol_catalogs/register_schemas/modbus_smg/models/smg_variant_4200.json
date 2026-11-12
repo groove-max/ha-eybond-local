@@ -78,6 +78,18 @@
     }
   ],
   "spec_sets": {
+    "config": [
+      {
+        "key": "battery_type",
+        "register": 322,
+        "enum_table": "battery_type"
+      },
+      {
+        "key": "automatic_mains_output_enabled",
+        "register": 338,
+        "enum_table": "automatic_mains_output_enabled"
+      }
+    ],
     "runtime": [
       {
         "key": "battery_type",
