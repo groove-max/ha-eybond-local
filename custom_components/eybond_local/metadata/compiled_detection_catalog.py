@@ -367,6 +367,32 @@ def resolve_unique_persisted_model_surface(
     return descriptor, surface
 
 
+def catalog_surface_may_bind_automatically(
+    catalog: CompiledDetectionCatalog,
+    surface_key: str,
+) -> bool:
+    """Whether a persisted snapshot surface may still bind without a choice.
+
+    A snapshot records what detection matched, not what the user asked for.  Once
+    an entry that owns the surface becomes explicit-selection-only, that record
+    is exactly the automatic adoption the boundary refuses, so the snapshot must
+    not be replayed into a binding.  Unknown surfaces and surfaces shared with
+    both kinds of entry fail closed.
+    """
+
+    normalized = str(surface_key or "").strip()
+    if not normalized or normalized not in catalog.surfaces:
+        return False
+    owners = tuple(
+        catalog.devices[key]
+        for key in catalog.devices_by_surface.get(normalized, ())
+        if key in catalog.devices
+    )
+    if not owners:
+        return False
+    return not any(owner.explicit_selection_only for owner in owners)
+
+
 def resolve_explicitly_selected_model_surface(
     entry_key: str,
     *,

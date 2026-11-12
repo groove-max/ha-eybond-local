@@ -228,6 +228,11 @@ class RuntimeOptionsMixin:
                 data = dict(self._config_entry.data)
                 options = dict(self._config_entry.options)
                 options[CONF_DRIVER_HINT] = selected
+                # An explicit experimental map belongs to one driver. Keeping it
+                # after a driver switch would make startup reject the pair and
+                # leave the inverter unbound for a choice the user can no longer
+                # see, so the switch clears it.
+                options.pop(CONF_DEVICE_CATALOG_ENTRY, None)
                 _clear_runtime_inverter_facts(data)
                 self.hass.config_entries.async_update_entry(
                     self._config_entry,

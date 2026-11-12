@@ -46,9 +46,13 @@ An earlier revision of the device-catalog entry pinned the settable word
 automatic **exact** model match at **high** confidence. That was wrong twice
 over: the word is user-editable, and a value that happens to be unchanged
 between two reads is not evidence of stability. The entry now declares
-`provisional_identity`, resolves as a `family` match at `medium` confidence, and
-`resolve_unique_persisted_model_surface` refuses to reconstruct a durable
-startup choice from it. The 48 V platform check at word 128 is a plausibility
+`provisional_identity` and, because a lower confidence label is not the same as
+refusing the match, also `explicit_selection_only`: automatic detection filters
+it out at every confidence level, `resolve_unique_persisted_model_surface`
+refuses to reconstruct a durable startup choice from it, and the pack binds only
+after the user names this exact catalog entry in the options flow. A negative
+Auto regression pins that the minimal evidence (zeroed identity words plus the
+shared power class) selects nothing on its own. The 48 V platform check at word 128 is a plausibility
 guard against a 96 V unit of the same power class, not a model discriminator.
 
 ## Inferred, not proven
@@ -101,9 +105,10 @@ These are the claims that must not harden into assertions.
   proves the matcher refuses a same-power-class unit. No anchor references a
   user-settable threshold: 16645 and 16648-16651 are never pinned, and 16650
   appears only in the reasoning prose. Because word 16646 is shared by every
-  6 kW unit of this protocol, the entry declares `provisional_identity`: it
-  resolves as a family match at medium confidence and can never become an
-  automatic exact/high match.
+  6 kW unit of this protocol, the entry declares `provisional_identity` and
+  `explicit_selection_only`: Auto never binds it, so no automatic path — with or
+  without a confidence label — can adopt the map without the user's explicit
+  choice.
 - Adding the pack creates Home Assistant poll cycles on top of the vendor app's
   own traffic. The registers are already polled, so no new dongle request shape
   is introduced, but HA does read them independently.

@@ -23,6 +23,7 @@ from ...const import (
 )
 from ...drivers.registry import get_driver
 from ...metadata.compiled_detection_catalog import (
+    catalog_surface_may_bind_automatically,
     load_compiled_detection_catalog,
     resolve_explicitly_selected_model_surface,
     resolve_unique_persisted_model_surface,
@@ -300,7 +301,17 @@ class CoordinatorStartupIdentityMixin:
         elif getattr(snapshot, "is_valid", False) and not profile_name:
             # Schema-only snapshots pass an explicit current read-only catalog
             # check. Do not replace this choice with driver-default controls.
-            catalog_surface = load_compiled_detection_catalog().surfaces[snapshot.surface_key]
+            catalog = load_compiled_detection_catalog()
+            if not catalog_surface_may_bind_automatically(
+                catalog, snapshot.surface_key
+            ):
+                # A snapshot written before an entry became explicit-selection
+                # only is not a user choice, it is the record of an automatic
+                # match this boundary now refuses. Reconstructing the binding
+                # from it would restore exactly the automatic adoption the
+                # explicit choice is meant to prevent.
+                return None
+            catalog_surface = catalog.surfaces[snapshot.surface_key]
             if driver_key not in {"", DRIVER_HINT_AUTO, catalog_surface.driver_key}:
                 return None
             driver_key = catalog_surface.driver_key

@@ -182,5 +182,63 @@ class ExplicitlySelectedStartupTests(unittest.TestCase):
         self.assertIsNone(inverter)
 
 
+class PersistedSurfaceGateTests(unittest.TestCase):
+    """A snapshot is evidence of a match, never a user choice."""
+
+    def _catalog(self, *, explicit: bool):
+        return types.SimpleNamespace(
+            surfaces={"test_surface": object()},
+            devices_by_surface={"test_surface": ("test_entry",)},
+            devices={
+                "test_entry": types.SimpleNamespace(
+                    explicit_selection_only=explicit,
+                ),
+            },
+        )
+
+    def _may_bind(self, catalog, surface_key):
+        from custom_components.eybond_local.metadata import (
+            compiled_detection_catalog as module,
+        )
+        return module.catalog_surface_may_bind_automatically(
+            catalog, surface_key
+        )
+
+    def test_snapshot_of_an_explicit_only_entry_cannot_bind(self):
+        self.assertFalse(
+            self._may_bind(self._catalog(explicit=True), "test_surface")
+        )
+
+    def test_snapshot_of_an_automatic_entry_still_binds(self):
+        self.assertTrue(
+            self._may_bind(self._catalog(explicit=False), "test_surface")
+        )
+
+    def test_unknown_or_empty_surface_fails_closed(self):
+        catalog = self._catalog(explicit=False)
+        self.assertFalse(self._may_bind(catalog, ""))
+        self.assertFalse(self._may_bind(catalog, "not_a_surface"))
+
+    def test_surface_without_owner_fails_closed(self):
+        catalog = self._catalog(explicit=False)
+        catalog.devices_by_surface = {}
+        self.assertFalse(self._may_bind(catalog, "test_surface"))
+
+    def test_real_catalog_blocks_only_the_experimental_surface(self):
+        from custom_components.eybond_local.metadata import (
+            compiled_detection_catalog as module,
+        )
+        catalog = module.load_compiled_detection_catalog()
+        blocked = {
+            key
+            for key in catalog.surfaces
+            if not module.catalog_surface_may_bind_automatically(
+                catalog, key
+            )
+        }
+        self.assertEqual(
+            blocked, {"lvyuan_ty_sic_6_5kbe_w1_read_only"}
+        )
+
 if __name__ == "__main__":
     unittest.main()

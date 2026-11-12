@@ -346,5 +346,70 @@ class RecoveryFailureLocalizationTests(unittest.TestCase):
         )
 
 
+class StringsJsonParityTests(unittest.TestCase):
+    """strings.json must carry every English key the runtime can render.
+
+    Home Assistant reads strings.json as the source bundle, while the shipped
+    translations/*.json are generated from it.  A key that exists only in
+    translations/en.json therefore works in development and silently falls back
+    to the hardcoded default everywhere else.  Nothing else in the suite
+    compares the two key sets, so this pins the parity directly.
+    """
+
+    def _flatten(self, payload: dict, prefix: str = "") -> dict[str, object]:
+        flat: dict[str, object] = {}
+        for key, value in payload.items():
+            path = f"{prefix}/{key}" if prefix else key
+            if isinstance(value, dict):
+                flat.update(self._flatten(value, path))
+            else:
+                flat[path] = value
+        return flat
+
+    def test_strings_json_has_every_english_key(self) -> None:
+        strings = self._flatten(
+            json.loads(
+                (COMPONENT / "strings.json").read_text(encoding="utf-8")
+            )
+        )
+        english = self._flatten(
+            json.loads(
+                (COMPONENT / "translations" / "en.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        )
+        missing = sorted(set(english) - set(strings))
+        self.assertEqual(
+            missing,
+            [],
+            f"keys present in translations/en.json but absent from "
+            f"strings.json: {missing}",
+        )
+
+    def test_every_non_english_bundle_defines_the_same_paths(self) -> None:
+        reference = set(
+            self._flatten(
+                json.loads(
+                    (COMPONENT / "strings.json").read_text(encoding="utf-8")
+                )
+            )
+        )
+        for path in sorted((COMPONENT / "translations").glob("*.json")):
+            with self.subTest(bundle=path.name):
+                localized = set(
+                    self._flatten(
+                        json.loads(path.read_text(encoding="utf-8"))
+                    )
+                )
+                missing = sorted(reference - localized)
+                self.assertEqual(
+                    missing,
+                    [],
+                    f"{path.name} is missing keys from strings.json: "
+                    f"{missing}",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
