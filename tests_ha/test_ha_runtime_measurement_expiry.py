@@ -1,11 +1,13 @@
 """Actual HA entity availability/energy after an inverter-only read outage."""
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from homeassistant.helpers import entity_registry as er
 
+from custom_components.eybond_local import sensor as sensor_module
 from custom_components.eybond_local.const import DOMAIN
 from custom_components.eybond_local.derived_energy import (
     DerivedEnergyCycleDescription, DerivedEnergyDescription, DerivedEnergyVariant,
@@ -76,8 +78,9 @@ async def test_live_collector_does_not_keep_stale_inverter_entities_available(ha
 
 
 @pytest.mark.parametrize("cycle", [None, "daily", "monthly"])
+@pytest.mark.parametrize("utc_offset", [-8, 0, 14])
 async def test_expired_power_resets_energy_sample_without_erasing_total(
-    expiring_runtime, monkeypatch, cycle,
+    expiring_runtime, monkeypatch, cycle, utc_offset,
 ):
     entry, hub, now, reading = expiring_runtime
     description = DerivedEnergyDescription(
@@ -95,15 +98,29 @@ async def test_expired_power_resets_energy_sample_without_erasing_total(
             ), description,
         )
     monkeypatch.setattr(entity, "async_write_ha_state", Mock())
-    timestamp = datetime.now(timezone.utc)
-    entity._accumulator.accumulate(1600, timestamp - timedelta(seconds=10))
+    # Cycle sensors use HA-local calendar periods; cumulative energy uses UTC.
+    # Seeding the cycle accumulator with UTC mixed two dates near midnight
+    # (and two months on the first day), producing a legitimate period reset.
+    # Keep both clocks deterministic and seed in the sensor's own time zone.
+    timestamp = datetime(2026, 11, 1, 0, 7, tzinfo=timezone.utc)
+    clock = [timestamp]
+    local_zone = timezone(timedelta(hours=utc_offset))
+    monkeypatch.setattr(
+        sensor_module, "datetime", Mock(wraps=datetime, now=lambda tz: clock[0].astimezone(tz)),
+    )
+    monkeypatch.setattr(
+        sensor_module, "dt_util", SimpleNamespace(now=lambda: clock[0].astimezone(local_zone)),
+    )
+    sample_time = timestamp if cycle is None else timestamp.astimezone(local_zone)
+    entity._accumulator.accumulate(1600, sample_time - timedelta(seconds=10))
     entity._handle_coordinator_update()
     assert entity.available
     total = entity.native_value
-    assert total > 0
+    assert total == 0.0044
 
     reading.side_effect = ModbusError("request_timeout")
     now[0] = 160
+    clock[0] = timestamp + timedelta(seconds=60)
     await entry.runtime_data.async_refresh()
     entity._handle_coordinator_update()
     assert not entity.available
@@ -112,6 +129,7 @@ async def test_expired_power_resets_energy_sample_without_erasing_total(
 
     reading.side_effect = None
     now[0] = 18100
+    clock[0] = timestamp + timedelta(hours=5)
     await entry.runtime_data.async_refresh()
     entity._handle_coordinator_update()
     assert entity.available

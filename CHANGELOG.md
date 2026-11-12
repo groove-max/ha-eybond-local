@@ -24,6 +24,18 @@ RC1 below; newer model features remain here.
   because magnitude and correlation in one passive period do not establish the
   measurement direction in other modes.
 
+- Decode SMG-family 4200 battery type and automatic mains-output settings with
+  their model enum tables in full config polls (#94). Keep selectors and mirror
+  sensors consistent without changing shared labels, entity IDs or write policy;
+  learned schemas inheriting the built-in model receive the same correction.
+- Recognize SmartESS's exact synthetic FC4 API envelope around a bare Modbus
+  write-refusal response during protected learning (#94). Preserve the original
+  API and wire evidence in the completion receipt, require the existing complete
+  live exchange and route shutdown, and reject malformed or mismatched wrappers.
+  Offline replay covers the owner's 90 captured writes; it does not release a
+  historical hold, prove physical write execution, or authorize importing a
+  support archive as recovery evidence.
+
 - Retire desynchronized mixed AT/binary collector sessions on invalid headers
   or incomplete binary frames instead of repeatedly discarding eight-byte
   fragments and losing subsequent valid responses (#89). Fail pending requests

@@ -15,7 +15,7 @@ from test_ha_config_flow import collector_entry
 @pytest.mark.parametrize("source,codec,framed", [
     (source, codec, framed) for source in ("smartess", "dessmonitor")
     for codec in ("modbus_rtu", "pi30_ascii", "eybond_g_ascii") for framed in (True, False)
-] + [("smartess_refusal", "modbus_rtu", False)])
+] + [("smartess_refusal", "modbus_rtu", False), ("smartess_wrapper", "modbus_rtu", False)])
 async def test_completed_stop_restores_only_fully_proven_study(dispatch_context, monkeypatch, fault, source, codec, framed):
     from tests.test_shadow_learning_completion_adapters import exchange
     from custom_components.eybond_local.support.shadow_learning.completion import CloudCommandCompletion
@@ -23,7 +23,8 @@ async def test_completed_stop_restores_only_fully_proven_study(dispatch_context,
 
     from custom_components.eybond_local.smartess_cloud import SmartEssActionRejectedError
     device_refusal = source == "smartess_refusal"
-    if device_refusal:
+    wrapped_refusal = source == "smartess_wrapper"
+    if device_refusal or wrapped_refusal:
         source = "smartess"
     ctx = dispatch_context; c = ctx.coordinator
     ctx.state = replace(ctx.state, cloud_source=source)
@@ -34,6 +35,10 @@ async def test_completed_stop_restores_only_fully_proven_study(dispatch_context,
         study_id=ctx.owner.removeprefix("shadow_learning:"), collector_pn=ctx.pn)
     monkeypatch.setattr(c._runtime, "shadow_learning_completion", lambda: book, raising=False)
     arguments, request, reply, envelope, carrier = exchange(source, codec, framed, pn=ctx.pn)
+    if wrapped_refusal:
+        from custom_components.eybond_local.collector.protocol import build_collector_request
+        echo = build_collector_request(0, reply, devcode=1, collector_addr=255, fcode=4)
+        envelope = replace(envelope, dat={"status": 0, "dat": echo.hex()})
     if device_refusal:
         from custom_components.eybond_local.payload.modbus import build_write_multiple_request
         from custom_components.eybond_local.support.shadow_learning.protocol import ModbusRtuShadowLearningAdapter

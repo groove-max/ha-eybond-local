@@ -1,4 +1,4 @@
-"""All 146 saved PI30-local/Modbus-cloud commands through proxy and HA stop.
+"""Saved framed and raw Modbus commands through proxy and HA stop.
 
 Only the provider, collector peer and endpoint IO are simulated. Never use this
 offline receipt to release an actual collector's historical protection hold.
@@ -15,15 +15,20 @@ from test_ha_config_flow import collector_entry
 
 
 @pytest.mark.parametrize("last_echo_missing", [False, True])
-async def test_recorded_146_command_proxy_and_retirement(dispatch_context, monkeypatch, tmp_path, socket_enabled, last_echo_missing):
+@pytest.mark.parametrize("fixture_name", [
+    "smartess_0925_recorded_learning.json",
+    "smartess_4200_recorded_wrapped_refusals.json",
+])
+async def test_recorded_command_proxy_and_retirement(dispatch_context, monkeypatch, tmp_path, socket_enabled, last_echo_missing, fixture_name):
     from custom_components.eybond_local.collector.protocol import build_collector_request, decode_header
     from custom_components.eybond_local.smartess_cloud import ApiEnvelope, build_device_control_action
     from custom_components.eybond_local.support.shadow_learning.backend import ShadowLearningSeed
     from custom_components.eybond_local.support.shadow_learning.proxy import InProcessFailClosedShadowProxyHandler
     from custom_components.eybond_local.support.shadow_learning.completion_store import CompletedLearningStore
 
-    data = json.loads((Path(__file__).parents[1]/"tests/fixtures/smartess_0925_recorded_learning.json").read_text())
+    data = json.loads((Path(__file__).parents[1]/"tests/fixtures"/fixture_name).read_text())
     rows = [dict(zip(data["attempt_columns"], row, strict=True)) for row in data["attempts"]]
+    raw_carrier = data.get("carrier") == "modbus"
     ctx = dispatch_context
     c = ctx.coordinator
     await c._async_save_shadow_learning_session_state(ctx.state)
@@ -50,8 +55,12 @@ async def test_recorded_146_command_proxy_and_retirement(dispatch_context, monke
                 item, future = job
                 expected = bytes.fromhex(item["api_response_frame_hex"])
                 header = decode_header(expected)
-                request = build_collector_request(header.tid, bytes.fromhex(item["write_payload_hex"]),
-                    devcode=header.devcode, collector_addr=header.devaddr, fcode=4)
+                request = bytes.fromhex(item["write_payload_hex"])
+                if raw_carrier:
+                    expected = expected[8:]  # fixture API envelope, not collector wire
+                else:
+                    request = build_collector_request(header.tid, request,
+                        devcode=header.devcode, collector_addr=header.devaddr, fcode=4)
                 writer.write(request)
                 await writer.drain()
                 response = await reader.readexactly(len(expected))
@@ -105,14 +114,15 @@ async def test_recorded_146_command_proxy_and_retirement(dispatch_context, monke
             def http(**kwargs):
                 assert kwargs["action"] == action
                 response = asyncio.run_coroutine_threadsafe(send(item), loop).result(timeout=5)
-                dat = {"dat": response.hex(" "), "status": 0}
+                echo = item["api_response_frame_hex"] if raw_carrier else response.hex(" ")
+                dat = {"dat": echo, "status": 0}
                 if last_echo_missing and index == len(rows)-1:
                     dat.pop("dat")
                 return ApiEnvelope(err=0, desc="ERR_NONE", dat=dat, raw={})
 
             await c.async_dispatch_shadow_learning_cloud_action(http,
                 collector_pn=ctx.pn, route_owner_id=ctx.owner, action=action)
-        assert len(handler.backend.write_observations) == 146
+        assert len(handler.backend.write_observations) == len(rows)
         assert handler.backend._register_bank == bank
         assert await c._async_cloud_learning_hold_reason()
         result = await c.async_stop_shadow_learning(request_refresh=False)
@@ -121,17 +131,21 @@ async def test_recorded_146_command_proxy_and_retirement(dispatch_context, monke
         assert not cloud_errors
         if last_echo_missing:
             assert result["status"] == "cloud_held"
-            assert len(handler.completion.commands) == 145
+            assert len(handler.completion.commands) == len(rows)-1
             assert await c._async_cloud_learning_hold_reason()
             restore.assert_not_awaited()
         else:
-            assert len(handler.completion.completed_commands()) == 146
+            assert len(handler.completion.completed_commands()) == len(rows)
             assert not await c._async_cloud_learning_hold_reason()
             restore.assert_awaited_once_with(ctx.state.original_endpoint)
             store = CompletedLearningStore(Path(c.hass.config.config_dir))
             receipt = json.loads(next((store._root/"completed_receipts").glob("*.json")).read_text())
-            assert len(receipt["commands"]) == 146
+            assert len(receipt["commands"]) == len(rows)
             assert all(command["protocol"] == "modbus_rtu" for command in receipt["commands"])
+            if raw_carrier:
+                assert all(command["carrier"] == "modbus" and
+                           command["terminal"]["kind"] == "smartess_fc4_refusal_echo"
+                           for command in receipt["commands"])
     finally:
         await queue.put(None)
         await handler.stop()
