@@ -57,7 +57,7 @@ def decode_raw_value(
     spec: RegisterValueSpec,
     *,
     ascii_style: AsciiStyle = "printable",
-) -> int | str:
+) -> int | str | None:
     """Extract the raw (unscaled) value for one spec from decoded registers."""
 
     if spec.combine == "ascii_low_byte":
@@ -71,6 +71,13 @@ def decode_raw_value(
                 decode_ascii_word(registers.get(spec.register + offset, 0), style=ascii_style)
             )
         return "".join(chars).strip()
+    if spec.combine == "srne_datetime_unavailable":
+        # Exact SMX-II firmware: byte positions are documented but year epoch
+        # and month convention lack independently correlated hardware evidence.
+        # Preserve raw words/bytes via separate exact-model schema specs.
+        if spec.word_count != 3:
+            raise ValueError(f"srne_datetime_word_count:{spec.key}:{spec.word_count}")
+        return None
     if spec.combine == "srne_datetime":
         words = [registers.get(spec.register + offset, 0) for offset in range(spec.word_count)]
         if len(words) != 3:

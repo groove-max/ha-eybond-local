@@ -247,7 +247,7 @@ class SmxTelemetryCompatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["battery_discharge_today"], 4)
         self.assertEqual(values["battery_charge_total"], 22453)
         self.assertEqual(values["battery_discharge_total"], 10945)
-        self.assertEqual(values["system_datetime"], "2026-11-03 18:12:34")
+        self.assertIsNone(values["system_datetime"])
 
         with self.assertRaisesRegex(ValueError, "unsupported_capability"):
             await driver.async_write_capability(transport, inverter, "max_ac_charge_current", 60)
@@ -274,7 +274,7 @@ class SmxTelemetryCompatTests(unittest.IsolatedAsyncioTestCase):
         legacy_profile = load_driver_profile("srne_modbus/smx_ii.json")
         self.assertTrue(surface.read_only)
         self.assertEqual(surface.profile_name, "")
-        self.assertEqual(len(schema.measurement_descriptions), 88)
+        self.assertEqual(len(schema.measurement_descriptions), 97)
         self.assertEqual(legacy_profile.capabilities, ())
         self.assertEqual(legacy_profile.presets, ())
         keys = {item.key for item in schema.measurement_descriptions}
