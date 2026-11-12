@@ -254,6 +254,18 @@ RC1 below; newer model features remain here.
   the boundary enforced rather than described: the flag is fail-closed in the
   resolver, and the replay suite pins the negative case with Auto refusing the
   minimal-evidence fixture and the positive case through the explicit path.
+  Three further routes into the same map are closed, because each could
+  bind it with no user statement at all: a persisted snapshot no longer
+  rebuilds the bind from its surface key, since that snapshot records the
+  automatic match the boundary refuses and a restart would otherwise
+  reinstate it on every boot; switching the driver intent clears a stored
+  catalog entry instead of leaving a pair startup rejects and the UI no
+  longer shows; and the options dropdown gains an explicit automatic value,
+  because a select has no empty value and the old blank option could never
+  be submitted. The catalog notes and the LVYUAN evidence document describe
+  explicit-selection-only rather than a medium-confidence family match, and
+  a strings.json parity test now fails when a key exists only in
+  translations/en.json.
 
 - Support explicit model-scoped `preset_removals` without changing the additive
   meaning of an empty inherited list. Anenji #88 equalization controls become
