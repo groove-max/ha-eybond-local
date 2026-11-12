@@ -2222,6 +2222,7 @@
    "priority": 120,
    "family_fallback": false,
    "provisional_identity": true,
+   "explicit_selection_only": true,
    "provisional_reason": "The only non-settable identity word in the captured rating block is 16646 == 6, which identifies the 6 kW power class and is shared by every 6 kW unit of this protocol. Every other word in that block is a user-set charge threshold, including 16650: it happened to read 55.2 V in both of our observations because it was never edited, which is not evidence of a hardware fingerprint. Without a stable per-model discriminator, automatic exact-model selection is not justified, so this profile stays explicitly provisional.",
    "anchors": [
     {

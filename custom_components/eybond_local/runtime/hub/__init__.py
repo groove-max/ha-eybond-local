@@ -54,8 +54,12 @@ class EybondHub(
         pi30_flag_command_case: str = PI30_FLAG_CASE_PROFILE,
         connection_mode: str = "",
         collector_mutation_guard: Callable[[], Awaitable[None]] | None = None,
+        explicit_catalog_entry_key: str = "",
     ) -> None:
         self._driver_hint = driver_hint
+        # An experimental catalog entry never binds from an automatic sweep;
+        # this is the user's explicit choice of one, scoped to its probes.
+        self._explicit_catalog_entry_key = str(explicit_catalog_entry_key or "").strip()
         self._inverter_probe_target = inverter_probe_target
         if type(pi30_flag_command_case) is not str or pi30_flag_command_case not in PI30_FLAG_COMMAND_CASES:
             raise ValueError("invalid_pi30_flag_command_case")

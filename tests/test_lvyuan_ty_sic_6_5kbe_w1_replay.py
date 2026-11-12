@@ -32,6 +32,13 @@ from custom_components.eybond_local.canonical_telemetry import (  # noqa: E402
     canonical_measurements_for_driver,
 )
 from custom_components.eybond_local.drivers.modbus_catalog import ModbusCatalogDriver  # noqa: E402
+from custom_components.eybond_local.metadata.explicit_selection import (  # noqa: E402
+    explicit_catalog_entry,
+)
+from custom_components.eybond_local.runtime.driver_detection import (  # noqa: E402
+    DriverSweepNoMatch,
+    async_detect_inverter,
+)
 from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
     DriverReadMode,
     DriverReadResult,
@@ -52,6 +59,11 @@ NEGATIVE_96V = json.loads(
 
 IDENTITY_START = 16640
 IDENTITY_COUNT = 16
+
+# This pack is explicitly experimental: its evidence is sound for telemetry but
+# not for automatic identity, so the user has to name this catalog entry before
+# the runtime may bind it.
+LVYUAN_ENTRY = "lvyuan_ty_sic_6_5kbe_w1"
 
 
 def _target() -> ProbeTarget:
@@ -103,14 +115,33 @@ def _transport(fixture: dict) -> FixtureTransport:
     )
 
 
+def _sweep_transport(registers: dict[int, int]) -> FixtureTransport:
+    """Replay a register map against the route an auto sweep actually probes.
+
+    The auto sweep uses each driver's declared probe targets, not the
+    capture's own route, and FixtureTransport rejects a request whose devcode
+    does not match. Serving the registers on the driver's default route keeps
+    the negative tests honest: the identity block really is answered, so only
+    the explicit-selection boundary can explain a refusal.
+    """
+
+    return FixtureTransport(
+        registers=registers,
+        input_registers=None,
+        command_responses=None,
+        probe_target=ModbusCatalogDriver().probe_targets[0],
+    )
+
+
 class LvyuanIdentityReplayTests(unittest.IsolatedAsyncioTestCase):
     async def test_august_capture_resolves_the_exact_model(self) -> None:
         driver = ModbusCatalogDriver()
 
-        inverter = await driver.async_probe(_transport(AUGUST), _target())
+        with explicit_catalog_entry(LVYUAN_ENTRY):
+            inverter = await driver.async_probe(_transport(AUGUST), _target())
 
         assert inverter is not None
-        self.assertEqual(inverter.variant_key, "lvyuan_ty_sic_6_5kbe_w1")
+        self.assertEqual(inverter.variant_key, LVYUAN_ENTRY)
         self.assertEqual(
             inverter.register_schema_name, "lvyuan_ty_sic_6_5kbe_w1/base.json"
         )
@@ -125,10 +156,11 @@ class LvyuanIdentityReplayTests(unittest.IsolatedAsyncioTestCase):
 
         driver = ModbusCatalogDriver()
 
-        inverter = await driver.async_probe(_transport(NOVEMBER), _target())
+        with explicit_catalog_entry(LVYUAN_ENTRY):
+            inverter = await driver.async_probe(_transport(NOVEMBER), _target())
 
         assert inverter is not None
-        self.assertEqual(inverter.variant_key, "lvyuan_ty_sic_6_5kbe_w1")
+        self.assertEqual(inverter.variant_key, LVYUAN_ENTRY)
 
         # The two fixtures are deliberately NOT identical. Pinning the whole
         # rating block equal would hide exactly the drift that broke the
@@ -167,7 +199,8 @@ class LvyuanIdentityReplayTests(unittest.IsolatedAsyncioTestCase):
 
         driver = ModbusCatalogDriver()
 
-        inverter = await driver.async_probe(_transport(AUGUST), _target())
+        with explicit_catalog_entry(LVYUAN_ENTRY):
+            inverter = await driver.async_probe(_transport(AUGUST), _target())
         assert inverter is not None
 
         detection = inverter.details["catalog_detection"]
@@ -189,9 +222,88 @@ class LvyuanIdentityReplayTests(unittest.IsolatedAsyncioTestCase):
 
         driver = ModbusCatalogDriver()
 
-        inverter = await driver.async_probe(_transport(NEGATIVE_96V), _target())
+        with explicit_catalog_entry(LVYUAN_ENTRY):
+            inverter = await driver.async_probe(_transport(NEGATIVE_96V), _target())
 
         self.assertIsNone(inverter)
+
+    async def test_auto_detection_never_binds_the_experimental_map(self) -> None:
+        """Automatic detection must not adopt a map the user never chose.
+
+        The captured evidence is sound for telemetry but is not sufficient for
+        automatic identity: the only non-settable identity word (16646 == 6)
+        names the power class and is shared by every 6 kW unit of this
+        protocol. Binding on that alone would turn a plausible scan into a
+        claimed runtime identity, so the entry declares
+        explicit_selection_only and the auto sweep must return no match even
+        though the transport answers the identity block perfectly.
+        """
+
+        with self.assertRaises(DriverSweepNoMatch) as refused:
+            await async_detect_inverter(
+                _sweep_transport(_registers(AUGUST)),
+                driver_hint="auto",
+            )
+        # Guard the guard: a silent refusal would mean the transport never
+        # answered, which would make this test pass for the wrong reason.
+        self.assertFalse(refused.exception.silent)
+
+    async def test_auto_detection_does_not_bind_on_minimal_evidence(self) -> None:
+        """A reviewer's minimal-evidence reproduction must stay unmatched.
+
+        Supplying only the rating block -- zero-filled except the shared 6 kW
+        power-class word and a normal 48 V platform reading -- used to resolve
+        to the LVYUAN model and then fail the very next read on a register that
+        was never captured. Auto must refuse this ambiguous evidence outright
+        instead of binding a surface it cannot serve.
+        """
+
+        minimal_registers = {
+            **{IDENTITY_START + offset: 0 for offset in range(IDENTITY_COUNT)},
+            16646: 6,
+            128: 546,
+        }
+
+        with self.assertRaises(DriverSweepNoMatch) as refused:
+            await async_detect_inverter(
+                _sweep_transport(minimal_registers),
+                driver_hint="auto",
+            )
+        self.assertFalse(refused.exception.silent)
+
+    async def test_explicit_selection_binds_through_the_real_pipeline(self) -> None:
+        """Naming the entry explicitly is the one supported way in.
+
+        The selection travels on the probe path rather than through a wider
+        detection signature, and it must reach the same catalog resolution --
+        still labelled provisional/family, never exact/high.
+        """
+
+        with explicit_catalog_entry(LVYUAN_ENTRY):
+            context = await async_detect_inverter(
+                _sweep_transport(_registers(AUGUST)),
+                driver_hint="auto",
+            )
+
+        self.assertEqual(context.inverter.driver_key, "modbus_catalog")
+        self.assertEqual(context.inverter.variant_key, LVYUAN_ENTRY)
+        detection = context.inverter.details["catalog_detection"]
+        self.assertEqual(detection["resolution"], "family")
+        self.assertIs(detection["provisional_identity"], True)
+
+    async def test_explicit_selection_of_another_entry_does_not_unlock_it(self) -> None:
+        """Selecting a different entry must not open this one.
+
+        The gate compares the exact catalog entry, so an unrelated explicit
+        choice is not a blank cheque for every experimental descriptor.
+        """
+
+        with explicit_catalog_entry("lvyuan_ty_sic_3_6kbe_w1"):
+            with self.assertRaises(DriverSweepNoMatch):
+                await async_detect_inverter(
+                    _sweep_transport(_registers(AUGUST)),
+                    driver_hint="auto",
+                )
 
     async def test_input_active_power_is_not_canonical_grid_power(self) -> None:
         """Word 33290 stays a separate provisional measurement.
@@ -229,7 +341,8 @@ class LvyuanTelemetryReplayTests(unittest.IsolatedAsyncioTestCase):
         driver = ModbusCatalogDriver()
         transport = _transport(AUGUST)
 
-        inverter = await driver.async_probe(transport, _target())
+        with explicit_catalog_entry(LVYUAN_ENTRY):
+            inverter = await driver.async_probe(transport, _target())
         assert inverter is not None
 
         result = await driver.async_read_values(transport, inverter)

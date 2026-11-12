@@ -24,6 +24,7 @@ from .common import (
     monotonic,
     resolve_catalog_driver_candidate_overlap,
 )
+from ...metadata.explicit_selection import explicit_catalog_entry
 
 
 async def _async_capture_task_outcome(task: asyncio.Task) -> tuple[bool, object]:
@@ -266,21 +267,34 @@ class HubDetectionMixin:
             detection_hint == DRIVER_HINT_AUTO
             and self._driver_detection_strategy == DRIVER_DETECTION_FULL_SCAN
         )
-        detection_task = asyncio.create_task(
-            (
-                async_detect_inverter_candidates(
+        async def _async_detect_in_scope():
+            # An experimental catalog entry must never bind from an automatic
+            # sweep, so the user's explicit choice is scoped to this pass
+            # rather than threaded through the shared detection signature.
+            selection = str(
+                getattr(self, "_explicit_catalog_entry_key", "") or ""
+            ).strip()
+            if selection:
+                with explicit_catalog_entry(selection):
+                    return await _detect()
+            return await _detect()
+
+        async def _detect():
+            if detect_all_candidates:
+                return await async_detect_inverter_candidates(
                     self._link_manager.transport,
                     driver_hint=DRIVER_HINT_AUTO,
                 )
-                if detect_all_candidates
-                else async_detect_inverter(
-                    self._link_manager.transport,
-                    driver_hint=detection_hint,
-                    **({"probe_target": self._inverter_probe_target}
-                       if getattr(self, "_inverter_probe_target", None) is not None
-                       and detection_hint == self._driver_hint else {}),
-                )
-            ),
+            return await async_detect_inverter(
+                self._link_manager.transport,
+                driver_hint=detection_hint,
+                **({"probe_target": self._inverter_probe_target}
+                   if getattr(self, "_inverter_probe_target", None) is not None
+                   and detection_hint == self._driver_hint else {}),
+            )
+
+        detection_task = asyncio.create_task(
+            _async_detect_in_scope(),
             name="eybond_inverter_detection",
         )
         detection_outcome_task = asyncio.create_task(

@@ -131,6 +131,23 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
             return ()
         return candidates
 
+    def _experimental_catalog_entries(self) -> tuple[str, ...]:
+        """Return catalog entries that may only bind by explicit selection."""
+
+        try:
+            from ...metadata.compiled_detection_catalog import (
+                load_compiled_detection_catalog,
+            )
+
+            catalog = load_compiled_detection_catalog()
+        except Exception:
+            return ()
+        return tuple(
+            descriptor.key
+            for descriptor in catalog.devices.values()
+            if descriptor.explicit_selection_only
+        )
+
     def _server_ip_field(self) -> SelectSelector | TextSelector:
         """Return the user-friendly selector for one local server IP."""
 
@@ -429,6 +446,15 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
 
         if len(self._runtime_inverter_protocol_candidates()) > 1:
             menu_options.insert(0 if not marker_present else 1, "inverter_protocol")
+        # An experimental map never binds from an automatic sweep, so the menu
+        # must offer the explicit choice even when nothing is ambiguous: a
+        # single-candidate entry still has to be named by the user.  Keep it
+        # after the ambiguity choice so that entry stays the first action.
+        if self._experimental_catalog_entries():
+            menu_options.insert(
+                menu_options.index("runtime") + 2,
+                "experimental_map",
+            )
 
         return self.async_show_menu(
             step_id="init",

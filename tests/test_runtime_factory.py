@@ -69,6 +69,7 @@ class RuntimeFactoryTests(unittest.TestCase):
             pi30_flag_command_case="profile",
             connection_mode="known_ip",
             collector_mutation_guard=None,
+            explicit_catalog_entry_key="",
         )
 
 

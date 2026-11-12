@@ -282,6 +282,10 @@ class DeviceCatalogEntry:
     # downgraded to ``family``/``medium`` and it must never be presented as an
     # exact, high-confidence auto match.
     provisional_identity: bool = False
+    # A device that must never bind from an automatic sweep: its evidence is
+    # sound for telemetry but not for automatic identity, so the user has to
+    # name this exact catalog entry before the runtime may use it.
+    explicit_selection_only: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -927,6 +931,7 @@ def _parse_device(
         family_fallback=bool(raw.get("family_fallback", False)),
         detection_supersedes_protocols=tuple(detection_supersedes_protocols),
         provisional_identity=bool(raw.get("provisional_identity", False)),
+        explicit_selection_only=bool(raw.get("explicit_selection_only", False)),
     )
 
 

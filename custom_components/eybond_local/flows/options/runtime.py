@@ -50,6 +50,7 @@ from ...const import (
     CONF_DETECTED_MODEL,
     CONF_DETECTED_SERIAL,
     CONF_DETECTION_CONFIDENCE,
+    CONF_DEVICE_CATALOG_ENTRY,
     CONF_DRIVER_DETECTION_STRATEGY,
     CONF_DRIVER_HINT,
     CONF_PI30_FLAG_COMMAND_CASE,
@@ -192,6 +193,11 @@ def _collector_uart_action_selector(
     )
 
 
+# Dropdown selectors have no empty value, so "no experimental map" is an
+# explicit option that the handler maps back to removing the stored key.
+_EXPERIMENTAL_MAP_NONE = "__automatic__"
+
+
 class RuntimeOptionsMixin:
     """RuntimeOptions lifecycle."""
 
@@ -264,6 +270,105 @@ class RuntimeOptionsMixin:
             ),
             errors=errors,
             description_placeholders={"count": str(len(candidates))},
+        )
+
+    @_with_translation_bundle
+    async def async_step_experimental_map(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Record an explicit choice of one experimental inverter map.
+
+        Some catalog entries carry telemetry evidence but no non-settable
+        per-model identity word, so an automatic sweep cannot tell them apart
+        from a sibling model.  Such an entry declares explicit_selection_only
+        and never binds on its own; this step is the only place the user can
+        name it.  Choosing it here is a deliberate statement that the inverter
+        is that model, not a guess made on the user's behalf.
+        """
+
+        from ...metadata.compiled_detection_catalog import (
+            load_compiled_detection_catalog,
+        )
+
+        catalog = load_compiled_detection_catalog()
+        entries = tuple(
+            descriptor
+            for descriptor in catalog.devices.values()
+            if descriptor.explicit_selection_only
+        )
+        if not entries:
+            return await self.async_step_init()
+
+        entry_by_key = {descriptor.key: descriptor for descriptor in entries}
+        current = str(
+            self._config_entry.options.get(
+                CONF_DEVICE_CATALOG_ENTRY,
+                self._config_entry.data.get(CONF_DEVICE_CATALOG_ENTRY, ""),
+            )
+            or ""
+        ).strip()
+        if current not in entry_by_key:
+            current = _EXPERIMENTAL_MAP_NONE
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            selected = user_input.get(CONF_DEVICE_CATALOG_ENTRY)
+            if type(selected) is not str or (
+                selected != _EXPERIMENTAL_MAP_NONE
+                and selected not in entry_by_key
+            ):
+                errors[CONF_DEVICE_CATALOG_ENTRY] = "invalid_selection"
+            else:
+                data = dict(self._config_entry.data)
+                options = dict(self._config_entry.options)
+                if selected == _EXPERIMENTAL_MAP_NONE:
+                    options.pop(CONF_DEVICE_CATALOG_ENTRY, None)
+                else:
+                    options[CONF_DEVICE_CATALOG_ENTRY] = selected
+                _clear_runtime_inverter_facts(data)
+                self.hass.config_entries.async_update_entry(
+                    self._config_entry,
+                    data=data,
+                    options=options,
+                )
+                return self.async_create_entry(data=options)
+
+        # A dropdown cannot carry an empty value, so "keep automatic detection"
+        # needs a real option of its own rather than a blank entry.
+        selector_options = [
+            SelectOptionDict(
+                value=_EXPERIMENTAL_MAP_NONE,
+                label=self._tr(
+                    "options.experimental_map_none_option",
+                    "Automatic detection (do not bind an experimental map)",
+                ),
+            ),
+            *(
+                SelectOptionDict(
+                    value=descriptor.key,
+                    label=descriptor.model_name or descriptor.key,
+                )
+                for descriptor in entries
+            ),
+        ]
+        return self.async_show_form(
+            step_id="experimental_map",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_DEVICE_CATALOG_ENTRY,
+                        default=current,
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=selector_options,
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+            errors=errors,
+            description_placeholders={"count": str(len(entries))},
         )
 
     @_with_translation_bundle

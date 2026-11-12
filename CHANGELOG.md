@@ -238,6 +238,23 @@ RC1 below; newer model features remain here.
 
 ### Changed
 
+- Require an explicit choice before an experimental inverter map may bind.
+  A catalog device can now declare explicit_selection_only, and such a
+  device is filtered out of every automatic sweep at the single point where a
+  provisional descriptor becomes bindable, so Auto reports unresolved instead
+  of adopting a map on plausible evidence. The LVYUAN TY-SIC-6.5KBE-W1 entry
+  declares it: its rating-block words identify the model family but cannot
+  separate it from a sibling, and the maintainer reproduced Auto binding it on
+  zero-filled identity words and then failing on the next read. The choice is
+  carried to the detection pass out of band, so the shared detection signature
+  and the driver registry are unchanged, and naming the entry is what the user
+  does in the new Experimental map options step; leaving it automatic removes
+  the stored key. Startup restores the bind from that stored choice alone, and
+  an empty or unknown key stays unresolved. Abandoning a sweep-only label keeps
+  the boundary enforced rather than described: the flag is fail-closed in the
+  resolver, and the replay suite pins the negative case with Auto refusing the
+  minimal-evidence fixture and the positive case through the explicit path.
+
 - Support explicit model-scoped `preset_removals` without changing the additive
   meaning of an empty inherited list. Anenji #88 equalization controls become
   unavailable for lithium rather than being deleted dynamically.
