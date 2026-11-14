@@ -5,10 +5,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, replace
 import ipaddress
-import json
 import logging
 import socket
-import subprocess
 from typing import Callable, Protocol
 
 from ...collector.cloud_family import (
@@ -181,87 +179,37 @@ def _active_ipv4_addresses() -> tuple[str, ...]:
 
 
 def _active_ipv4_interfaces() -> tuple[tuple[str, int], ...]:
-    """Return active global IPv4 addresses with prefix lengths on this host."""
-
-    try:
-        output = subprocess.check_output(
-            ["ip", "-j", "-4", "addr", "show", "up"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        )
-        raw = json.loads(output)
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
-        raw = []
-
+    """Use the same filtered host inventory as config/options flows."""
+    from ... import network_interfaces
     addresses: list[tuple[str, int]] = []
-    for item in raw:
-        for addr in item.get("addr_info", []):
-            ip = str(addr.get("local", "")).strip()
-            if not ip:
-                continue
-            if addr.get("family") != "inet":
-                continue
-            if addr.get("scope") not in {"global", "site"}:
-                continue
-            if ip.startswith("127."):
-                continue
-            try:
-                prefixlen = int(addr.get("prefixlen", 32) or 32)
-            except (TypeError, ValueError):
-                prefixlen = 32
-            addresses.append((ip, prefixlen))
-    if not addresses:
+    for item in network_interfaces.get_ipv4_interfaces():
         try:
-            output = subprocess.check_output(
-                ["ip", "-o", "-4", "addr", "show", "up"],
-                text=True,
-                stderr=subprocess.DEVNULL,
+            interface = ipaddress.ip_interface(
+                f"{item['ip']}/{item.get('prefixlen', '32')}"
             )
-        except (OSError, subprocess.SubprocessError):
-            output = ""
-        for line in output.splitlines():
-            parts = line.split()
-            if "inet" not in parts:
-                continue
-            try:
-                cidr = parts[parts.index("inet") + 1]
-                interface = ipaddress.ip_interface(cidr)
-            except (ValueError, IndexError):
-                continue
-            ip = str(interface.ip)
-            if ip.startswith("127."):
-                continue
-            addresses.append((ip, interface.network.prefixlen))
+        except (KeyError, ValueError):
+            continue
+        if interface.version == 4:
+            addresses.append((str(interface.ip), interface.network.prefixlen))
     return tuple(dict.fromkeys(addresses))
 
 
-def _same_ipv4_24_subnet(left: str, right: str) -> bool:
-    """Return whether two IPv4 addresses share the same /24 subnet."""
-
-    try:
-        left_address = ipaddress.ip_address(left)
-        right_address = ipaddress.ip_address(right)
-    except ValueError:
-        return False
-    if left_address.version != 4 or right_address.version != 4:
-        return False
-    return ipaddress.ip_network(f"{left}/24", strict=False) == ipaddress.ip_network(
-        f"{right}/24",
-        strict=False,
-    )
-
-
 def resolve_server_ip(configured_ip: str, *, collector_ip: str = "") -> str:
-    """Return a bindable server IP, preferring the collector-facing subnet when possible."""
+    """Preserve explicit callback intent; discover only an unconfigured address.
+
+    The listener binds separately to all interfaces. A temporarily absent LAN,
+    routed collector or external advertised route must not cause a new callback
+    address to be inferred from an unrelated active interface. Real address
+    changes require an explicit configuration update.
+    """
+
+    if configured_ip:
+        return configured_ip
 
     active_interfaces = _active_ipv4_interfaces()
-    # Failed enumeration is not proof that the configured address disappeared.
-    # A default-route address cannot stand in for a complete interface inventory.
     if not active_interfaces:
-        return configured_ip or _default_local_ip()
+        return ""
     active_ips = tuple(ip for ip, _prefixlen in active_interfaces)
-    if configured_ip and configured_ip in active_ips:
-        return configured_ip
 
     try:
         collector_address = ipaddress.ip_address(collector_ip) if collector_ip else None
@@ -276,11 +224,6 @@ def resolve_server_ip(configured_ip: str, *, collector_ip: str = "") -> str:
                 continue
             if collector_address in network:
                 return ip
-
-        # For direct AP-mode collectors, keeping the same-subnet callback IP is safer than
-        # auto-healing to an unrelated default-route interface that the collector cannot reach.
-        if configured_ip and _same_ipv4_24_subnet(configured_ip, collector_ip):
-            return configured_ip
 
     fallback = _default_local_ip()
     if fallback and fallback in active_ips:

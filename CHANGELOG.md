@@ -13,6 +13,13 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Preserve a configured HA callback address across startup and network outages
+  instead of replacing it with another active interface (#82). Runtime and
+  setup share the filtered LAN/VPN inventory; a known internal-only inventory
+  cannot reintroduce Docker addresses through the default-route fallback.
+  Automatic selection fills an unset address only. If the HA LAN address really
+  changes, update it explicitly in the existing entry's connection settings.
+
 - Handle the observed zero-length FC4 no-result envelope only when its TID and
   complete route match a recently sent request on the same physical framed or
   AT/mixed socket (#89). Fail an active request rather than acknowledge a write;

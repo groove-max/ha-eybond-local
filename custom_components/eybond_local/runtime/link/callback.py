@@ -94,6 +94,10 @@ class LinkCallbackMixin:
             # No UDP target to poke; the collector may still dial in on its own,
             # and the bounded wait handles that.
             return "no_target"
+        if not self.effective_advertised_server_ip:
+            # Startup may expose only internal host interfaces. Wait for a
+            # usable address rather than send an empty callback destination.
+            return "no_server_address"
         advertised_port = int(self._configured_advertised_tcp_port or self._tcp_port)
         self._callback_trigger_count += 1
         try:

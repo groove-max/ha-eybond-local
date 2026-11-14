@@ -79,6 +79,17 @@ class RuntimeCallbackBudgetTests(unittest.IsolatedAsyncioTestCase):
     def attempt(self):
         return self.manager.callback_trigger_diagnostics()["collector_callback_last_attempt"]
 
+    async def test_no_available_server_address_does_not_send_empty_callback(self):
+        self.manager._effective_server_ip = ""
+        probe = self.patch_udp(AsyncMock(return_value=SimpleNamespace(reply="", reply_from="")))
+        self.assertEqual(await self.manager._send_callback_trigger(), "no_server_address")
+        probe.assert_not_called()
+        self.assertEqual(self.manager._callback_trigger_count, 0)
+        # Explicit advertised/NAT intent remains usable and is not replaced.
+        self.manager._configured_advertised_server_ip = "203.0.113.8"
+        self.assertEqual(await self.manager._send_callback_trigger(), "no_reply")
+        self.assertEqual(probe.call_args.kwargs["advertised_server_ip"], "203.0.113.8")
+
     async def test_slow_udp_preserves_arrived_framed_and_at_sessions(self):
         for wire in ("eybond_framed", "at_text"):
             with self.subTest(wire=wire):

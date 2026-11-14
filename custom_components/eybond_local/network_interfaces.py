@@ -25,7 +25,7 @@ _IP_ADDR_SHOW_ONELINE = re.compile(
 
 
 def _is_user_selectable_interface(ifname: str) -> bool:
-    normalized = str(ifname or "").strip().lower()
+    normalized = str(ifname or "").strip().lower().split("@", 1)[0]
     if not normalized:
         return True
     if normalized in _INTERNAL_INTERFACE_NAMES:
@@ -141,18 +141,28 @@ def _parse_oneline_interfaces(output: str) -> list[dict[str, str]]:
 
 
 def get_ipv4_interfaces() -> list[dict[str, str]]:
-    """Return active global IPv4 interfaces with human-friendly labels."""
+    """Return usable IPv4 interfaces, never default-route around a known exclusion.
 
+    A successful empty/internal-only inventory can be transient during startup.
+    It is not permission to reintroduce a filtered Docker address as a fallback.
+    The default-route fallback is only for hosts without usable enumeration.
+    """
+
+    inventory_available = False
     try:
         output = subprocess.check_output(
             ["ip", "-j", "-4", "addr", "show", "up"],
             text=True,
             stderr=subprocess.DEVNULL,
         )
-        interfaces = _parse_json_interfaces(json.loads(output))
+        raw = json.loads(output)
+        if not isinstance(raw, list) or any(not isinstance(item, dict) for item in raw):
+            raise ValueError("invalid_interface_inventory")
+        inventory_available = True
+        interfaces = _parse_json_interfaces(raw)
         if interfaces:
             return interfaces
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+    except (OSError, subprocess.SubprocessError, ValueError):
         pass
 
     try:
@@ -161,12 +171,15 @@ def get_ipv4_interfaces() -> list[dict[str, str]]:
             text=True,
             stderr=subprocess.DEVNULL,
         )
+        inventory_available = True
         interfaces = _parse_oneline_interfaces(output)
         if interfaces:
             return interfaces
     except (OSError, subprocess.SubprocessError):
         pass
 
+    if inventory_available:
+        return []
     fallback_ip = get_local_ip()
     if not fallback_ip:
         return []

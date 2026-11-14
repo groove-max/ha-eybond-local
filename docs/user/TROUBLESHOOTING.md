@@ -2,6 +2,21 @@
 
 [Українська](TROUBLESHOOTING.uk.md)
 
+## HA address after a restart or network change
+
+Current main preserves the configured HA listener/callback address even if its
+LAN interface is temporarily absent during startup. Automatic selection is only
+used when no address is configured, and excludes known Docker/internal host
+interfaces. The TCP listener's wildcard bind address is not an address to give
+to the collector.
+
+If an older build replaced the LAN address with `172.30.32.1` (`hassio`) or a
+Docker bridge address, restore the correct address through the existing entry's
+connection settings. Updating does not guess the former address. If HA's LAN IP
+really changed, update it explicitly there. Preserve any separately configured
+advertised/NAT address and port; do not delete the entry or change the inverter
+profile, UART or vendor-cloud endpoint for this issue.
+
 Keep the existing setup and collect evidence before resetting or deleting the
 integration. A collector connection, inverter response and vendor-cloud update
 are different stages; identify which one stopped.
