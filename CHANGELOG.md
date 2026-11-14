@@ -13,6 +13,12 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Add maintainer-reviewed recovery for historical Shadow Learning holds whose
+  current journal belongs to a later protected retry. Approval is explicit and
+  bound to unchanged local history; normal HA recovery restores the original
+  run's endpoint obligation and verifies the return. Updating alone never
+  approves a history or clears a hold, and no new control requests are sent.
+
 - Preserve a configured HA callback address across startup and network outages
   instead of replacing it with another active interface (#82). Runtime and
   setup share the filtered LAN/VPN inventory; a known internal-only inventory

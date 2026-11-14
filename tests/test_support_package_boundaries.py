@@ -85,6 +85,7 @@ class SupportPackageBoundaryTests(unittest.TestCase):
                 "read_evidence.py",
                 "retry_evidence.py",
                 "review_model.py",
+                "reviewed_recovery.py",
                 "runtime.py",
                 "session.py",
                 "session_journal.py",
