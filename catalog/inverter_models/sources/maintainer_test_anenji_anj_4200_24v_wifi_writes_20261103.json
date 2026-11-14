@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_key": "maintainer_test_anenji_anj_4200_24v_wifi_writes_20261103",
+  "kind": "maintainer_test",
+  "title": "Anenji ANJ-4.2KW-24V-WIFI safe write and readback validation (contributed hardware check)",
+  "reference": "private:maintainer-test-anenji-anj-4200-24v-writes-20261103",
+  "captured_at": "2026-11-03",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Safe write/readback cycles contributed by the reporting owner on a live Anenji ANJ-4.2KW-24V-WIFI, the exact printed model name, resolved through the shared SMG family 4200 descriptor: buzzer mode (register 303, Beeps Off to Beeps On and back), LCD backlight (305, off to on and back) and LCD auto-return (306, off to on and back) were toggled through their Home Assistant select and switch entities. Every write read the new value back from the register, the original value was restored, and the restore was verified. All writes and readbacks succeeded; the same three registers also accepted direct FC16 writes. No battery, charge-current or voltage setpoint was touched.",
+  "assertions": [
+    "write_validation"
+  ]
+}
