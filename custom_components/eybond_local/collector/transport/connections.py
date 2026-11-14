@@ -39,6 +39,7 @@ from .diagnostic_modbus import DiagnosticModbusSession, ModbusDiagnosticClaim
 from .diagnostic_pi30 import DiagnosticPi30Session
 from .send_ownership import SocketSendOwner, finish_request_future
 from .request_trace import SocketRequestTrace
+from .empty_forward_reply import EmptyForwardReplyWindow
 from .binary_framing import (
     BinaryFramingError,
     BinaryGrammar,
@@ -101,6 +102,7 @@ class _CollectorConnection:
         self._session_identity_callback: Callable[[str, str, str], None] | None = None
         self._session_exchange_callback: Callable[[str], None] | None = None
         self._run_epoch = 0
+        self._empty_forward_replies = EmptyForwardReplyWindow()
         self._auxiliary_session = AuxiliaryReadSession()
         self._diagnostic_modbus = DiagnosticModbusSession()
         self._diagnostic_pi30 = DiagnosticPi30Session()
@@ -240,7 +242,13 @@ class _CollectorConnection:
                 self._pending_parameter[tid] = payload[0]
 
             try:
-                await self._async_write(frame, owner=owner, trace=trace)
+                empty_replies = self._empty_forward_replies
+                empty_replies.record(decode_header(frame))
+                try:
+                    await self._async_write(frame, owner=owner, trace=trace)
+                except BaseException:
+                    empty_replies.forget(tid)
+                    raise
                 logger.debug(
                     "TX collector remote=%s tid=%d fc=%d devcode=0x%04X devaddr=0x%02X payload=%s",
                     self._collector.remote_ip,
@@ -396,6 +404,7 @@ class _CollectorConnection:
         self._last_liveness_monotonic = initial_liveness_monotonic
         self.last_framed_exchange_monotonic = None
         self._auxiliary_session = AuxiliaryReadSession()
+        self._empty_forward_replies = EmptyForwardReplyWindow()
         self._diagnostic_modbus = DiagnosticModbusSession()
         self._diagnostic_pi30 = DiagnosticPi30Session()
         self._reader = reader
@@ -433,6 +442,7 @@ class _CollectorConnection:
         try:
             while self.connected:
                 tid = self._tid.next()
+                self._empty_forward_replies.forget(tid)
                 interval = int(self._heartbeat_interval)
                 frame = build_heartbeat_request(tid, interval)
                 await self._async_write(frame)
@@ -617,6 +627,8 @@ class _CollectorConnection:
                         )
                         return
                     header = decode_header(header_bytes)
+                    if self._empty_forward_replies.consume(header, self._pending):
+                        continue
                     header_error = _runtime_eybond_header_error(header)
                     if header_error:
                         # function_invalid stays fatal here. A 7-byte raw RTU
@@ -780,6 +792,7 @@ class _CollectorConnection:
                 # TID. It remains a heartbeat, never an FC2/FC3/FC4 reply. Do not
                 # compare devcode/address: firmware legitimately rewrites those.
                 if correlated:
+                    self._empty_forward_replies.forget(header.tid)
                     self.last_framed_exchange_monotonic = observed_at
                     exchange_callback = self._session_exchange_callback
                     if exchange_callback is not None and self._session_id:
@@ -942,6 +955,7 @@ class _CollectorAtConnection:
         self._raw_passthrough_bootstrapped = False
         self._mixed_frame_observed = False
         self._run_epoch = 0
+        self._empty_forward_replies = EmptyForwardReplyWindow()
         self._auxiliary_session = AuxiliaryReadSession()
         self._diagnostic_modbus = DiagnosticModbusSession()
         self._diagnostic_pi30 = DiagnosticPi30Session()
@@ -1251,7 +1265,13 @@ class _CollectorAtConnection:
             if (fcode == FC_QUERY_COLLECTOR and len(payload) == 1) or (fcode == FC_SET_COLLECTOR and payload):
                 self._pending_framed_parameter[tid] = payload[0]
             try:
-                await self._async_write(frame, owner=owner, trace=trace)
+                empty_replies = self._empty_forward_replies
+                empty_replies.record(decode_header(frame))
+                try:
+                    await self._async_write(frame, owner=owner, trace=trace)
+                except BaseException:
+                    empty_replies.forget(tid)
+                    raise
                 response = await asyncio.wait_for(future, timeout=request_timeout)
                 owner.check_reply(self)
                 if trace is not None:
@@ -1399,6 +1419,7 @@ class _CollectorAtConnection:
         self._collector.connection_count += 1
         self._collector.last_disconnect_reason = ""
         self._auxiliary_session = AuxiliaryReadSession()
+        self._empty_forward_replies = EmptyForwardReplyWindow()
         self._diagnostic_modbus = DiagnosticModbusSession()
         self._diagnostic_pi30 = DiagnosticPi30Session()
         self._runtime_modbus = DiagnosticModbusSession(
@@ -1616,6 +1637,10 @@ class _CollectorAtConnection:
                         ))
                         header_bytes = prefix + header_tail
                         header = decode_header(header_bytes)
+                        if self._empty_forward_replies.consume(
+                            header, self._pending_framed_response,
+                        ):
+                            continue
                         if not self._looks_like_mixed_frame_header(header):
                             header_error = _runtime_eybond_header_error(header)
                             if (
@@ -1674,6 +1699,7 @@ class _CollectorAtConnection:
                             and (expected_parameter is None or len(payload) < 2
                                  or payload[1] == expected_parameter)
                         ):
+                            self._empty_forward_replies.forget(header.tid)
                             self.last_framed_exchange_monotonic = monotonic()
                             exchange_callback = self._session_exchange_callback
                             if exchange_callback is not None and self._session_id:

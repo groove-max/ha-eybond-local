@@ -206,7 +206,7 @@ def _entry_has_startup_entity_fallback(entry: ConfigEntry) -> bool:
 
 
 async def _async_self_heal_server_ip(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Persist a valid local listener IP if the stored one has gone stale."""
+    """Fill a missing listener address; never rewrite a configured route at startup."""
 
     from .runtime.link import resolve_server_ip
 
@@ -217,7 +217,11 @@ async def _async_self_heal_server_ip(hass: HomeAssistant, entry: ConfigEntry) ->
         CONF_SERVER_IP,
         entry.data.get(CONF_SERVER_IP, ""),
     )
-    collector_ip = str(entry.data.get("collector_ip", "") or "").strip()
+    if configured_server_ip:
+        return
+    collector_ip = str(entry.options.get(
+        CONF_COLLECTOR_IP, entry.data.get(CONF_COLLECTOR_IP, ""),
+    ) or "").strip()
     resolved_server_ip = await hass.async_add_executor_job(
         partial(resolve_server_ip, configured_server_ip, collector_ip=collector_ip),
     )
@@ -238,9 +242,8 @@ async def _async_self_heal_server_ip(hass: HomeAssistant, entry: ConfigEntry) ->
     if not changed:
         return
 
-    logger.warning(
-        "Healing stale EyeBond server_ip from %s to %s for entry %s",
-        configured_server_ip,
+    logger.info(
+        "Selecting initial EyeBond server_ip %s for entry %s",
         resolved_server_ip,
         entry.entry_id,
     )

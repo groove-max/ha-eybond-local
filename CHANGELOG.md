@@ -39,6 +39,38 @@ RC1 below; newer model features remain here.
   power: supplying only `input_active_power` must leave `grid_power` absent,
   because magnitude and correlation in one passive period do not establish the
   measurement direction in other modes.
+- Add maintainer-reviewed recovery for historical Shadow Learning holds whose
+  current journal belongs to a later protected retry. Approval is explicit and
+  bound to unchanged local history; normal HA recovery restores the original
+  run's endpoint obligation and verifies the return. Updating alone never
+  approves a history or clears a hold, and no new control requests are sent.
+
+- Preserve a configured HA callback address across startup and network outages
+  instead of replacing it with another active interface (#82). Runtime and
+  setup share the filtered LAN/VPN inventory; a known internal-only inventory
+  cannot reintroduce Docker addresses through the default-route fallback.
+  Automatic selection fills an unset address only. If the HA LAN address really
+  changes, update it explicitly in the existing entry's connection settings.
+
+- Handle the observed zero-length FC4 no-result envelope only when its TID and
+  complete route match a recently sent request on the same physical framed or
+  AT/mixed socket (#89). Fail an active request rather than acknowledge a write;
+  consume a correlated late negative without delivering it to the next request.
+  Keep ordinary malformed-header rejection, identity and auxiliary framing
+  unchanged. Correlation is bounded in time/count and reset on reconnect.
+
+- Give runtime callback recovery its TCP/identity wait window after the bounded
+  UDP trigger completes. A slow UDP reply no longer exhausts the window before
+  existing or newly arrived sockets can be inspected. Preserve the same causal
+  lease, pre-trigger baseline and strong PN checks; retain non-sensitive phase
+  outcomes/timings in diagnostics even when offline telemetry is cleared.
+
+- Include explicit localized action labels in manual collector verification and
+  identity-repair menus, with readable English fallbacks. The silent-collector
+  framed/AT actions no longer depend on the browser having current translation
+  keys. Preserve action order, explicit selection and identity verification;
+  this UI fix does not establish why a collector failed to identify itself.
+
 
 - Decode SMG-family 4200 battery type and automatic mains-output settings with
   their model enum tables in full config polls (#94). Keep selectors and mirror

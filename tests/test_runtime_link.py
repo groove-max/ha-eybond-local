@@ -211,7 +211,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         # particular, a routed collector need not share the configured /24.
         for failure in (FileNotFoundError("ip"), subprocess.CalledProcessError(1, "ip")):
             with self.subTest(failure=type(failure).__name__), patch(
-                "custom_components.eybond_local.runtime.link.common.subprocess.check_output",
+                "custom_components.eybond_local.network_interfaces.subprocess.check_output",
                 side_effect=failure,
             ), patch(
                 "custom_components.eybond_local.runtime.link.common._default_local_ip",
@@ -224,10 +224,10 @@ class RuntimeLinkManagerTests(unittest.TestCase):
 
     def test_failed_inventory_without_configured_ip_can_use_default_route(self):
         with patch(
-            "custom_components.eybond_local.runtime.link.common.subprocess.check_output",
+            "custom_components.eybond_local.network_interfaces.subprocess.check_output",
             side_effect=FileNotFoundError("ip"),
         ), patch(
-            "custom_components.eybond_local.runtime.link.common._default_local_ip",
+            "custom_components.eybond_local.network_interfaces.get_local_ip",
             return_value="192.0.2.20",
         ):
             self.assertEqual(resolve_server_ip("", collector_ip="203.0.113.40"), "192.0.2.20")
@@ -241,14 +241,14 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         ]
 
         with patch(
-            "custom_components.eybond_local.runtime.link.common.subprocess.check_output",
+            "custom_components.eybond_local.network_interfaces.subprocess.check_output",
             side_effect=side_effects,
         ), patch(
             "custom_components.eybond_local.runtime.link.common._default_local_ip",
             return_value="192.168.1.104",
         ):
             resolved = resolve_server_ip(
-                "192.168.88.91",
+                "",
                 collector_ip="192.168.88.88",
             )
 
@@ -263,7 +263,7 @@ class RuntimeLinkManagerTests(unittest.TestCase):
             return_value="192.168.1.104",
         ):
             resolved = resolve_server_ip(
-                "192.168.88.91",
+                "",
                 collector_ip="192.168.88.88",
             )
 

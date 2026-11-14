@@ -575,7 +575,7 @@ class ManualCollectorFlowMixin:
         if not self._manual_config:
             return await self.async_step_manual()
 
-        menu_options = []
+        menu_options: dict[str, str] = {}
         last_error = str(getattr(self._manual_result, "last_error", "") or "")
         if (
             last_error in ("callback_session_silent", "onboarding_wire_probe_failed")
@@ -585,18 +585,24 @@ class ManualCollectorFlowMixin:
             # only the user) may pick the bootstrap protocol for exactly one
             # read-only identity query on the exact offered session. A stale
             # offer must be renewed, never applied to a replacement socket.
-            menu_options.append("manual_bootstrap_framed")
-            menu_options.append("manual_bootstrap_at")
-        menu_options.extend(
-            [
-                MANUAL_CONFIRM_ACTION_PROBE_AGAIN,
-                MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
-            ]
+            menu_options["manual_bootstrap_framed"] = (
+                "Silent collector: query with EyeBond framed protocol"
+            )
+            menu_options["manual_bootstrap_at"] = (
+                "Silent collector: query with AT command protocol"
+            )
+        menu_options.update(
+            {
+                MANUAL_CONFIRM_ACTION_PROBE_AGAIN: "Probe again",
+                MANUAL_CONFIRM_ACTION_EDIT_SETTINGS: "Edit settings",
+            }
         )
         if self._repair_entry_id:
             return self.async_show_menu(
                 step_id="reconfigure_confirm",
-                menu_options=menu_options,
+                menu_options=self._menu_labels(
+                    "config.step.reconfigure_confirm.menu_options", menu_options,
+                ),
                 description_placeholders={
                     "failure_explanation": _shared_recovery_failure_explanation(
                         self._tr, last_error,
@@ -604,15 +610,17 @@ class ManualCollectorFlowMixin:
                 },
             )
         if self._can_offer_smartess_cloud_assist(self._manual_result):
-            menu_options.append("manual_smartess_cloud_assist")
+            menu_options["manual_smartess_cloud_assist"] = "Refine via SmartESS cloud"
         if self._manual_entry_ready_to_save():
-            menu_options.insert(0, MANUAL_CONFIRM_ACTION_SAVE)
+            menu_options = {MANUAL_CONFIRM_ACTION_SAVE: "Add device", **menu_options}
         if last_error == "inbound_awaiting_session":
-            menu_options.append(MANUAL_CONFIRM_ACTION_ENABLE_DISCOVERY)
+            menu_options[MANUAL_CONFIRM_ACTION_ENABLE_DISCOVERY] = "Enable background discovery"
 
         return self.async_show_menu(
             step_id="manual_confirm",
-            menu_options=menu_options,
+            menu_options=self._menu_labels(
+                "config.step.manual_confirm.menu_options", menu_options,
+            ),
             description_placeholders=self._manual_confirm_placeholders(
                 self._manual_config,
                 self._manual_result,

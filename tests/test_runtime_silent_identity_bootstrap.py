@@ -320,6 +320,40 @@ class _Fc2OnlyCollector(_SilentFramedFc1Collector):
 
 
 class RuntimeSilentIdentityBootstrapTests(unittest.IsolatedAsyncioTestCase):
+    async def test_slow_udp_does_not_spend_real_silent_socket_identity_window(self):
+        """Borrow the real listener and identify/route a socket arriving during UDP."""
+        for wire, collector_type in (
+            ("at_text", _SilentAtCollector),
+            ("eybond_framed", _SilentFramedFc1Collector),
+        ):
+            with self.subTest(wire=wire):
+                port = _free_port()
+                manager = self._manager(port=port, challenge=wire)
+                collector = collector_type(FULL_PN)
+                await manager.async_start()
+
+                async def slow_udp(**kwargs):
+                    await collector.connect(port)
+                    await asyncio.sleep(0.4)  # Exceeds the caller's 0.2s budget.
+                    return types.SimpleNamespace(reply="", reply_from="")
+
+                try:
+                    with patch(
+                        "custom_components.eybond_local.runtime.link.callback."
+                        "async_send_callback_trigger", side_effect=slow_udp,
+                    ) as trigger:
+                        self.assertTrue(await manager.async_try_connect(timeout=0.2))
+                    trigger.assert_awaited_once()
+                    self.assertEqual(manager.session_handle.collector_pn, FULL_PN)
+                    attempt = manager.callback_trigger_diagnostics()["collector_callback_last_attempt"]
+                    self.assertEqual(attempt["identity_result"], "identified")
+                    self.assertEqual(attempt["outcome"], "connected")
+                    self.assertEqual(attempt["baseline_sessions"], 0)
+                    self.assertGreaterEqual(attempt["trigger_elapsed_ms"], 350)
+                finally:
+                    await collector.stop()
+                    await manager.async_stop()
+
     async def test_fc2_identity_handoff_proves_liveness_without_heartbeat(self):
         """#66: the listener's successful identity read must survive activation."""
         port = _free_port()

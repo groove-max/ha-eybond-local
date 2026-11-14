@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+import math
 from typing import Any
 
 from ..metadata.compiled_detection_catalog import load_compiled_detection_catalog
+from ..metadata.detection_decision_tree import evaluate_detection_decision_tree_static
 from ..metadata.register_schema_loader import load_register_schema
 from ..models import DetectedInverter, ProbeTarget
 from ..payload.modbus import ModbusError, ModbusSession
@@ -31,6 +34,18 @@ _DC_DIAGNOSTIC_RANGES = (
     (0x010F, 3, "pv2"),
 )
 _DC_DIAGNOSTIC_TIMEOUT = 15.0
+
+# The exact-unit SMX-II overlay includes settings, identity and lifetime counters
+# which do not need the same cadence as electrical readings. Preserve the full
+# cold-start snapshot; thereafter rotate slow blocks in per-link runtime state.
+# Every selected fast block is read on every poll, including after read failures.
+_SMX_SCHEMA_KEY = "srne_modbus_smx_ii_24v"
+_SMX_POLL_STATE_KEY = "srne_smx_ii_poll"
+_SMX_SLOW_SWEEP_TARGET_SECONDS = 600.0
+_SMX_FAST_BLOCK_KEYS = frozenset({
+    "config", "controller_dc", "pv1", "charge_state", "charge_summary",
+    "status", "live", "energy_today", "energy_utility_today",
+})
 
 
 class SrneModbusDriver(InverterDriver):
@@ -94,7 +109,23 @@ class SrneModbusDriver(InverterDriver):
             "identity.product_info": product_info,
             "protocol.protocol_id": "SRNE_MODBUS",
         }
-        resolution = catalog.resolve_family(protocol_key=self.key, evidence=evidence)
+        # Resolve an exact, catalog-backed device identity before falling back
+        # to the conservative SRNE family schema. The specialized SMX-II schema
+        # exposes telemetry only: this driver's write method always rejects.
+        evaluation = evaluate_detection_decision_tree_static(
+            catalog.decision_trees[self.key], evidence
+        )
+        resolution = catalog.resolution_for_candidates(
+            protocol_key=self.key,
+            candidate_keys=(
+                evaluation.candidate_keys
+                if evaluation.status == "resolved"
+                else ()
+            ),
+            evidence=evidence,
+        )
+        if resolution.resolution != "exact":
+            resolution = catalog.resolve_family(protocol_key=self.key, evidence=evidence)
         if not resolution.surface_key:
             return None
         surface = catalog.surfaces[resolution.surface_key]
@@ -138,6 +169,10 @@ class SrneModbusDriver(InverterDriver):
             inverter.register_schema_name or self.register_schema_name
         )
         session = self._session(transport, inverter.probe_target)
+        if schema.key == _SMX_SCHEMA_KEY and runtime_state is not None:
+            return await _async_read_smx_ii_values(
+                session, schema, inverter, runtime_state, poll_interval=poll_interval
+            )
         values = await read_spec_set_values(
             session,
             schema,
@@ -271,6 +306,87 @@ class SrneModbusDriver(InverterDriver):
             route=target.link_route,
             slave_id=target.payload_address,
         )
+
+
+async def _async_read_smx_ii_values(
+    session: ModbusSession,
+    schema,
+    inverter: DetectedInverter,
+    runtime_state: dict[str, Any],
+    *,
+    poll_interval: float | None,
+) -> DriverReadResult:
+    """Keep live SMX-II readings fresh while rotating static register groups.
+
+    The hub owns ``runtime_state`` per inverter binding and folds DELTA reads
+    into its own last-good cache. We retain only a small rotation cursor here,
+    never duplicate telemetry or persist readings across sessions. Explicit
+    reads without runtime state still use the original full-sweep behavior.
+    """
+
+    identity = (schema.source_path, inverter.probe_target)
+    state = runtime_state.get(_SMX_POLL_STATE_KEY)
+    if type(state) is not dict or state.get("identity") != identity:
+        # Populate all settings and counters once. Failed blocks remain absent
+        # from the first FULL snapshot instead of becoming synthetic zeros.
+        values = await read_spec_set_values(session, schema, ascii_style="printable")
+        runtime_state[_SMX_POLL_STATE_KEY] = {"identity": identity, "index": 0}
+        return DriverReadResult(values=values, mode=DriverReadMode.FULL)
+
+    fast_blocks = tuple(
+        block for block in schema.blocks if block.key in _SMX_FAST_BLOCK_KEYS
+    )
+    slow_blocks = tuple(
+        block for block in schema.blocks if block.key not in _SMX_FAST_BLOCK_KEYS
+    )
+    if not slow_blocks:
+        values = await read_spec_set_values(session, schema, ascii_style="printable")
+        return DriverReadResult(values=values, mode=DriverReadMode.FULL)
+
+    # One slow block per short poll; at longer configured intervals take enough
+    # blocks to aim for a complete slow sweep in approximately ten minutes.
+    # This is a cadence target, not a timer or an additional background task.
+    interval = (
+        float(poll_interval)
+        if poll_interval is not None and math.isfinite(poll_interval) and poll_interval > 0
+        else 5.0
+    )
+    count = min(
+        len(slow_blocks),
+        max(1, math.ceil(len(slow_blocks) * interval / _SMX_SLOW_SWEEP_TARGET_SECONDS)),
+    )
+    raw_index = state.get("index", 0)
+    index = raw_index if type(raw_index) is int and raw_index >= 0 else 0
+    selected_slow = tuple(
+        slow_blocks[(index + offset) % len(slow_blocks)]
+        for offset in range(count)
+    )
+    selected_blocks = (*fast_blocks, *selected_slow)
+    values = await read_spec_set_values(
+        session,
+        replace(schema, blocks=selected_blocks),
+        ascii_style="printable",
+    )
+
+    # DELTA retains omitted slow blocks, but failed *selected* reads must not
+    # leave old live readings or settings masquerading as fresh observations.
+    selected_specs = (
+        spec
+        for spec in schema.spec_set("runtime")
+        if any(
+            spec.function == block.function
+            and block.start <= spec.register
+            and spec.register + spec.word_count <= block.start + block.count
+            for block in selected_blocks
+        )
+    )
+    removed = frozenset(spec.key for spec in selected_specs if spec.key not in values)
+    state["index"] = (index + count) % len(slow_blocks)
+    return DriverReadResult(
+        values=values,
+        mode=DriverReadMode.DELTA,
+        removed_keys=removed,
+    )
 
 
 def _is_address_rejection(error: Exception) -> bool:

@@ -167,6 +167,20 @@ class TranslationBundleMixin:
                     return default
         return text
 
+    def _menu_labels(self, key: str, options: dict[str, str]) -> dict[str, str]:
+        """Send explicit labels instead of relying on frontend translation cache.
+
+        Call from a step decorated with ``with_translation_bundle``. Keys and
+        order remain the caller's navigation contract; values are readable
+        English fallbacks for incomplete installations or missing translations.
+        HA accepts this mapping directly, without another browser-side lookup.
+        """
+
+        return {
+            action: self._tr(f"{key}.{action}", fallback).strip() or fallback
+            for action, fallback in options.items()
+        }
+
 
 __all__ = [
     "TranslationBundleMixin",

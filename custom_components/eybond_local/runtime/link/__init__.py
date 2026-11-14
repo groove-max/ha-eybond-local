@@ -127,6 +127,9 @@ class EybondRuntimeLinkManager(
         self._callback_trigger_count = 0
         self._last_callback_state: str = CALLBACK_STATE_IDLE
         self._last_callback_detail: str = ""
+        # Historical attempt evidence, not live telemetry/identity authority.
+        # Offline cache invalidation must not erase why reconnect failed.
+        self._last_callback_attempt: dict[str, object] = {}
         # Cross-entry ownership authority (the domain registry) + this entry id,
         # injected read-only by the coordinator. Used only to classify the
         # "session claimed by another entry" callback outcome. Never used to read

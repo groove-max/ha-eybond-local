@@ -1372,6 +1372,24 @@ class CoordinatorCloudToolsMixin:
                 logger.warning("Completed learning receipt could not be finalized: %s", type(exc).__name__)
         self._protected_learning_run = None
 
+        # A separately reviewed legacy history can repair an old original-hold /
+        # retry-journal mismatch. Never consume it before HTTP and route drain,
+        # or use the retry's local endpoint as the original cloud destination.
+        if state is not None:
+            from .learning_reviewed_recovery import async_recover_reviewed_history
+            try:
+                async def finish_reviewed():
+                    return await async_recover_reviewed_history(self, stopping_state, _op_token)
+                reviewed, pending_cancel = await self._run_finalization_shielded(finish_reviewed)
+                if pending_cancel is not None:
+                    raise pending_cancel
+            except Exception as exc:
+                logger.warning("Reviewed learning recovery could not be finalized: %s", type(exc).__name__)
+            finally:
+                # A failed directory sync can follow a successful journal rename.
+                state = stopping_state = await self._async_active_shadow_learning_state(require_process=False)
+                hold_reason = await self._async_cloud_learning_hold_reason()
+
         # The cloud route is now closed; do not keep serving snapshot telemetry.
         # An unconfirmed hold survives retries, force-clear and restart.
         # Retain the exact endpoint-operation ownership and restoration evidence.
