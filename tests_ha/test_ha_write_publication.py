@@ -149,7 +149,7 @@ async def test_two_writes_publish_latest_observation_without_replaying(coordinat
     assert coordinator.published[-1] == 30
 
 
-@pytest.mark.parametrize("error", ["nak", "write_not_confirmed"])
+@pytest.mark.parametrize("error", ["nak", "write_not_confirmed", "write_response_unconfirmed:battery_type"])
 async def test_failure_is_not_optimistically_published_or_retried(coordinator, error):
     coordinator.write_error = RuntimeError(error)
     with pytest.raises(RuntimeError, match=error):

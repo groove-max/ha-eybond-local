@@ -248,6 +248,15 @@ Check the actual setting before another write. For support, keep the debug log
 around the failure and any subsequent normal command; do not repeat a one-shot
 action such as battery equalization just to reproduce the error.
 
+For SMG settings, newer development builds also retain
+`runtime_capability_write_confirmation` in Support Archive diagnostics when
+the acknowledgement fails. `write_status` describes the acknowledgement;
+`first_full_poll_value` and `latest_full_poll_value` describe independent normal
+register reads. A matching read does not turn an unconfirmed acknowledgement
+into a successful one or prove that an LCD agrees with it. The trace adds no
+extra reads or writes on failure and is session-local: capture support data
+before a restart, reconnect or another setting write replaces the evidence.
+
 ## MUST PV/PH18 power and energy corrections
 
 The unreleased test build corrects several readings in the MUST PV/PH18 map:

@@ -4389,6 +4389,29 @@ class RuntimeStateMachineTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_terminal_no_match_cannot_hide_session_loss(self) -> None:
+        async def _run() -> None:
+            for changed in (False, True):
+                for full_scan in (False, True):
+                    hub = self._hub(full_scan=full_scan)
+                    hub._link_manager.owned_session_generation = 1
+
+                    async def _lost_link(*_args, **_kwargs):
+                        hub._link_manager.connected = False
+                        if changed:
+                            hub._link_manager.owned_session_generation += 1
+                        raise DriverSweepNoMatch("no_supported_driver_matched", silent=True)
+
+                    method = "async_detect_inverter_candidates" if full_scan else "async_detect_inverter"
+                    with patch(
+                        f"custom_components.eybond_local.runtime.hub.detection.{method}",
+                        side_effect=_lost_link,
+                    ), patch.object(hub, "_async_attempt_runtime_link_baud_sweep", new=AsyncMock()) as sweep:
+                        result = await hub._async_detect_driver()
+                    self.assertEqual(result, "collector_session_changed" if changed else "collector_disconnected")
+                    sweep.assert_not_awaited()
+        asyncio.run(_run())
+
     def test_cancelled_refresh_drains_late_driver_detection_failure(self) -> None:
         async def _run() -> None:
             hub = self._hub(full_scan=False)

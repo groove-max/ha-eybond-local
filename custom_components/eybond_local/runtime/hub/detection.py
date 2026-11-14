@@ -243,6 +243,17 @@ class HubDetectionMixin:
 
     async def _async_detect_driver(self) -> str:
         detection_generation = self._owned_session_generation()
+
+        def interrupted_reason() -> str:
+            # The wire task and session guard may finish in the same loop
+            # turn. A terminal error from that task must not win over lost
+            # ownership, nor trigger UART scans on a disconnected collector.
+            if self._owned_session_generation() != detection_generation:
+                return "collector_session_changed"
+            if not self._link_manager.connected:
+                return "collector_disconnected"
+            return ""
+
         existing_driver_key = str(
             getattr(self._inverter, "driver_key", "") or ""
         ).strip()
@@ -328,6 +339,8 @@ class HubDetectionMixin:
             parent_cancel_requested = True
             raise
         except DriverSweepNoMatch as exc:
+            if reason := interrupted_reason():
+                return reason
             self._record_inverter_detection_probe_log(
                 exc.probe_log,
                 budget_exhausted=False,
@@ -341,7 +354,7 @@ class HubDetectionMixin:
             if detection_result is None:
                 return str(exc)
         except RuntimeError as exc:
-            return str(exc)
+            return interrupted_reason() or str(exc)
         finally:
             parent_cancel_requested = (
                 await _async_cancel_and_drain_task(
@@ -373,8 +386,8 @@ class HubDetectionMixin:
                 generation=detection_generation,
             )
 
-        if self._owned_session_generation() != detection_generation:
-            return "collector_session_changed"
+        if reason := interrupted_reason():
+            return reason
 
         if detect_all_candidates:
             selection = resolve_catalog_driver_candidate_overlap(contexts)

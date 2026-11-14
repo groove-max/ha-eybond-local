@@ -46,6 +46,8 @@ class CapabilityWriteConfirmation:
     requested_value: object
     expected_value: object
     requested_words: tuple[int, ...]
+    write_status: str = "pending"
+    write_error: str = ""
     immediate_status: str = _OBSERVATION_PENDING
     immediate_value: object | None = None
     immediate_words: tuple[int, ...] = ()
@@ -66,6 +68,10 @@ class CapabilityWriteConfirmation:
         _strict_scalar(self.requested_value, field_name="requested_value")
         _strict_scalar(self.expected_value, field_name="expected_value")
         _strict_words(self.requested_words, field_name="requested_words", allow_empty=False)
+        if self.write_status not in {"pending", "acknowledged", "unconfirmed", "rejected"}:
+            raise ValueError("write_confirmation_write_status_invalid")
+        if type(self.write_error) is not str:
+            raise TypeError("write_confirmation_write_error_not_string")
         _strict_status(self.immediate_status, field_name="immediate_status")
         _strict_status(self.first_poll_status, field_name="first_poll_status")
         _strict_status(self.latest_poll_status, field_name="latest_poll_status")
@@ -79,6 +85,21 @@ class CapabilityWriteConfirmation:
             raise ValueError("write_confirmation_poll_count_invalid")
         if type(self.poll_mismatch_seen) is not bool or type(self.poll_match_seen) is not bool:
             raise TypeError("write_confirmation_poll_flags_invalid")
+
+    def with_write_outcome(
+        self, *, error: BaseException | None = None, rejected: bool = False,
+    ) -> "CapabilityWriteConfirmation":
+        """Keep acknowledgement separate from a later observed register value.
+
+        An empty/invalid ACK or cancellation never becomes success because a
+        subsequent poll happens to contain the requested value.
+        """
+
+        return replace(
+            self,
+            write_status=("rejected" if rejected else "unconfirmed") if error else "acknowledged",
+            write_error=_error_marker(error) if error else "",
+        )
 
     def with_immediate_observation(
         self,
@@ -178,6 +199,8 @@ class CapabilityWriteConfirmation:
             "requested_value": self.requested_value,
             "expected_value": self.expected_value,
             "requested_words": list(self.requested_words),
+            "write_status": self.write_status,
+            "write_error": self.write_error,
             "immediate_status": self.immediate_status,
             "immediate_value": self.immediate_value,
             "immediate_words": list(self.immediate_words),
