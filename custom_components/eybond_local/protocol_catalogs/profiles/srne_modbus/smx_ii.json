@@ -1,9 +1,252 @@
 {
   "profile_key": "srne_modbus/smx_ii.json",
-  "title": "EASUN SMX-II 24 V (legacy read-only compatibility)",
+  "title": "EASUN SMX-II 24 V (identity-gated)",
   "driver_key": "srne_modbus",
   "protocol_family": "srne_modbus",
-  "groups": [],
-  "capabilities": [],
-  "presets": []
+  "groups": [
+    {"key": "output", "title": "Output", "order": 100, "icon": "mdi:transmission-tower-export"},
+    {"key": "charging", "title": "Charging", "order": 200, "icon": "mdi:battery-charging"},
+    {"key": "battery", "title": "Battery", "order": 300, "icon": "mdi:battery-cog"},
+    {"key": "protection", "title": "Protection", "order": 400, "icon": "mdi:shield-cog"},
+    {"key": "advanced", "title": "Advanced", "order": 900, "icon": "mdi:cog", "advanced": true}
+  ],
+  "capability_defaults": {
+    "write_function": 6,
+    "provenance": "doc_backed",
+    "support_tier": "conditional",
+    "requires_confirm": true,
+    "enabled_default": true,
+    "poll_readback": true,
+    "support_notes": "Register semantics are corroborated by the EASUN SMX-II 3.6 kW easun-modbus implementation and the community SRNE/EASUN SMX-II ESPHome map. The 24 V model stores battery-voltage thresholds in 0.2 V wire increments. A write is accepted only after an exact-register read-back."
+  },
+  "capabilities": [
+    {
+      "key": "output_priority", "title": "Output Priority", "register": 57860,
+      "value_kind": "enum", "group": "output", "tested": true, "enabled_default": true,
+      "change_summary": "Chooses the preferred source for the inverter output.",
+      "choices": [
+        {"value": 0, "label": "PV First", "order": 0},
+        {"value": 1, "label": "Utility First", "order": 1},
+        {"value": 2, "label": "Battery First", "order": 2}
+      ]
+    },
+    {
+      "key": "charger_source_priority", "title": "Charger Source Priority", "register": 57871,
+      "value_kind": "enum", "group": "charging", "tested": true, "enabled_default": true,
+      "change_summary": "Chooses which source charges the battery.",
+      "choices": [
+        {"value": 0, "label": "PV First", "order": 0},
+        {"value": 1, "label": "Utility First", "order": 1},
+        {"value": 2, "label": "PV and Utility", "order": 2},
+        {"value": 3, "label": "PV Only", "order": 3}
+      ]
+    },
+    {
+      "key": "output_frequency_setting", "title": "Output Frequency", "register": 57865,
+      "value_kind": "enum", "group": "output", "change_summary": "Sets the nominal AC output frequency.",
+      "choices": [
+        {"value": 5000, "label": "50 Hz", "order": 0},
+        {"value": 6000, "label": "60 Hz", "order": 1}
+      ]
+    },
+    {
+      "key": "ac_input_voltage_range", "title": "AC Input Voltage Range", "register": 57867,
+      "value_kind": "enum", "group": "output", "change_summary": "Chooses appliance or UPS AC input limits.",
+      "choices": [
+        {"value": 0, "label": "Appliance", "order": 0},
+        {"value": 1, "label": "UPS", "order": 1}
+      ]
+    },
+    {
+      "key": "output_voltage_setting", "title": "Output Voltage", "register": 57864,
+      "value_kind": "scaled_u16", "divisor": 10, "minimum": 0, "maximum": 3000,
+      "step": 0.1, "unit": "V", "device_class": "voltage", "group": "output",
+      "change_summary": "Sets the nominal AC output voltage."
+    },
+    {
+      "key": "max_charge_current", "title": "Maximum Charge Current", "register": 57866,
+      "value_kind": "scaled_u16", "divisor": 10, "minimum": 0, "maximum": 2000,
+      "step": 0.1, "unit": "A", "device_class": "current", "group": "charging",
+      "change_summary": "Limits the combined battery charge current."
+    },
+    {
+      "key": "max_ac_charge_current", "title": "Maximum Utility Charge Current", "register": 57861,
+      "value_kind": "scaled_u16", "divisor": 10, "minimum": 0, "maximum": 2000,
+      "step": 0.1, "unit": "A", "device_class": "current", "group": "charging",
+      "change_summary": "Limits battery charging current drawn from utility."
+    },
+    {
+      "key": "max_pv_charge_current", "title": "Maximum PV Charge Current", "register": 57345,
+      "value_kind": "scaled_u16", "divisor": 10, "minimum": 0, "maximum": 2000,
+      "step": 0.1, "unit": "A", "device_class": "current", "group": "charging",
+      "change_summary": "Limits battery charging current drawn from PV."
+    },
+    {
+      "key": "battery_type", "title": "Battery Type", "register": 57348,
+      "value_kind": "enum", "group": "battery", "change_summary": "Selects the battery charging profile.",
+      "choices": [
+        {"value": 0, "label": "User Defined", "order": 0},
+        {"value": 1, "label": "Sealed Lead Acid", "order": 1},
+        {"value": 2, "label": "Flooded Lead Acid", "order": 2},
+        {"value": 3, "label": "GEL", "order": 3},
+        {"value": 4, "label": "Lithium LF14", "order": 4},
+        {"value": 5, "label": "Lithium LF15", "order": 5},
+        {"value": 6, "label": "Lithium LF16", "order": 6},
+        {"value": 7, "label": "Lithium LF7", "order": 7},
+        {"value": 8, "label": "Lithium LF8", "order": 8},
+        {"value": 9, "label": "Lithium LF9", "order": 9},
+        {"value": 10, "label": "NCA7", "order": 10},
+        {"value": 11, "label": "NCA8", "order": 11},
+        {"value": 12, "label": "NCA13", "order": 12},
+        {"value": 13, "label": "NCA14", "order": 13}
+      ]
+    },
+    {
+      "key": "battery_capacity", "title": "Battery Capacity", "register": 57346,
+      "value_kind": "u16", "minimum": 1, "maximum": 2000, "step": 1, "unit": "Ah",
+      "group": "battery", "provenance": "inferred", "experimental": true,
+      "change_summary": "Sets nominal battery capacity used by the inverter SOC estimate."
+    },
+    {
+      "key": "battery_overcharge_voltage", "title": "Battery Overcharge Voltage", "register": 57349,
+      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
+      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
+      "provenance": "inferred", "experimental": true,
+      "change_summary": "Sets the battery overcharge protection threshold."
+    },
+    {
+      "key": "battery_charge_voltage_limit", "title": "Battery Charge Voltage Limit", "register": 57350,
+      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
+      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
+      "provenance": "inferred", "experimental": true,
+      "change_summary": "Sets the upper battery charging voltage limit."
+    },
+    {
+      "key": "battery_equalization_voltage", "title": "Battery Equalization Voltage", "register": 57351,
+      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
+      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
+      "change_summary": "Sets the battery equalization voltage."
+    },
+    {
+      "key": "battery_boost_voltage", "title": "Battery Boost Voltage", "register": 57352,
+      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
+      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
+      "change_summary": "Sets the battery boost/absorption voltage."
+    },
+    {
+      "key": "battery_float_voltage", "title": "Battery Float Voltage", "register": 57353,
+      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
+      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
+      "change_summary": "Sets the battery float voltage."
+    },
+    {
+      "key": "battery_charge_recovery_voltage", "title": "Battery Charge Recovery Voltage", "register": 57354,
+      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
+      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
+      "change_summary": "Sets the boost-charge recovery voltage."
+    },
+    {
+      "key": "battery_undervoltage_recovery", "title": "Battery Undervoltage Recovery", "register": 57355,
+      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
+      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "battery",
+      "change_summary": "Sets the voltage at which battery undervoltage clears."
+    },
+    {
+      "key": "battery_undervoltage_alarm", "title": "Battery Undervoltage Alarm", "register": 57356,
+      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
+      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "protection",
+      "change_summary": "Sets the low-battery warning voltage."
+    },
+    {
+      "key": "battery_overdischarge_voltage", "title": "Battery Overdischarge Voltage", "register": 57357,
+      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
+      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "protection",
+      "change_summary": "Sets the battery overdischarge threshold."
+    },
+    {
+      "key": "battery_discharge_limit_voltage", "title": "Battery Discharge Limit Voltage", "register": 57358,
+      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
+      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "protection",
+      "change_summary": "Sets the battery discharge cut-off voltage."
+    },
+    {
+      "key": "battery_overdischarge_delay", "title": "Battery Overdischarge Delay", "register": 57360,
+      "value_kind": "u16", "minimum": 0, "maximum": 120, "step": 1, "unit": "s",
+      "group": "protection", "change_summary": "Sets the overdischarge protection delay."
+    },
+    {
+      "key": "battery_equalization_time", "title": "Battery Equalization Time", "register": 57361,
+      "value_kind": "u16", "minimum": 0, "maximum": 600, "step": 1, "unit": "min",
+      "group": "battery", "change_summary": "Sets battery equalization duration."
+    },
+    {
+      "key": "battery_boost_time", "title": "Battery Boost Time", "register": 57362,
+      "value_kind": "u16", "minimum": 0, "maximum": 600, "step": 1, "unit": "min",
+      "group": "battery", "change_summary": "Sets battery boost/absorption duration."
+    },
+    {
+      "key": "battery_equalization_interval", "title": "Battery Equalization Interval", "register": 57363,
+      "value_kind": "u16", "minimum": 0, "maximum": 255, "step": 1, "unit": "d",
+      "group": "battery", "change_summary": "Sets the interval between battery equalization cycles."
+    },
+    {
+      "key": "battery_equalization_timeout", "title": "Battery Equalization Timeout", "register": 57379,
+      "value_kind": "u16", "minimum": 0, "maximum": 600, "step": 1, "unit": "min",
+      "group": "battery", "change_summary": "Sets the maximum equalization duration."
+    },
+    {
+      "key": "turn_to_utility_voltage", "title": "Switch to Utility Voltage", "register": 57371,
+      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
+      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "output",
+      "change_summary": "Sets the battery voltage that transfers the load to utility."
+    },
+    {
+      "key": "turn_to_inverter_voltage", "title": "Return to Inverter Voltage", "register": 57378,
+      "value_kind": "scaled_u16", "multiplier": 0.2, "minimum": 100, "maximum": 165,
+      "step": 0.2, "unit": "V", "device_class": "voltage", "group": "output",
+      "change_summary": "Sets the battery voltage that returns the load to inverter."
+    },
+    {
+      "key": "battery_equalization_enable", "title": "Battery Equalization", "register": 57862,
+      "value_kind": "bool", "group": "battery", "change_summary": "Enables periodic battery equalization."
+    },
+    {
+      "key": "power_saving_mode", "title": "Power Saving Mode", "register": 57868,
+      "value_kind": "bool", "group": "output", "change_summary": "Enables low-load search mode."
+    },
+    {
+      "key": "restart_on_overload", "title": "Restart on Overload", "register": 57869,
+      "value_kind": "bool", "group": "protection", "change_summary": "Automatically restarts after overload protection."
+    },
+    {
+      "key": "restart_on_overtemperature", "title": "Restart on Overtemperature", "register": 57870,
+      "value_kind": "bool", "group": "protection", "change_summary": "Automatically restarts after overtemperature protection."
+    },
+    {
+      "key": "alarm_enable", "title": "Alarm Buzzer", "register": 57872,
+      "value_kind": "bool", "group": "advanced", "advanced": true,
+      "change_summary": "Enables the inverter alarm buzzer."
+    },
+    {
+      "key": "input_change_alarm", "title": "Input Source Change Alarm", "register": 57873,
+      "value_kind": "bool", "group": "advanced", "advanced": true,
+      "change_summary": "Enables the buzzer when the input source changes."
+    },
+    {
+      "key": "bypass_on_overload", "title": "Bypass on Overload", "register": 57874,
+      "value_kind": "bool", "group": "protection", "advanced": true,
+      "change_summary": "Transfers to bypass when inverter output is overloaded."
+    },
+    {
+      "key": "battery_equalize_now", "title": "Equalize Battery Now", "register": 57101,
+      "value_kind": "bool", "group": "battery", "advanced": true,
+      "change_summary": "Starts or stops an immediate equalization cycle."
+    },
+    {
+      "key": "inverter_power", "title": "Inverter Power", "register": 57088,
+      "value_kind": "bool", "write_function": 16, "bitmask": 1, "group": "advanced",
+      "advanced": true, "unsafe_while_running": true, "provenance": "inferred", "experimental": true,
+      "change_summary": "Turns inverter operation on or off through the community-documented control register."
+    }
+  ]
 }

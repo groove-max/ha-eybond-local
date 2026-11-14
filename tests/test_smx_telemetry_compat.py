@@ -1,4 +1,4 @@
-"""Offline checks of the owner-unit SMX-II read-only compatibility overlay."""
+"""Offline checks of exact SMX-II telemetry and model-gated controls."""
 
 from __future__ import annotations
 
@@ -227,7 +227,7 @@ class SmxTelemetryCompatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("grid_voltage", recovered.values)
         self.assertNotIn("grid_voltage", recovered.removed_keys)
 
-    async def test_exact_owner_uses_full_schema_without_controls(self) -> None:
+    async def test_exact_owner_uses_full_schema_and_legacy_controls(self) -> None:
         driver = SrneModbusDriver()
         transport = _fixture(OWNER)
         inverter = await driver.async_probe(transport, TARGET)
@@ -235,8 +235,11 @@ class SmxTelemetryCompatTests(unittest.IsolatedAsyncioTestCase):
         assert inverter is not None
         self.assertEqual(inverter.variant_key, "smx_ii_24v")
         self.assertEqual(inverter.register_schema_name, SCHEMA)
-        self.assertEqual(inverter.profile_name, "")
-        self.assertEqual(inverter.capabilities, ())
+        self.assertEqual(inverter.profile_name, "srne_modbus/smx_ii.json")
+        self.assertEqual(len(inverter.capabilities), 36)
+        self.assertEqual({item.key for item in inverter.capabilities if item.tested}, {
+            "output_priority", "charger_source_priority",
+        })
         self.assertEqual(inverter.details["catalog_detection"]["resolution"], "exact")
         self.assertEqual(inverter.details["catalog_detection"]["confidence"], "high")
 
@@ -249,8 +252,8 @@ class SmxTelemetryCompatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(values["battery_discharge_total"], 10945)
         self.assertIsNone(values["system_datetime"])
 
-        with self.assertRaisesRegex(ValueError, "unsupported_capability"):
-            await driver.async_write_capability(transport, inverter, "max_ac_charge_current", 60)
+        # Read-only probes and telemetry do not change the fixture registers.
+        self.assertEqual(transport._registers[57861], 0)
 
     async def test_unlisted_srne_stays_generic_read_only(self) -> None:
         inverter = await SrneModbusDriver().async_probe(_fixture("SR-OTHER-MODEL"), TARGET)
@@ -260,6 +263,7 @@ class SmxTelemetryCompatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.register_schema_name, "srne_modbus/base.json")
         self.assertEqual(inverter.details["catalog_detection"]["resolution"], "family")
         self.assertEqual(inverter.capabilities, ())
+        self.assertEqual(inverter.profile_name, "")
 
     async def test_nearby_product_info_does_not_match_owner(self) -> None:
         inverter = await SrneModbusDriver().async_probe(_fixture("SR-2206260036-300918"), TARGET)
@@ -272,10 +276,10 @@ class SmxTelemetryCompatTests(unittest.IsolatedAsyncioTestCase):
         surface = catalog.surfaces["srne_modbus_smx_ii"]
         schema = load_register_schema(SCHEMA)
         legacy_profile = load_driver_profile("srne_modbus/smx_ii.json")
-        self.assertTrue(surface.read_only)
-        self.assertEqual(surface.profile_name, "")
+        self.assertFalse(surface.read_only)
+        self.assertEqual(surface.profile_name, "srne_modbus/smx_ii.json")
         self.assertEqual(len(schema.measurement_descriptions), 97)
-        self.assertEqual(legacy_profile.capabilities, ())
+        self.assertEqual(len(legacy_profile.capabilities), 36)
         self.assertEqual(legacy_profile.presets, ())
         keys = {item.key for item in schema.measurement_descriptions}
         self.assertTrue({
@@ -286,7 +290,7 @@ class SmxTelemetryCompatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(resolved)
         assert resolved is not None
         self.assertEqual(resolved[1].key, "srne_modbus_smx_ii")
-        self.assertEqual(resolved[1].profile_name, "")
+        self.assertEqual(resolved[1].profile_name, "srne_modbus/smx_ii.json")
         runtime_keys = {
             item.key for item in measurements_for_runtime(
                 driver_key="srne_modbus",

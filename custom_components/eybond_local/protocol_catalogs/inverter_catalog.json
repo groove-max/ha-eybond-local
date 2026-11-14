@@ -1797,10 +1797,10 @@
    "protocol_key": "srne_modbus",
    "driver_key": "srne_modbus",
    "variant_key": "smx_ii_24v",
-   "profile_name": "",
+  "profile_name": "srne_modbus/smx_ii.json",
    "register_schema_name": "srne_modbus/smx_ii_24v.json",
-   "tier": "partial",
-   "read_only": true,
+  "tier": "full",
+  "read_only": false,
    "support_capture_policy": "srne_modbus"
   },
   {

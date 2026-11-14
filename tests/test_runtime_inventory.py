@@ -20,7 +20,8 @@ class RuntimeInventoryTests(unittest.TestCase):
     def test_profile_names_are_derived_from_compiled_runtime_surfaces(self) -> None:
         names = runtime_profile_names()
 
-        self.assertEqual(len(names), 33)
+        self.assertEqual(len(names), 34)
+        self.assertIn("srne_modbus/smx_ii.json", names)
         self.assertIn("pi30_ascii/models/vmii_6200_31_07.json", names)
         self.assertIn("must_pv_ph18/base.json", names)
         self.assertIn("must_pv_ph18/pv3300.json", names)
@@ -54,8 +55,8 @@ class RuntimeInventoryTests(unittest.TestCase):
         summary = inventory["summary"]
 
         self.assertEqual(summary["profiles"], len(inventory["profiles"]))
-        self.assertEqual(summary["profiles"], 33)
-        self.assertEqual(summary["capabilities"], 1243)
+        self.assertEqual(summary["profiles"], 34)
+        self.assertEqual(summary["capabilities"], 1279)
         # The separate PV3300 surface adds 27 controls: four owner-confirmed,
         # 23 untested. The common MUST surface remains wholly untested.
         # Exact Aninerel promotion adds five conditional, untested controls;
@@ -63,13 +64,19 @@ class RuntimeInventoryTests(unittest.TestCase):
         # The firmware-scoped PI30 surface inherits 20 existing MAX controls;
         # only its charger-priority enum differs, not validation of other maps.
         # Issue #88 adds nine model-scoped controls, retaining untested status.
-        self.assertEqual(summary["validation_state_counts"], {"tested": 458, "untested": 785})
+        # The exact EASUN SMX-II restoration adds 36 legacy controls:
+        # two previously tested and 34 conditional/untested.
+        self.assertEqual(summary["validation_state_counts"], {"tested": 460, "untested": 819})
         self.assertEqual(
             summary["support_tier_counts"],
-            {"blocked": 31, "conditional": 810, "standard": 402},
+            {"blocked": 31, "conditional": 846, "standard": 402},
         )
 
         profile_by_key = {item["profile_key"]: item for item in inventory["profiles"]}
+        self.assertEqual(
+            profile_by_key["srne_modbus/smx_ii.json"]["validation_state_counts"],
+            {"tested": 2, "untested": 34},
+        )
         self.assertEqual(
             profile_by_key["must_pv_ph18/base.json"]["validation_state_counts"],
             {"untested": 27},
