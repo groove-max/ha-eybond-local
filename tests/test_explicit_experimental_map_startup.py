@@ -22,8 +22,19 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.runtime.coordinator import startup as startup_module  # noqa: E402
-from custom_components.eybond_local.models import ProbeTarget, RuntimeSnapshot  # noqa: E402
+def _startup_module():
+    """Import the module lazily.
+
+    The coordinator suites in this repository build their own const and
+    models stubs before importing any coordinator module. Importing the
+    real chain at collection time would populate sys.modules first and make
+    those suites fail for a reason that has nothing to do with them.
+    """
+
+    from custom_components.eybond_local.runtime.coordinator import startup
+
+    return startup
+
 
 
 ENTRY_KEY = "lvyuan_ty_sic_6_5kbe_w1"
@@ -40,7 +51,8 @@ def _surface() -> types.SimpleNamespace:
 
 
 def _coordinator(options: dict, data: dict) -> object:
-    coordinator = object.__new__(startup_module.CoordinatorStartupIdentityMixin)
+    startup = _startup_module()
+    coordinator = object.__new__(startup.CoordinatorStartupIdentityMixin)
     coordinator.config_entry = types.SimpleNamespace(
         entry_id="entry-1",
         data={
@@ -51,7 +63,7 @@ def _coordinator(options: dict, data: dict) -> object:
         },
         options=options,
     )
-    coordinator.data = RuntimeSnapshot(values={})
+    coordinator.data = startup.RuntimeSnapshot(values={})
     # The mixin reads the persisted metadata snapshot; these tests exercise the
     # explicit-selection branch, so the snapshot stays empty and invalid.
     coordinator.effective_metadata_snapshot = types.SimpleNamespace(
@@ -82,10 +94,13 @@ class ExplicitlySelectedStartupTests(unittest.TestCase):
         the explicit branch a restart would leave the inverter unbound -- the
         user's own choice would be what breaks it.
         """
+        startup = _startup_module()
 
         driver = types.SimpleNamespace(
             key="modbus_catalog",
-            probe_targets=(ProbeTarget(devcode=23711, collector_addr=1, device_addr=1),),
+            probe_targets=(
+                startup.ProbeTarget(devcode=23711, collector_addr=1, device_addr=1),
+            ),
         )
         profile = types.SimpleNamespace(
             driver_key="modbus_catalog",
@@ -99,19 +114,19 @@ class ExplicitlySelectedStartupTests(unittest.TestCase):
 
         with (
             patch.object(
-                startup_module,
+                startup,
                 "resolve_explicitly_selected_model_surface",
                 return_value=(types.SimpleNamespace(), _surface()),
             ) as resolve_selected,
             patch.object(
-                startup_module,
+                startup,
                 "resolve_unique_persisted_model_surface",
                 return_value=None,
             ) as resolve_persisted,
-            patch.object(startup_module, "get_driver", return_value=driver),
-            patch.object(startup_module, "load_driver_profile", return_value=profile),
+            patch.object(startup, "get_driver", return_value=driver),
+            patch.object(startup, "load_driver_profile", return_value=profile),
             patch.object(
-                startup_module,
+                startup,
                 "load_register_schema",
                 return_value=register_schema,
             ),
@@ -134,6 +149,7 @@ class ExplicitlySelectedStartupTests(unittest.TestCase):
         Same entry, healthy detected model, high confidence -- and still no
         binding, because the only route into this map is the user naming it.
         """
+        startup = _startup_module()
 
         coordinator = _coordinator(
             {},
@@ -145,12 +161,12 @@ class ExplicitlySelectedStartupTests(unittest.TestCase):
 
         with (
             patch.object(
-                startup_module,
+                startup,
                 "resolve_explicitly_selected_model_surface",
                 return_value=None,
             ) as resolve_selected,
             patch.object(
-                startup_module,
+                startup,
                 "resolve_unique_persisted_model_surface",
                 return_value=None,
             ),
@@ -162,17 +178,18 @@ class ExplicitlySelectedStartupTests(unittest.TestCase):
 
     def test_unknown_explicit_entry_fails_closed(self) -> None:
         """A stale selection must not silently bind something else."""
+        startup = _startup_module()
 
         coordinator = _coordinator({"device_catalog_entry_key": "removed_entry"}, {})
 
         with (
             patch.object(
-                startup_module,
+                startup,
                 "resolve_explicitly_selected_model_surface",
                 return_value=None,
             ),
             patch.object(
-                startup_module,
+                startup,
                 "resolve_unique_persisted_model_surface",
                 return_value=None,
             ),

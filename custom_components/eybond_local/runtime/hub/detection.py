@@ -43,13 +43,15 @@ def _scoped_to_explicit_catalog_entry(func):
 
     @wraps(func)
     async def _scoped(self, *args, **kwargs):
+        # Set the entry's own value unconditionally, including the empty one.
+        # ContextVars are inherited by tasks, so skipping the empty case would
+        # let this entry's detection run inside another entry's selection and
+        # bind an experimental map the user never named here.
         selection = str(
             getattr(self, "_explicit_catalog_entry_key", "") or ""
         ).strip()
-        if selection:
-            with explicit_catalog_entry(selection):
-                return await func(self, *args, **kwargs)
-        return await func(self, *args, **kwargs)
+        with explicit_catalog_entry(selection):
+            return await func(self, *args, **kwargs)
 
     _scoped.__eybond_explicit_scope__ = True
     return _scoped

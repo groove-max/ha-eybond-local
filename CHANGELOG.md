@@ -7,6 +7,22 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+### Fixed
+
+- Scope every detection pass to its own explicit catalog-map choice, including
+  the empty one. A ContextVar is inherited by child tasks, so a hub with no
+  selection inherited whichever map its parent task had chosen and could bind
+  an experimental map the user never named for it (#93). The pass now sets its
+  own value unconditionally; nested and child-task regressions prove that an
+  unselected entry stays unselected and that the enclosing scope is restored
+  after success, failure and cancellation.
+
+- Align the driver hint with an experimental map choice, in both directions.
+  The map belongs to one driver, so choosing it now adopts that driver instead
+  of leaving a stale manual hint that startup would refuse, and returning to
+  automatic detection releases the pinned driver again (#93). The options step
+  is covered by save-and-reload tests rather than resolver helpers alone.
+
 The following development changes are not part of the frozen 0.3.0-rc.1 release.
 The common connection, BLE lifecycle and editability repairs are recorded under
 RC1 below; newer model features remain here.

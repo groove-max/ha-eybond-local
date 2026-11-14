@@ -329,8 +329,23 @@ class RuntimeOptionsMixin:
                 options = dict(self._config_entry.options)
                 if selected == _EXPERIMENTAL_MAP_NONE:
                     options.pop(CONF_DEVICE_CATALOG_ENTRY, None)
+                    # Returning to automatic detection must also release the
+                    # driver the map had pinned, otherwise the entry keeps a
+                    # manual hint the user never chose on this path.
+                    options.pop(CONF_DRIVER_HINT, None)
                 else:
                     options[CONF_DEVICE_CATALOG_ENTRY] = selected
+                    # The chosen map belongs to one driver.  A stale manual
+                    # hint for a different driver would make startup refuse
+                    # the pair, so adopt the map's driver here instead of
+                    # leaving the entry silently unbound after a reload.
+                    selected_surface = catalog.surfaces.get(
+                        entry_by_key[selected].surface_key
+                    )
+                    if selected_surface is not None and getattr(
+                        selected_surface, "driver_key", ""
+                    ):
+                        options[CONF_DRIVER_HINT] = selected_surface.driver_key
                 _clear_runtime_inverter_facts(data)
                 self.hass.config_entries.async_update_entry(
                     self._config_entry,

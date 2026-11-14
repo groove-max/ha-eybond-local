@@ -5732,6 +5732,72 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "runtime")
 
+
+    async def test_experimental_map_choice_adopts_the_maps_driver(self) -> None:
+        """A stale hint for another driver must not survive the choice."""
+
+        from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+            load_compiled_detection_catalog,
+        )
+
+        catalog = load_compiled_detection_catalog()
+        entry_key = next(
+            descriptor.key
+            for descriptor in catalog.devices.values()
+            if descriptor.explicit_selection_only
+        )
+        map_driver = catalog.surfaces[
+            catalog.devices[entry_key].surface_key
+        ].driver_key
+
+        options = self._make_options_flow()
+        options._config_entry.options = {"driver_hint": "not_the_map_driver"}
+
+        result = await options.async_step_experimental_map(
+            {"device_catalog_entry_key": entry_key}
+        )
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(
+            options._config_entry.options["device_catalog_entry_key"], entry_key
+        )
+        self.assertEqual(
+            options._config_entry.options["driver_hint"], map_driver
+        )
+
+    async def test_experimental_map_reset_releases_the_pinned_driver(self) -> None:
+        """Returning to automatic detection must not keep a pinned driver."""
+
+        from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+            load_compiled_detection_catalog,
+        )
+
+        catalog = load_compiled_detection_catalog()
+        entry_key = next(
+            descriptor.key
+            for descriptor in catalog.devices.values()
+            if descriptor.explicit_selection_only
+        )
+        map_driver = catalog.surfaces[
+            catalog.devices[entry_key].surface_key
+        ].driver_key
+
+        options = self._make_options_flow()
+        options._config_entry.options = {
+            "device_catalog_entry_key": entry_key,
+            "driver_hint": map_driver,
+        }
+
+        result = await options.async_step_experimental_map(
+            {"device_catalog_entry_key": "__automatic__"}
+        )
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertNotIn(
+            "device_catalog_entry_key", options._config_entry.options
+        )
+        self.assertNotIn("driver_hint", options._config_entry.options)
+
     async def test_options_init_menu_exposes_collector_wifi(self) -> None:
         options = self._make_options_flow()
 
