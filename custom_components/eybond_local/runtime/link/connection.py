@@ -353,9 +353,21 @@ class LinkConnectionMixin:
             ):
                 challenge = self._identity_challenge_candidate()
                 probe_channel = None
-                deadline = asyncio.get_running_loop().time() + max(
-                    0.0, float(timeout)
-                )
+                loop = asyncio.get_running_loop()
+                started = loop.time()
+                wait_budget = max(0.0, float(timeout))
+                attempt: dict[str, object] = {
+                    "sequence": self._callback_attempt_counter,
+                    "stage": "channel_open",
+                    "outcome": "in_progress",
+                    "trigger_result": "not_sent",
+                    "trigger_elapsed_ms": 0,
+                    "wait_budget_ms": round(wait_budget * 1000),
+                    "identity_result": "not_attempted",
+                    "identity_elapsed_ms": 0,
+                    "baseline_sessions": 0,
+                }
+                self._last_callback_attempt = attempt
                 try:
                     baseline: frozenset[str] = frozenset()
                     from ...collector.silent_session_probe import (
@@ -377,17 +389,41 @@ class LinkConnectionMixin:
                             if observation.session_id
                         )
                         self._active_identity_challenge_protocol = challenge
+                        attempt["baseline_sessions"] = len(baseline)
 
-                    await self._send_callback_trigger()
+                    attempt["stage"] = "trigger"
+                    trigger_started = loop.time()
+                    try:
+                        attempt["trigger_result"] = await self._send_callback_trigger()
+                    finally:
+                        attempt["trigger_elapsed_ms"] = round(
+                            (loop.time() - trigger_started) * 1000
+                        )
+
+                    # UDP has its own bounded reply window (including compatible
+                    # terminators). Start the arrival/identity window AFTER it:
+                    # otherwise a 0.75s refresh can exhaust its entire budget
+                    # before the negotiator even looks at an already-live TCP
+                    # socket. Keep the SAME causality lease and pre-send baseline
+                    # across both phases; a UDP reply is never identity evidence.
+                    deadline = loop.time() + wait_budget
 
                     if probe_channel is not None and probe_channel.available:
-                        result = await self._session_identity_negotiator.async_negotiate(
-                            channel=probe_channel,
-                            expected_pn=self._collector_pn,
-                            baseline_session_ids=baseline,
-                            deadline=deadline,
-                            preferred_protocol=challenge,
-                        )
+                        attempt["stage"] = "identity"
+                        identity_started = loop.time()
+                        try:
+                            result = await self._session_identity_negotiator.async_negotiate(
+                                channel=probe_channel,
+                                expected_pn=self._collector_pn,
+                                baseline_session_ids=baseline,
+                                deadline=deadline,
+                                preferred_protocol=challenge,
+                            )
+                        finally:
+                            attempt["identity_elapsed_ms"] = round(
+                                (loop.time() - identity_started) * 1000
+                            )
+                        attempt["identity_result"] = result.status
                         logger.debug(
                             "Runtime callback identity result=%s port=%d "
                             "baseline=%d wire=%s source=%s probe=%s",
@@ -403,6 +439,7 @@ class LinkConnectionMixin:
                             # A timeout, foreign PN or ambiguous socket set must
                             # never fall through to route/peer matching.
                             self._note_callback_failure()
+                            attempt["outcome"] = result.status
                             return False
                         # The exact-session challenge wrote only a strong PN
                         # into the public inventory. The ordinary registry now
@@ -416,19 +453,31 @@ class LinkConnectionMixin:
                         # unavailable, fail closed instead of letting the
                         # transport claim by a weak PN prefix or peer route.
                         self._note_callback_failure()
+                        attempt["outcome"] = "channel_unavailable"
                         return False
 
+                    attempt["stage"] = "activation"
                     remaining = max(
-                        0.0, deadline - asyncio.get_running_loop().time()
+                        0.0, deadline - loop.time()
                     )
-                    return await self._async_await_callback_session(
+                    connected = await self._async_await_callback_session(
                         timeout=remaining,
                         require_heartbeat=require_heartbeat,
                     )
+                    attempt["outcome"] = "connected" if connected else "activation_failed"
+                    return connected
+                except asyncio.CancelledError:
+                    attempt["outcome"] = "cancelled"
+                    raise
+                except Exception:
+                    attempt["outcome"] = "error"
+                    raise
                 finally:
+                    attempt["elapsed_ms"] = round((loop.time() - started) * 1000)
                     self._active_identity_challenge_protocol = ""
                     if probe_channel is not None:
                         await probe_channel.async_close()
+                    logger.debug("Runtime callback attempt summary %s", attempt)
         except CallbackCausalityBusyError:
             # Someone else owns causality (an onboarding attempt, an inbound
             # verification). We did NOT trigger, so this is not a collector

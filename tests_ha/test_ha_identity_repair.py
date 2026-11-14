@@ -164,11 +164,13 @@ def certified(hass, protocol):
     )
 
 
+@pytest.mark.parametrize("language", ["en", "ru", "uk"])
 @pytest.mark.parametrize("protocol,action", [
     ("eybond_framed", "manual_bootstrap_framed"),
     ("at_text", "manual_bootstrap_at"),
 ])
-async def test_silent_repair_updates_same_entry_and_reloads(hass, pending_entry, protocol, action):
+async def test_silent_repair_updates_same_entry_and_reloads(hass, pending_entry, protocol, action, language):
+    hass.config.language = language
     calls = []
     original_entries = {entry.entry_id for entry in hass.config_entries.async_entries(DOMAIN)}
 
@@ -182,7 +184,10 @@ async def test_silent_repair_updates_same_entry_and_reloads(hass, pending_entry,
         assert action in result["menu_options"]
         assert "manual_save" not in result["menu_options"]
         assert "manual_recovery_verify" not in result["menu_options"]
-        assert "connected" in result["description_placeholders"]["failure_explanation"].lower()
+        assert isinstance(result["menu_options"], dict)
+        assert all(label.strip() for label in result["menu_options"].values())
+        if language == "en":
+            assert "connected" in result["description_placeholders"]["failure_explanation"].lower()
         result = await choose(hass, result, action)
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
@@ -228,7 +233,7 @@ async def test_closed_or_missing_silent_session_keeps_repair_retry_menu(hass, pe
         result = await start_repair(hass, pending_entry)
         assert result["type"] is FlowResultType.MENU
         assert result["step_id"] == "reconfigure_confirm"
-        assert result["menu_options"] == ["manual_probe_again", "manual_edit_settings"]
+        assert list(result["menu_options"]) == ["manual_probe_again", "manual_edit_settings"]
         result = await choose(hass, result, "manual_probe_again")
         assert "manual_bootstrap_framed" in result["menu_options"]
         assert "manual_bootstrap_at" in result["menu_options"]

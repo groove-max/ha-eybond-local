@@ -79,11 +79,11 @@ class LinkCallbackMixin:
         self._callback_ownership_registry = registry
         self._callback_entry_id = str(entry_id or "").strip()
 
-    async def _send_callback_trigger(self) -> None:
+    async def _send_callback_trigger(self) -> str:
         """Send exactly ONE UDP callback trigger for a callback_on_demand attempt.
 
         This is the one-shot replacement for the old continuous
-        ``DiscoveryAnnouncer`` loop: one datagram per connect attempt, never a
+        ``DiscoveryAnnouncer`` loop: one logical send per connect attempt, never a
         repeating N-second broadcast. The bounded wait for the inbound session
         happens after this returns. ``collector_ip``/``discovery_target`` are only
         the UDP target here, not identity.
@@ -93,7 +93,7 @@ class LinkCallbackMixin:
         if not target_ip:
             # No UDP target to poke; the collector may still dial in on its own,
             # and the bounded wait handles that.
-            return
+            return "no_target"
         advertised_port = int(self._configured_advertised_tcp_port or self._tcp_port)
         self._callback_trigger_count += 1
         try:
@@ -108,9 +108,10 @@ class LinkCallbackMixin:
             )
         except Exception as exc:  # pragma: no cover - defensive UDP send guard
             logger.debug("EyeBond one-shot callback trigger send failed: %s", exc)
-            return
+            return "send_failed"
         self._announcer.last_reply = probe.reply
         self._announcer.last_reply_from = probe.reply_from
+        return "reply_received" if probe.reply else "no_reply"
 
     def _callback_ownership_owner_for_pn(self, collector_pn: str) -> str:
         registry = self._callback_ownership_registry
@@ -220,6 +221,7 @@ class LinkCallbackMixin:
             "collector_callback_state_message": _callback_state_message(
                 self._last_callback_state
             ),
+            "collector_callback_last_attempt": dict(self._last_callback_attempt),
         }
 
     def set_reverse_discovery_enabled(self, enabled: bool) -> None:

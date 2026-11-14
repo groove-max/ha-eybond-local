@@ -65,7 +65,7 @@ def _install_homeassistant_stubs() -> None:
             return {
                 "type": "menu",
                 "step_id": step_id,
-                "menu_options": list(menu_options),
+                "menu_options": menu_options,
                 "description_placeholders": description_placeholders or {},
             }
 
@@ -4851,7 +4851,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "manual_confirm")
         self.assertEqual(
-            result["menu_options"],
+            list(result["menu_options"]),
             ["manual_probe_again", "manual_edit_settings"],
         )
         self.assertEqual(flow._manual_result.last_error, "callback_timeout")
@@ -4872,7 +4872,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "manual_confirm")
         self.assertEqual(
-            result["menu_options"],
+            list(result["menu_options"]),
             ["manual_probe_again", "manual_edit_settings"],
         )
 
@@ -5109,7 +5109,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "menu")
         self.assertEqual(result["step_id"], "manual_confirm")
         self.assertEqual(
-            result["menu_options"],
+            list(result["menu_options"]),
             ["manual_probe_again", "manual_edit_settings"],
         )
         self.assertFalse(hasattr(flow, "_test_unique_id"))

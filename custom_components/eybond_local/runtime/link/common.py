@@ -80,7 +80,8 @@ CALLBACK_STATE_LISTENER_UNAVAILABLE = "callback_listener_unavailable"
 CALLBACK_STATE_LISTENER_ERROR = "callback_listener_error"
 
 # One-shot UDP callback trigger send/reply window (seconds). This is not a
-# polling interval -- exactly one datagram is sent per connect attempt.
+# polling interval. One logical send may try the compatible UDP terminators;
+# its reply wait must not consume the subsequent TCP/identity arrival budget.
 _CALLBACK_TRIGGER_TIMEOUT = 0.75
 
 # Actionable, user-facing explanations for each typed callback outcome. Surfaced
