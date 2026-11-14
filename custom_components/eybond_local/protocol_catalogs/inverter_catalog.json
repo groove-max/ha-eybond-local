@@ -1793,6 +1793,17 @@
    "support_capture_policy": "srne_modbus"
   },
   {
+   "key": "srne_modbus_smx_ii",
+   "protocol_key": "srne_modbus",
+   "driver_key": "srne_modbus",
+   "variant_key": "smx_ii_24v",
+   "profile_name": "",
+   "register_schema_name": "srne_modbus/smx_ii_24v.json",
+   "tier": "partial",
+   "read_only": true,
+   "support_capture_policy": "srne_modbus"
+  },
+  {
    "key": "must_pv_ph18_full",
    "protocol_key": "must_pv_ph18",
    "driver_key": "must_pv_ph18",
@@ -3052,6 +3063,22 @@
      "field capture: PV39-8048 TLV, PACE BMS on CAN, FC03 109-113 vs BMS app and SmartValue"
     ],
     "confidence": "documented-with-register-capture"
+   }
+  },
+  {
+   "entry_key": "easun_smx_ii_24v_owner_unit",
+   "surface_key": "srne_modbus_smx_ii",
+   "model_name": "EASUN iSolar SMX II 3.6KW (24 V; verified owner unit)",
+   "aliases": ["SRNE SR-2206260036-300917"],
+   "priority": 130,
+   "family_fallback": false,
+   "anchors": [
+    {"key": "protocol.protocol_id", "equals": "SRNE_MODBUS"},
+    {"key": "identity.product_info", "equals": "SR-2206260036-300917"}
+   ],
+   "provenance": {
+    "sources": ["Owner-verified EASUN SMX-II 24 V inverter: nameplate SR-2206260036-300917-B02, matching 20-character SRNE Modbus product-info. The telemetry binding is limited to this exact identity and never authorizes writes."],
+    "confidence": "owner-nameplate-exact-unit-identity"
    }
   },
   {
