@@ -222,12 +222,13 @@ STRATEGY_REPAIR_LEASES = StrategyTransitionLease(
 )
 
 
-def _disallowed_payload_key(payload: Any) -> str:
+def disallowed_transition_option_key(payload: Any) -> str:
     """The first payload key NOT on the orthogonal allowlist, or "".
 
     Allowlist, not blacklist: a new architecture/identity/topology field added
     to the entry model in the future is refused by default rather than
-    silently smuggled through the transition.
+    silently smuggled through the transition. The failed-transition settings
+    action uses this same policy: declining the mode change must not bypass it.
     """
 
     if not payload:
@@ -409,7 +410,7 @@ async def async_run_strategy_transition(
             failure_reason=TRANSITION_NOT_REQUIRED,
         )
 
-    forbidden = _disallowed_payload_key(option_payload)
+    forbidden = disallowed_transition_option_key(option_payload)
     if forbidden:
         logger.info(
             "Strategy transition refused: disallowed payload key %r", forbidden

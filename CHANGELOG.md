@@ -13,6 +13,12 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Preserve existing inverter, polling and saved cloud-endpoint options when
+  choosing to keep settings after a failed connection-mode change. Merge only
+  the explicitly staged runtime edits; do not clear other options, overwrite
+  newer unrelated settings or commit unverified connection/identity fields through this
+  action. Unchanged settings no longer cause an unnecessary integration reload.
+
 - Retain SMG setting-write diagnostics when the acknowledgement is empty,
   malformed, rejected or interrupted (#88). Keep the acknowledgement outcome
   separate from subsequent normal register reads, without resending the setting,

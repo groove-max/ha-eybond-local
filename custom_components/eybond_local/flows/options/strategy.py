@@ -1464,19 +1464,28 @@ class StrategyTransitionOptionsMixin:
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Save the submitted runtime settings WITHOUT changing the strategy."""
+        """Merge staged runtime edits into current options, keeping the strategy."""
 
         del user_input
-        options = dict(self._transition_options_payload)
-        self._transition_target_strategy = ""
-        self._transition_rollback_selection = None
-        self._transition_rollback_candidate_snapshot = None
-        self._transition_rollback_candidate_pinned = False
-        self._transition_rollback_candidate_snapshot = None
-        self._transition_rollback_candidate_pinned = False
-        self._transition_options_payload = {}
-        self._transition_result = None
-        self._transition_error = ""
+        from ...connection.strategy_transition import (
+            TRANSITION_PAYLOAD_FORBIDDEN,
+            disallowed_transition_option_key,
+        )
+
+        if disallowed_transition_option_key(self._transition_options_payload):
+            # A rejected topology/identity payload cannot become valid merely
+            # because the user declines the transition. Reuse its allowlist.
+            self._transition_error = TRANSITION_PAYLOAD_FORBIDDEN
+            return await self.async_step_strategy_transition_failed()
+
+        # The mode-only flow stages no runtime edits. HA replaces the complete
+        # options mapping on create_entry; using that empty/partial payload
+        # alone loses the driver/map, polling and saved cloud endpoint. Read
+        # CURRENT options so changes made while the failure menu was open also
+        # survive. Only explicitly staged orthogonal edits may override them.
+        options = dict(self._config_entry.options)
+        options.update(self._transition_options_payload)
+        self._stage_connection_strategy_transition("")
         self.hass.config_entries.async_update_entry(self._config_entry, options=options)
         return self.async_create_entry(data=options)
 
@@ -1487,13 +1496,5 @@ class StrategyTransitionOptionsMixin:
         """Leave everything untouched (options included)."""
 
         del user_input
-        self._transition_target_strategy = ""
-        self._transition_rollback_selection = None
-        self._transition_rollback_candidate_snapshot = None
-        self._transition_rollback_candidate_pinned = False
-        self._transition_rollback_candidate_snapshot = None
-        self._transition_rollback_candidate_pinned = False
-        self._transition_options_payload = {}
-        self._transition_result = None
-        self._transition_error = ""
+        self._stage_connection_strategy_transition("")
         return self.async_create_entry(data=dict(self._config_entry.options))
