@@ -41,8 +41,8 @@ class HardRejectUnitTests(unittest.TestCase):
         self.assertIsNone(hard_reject_reason(_good_rb_values(bms_total_voltage=1230.1)))
         self.assertIsNone(hard_reject_reason(_good_rb_values(bms_total_voltage=25.6)))
 
-    def test_f24_accepts_maksym_256v_case(self):
-        # Maksym: 25.6 V with F battery rating 24 V must publish.
+    def test_f24_accepts_25_6v_with_24v_rating(self):
+        # 25.6 V with a 24 V battery rating must publish.
         ratings = dict(rated_voltage=115.0, rated_current=105.0, rated_battery_voltage=24.0)
         lo, hi = pack_voltage_window(24.0)
         self.assertEqual((lo, hi), (18.0, 32.0))

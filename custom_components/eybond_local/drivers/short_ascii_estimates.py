@@ -1,22 +1,24 @@
 """Labelled short-ASCII estimates derived from wire measurements + ratings.
 
-MX2: %×VA watts are an estimate, never measured active power. Keep wire load%
-intact; do not publish tip-style ``load_power`` / silent source swaps here.
-``best_available_ac_load_estimate`` is an explicitly labelled composite for
-dashboards:
+Percent-times-VA watts are an estimate, never measured active power. Keep wire
+load% intact; do not publish tip-style ``load_power`` / silent source swaps
+here. ``best_available_ac_load_estimate`` is an explicitly labelled composite
+for dashboards:
 
 (1) Q1 %×VA when the inverter reports load (> 0 W) → ``q1_percent`` (only hard stop);
-(2) else energy balance from known BMS watts (+ PV):
+(2) else energy balance when both BMS watts and PV watts are known:
     ``P_house ≈ max(0, P_pv − P_battery)`` with pack sign +charge / −discharge
-    → ``bms_dc`` / ``bms_dc_plus_pv`` / ``pv_minus_charge`` / ``pv_idle``;
+    → ``bms_dc`` (explicit 0 W PV while discharging) / ``bms_dc_plus_pv`` /
+    ``pv_minus_charge`` / ``pv_idle``;
 (3) else PV alone if BMS watts missing → ``pv_only``;
 (4) else Q1 including 0 W when the pack watts are unknown, or omit.
-    A charging or idle pack with no PV reading is a hole, not a Q1 zero.
+    Charge, idle, or discharge with no PV reading is a hole, not a published
+    battery-watt stand-in and not a Q1 zero.
 
 BMS watts use live ``battery_power`` only. A missing ``pv_power`` is not
-treated as 0 W: discharge may omit the PV term, and charge/idle without PV
-does not publish a residual built from that hole. Held pack watts stay on
-their own labelled entity.
+treated as 0 W and is not filled with battery watts. Discharge, charge, and
+idle without PV omit the estimate. Battery power stays its own measurement.
+Held pack watts stay on their own labelled entity.
 """
 
 from __future__ import annotations
@@ -84,8 +86,8 @@ def best_available_ac_load_estimate_values(values: dict[str, object]) -> dict[st
     (so PV 500 W + 100 W discharge → 600 W). Idle pack + PV → full PV.
 
     Battery watts are live ``battery_power`` only. When ``pv_power`` is absent,
-    discharge omits the PV term and charge/idle omits the estimate instead of
-    treating the hole as 0 W.
+    discharge, charge, and idle omit the estimate. Do not treat that hole as
+    0 W of PV or publish battery watts as house load.
     """
     q1_w = _q1_load_watts(values)
     # Inverter reporting real load: trust Q1 for house AC demand.
@@ -107,11 +109,8 @@ def best_available_ac_load_estimate_values(values: dict[str, object]) -> dict[st
         }
 
     if battery_w is not None and battery_w < 0:
-        # PV was not read. Use the measured discharge and do not invent 0 W of PV.
-        return {
-            "best_available_ac_load_estimate": round(-battery_w, 1),
-            "best_available_ac_load_estimate_source": "bms_dc",
-        }
+        # PV was not read. Battery power stays its own measurement.
+        return {}
 
     if pv_w is not None and pv_w > 0:
         # Pack watts missing; still better than publishing a silent Q1 zero.

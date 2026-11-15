@@ -73,16 +73,14 @@ class BestAvailableAcLoadEstimateUnitTests(unittest.TestCase):
         self.assertNotIn("load_power", out)
         self.assertNotIn("load_power_source", out)
 
-    def test_silent_q1_discharge_uses_bms_dc(self):
-        out = best_available_ac_load_estimate_values({
+    def test_silent_q1_discharge_without_pv_omits_estimate(self):
+        values = {
             "load_percent": 0,
             "estimated_ac_load_power": 0.0,
             "battery_power": -1300.5,
-        })
-        self.assertEqual(out, {
-            "best_available_ac_load_estimate": 1300.5,
-            "best_available_ac_load_estimate_source": "bms_dc",
-        })
+        }
+        self.assertEqual(best_available_ac_load_estimate_values(values), {})
+        self.assertEqual(values["battery_power"], -1300.5)
 
     def test_discharge_plus_pv_adds_solar_to_bms_dc(self):
         """Shoulder: Q1 silent, pack discharging, PV consumed by the house."""
@@ -150,7 +148,7 @@ class BestAvailableAcLoadEstimateUnitTests(unittest.TestCase):
         self.assertEqual(out["best_available_ac_load_estimate_source"], "q1_percent")
         self.assertEqual(out["best_available_ac_load_estimate"], 1569.8)
 
-    def test_zero_load_percent_with_discharge_uses_bms_dc(self):
+    def test_zero_load_percent_discharge_without_pv_omits_estimate(self):
         out = best_available_ac_load_estimate_values({
             "load_percent": 0,
             "short_ascii_rated_voltage": 115,
@@ -158,28 +156,23 @@ class BestAvailableAcLoadEstimateUnitTests(unittest.TestCase):
             "estimated_ac_load_power": 0.0,
             "battery_power": -850.0,
         })
-        self.assertEqual(out, {
-            "best_available_ac_load_estimate": 850.0,
-            "best_available_ac_load_estimate_source": "bms_dc",
-        })
+        self.assertEqual(out, {})
 
-    def test_light_discharge_still_balances_no_deadband(self):
-        """Former −25 W floor removed: any discharge contributes to balance."""
+    def test_light_discharge_without_pv_omits_estimate(self):
+        """An unread PV omits the house-load estimate for both a small and a
+        larger discharge."""
         silent = {
             "load_percent": 0,
             "estimated_ac_load_power": 0.0,
         }
-        at = best_available_ac_load_estimate_values({
-            **silent, "battery_power": -25.0,
-        })
-        self.assertEqual(at["best_available_ac_load_estimate_source"], "bms_dc")
-        self.assertEqual(at["best_available_ac_load_estimate"], 25.0)
-
-        light = best_available_ac_load_estimate_values({
-            **silent, "battery_power": -24.9,
-        })
-        self.assertEqual(light["best_available_ac_load_estimate_source"], "bms_dc")
-        self.assertEqual(light["best_available_ac_load_estimate"], 24.9)
+        self.assertEqual(
+            best_available_ac_load_estimate_values({**silent, "battery_power": -25.0}),
+            {},
+        )
+        self.assertEqual(
+            best_available_ac_load_estimate_values({**silent, "battery_power": -24.9}),
+            {},
+        )
 
         reporting = best_available_ac_load_estimate_values({
             **self._Q1, "battery_power": -25.0,

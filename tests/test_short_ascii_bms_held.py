@@ -178,13 +178,30 @@ class BestAvailableIgnoresHeldBatteryTests(unittest.TestCase):
         })
 
     def test_live_battery_ignores_held(self):
-        out = best_available_ac_load_estimate_values({
+        silent = {
             "estimated_ac_load_power": 0.0,
+            "pv_power": 500.0,
+        }
+        without_battery = best_available_ac_load_estimate_values(silent)
+        live = best_available_ac_load_estimate_values({
+            **silent,
             "battery_power": -100.0,
             "battery_power_held_estimate": -900.0,
         })
-        self.assertEqual(out["best_available_ac_load_estimate"], 100.0)
-        self.assertEqual(out["best_available_ac_load_estimate_source"], "bms_dc")
+        other_held = best_available_ac_load_estimate_values({
+            **silent,
+            "battery_power": -100.0,
+            "battery_power_held_estimate": -50.0,
+        })
+        self.assertEqual(without_battery, {
+            "best_available_ac_load_estimate": 500.0,
+            "best_available_ac_load_estimate_source": "pv_only",
+        })
+        self.assertEqual(live, {
+            "best_available_ac_load_estimate": 600.0,
+            "best_available_ac_load_estimate_source": "bms_dc_plus_pv",
+        })
+        self.assertEqual(other_held, live)
 
     def test_silent_q1_held_charge_does_not_build_residual(self):
         out = best_available_ac_load_estimate_values({

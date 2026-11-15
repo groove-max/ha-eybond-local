@@ -846,7 +846,7 @@ class HubRefreshMixin:
     def set_admit_short_ascii_mppt(self, admitted: bool) -> None:
         """Admit (or revoke) short-ASCII aux 0200 polls for this runtime.
 
-        Stock installs stay False. Sites opt in via config-entry option
+        Stock installs stay False. The options flow writes config-entry option
         ``admit_short_ascii_mppt``; entity ``enabled_default`` alone does not poll.
         """
 

@@ -2,8 +2,8 @@
 
 Solicits through ``link_transport.async_auxiliary_read`` (framed/AT facade).
 Does not harvest tip AABB, wait on EyeBond TID ambiguity, or merge settings
-0202. Stock installs must set entry option ``admit_short_ascii_mppt`` before
-any 0200 poll; ``enabled_default: false`` alone only hides entities.
+0202. The poll stays off until ``admit_short_ascii_mppt`` is true.
+``enabled_default: false`` alone only hides entities.
 Live PV/MPPT measurement keys stay opt-in (``enabled_default: false``);
 quiet ``mppt_error_code`` / ``mppt_error`` diagnostics default on in
 ``eybond_short_ascii/base.json``.

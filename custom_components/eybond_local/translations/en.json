@@ -445,6 +445,7 @@
           "connection": "Collector connection and cloud",
           "collector_endpoint": "Home Assistant connection address",
           "inverter_display": "Inverter display",
+          "short_ascii_mppt": "Short-ASCII MPPT poll",
           "runtime": "Polling and inverter detection",
           "cloud_tools": "Expand device support",
           "local_register_observation": "Local read-only observation",
@@ -467,6 +468,16 @@
         "data_description": {
           "inverter_display_manufacturer": "Enter only the public brand/model from the label, not a serial number or personal information. Up to 128 characters; included in support packages as user-declared labels.",
           "inverter_display_model": "Enter only the public brand/model from the label, not a serial number or personal information. Up to 128 characters; included in support packages as user-declared labels."
+        }
+      },
+      "short_ascii_mppt": {
+        "title": "Short-ASCII MPPT poll",
+        "description": "This only changes the short-ASCII auxiliary 0200 poll. Other drivers ignore it. Stock stays off until enabled.",
+        "data": {
+          "admit_short_ascii_mppt": "Admit the short-ASCII auxiliary 0200 poll"
+        },
+        "data_description": {
+          "admit_short_ascii_mppt": "Off until enabled. This asks the short-ASCII driver to poll auxiliary 0200. Other inverter drivers ignore this option."
         }
       },
       "cloud_tools": {

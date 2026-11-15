@@ -5742,6 +5742,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             [
                 "connection",
                 "runtime",
+                "short_ascii_mppt",
                 "inverter_display",
                 "collector_wifi",
                 "diagnostics",
@@ -5864,6 +5865,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             [
                 "collector_endpoint",
                 "runtime",
+                "short_ascii_mppt",
                 "inverter_display",
                 "collector_wifi",
                 "collector_uart",

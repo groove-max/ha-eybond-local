@@ -126,7 +126,7 @@ AABB intent.
 Cancellation/timeout after a send fences that exact socket; replies have no
 transaction id. Integrity or boundary failures close the session.
 
-## Maksym rule (rejects stay rejects)
+## Rejects stay rejects
 
 After a grammar is chosen, checksum, length, function-code, and subtype
 failures are rejects. They must not become sensor values. Do not invent fields
@@ -206,7 +206,7 @@ length is not buffered, the claim subtype matches, and the checksum is valid.
 | MPPT soft fail | Live `pv_power` / `pv_voltage` stay omitted. Labelled `*_held_estimate` mirrors (plus `mppt_held_estimate_age_seconds` / `mppt_held_estimate_mode`) keep the last good sample for the 60 s MPPT TTL. A cached TTL replay projects mode `held` and age since the real sample; only a newly read sample is observed as `live`. |
 
 Checksum/length/subtype rejects never assign sensor values from the failed
-contract (Maksym rule). Soft MPPT failure must not be treated as a successful
+contract (Rejects stay rejects). Soft MPPT failure must not be treated as a successful
 decode.
 
 ## Optional MPPT poller health

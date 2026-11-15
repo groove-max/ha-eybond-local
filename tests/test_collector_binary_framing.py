@@ -235,7 +235,7 @@ class BinaryFrameDecoderTests(unittest.TestCase):
         self.assertIsNone(owned.frame)
 
     def test_complete_eybond_frame_is_not_truncated_to_aabb(self) -> None:
-        """Maksym's counterexample: a full FC4 frame is also a valid 21-byte AABB."""
+        """Fixture: a complete FC4 frame whose first 21 bytes are also a valid AABB reply."""
 
         wire = bytes.fromhex("aabb020004b00104020800fa000a010000000000ca") + bytes(1185)
         header = decode_header(wire)
