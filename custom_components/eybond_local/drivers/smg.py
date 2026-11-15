@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from ..poll_policy import PollPolicy
 
 
@@ -699,19 +701,10 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
                 current_word=int(current[0]),
                 encoded_word=int(raw_words[0]),
             )
-            await session.write_holding(capability.register, [merged])
-        elif capability.write_function == 6:
-            for offset, word in enumerate(raw_words):
-                await session.write_single_holding(capability.register + offset, int(word))
-        else:
-            await session.write_holding(capability.register, raw_words)
 
-        # A Modbus write acknowledgement proves only that the request completed
-        # on the wire.  For setting-like capabilities, observe the exact target
-        # register immediately as a separate fact.  A mismatch is retained for
-        # diagnostics but is not declared final here: some SMG firmwares apply
-        # settings asynchronously, and the hub's mandatory full refresh remains
-        # the user-visible confirmation authority.
+        # Start at the write boundary, AFTER a possible bitmask pre-read. An
+        # unconfirmed write must replace the previous attempt's evidence too.
+        trace = None
         if capability.value_kind != "action":
             trace = start_write_confirmation(
                 runtime_state,
@@ -721,6 +714,37 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
                 expected_value=native_value,
                 requested_words=tuple(int(word) for word in raw_words),
             )
+        try:
+            if capability.bitmask:
+                await session.write_holding(capability.register, [merged])
+            elif capability.write_function == 6:
+                for offset, word in enumerate(raw_words):
+                    await session.write_single_holding(capability.register + offset, int(word))
+            else:
+                await session.write_holding(capability.register, raw_words)
+        except (Exception, asyncio.CancelledError) as exc:
+            if trace is not None:
+                trace = trace.with_write_outcome(
+                    error=exc,
+                    rejected=(
+                        isinstance(exc, ModbusError)
+                        and str(exc) in {"exception_code:1", "exception_code:2", "exception_code:3"}
+                        and (capability.write_function != 6 or len(raw_words) == 1)
+                    ),
+                ).with_immediate_unavailable(error=exc)
+                store_write_confirmation(runtime_state, trace)
+            # No extra reads, resends, or optimistic state changes. The normal
+            # coordinator refresh will record what the inverter actually says.
+            raise
+
+        # A Modbus write acknowledgement proves only that the request completed
+        # on the wire.  For setting-like capabilities, observe the exact target
+        # register immediately as a separate fact.  A mismatch is retained for
+        # diagnostics but is not declared final here: some SMG firmwares apply
+        # settings asynchronously, and the hub's mandatory full refresh remains
+        # the user-visible confirmation authority.
+        if trace is not None:
+            trace = trace.with_write_outcome()
             try:
                 observed_words = tuple(
                     int(word)

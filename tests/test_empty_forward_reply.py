@@ -132,6 +132,24 @@ class EmptyForwardReaderTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(w.closed)
                 self.assertEqual(c.collector_info.last_disconnect_reason, "collector_frame_length_invalid")
 
+    async def test_empty_followed_by_zeros_does_not_authorize_resynchronization(self):
+        # #89: a correlated empty reply is followed by an invalid zero header.
+        # Its unknown trailing extent cannot be guessed from an HA text log.
+        # Do not extend the existing single-window resync to an arbitrary run
+        # of zeros, even if a valid-looking response follows it.
+        for kind in ("framed", "at"):
+            c, r, w, run = await self.open(kind)
+            old, old_tid = await self.send(kind, c, w, timeout=.01)
+            with self.assertRaises(TimeoutError):
+                await old
+            current, tid = await self.send(kind, c, w)
+            r.feed_data(frame(old_tid, empty=True) + bytes(16) + frame(tid, payload=b"untrusted"))
+            await asyncio.wait_for(run, .5)
+            with self.assertRaises(ConnectionError):
+                await current
+            self.assertTrue(w.closed)
+            self.assertEqual(c.collector_info.last_disconnect_reason, "collector_frame_length_invalid")
+
     async def test_failed_local_write_cannot_authorize_empty_reply(self):
         for kind in ("framed", "at"):
             c, _, _, _ = await self.open(kind)

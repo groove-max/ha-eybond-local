@@ -25,6 +25,17 @@ from ..models import DetectedInverter, DriverMatch, ProbeTarget
 logger = logging.getLogger(__name__)
 
 
+def _require_detection_link(transport: Any) -> None:
+    """A closed link cannot establish a negative protocol match.
+
+    Recovery belongs to the session owner, not the driver sweep. Transports
+    without a connectivity signal (e.g. offline replay) keep their semantics.
+    """
+
+    if getattr(transport, "connected", None) is False:
+        raise RuntimeError("collector_disconnected")
+
+
 @dataclass(slots=True)
 class DetectedDriverContext:
     """The concrete matched driver plus a serializable match summary."""
@@ -329,6 +340,7 @@ async def async_detect_inverter(
     loop = asyncio.get_running_loop()
     saw_any_response = False
     for index, (driver, targets) in enumerate(driver_targets):
+        _require_detection_link(transport)
         if deadline.expired():
             probe_log.extend(
                 {"driver": pending.key, "elapsed_ms": 0, "outcome": "skipped_budget_exhausted"}
@@ -409,6 +421,7 @@ async def async_detect_inverter(
             logger.debug("Probe failed driver=%s error=%s", driver.key, exc)
             continue
 
+        _require_detection_link(transport)
         saw_any_response = saw_any_response or tracked.saw_response
         if inverter is not None:
             elapsed_ms = _append_probe_log(
@@ -437,6 +450,7 @@ async def async_detect_inverter(
             loop=loop,
         )
 
+    _require_detection_link(transport)
     silent = not saw_any_response
     if inverter_link_down:
         raise DriverSweepNoMatch(
@@ -524,6 +538,7 @@ async def async_detect_inverter_candidates(
         return elapsed_ms
 
     for index, (driver, targets) in enumerate(driver_targets):
+        _require_detection_link(transport)
         remaining = deadline.remaining()
         if remaining is not None and remaining <= 0:
             budget_exhausted = True
@@ -598,6 +613,7 @@ async def async_detect_inverter_candidates(
             logger.debug("Probe failed driver=%s error=%s", driver.key, exc)
             continue
 
+        _require_detection_link(transport)
         if inverter is not None:
             elapsed_ms = _log_probe(
                 driver,
@@ -628,6 +644,7 @@ async def async_detect_inverter_candidates(
                 routes=tracked.route_records,
             )
 
+    _require_detection_link(transport)
     if candidates or budget_exhausted:
         return DriverCandidateScan(
             candidates=tuple(candidates),
@@ -668,6 +685,7 @@ async def _ordered_driver_targets_by_signature(
     unsigned: list[tuple[InverterDriver, tuple[ProbeTarget, ...]]] = []
 
     for index, (driver, targets) in enumerate(driver_targets):
+        _require_detection_link(transport)
         signature_timeout = getattr(driver, "signature_timeout", None)
         if signature_timeout is None or signature_timeout <= 0:
             unsigned.append((driver, targets))
@@ -684,6 +702,7 @@ async def _ordered_driver_targets_by_signature(
         except Exception as exc:
             logger.debug("Signature probe failed driver=%s error=%s", driver.key, exc)
             matched = False
+        _require_detection_link(transport)
         if matched:
             remaining = driver_targets[index + 1 :]
             logger.debug("Driver signature matched driver=%s; prioritizing without probing remaining signatures", driver.key)
@@ -724,11 +743,13 @@ async def _async_probe_driver_signature_targets(
     targets: tuple[ProbeTarget, ...],
 ) -> bool:
     for target in targets:
+        _require_detection_link(transport)
         try:
             if await driver.async_probe_signature(transport, target):
                 return True
         except Exception as exc:
             logger.debug("Signature probe failed driver=%s target=%s error=%s", driver.key, target, exc)
+        _require_detection_link(transport)
     return False
 
 
@@ -845,6 +866,7 @@ async def _async_probe_driver_targets(
 ) -> DetectedInverter | None:
     typed_no_match: DriverProbeNoMatchError | None = None
     for target in targets:
+        _require_detection_link(transport)
         try:
             probe_with_evidence = getattr(driver, "async_probe_with_evidence", None)
             if callable(probe_with_evidence):
@@ -867,8 +889,10 @@ async def _async_probe_driver_targets(
             logger.debug("Probe failed driver=%s target=%s error=%s", driver.key, target, exc)
             continue
 
+        _require_detection_link(transport)
         if inverter is not None:
             return inverter
+    _require_detection_link(transport)
     if typed_no_match is not None:
         raise typed_no_match
     return None
