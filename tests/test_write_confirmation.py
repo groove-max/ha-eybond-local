@@ -66,6 +66,17 @@ class CapabilityWriteConfirmationTests(unittest.TestCase):
         self.assertEqual(after_external_change.latest_poll_value, "SBU")
         self.assertEqual(after_external_change.poll_observation_count, 1)
 
+    def test_acknowledgement_is_separate_from_observed_convergence(self) -> None:
+        trace = CapabilityWriteConfirmation(
+            capability_key="battery_type", value_key="battery_type",
+            requested_value="Flooded", expected_value="Flooded", requested_words=(1,),
+        ).with_write_outcome(error=TimeoutError("request_timeout:private-host"))
+        trace = trace.with_poll_observation(value="Flooded", matched=True)
+        self.assertEqual(trace.write_status, "unconfirmed")
+        self.assertEqual(trace.write_error, "TimeoutError:request_timeout")
+        self.assertEqual(trace.convergence, "requested_value_observed")
+        self.assertNotIn("private-host", str(trace.diagnostics()))
+
     def test_unavailable_immediate_read_uses_bounded_error_marker(self) -> None:
         trace = CapabilityWriteConfirmation(
             capability_key="secondary_output_priority",

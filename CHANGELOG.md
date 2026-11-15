@@ -13,6 +13,23 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Retain SMG setting-write diagnostics when the acknowledgement is empty,
+  malformed, rejected or interrupted (#88). Keep the acknowledgement outcome
+  separate from subsequent normal register reads, without resending the setting,
+  adding recovery reads or projecting the requested value into entity state.
+
+- Stop inverter detection when its collector link is lost (#89). A disconnected
+  or replaced session cannot establish an unsupported-protocol verdict or trigger
+  a UART sweep, including when detection and the session guard finish together.
+  This does not relax malformed-frame parsing or establish the cause of the
+  collector's trailing zero bytes.
+
+- Add maintainer-reviewed recovery for historical Shadow Learning holds whose
+  current journal belongs to a later protected retry. Approval is explicit and
+  bound to unchanged local history; normal HA recovery restores the original
+  run's endpoint obligation and verifies the return. Updating alone never
+  approves a history or clears a hold, and no new control requests are sent.
+
 - Preserve a configured HA callback address across startup and network outages
   instead of replacing it with another active interface (#82). Runtime and
   setup share the filtered LAN/VPN inventory; a known internal-only inventory

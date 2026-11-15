@@ -270,3 +270,15 @@ class CloudLearningMutationFence:
         except CloudLearningProtectionRequired as exc:
             return str(exc)
         return ""
+
+    async def accept_reviewed_retirement(self, state) -> None:
+        """Explicit historical review is distinct from automatic wire completion."""
+        from .reviewed_recovery import ReviewedLearningRecoveryStore
+        if state.collector_pn != self._collector_pn or self._blocked_reason not in ("", "cloud_learning_hold_pending"):
+            raise CloudLearningProtectionRequired("cloud_learning_review_fence_conflict")
+        store = ReviewedLearningRecoveryStore(self._store._config_dir)
+        await async_run_owned_worker(store.require_retired_review, state=state)
+        if self._blocked_reason not in ("", "cloud_learning_hold_pending"):
+            raise CloudLearningProtectionRequired("cloud_learning_review_fence_conflict")
+        self._release_generation += 1
+        self._blocked_reason = ""

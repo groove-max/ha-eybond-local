@@ -57,6 +57,7 @@ If you are extending or maintaining the project, use [../CONTRIBUTING.md](../CON
 - [Validation](maintainer/VALIDATION.md) — focused tests, quality gate, and Home Assistant compatibility lanes
 - [Releasing](maintainer/RELEASING.md) — maintainer-only release preparation and publication checklist
 - [Issue Triage](maintainer/ISSUE_TRIAGE.md) — manual status labels, evidence requests, retest handling, and closing rules
+- [Reviewed Learning Recovery](maintainer/LEARNING_RECOVERY.md) — supervised recovery of old, fully reviewed original/retry histories
 - [Graphify](maintainer/GRAPHIFY.md) — regenerating and querying the local architecture knowledge graph
 - [Graphify Architecture Audit](maintainer/GRAPHIFY_ARCHITECTURE_AUDIT.md) — findings and follow-up work from the current graph snapshot
 
