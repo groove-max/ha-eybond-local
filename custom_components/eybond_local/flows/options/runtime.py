@@ -34,6 +34,7 @@ from ...connection.entry import (
     build_runtime_option_settings,
     resolve_catalog_entry_key,
     resolve_driver_hint,
+    resolve_effective_catalog_choice,
 )
 from ..common.connection_form import (
     DRIVER_DISPLAY_LABELS as _DRIVER_DISPLAY_LABELS,
@@ -237,8 +238,15 @@ class RuntimeOptionsMixin:
                 # An explicit experimental map belongs to one driver. Keeping it
                 # after a driver switch would make startup reject the pair and
                 # leave the inverter unbound for a choice the user can no longer
-                # see, so the switch clears it.
-                apply_catalog_choice(data, options, catalog_entry_key="")
+                # see, so the switch keeps it only when the map is the new
+                # driver's own and clears it otherwise (from both sources).
+                apply_catalog_choice(
+                    data,
+                    options,
+                    catalog_entry_key=resolve_effective_catalog_choice(
+                        data, options, driver_hint=selected,
+                    ),
+                )
                 _clear_runtime_inverter_facts(data)
                 self.hass.config_entries.async_update_entry(
                     self._config_entry,
@@ -870,6 +878,23 @@ class RuntimeOptionsMixin:
         if (submitted_driver_intent == current_driver_intent
                 and PROBE_ROUTE_OPTION in self._config_entry.options):
             options[PROBE_ROUTE_OPTION] = self._config_entry.options[PROBE_ROUTE_OPTION]
+        # An explicit experimental map is a choice about a MODEL, not a polling
+        # preference, and this form has no field for it. Rebuilding the options
+        # from the form alone therefore dropped it, and because such a map may
+        # only bind when the user named it, the next reload lost the inverter
+        # instead of merely forgetting a setting. Keep the map while it still
+        # belongs to the effective driver, and release it from BOTH sources
+        # once a deliberate driver change (or Automatic) no longer matches it,
+        # so no stale copy can re-bind a map the user effectively replaced.
+        apply_catalog_choice(
+            data,
+            options,
+            catalog_entry_key=resolve_effective_catalog_choice(
+                self._config_entry.data,
+                self._config_entry.options,
+                driver_hint=submitted_driver_intent,
+            ),
+        )
         self.hass.config_entries.async_update_entry(
             self._config_entry,
             data=data,

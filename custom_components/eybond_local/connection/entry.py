@@ -146,6 +146,47 @@ def resolve_catalog_entry_key(
     return str(raw or "").strip()
 
 
+def resolve_effective_catalog_choice(
+    data: Mapping[str, object],
+    options: Mapping[str, object],
+    *,
+    driver_hint: str,
+) -> str:
+    """Return the explicit map that still belongs to this driver choice.
+
+    A stored map key is not a fact on its own: an entry marked
+    explicit-selection-only may bind only with the driver its surface
+    declares, and startup refuses the pair outright when the effective hint
+    names another driver (and unbinds the inverter). Callers that rebuild an
+    entry's options therefore keep the map only while this returns it, and
+    release it from both sources otherwise. An empty result means no map can
+    bind with this driver: nothing is stored, the key no longer resolves in
+    the catalog, or it belongs to a different driver.
+    """
+
+    key = resolve_catalog_entry_key(data, options)
+    if not key:
+        return ""
+    intent = str(driver_hint or "").strip()
+    if not intent or intent == DRIVER_HINT_AUTO:
+        # Automatic detection is the opposite of a named map; keeping the key
+        # next to it would let a later detection re-bind a map the user had
+        # effectively released.
+        return ""
+    try:
+        from ..metadata.compiled_detection_catalog import (
+            resolve_explicitly_selected_model_surface,
+        )
+
+        resolution = resolve_explicitly_selected_model_surface(key)
+    except Exception:
+        return ""
+    if resolution is None:
+        return ""
+    _descriptor, surface = resolution
+    return key if surface.driver_key == intent else ""
+
+
 def apply_driver_choice(
     data: dict[str, Any],
     options: dict[str, Any],

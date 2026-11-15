@@ -805,3 +805,206 @@ async def test_experimental_map_reset_releases_a_data_hint_after_real_reload(
 
     await hass.config_entries.async_unload(collector_entry.entry_id)
     await hass.async_block_till_done()
+
+
+async def test_runtime_edit_keeps_the_bound_map_across_a_real_reload(
+    hass: HomeAssistant, collector_entry: MockConfigEntry, fake_runtime, monkeypatch,
+) -> None:
+    """The reported flow: bind the map, edit polling, save, reload.
+
+    The runtime form has no field for the experimental map, so rebuilding the
+    options from its fields alone used to drop the key while keeping its
+    driver.  Because the map may only bind when the user named it, the
+    reloaded runtime then stopped binding the inverter instead of merely
+    forgetting a preference.  Editing only the polling interval must leave
+    BOTH the map key and its driver effective.
+    """
+
+    from conftest import FakeRuntimeManager
+    from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+        load_compiled_detection_catalog,
+    )
+
+    catalog = load_compiled_detection_catalog()
+    entry_key = next(
+        descriptor.key
+        for descriptor in catalog.devices.values()
+        if descriptor.explicit_selection_only
+    )
+    map_driver = catalog.surfaces[catalog.devices[entry_key].surface_key].driver_key
+
+    received: list[tuple[str, str]] = []
+    original_init = FakeRuntimeManager.__init__
+
+    def initialize(self, *args, **kwargs):
+        received.append((
+            kwargs["driver_hint"],
+            kwargs.get("explicit_catalog_entry_key", ""),
+        ))
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(FakeRuntimeManager, "__init__", initialize)
+
+    hass.config_entries.async_update_entry(
+        collector_entry,
+        data={**collector_entry.data, "driver_hint": "modbus_smg"},
+    )
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # 1. Bind the experimental map through the real options manager.
+    menu = await hass.config_entries.options.async_init(collector_entry.entry_id)
+    assert "experimental_map" in menu["menu_options"]
+    await hass.config_entries.options.async_configure(
+        menu["flow_id"], {"next_step_id": "experimental_map"},
+    )
+    result = await hass.config_entries.options.async_configure(
+        menu["flow_id"], user_input={"device_catalog_entry_key": entry_key},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    assert collector_entry.options["device_catalog_entry_key"] == entry_key
+    assert received[-1] == (map_driver, entry_key)
+
+    # 2. Keep the driver, change ONLY the polling preference.
+    menu = await hass.config_entries.options.async_init(collector_entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        menu["flow_id"], {"next_step_id": "runtime"},
+    )
+    result = await hass.config_entries.options.async_configure(
+        menu["flow_id"],
+        {
+            "driver_hint": map_driver,
+            "poll_mode": "manual",
+            "control_mode": "read_only",
+            "connection": {
+                "server_ip": SYNTHETIC_SERVER_IP,
+                "collector_ip": SYNTHETIC_COLLECTOR_IP,
+                "tcp_port": 8899,
+                "udp_port": 58899,
+                "discovery_target": "192.0.2.255",
+                "discovery_interval": 3,
+                "heartbeat_interval": 60,
+            },
+        },
+    )
+    # Manual polling asks for the interval in its own step.
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "runtime_poll_interval"
+    result = await hass.config_entries.options.async_configure(
+        menu["flow_id"], {"poll_interval": 40},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+
+    assert collector_entry.options["device_catalog_entry_key"] == entry_key, (
+        "an unrelated polling save must not release the explicit map"
+    )
+    assert collector_entry.options["driver_hint"] == map_driver
+    assert collector_entry.options["poll_interval"] == 40
+    assert collector_entry.state is ConfigEntryState.LOADED
+    assert received[-1] == (map_driver, entry_key), (
+        "the reloaded runtime must still receive the saved map and its driver"
+    )
+
+    # 3. A second reload proves the SAVED pair is what the runtime runs.
+    assert await hass.config_entries.async_reload(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    assert received[-1] == (map_driver, entry_key)
+
+    await hass.config_entries.async_unload(collector_entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_runtime_driver_change_releases_the_bound_map_after_real_reload(
+    hass: HomeAssistant, collector_entry: MockConfigEntry, fake_runtime, monkeypatch,
+) -> None:
+    """A deliberate driver change must release the map from both sources.
+
+    The entry starts with the map bound in options and in data.  Choosing a
+    different driver in the runtime form is a deliberate release: startup
+    refuses a map with a foreign driver and unbinds the inverter, so a stale
+    copy in either source would keep the unit unbound after the reload.
+    """
+
+    from conftest import FakeRuntimeManager
+    from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+        load_compiled_detection_catalog,
+    )
+
+    catalog = load_compiled_detection_catalog()
+    entry_key = next(
+        descriptor.key
+        for descriptor in catalog.devices.values()
+        if descriptor.explicit_selection_only
+    )
+    map_driver = catalog.surfaces[catalog.devices[entry_key].surface_key].driver_key
+
+    received: list[tuple[str, str]] = []
+    original_init = FakeRuntimeManager.__init__
+
+    def initialize(self, *args, **kwargs):
+        received.append((
+            kwargs["driver_hint"],
+            kwargs.get("explicit_catalog_entry_key", ""),
+        ))
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(FakeRuntimeManager, "__init__", initialize)
+
+    hass.config_entries.async_update_entry(
+        collector_entry,
+        data={**collector_entry.data, "device_catalog_entry_key": entry_key},
+        options={
+            **collector_entry.options,
+            "driver_hint": map_driver,
+            "device_catalog_entry_key": entry_key,
+        },
+    )
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    assert received[-1] == (map_driver, entry_key)
+
+    menu = await hass.config_entries.options.async_init(collector_entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        menu["flow_id"], {"next_step_id": "runtime"},
+    )
+    result = await hass.config_entries.options.async_configure(
+        menu["flow_id"],
+        {
+            "driver_hint": "modbus_smg",
+            "poll_mode": "auto",
+            "control_mode": "read_only",
+            "connection": {
+                "server_ip": SYNTHETIC_SERVER_IP,
+                "collector_ip": SYNTHETIC_COLLECTOR_IP,
+                "tcp_port": 8899,
+                "udp_port": 58899,
+                "discovery_target": "192.0.2.255",
+                "discovery_interval": 3,
+                "heartbeat_interval": 60,
+            },
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+
+    assert collector_entry.options["driver_hint"] == "modbus_smg"
+    assert "device_catalog_entry_key" not in collector_entry.options, (
+        "a foreign map must not survive in options"
+    )
+    assert "device_catalog_entry_key" not in collector_entry.data, (
+        "a foreign map must not survive in data either"
+    )
+    assert collector_entry.state is ConfigEntryState.LOADED
+    assert received[-1] == ("modbus_smg", ""), (
+        "the reloaded runtime must run the new driver with no stale map"
+    )
+
+    assert await hass.config_entries.async_reload(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    assert received[-1] == ("modbus_smg", "")
+
+    await hass.config_entries.async_unload(collector_entry.entry_id)
+    await hass.async_block_till_done()
+

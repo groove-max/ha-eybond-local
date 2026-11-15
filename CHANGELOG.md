@@ -23,6 +23,22 @@ the GitHub release body should be rendered from the matching version section her
   automatic detection releases the pinned driver again (#93). The options step
   is covered by save-and-reload tests rather than resolver helpers alone.
 
+- Keep the explicit experimental map when an unrelated save rebuilds the
+  options. The runtime form has no field for the map, so a polling or
+  control-mode save rebuilt the options without `device_catalog_entry_key`
+  and the next reload stopped binding the inverter even though the driver was
+  unchanged: such a map may only bind when the user named it, so the
+  selection silently disappeared rather than merely being forgotten (#93).
+  The commit path now carries the stored map through while it still belongs
+  to the effective driver, and releases it from both `data` and options once a
+  deliberate driver change (or Automatic) no longer matches it, so no stale
+  copy can re-bind a map the user effectively replaced. The release is one
+  shared helper used by the runtime, protocol and shadow steps, and the
+  runtime form now says in its driver hint that keeping the same driver keeps
+  the map. Real-HA tests drive the options manager through bind-map, edit
+  polling, save and reload with a non-Auto hint already in entry data, and
+  through a deliberate driver change that must leave no map in either source.
+
 - Make an options save actually change what the reloaded runtime runs. Every
   reader takes the driver hint and the explicit map key from entry options and
   falls back to entry data, but the options steps only wrote and cleared the

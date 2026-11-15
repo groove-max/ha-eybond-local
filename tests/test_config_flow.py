@@ -5836,6 +5836,111 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "",
         )
 
+    async def test_runtime_options_save_keeps_the_explicit_map_it_cannot_post(self) -> None:
+        """A polling/control save must not silently release the experimental map.
+
+        The runtime form has no field for the map, so rebuilding the options
+        from its fields alone dropped the key. Such a map may only bind when
+        the user named it, so losing it unbinds the inverter on the next
+        reload instead of merely forgetting a preference.
+        """
+
+        from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+            load_compiled_detection_catalog,
+        )
+
+        catalog = load_compiled_detection_catalog()
+        entry_key = next(
+            descriptor.key
+            for descriptor in catalog.devices.values()
+            if descriptor.explicit_selection_only
+        )
+        map_driver = catalog.surfaces[
+            catalog.devices[entry_key].surface_key
+        ].driver_key
+
+        options = self._make_options_flow()
+        options._config_entry.data["driver_hint"] = "modbus_smg"
+        options._config_entry.options = {
+            "device_catalog_entry_key": entry_key,
+            "driver_hint": map_driver,
+        }
+
+        result = await options.async_step_runtime({
+            CONF_DRIVER_HINT: map_driver,
+            "control_mode": "auto",
+            "poll_mode": "manual",
+            "poll_interval": 30,
+            "connection": {
+                "server_ip": "192.168.1.50",
+                "collector_ip": "192.168.1.55",
+                "tcp_port": 8899,
+                "udp_port": 58899,
+                "discovery_target": "192.168.1.255",
+                "discovery_interval": 3,
+                "heartbeat_interval": 60,
+            },
+        })
+
+        self.assertEqual(result["type"], "create_entry", result)
+        self.assertEqual(result["data"]["device_catalog_entry_key"], entry_key)
+        self.assertEqual(result["data"]["driver_hint"], map_driver)
+        self.assertEqual(
+            resolve_catalog_entry_key(
+                options._config_entry.data,
+                options._config_entry.options,
+            ),
+            entry_key,
+        )
+
+    async def test_runtime_options_save_releases_the_map_of_another_driver(self) -> None:
+        """A deliberate driver change retires a map that belongs to the old one.
+
+        Startup refuses a map together with a foreign driver and unbinds the
+        unit, so the stale key has to leave BOTH sources even when the map key
+        is only present in entry data.
+        """
+
+        from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+            load_compiled_detection_catalog,
+        )
+
+        catalog = load_compiled_detection_catalog()
+        entry_key = next(
+            descriptor.key
+            for descriptor in catalog.devices.values()
+            if descriptor.explicit_selection_only
+        )
+        map_driver = catalog.surfaces[
+            catalog.devices[entry_key].surface_key
+        ].driver_key
+
+        options = self._make_options_flow()
+        options._config_entry.data["device_catalog_entry_key"] = entry_key
+        options._config_entry.options = {"driver_hint": map_driver}
+
+        result = await options.async_step_runtime({
+            CONF_DRIVER_HINT: "modbus_smg",
+            "control_mode": "auto",
+            "poll_mode": "manual",
+            "poll_interval": 30,
+            "connection": {
+                "server_ip": "192.168.1.50",
+                "collector_ip": "192.168.1.55",
+                "tcp_port": 8899,
+                "udp_port": 58899,
+                "discovery_target": "192.168.1.255",
+                "discovery_interval": 3,
+                "heartbeat_interval": 60,
+            },
+        })
+
+        self.assertEqual(result["type"], "create_entry", result)
+        self.assertEqual(result["data"]["driver_hint"], "modbus_smg")
+        self.assertNotIn("device_catalog_entry_key", result["data"])
+        self.assertNotIn("device_catalog_entry_key", options._config_entry.data)
+        self.assertNotIn("device_catalog_entry_key", options._config_entry.options)
+
     async def test_options_init_menu_exposes_collector_wifi(self) -> None:
         options = self._make_options_flow()
 
