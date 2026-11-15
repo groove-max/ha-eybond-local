@@ -6,11 +6,11 @@ import dataclasses
 import logging
 from typing import Any
 
+from ...connection.entry import resolve_driver_hint
 from ...const import (
     CONF_COLLECTOR_PN,
     CONF_DETECTED_MODEL,
     CONF_DETECTED_SERIAL,
-    CONF_DRIVER_HINT,
     DRIVER_HINT_AUTO,
 )
 from ...drivers.registry import get_driver
@@ -42,9 +42,9 @@ class CoordinatorInverterProfileMixin:
                     return get_driver(driver_key)
             if not self.has_inverter_identity:
                 return None
-            driver_hint = self.config_entry.options.get(
-                CONF_DRIVER_HINT,
-                self.config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
+            driver_hint = resolve_driver_hint(
+                self.config_entry.data,
+                self.config_entry.options,
             )
             if driver_hint and driver_hint != DRIVER_HINT_AUTO:
                 return get_driver(driver_hint)

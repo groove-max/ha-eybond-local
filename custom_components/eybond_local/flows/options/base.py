@@ -40,10 +40,10 @@ from ..common.connection_form import (
 from ..common.connection_form import (
     selector_for_connection_field as _shared_connection_field_selector,
 )
+from ...connection.entry import resolve_driver_hint
 from ...const import (
     CONF_COLLECTOR_PN,
     CONF_DETECTED_DRIVER,
-    CONF_DRIVER_HINT,
     CONF_STRATEGY_TRANSITION_STATE,
     DRIVER_HINT_AUTO,
 )
@@ -105,12 +105,9 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
     def _poll_policy_driver_key(self) -> str:
         """Return the persisted detected driver that owns poll limits."""
 
-        driver_intent = str(
-            self._config_entry.options.get(
-                CONF_DRIVER_HINT,
-                self._config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
-            )
-            or DRIVER_HINT_AUTO
+        driver_intent = resolve_driver_hint(
+            self._config_entry.data,
+            self._config_entry.options,
         )
         if driver_intent != DRIVER_HINT_AUTO:
             return driver_intent

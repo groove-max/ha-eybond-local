@@ -296,6 +296,10 @@ import custom_components.eybond_local.flows.config.common as config_common_modul
 import custom_components.eybond_local.flows.config.network as config_network_module
 import custom_components.eybond_local.flows.config.scan as config_scan_module
 import custom_components.eybond_local.connection.admission_transaction as admission_transaction_module
+from custom_components.eybond_local.connection.entry import (
+    resolve_catalog_entry_key,
+    resolve_driver_hint,
+)
 import custom_components.eybond_local.const as const_module
 import custom_components.eybond_local.options_flow as options_flow_module
 import custom_components.eybond_local.flows.options.proxy as options_proxy_module
@@ -5752,6 +5756,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
 
         options = self._make_options_flow()
         options._config_entry.options = {"driver_hint": "not_the_map_driver"}
+        # Startup falls back to the data copy of the hint, so a stale value
+        # there would win over the map driver the user just chose.
+        options._config_entry.data["driver_hint"] = "modbus_smg"
 
         result = await options.async_step_experimental_map(
             {"device_catalog_entry_key": entry_key}
@@ -5763,6 +5770,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             options._config_entry.options["driver_hint"], map_driver
+        )
+        self.assertEqual(
+            options._config_entry.data["driver_hint"], map_driver
+        )
+        self.assertNotIn(
+            "device_catalog_entry_key", options._config_entry.data
         )
 
     async def test_experimental_map_reset_releases_the_pinned_driver(self) -> None:
@@ -5787,6 +5800,12 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "device_catalog_entry_key": entry_key,
             "driver_hint": map_driver,
         }
+        # A non-Auto hint in entry data is the case that used to survive the
+        # reset: the options step cleared only the options copies, the
+        # documented data fallback then re-bound the released driver and map,
+        # and the next setup ran them again.
+        options._config_entry.data["driver_hint"] = "modbus_smg"
+        options._config_entry.data["device_catalog_entry_key"] = entry_key
 
         result = await options.async_step_experimental_map(
             {"device_catalog_entry_key": "__automatic__"}
@@ -5797,6 +5816,25 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "device_catalog_entry_key", options._config_entry.options
         )
         self.assertNotIn("driver_hint", options._config_entry.options)
+        self.assertNotIn(
+            "device_catalog_entry_key", options._config_entry.data
+        )
+        self.assertNotIn("driver_hint", options._config_entry.data)
+        # Automatic detection is the effective runtime driver again.
+        self.assertEqual(
+            resolve_driver_hint(
+                options._config_entry.data,
+                options._config_entry.options,
+            ),
+            "auto",
+        )
+        self.assertEqual(
+            resolve_catalog_entry_key(
+                options._config_entry.data,
+                options._config_entry.options,
+            ),
+            "",
+        )
 
     async def test_options_init_menu_exposes_collector_wifi(self) -> None:
         options = self._make_options_flow()

@@ -7,7 +7,8 @@ import logging
 from pathlib import Path
 from time import monotonic
 
-from ...const import CONF_COLLECTOR_PN, CONF_DRIVER_HINT, DRIVER_HINT_AUTO
+from ...connection.entry import resolve_driver_hint
+from ...const import CONF_COLLECTOR_PN
 from ...support.diagnostic_evidence import DiagnosticEvidenceScope, diagnostic_evidence_scope
 from ...support.diagnostic_export import export_diagnostic_run
 from ...support.diagnostic_projection import build_configured_connection_debug, build_runtime_transport_debug
@@ -132,9 +133,9 @@ class CoordinatorDiagnosticsMixin:
         snapshot = self.data
         inverter = snapshot.inverter if snapshot is not None else None
         transport = self._diagnostic_link_transport()
-        driver_hint = self.config_entry.options.get(
-            CONF_DRIVER_HINT,
-            self.config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
+        driver_hint = resolve_driver_hint(
+            self.config_entry.data,
+            self.config_entry.options,
         )
 
         def _is_connected() -> bool:

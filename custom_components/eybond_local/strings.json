@@ -793,12 +793,12 @@
       },
       "experimental_map": {
         "title": "Choose experimental inverter map",
-        "description": "This integration knows {count} inverter map(s) that carry confirmed telemetry but no non-settable identity word, so automatic detection cannot tell them apart from a sibling model. Such a map never binds on its own. Select the exact model below only if you know the inverter is that model; leave it empty to keep automatic detection.",
+        "description": "This integration knows {count} inverter map(s) that carry confirmed telemetry but no non-settable identity word, so automatic detection cannot tell them apart from a sibling model. Such a map never binds on its own. Select the exact model below only if you know the inverter is that model; leave it empty to keep automatic detection. Choosing a map here also switches this entry's inverter driver to the driver that map belongs to, so a driver saved earlier is replaced; the automatic choice releases that driver choice together with the map.",
         "data": {
           "device_catalog_entry_key": "Experimental inverter map"
         },
         "data_description": {
-          "device_catalog_entry_key": "Only choose a map here when you are certain of the model. An empty choice keeps the normal automatic detection, which will not bind these experimental maps."
+          "device_catalog_entry_key": "Only choose a map here when you are certain of the model. Choosing a map also repoints the inverter driver at that map's driver, and returning to automatic detection releases both the map and that driver choice, so the entry really runs automatic detection again. The automatic detection never binds these experimental maps."
         }
       }
     },

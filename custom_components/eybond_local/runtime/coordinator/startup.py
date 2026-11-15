@@ -10,6 +10,7 @@ from ...collector_endpoint import (
     DEFAULT_COLLECTOR_SERVER_PROTOCOL,
     format_collector_server_endpoint as format_runtime_collector_server_endpoint,
 )
+from ...connection.entry import resolve_catalog_entry_key, resolve_driver_hint
 from ...const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_CONNECTION_MODE,
@@ -17,8 +18,6 @@ from ...const import (
     CONF_DETECTED_DRIVER,
     CONF_DETECTED_MODEL,
     CONF_DETECTED_SERIAL,
-    CONF_DEVICE_CATALOG_ENTRY,
-    CONF_DRIVER_HINT,
     DRIVER_HINT_AUTO,
 )
 from ...drivers.registry import get_driver
@@ -244,13 +243,10 @@ class CoordinatorStartupIdentityMixin:
         detected_serial = str(
             self.config_entry.data.get(CONF_DETECTED_SERIAL) or ""
         ).strip()
-        selected_entry_key = str(
-            self.config_entry.options.get(
-                CONF_DEVICE_CATALOG_ENTRY,
-                self.config_entry.data.get(CONF_DEVICE_CATALOG_ENTRY, ""),
-            )
-            or ""
-        ).strip()
+        selected_entry_key = resolve_catalog_entry_key(
+            self.config_entry.data,
+            self.config_entry.options,
+        )
         if not (detected_model or detected_serial or selected_entry_key):
             return None
 
@@ -263,13 +259,10 @@ class CoordinatorStartupIdentityMixin:
 
         catalog_identity_source = ""
         catalog_surface = None
-        driver_key = str(
-            self.config_entry.options.get(
-                CONF_DRIVER_HINT,
-                self.config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
-            )
-            or ""
-        ).strip()
+        driver_key = resolve_driver_hint(
+            self.config_entry.data,
+            self.config_entry.options,
+        )
         if not driver_key or driver_key == DRIVER_HINT_AUTO:
             driver_key = str(
                 self.config_entry.data.get(CONF_DETECTED_DRIVER) or ""
@@ -400,7 +393,7 @@ class CoordinatorStartupIdentityMixin:
 
         probe_target = selected_probe_target(
             self.config_entry.options.get(PROBE_ROUTE_OPTION),
-            self.config_entry.options.get(CONF_DRIVER_HINT, self.config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO)),
+            resolve_driver_hint(self.config_entry.data, self.config_entry.options),
         ) or probe_target
         return DetectedInverter(
             driver_key=str(getattr(driver, "key", "") or driver_key),

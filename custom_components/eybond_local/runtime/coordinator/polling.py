@@ -10,9 +10,9 @@ import math
 from homeassistant.components import persistent_notification
 
 from ...connection.connection_policy import collector_identity_binding_required
+from ...connection.entry import resolve_driver_hint
 from ...const import (
     CONF_CONNECTION_TYPE,
-    CONF_DRIVER_HINT,
     CONF_POLL_INTERVAL,
     CONF_POLL_MODE,
     DEFAULT_POLL_INTERVAL,
@@ -180,10 +180,16 @@ class CoordinatorPollingMixin:
             return
         config_entry = getattr(self, "config_entry", None)
         options = getattr(config_entry, "options", {}) or {}
+        # Same options-then-data resolution every other reader uses: an
+        # options-only read here disagreed with startup whenever the persisted
+        # intent still lived in entry data, so the scheduler polled one driver
+        # while the runtime ran another.
         driver_key = str(
             getattr(self, "_poll_scheduler_driver_key", "")
-            or options.get(CONF_DRIVER_HINT, "auto")
-            or "auto"
+            or resolve_driver_hint(
+                getattr(config_entry, "data", {}) or {},
+                options,
+            )
         )
         self._poll_scheduler_driver_key = driver_key
         self._poll_scheduler = PollScheduler(

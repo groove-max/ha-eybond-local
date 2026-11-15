@@ -11,10 +11,14 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from custom_components.eybond_local.connection.entry import (
+    apply_catalog_choice,
+    apply_driver_choice,
     build_detected_entry_settings,
     build_manual_entry_settings,
     build_runtime_option_settings,
     persisted_branch_setting_keys,
+    resolve_catalog_entry_key,
+    resolve_driver_hint,
     runtime_option_setting_keys,
     with_driver_hint,
 )
@@ -119,6 +123,83 @@ class ConnectionEntryTests(unittest.TestCase):
 
         self.assertEqual(values["driver_hint"], "pi30")
         self.assertEqual(values["server_ip"], "192.168.1.50")
+
+class DriverChoicePersistenceTests(unittest.TestCase):
+    """One place decides which of data/options wins and how a choice is saved."""
+
+    def test_resolve_driver_hint_prefers_options_over_data(self) -> None:
+        self.assertEqual(
+            resolve_driver_hint({"driver_hint": "modbus_smg"}, {"driver_hint": "pi30"}),
+            "pi30",
+        )
+        self.assertEqual(
+            resolve_driver_hint({"driver_hint": "modbus_smg"}, {}),
+            "modbus_smg",
+        )
+        self.assertEqual(resolve_driver_hint({}, {}), "auto")
+        self.assertEqual(
+            resolve_driver_hint({"driver_hint": "  "}, {"driver_hint": None}),
+            "auto",
+        )
+
+    def test_resolve_catalog_entry_key_prefers_options_over_data(self) -> None:
+        key = "lvyuan_ty_sic_6_5kbe_w1"
+        self.assertEqual(
+            resolve_catalog_entry_key(
+                {"device_catalog_entry_key": key},
+                {"device_catalog_entry_key": "other"},
+            ),
+            "other",
+        )
+        self.assertEqual(
+            resolve_catalog_entry_key({"device_catalog_entry_key": key}, {}),
+            key,
+        )
+        self.assertEqual(resolve_catalog_entry_key({}, {}), "")
+
+    def test_named_driver_choice_is_written_to_both_sources(self) -> None:
+        data = {"driver_hint": "auto", "server_ip": "192.168.1.50"}
+        options: dict[str, object] = {}
+
+        apply_driver_choice(data, options, driver_hint="modbus_catalog")
+
+        self.assertEqual(data["driver_hint"], "modbus_catalog")
+        self.assertEqual(options["driver_hint"], "modbus_catalog")
+        self.assertEqual(data["server_ip"], "192.168.1.50")
+
+    def test_automatic_driver_choice_clears_both_sources(self) -> None:
+        data = {"driver_hint": "modbus_smg"}
+        options = {"driver_hint": "modbus_catalog"}
+
+        apply_driver_choice(data, options, driver_hint="auto")
+
+        self.assertNotIn("driver_hint", data)
+        self.assertNotIn("driver_hint", options)
+        self.assertEqual(resolve_driver_hint(data, options), "auto")
+
+    def test_selected_catalog_map_is_stored_once_and_dropped_from_data(self) -> None:
+        data = {"device_catalog_entry_key": "stale"}
+        options: dict[str, object] = {}
+
+        apply_catalog_choice(data, options, catalog_entry_key="lvyuan_ty_sic_6_5kbe_w1")
+
+        self.assertEqual(
+            options["device_catalog_entry_key"], "lvyuan_ty_sic_6_5kbe_w1"
+        )
+        self.assertNotIn("device_catalog_entry_key", data)
+        self.assertEqual(
+            resolve_catalog_entry_key(data, options), "lvyuan_ty_sic_6_5kbe_w1"
+        )
+
+    def test_released_catalog_map_is_cleared_from_both_sources(self) -> None:
+        data = {"device_catalog_entry_key": "lvyuan_ty_sic_6_5kbe_w1"}
+        options = {"device_catalog_entry_key": "lvyuan_ty_sic_6_5kbe_w1"}
+
+        apply_catalog_choice(data, options, catalog_entry_key="")
+
+        self.assertNotIn("device_catalog_entry_key", data)
+        self.assertNotIn("device_catalog_entry_key", options)
+        self.assertEqual(resolve_catalog_entry_key(data, options), "")
 
 
 if __name__ == "__main__":

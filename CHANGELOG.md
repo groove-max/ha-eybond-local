@@ -23,6 +23,18 @@ the GitHub release body should be rendered from the matching version section her
   automatic detection releases the pinned driver again (#93). The options step
   is covered by save-and-reload tests rather than resolver helpers alone.
 
+- Make an options save actually change what the reloaded runtime runs. Every
+  reader takes the driver hint and the explicit map key from entry options and
+  falls back to entry data, but the options steps only wrote and cleared the
+  options copy. Returning to automatic detection therefore left a non-Auto
+  hint in entry data effective, and a released map could be re-bound from its
+  data copy, so the saved settings and the runtime disagreed until the entry
+  was deleted. One helper now both resolves those keys (options-then-data) and
+  writes a real choice to both sources, which is what makes data and options
+  agree (#93). A real-HA test drives the options manager through save, reset
+  and reload with a non-Auto hint already in entry data; the polling scheduler
+  now uses the same options-then-data resolution as startup.
+
 The following development changes are not part of the frozen 0.3.0-rc.1 release.
 The common connection, BLE lifecycle and editability repairs are recorded under
 RC1 below; newer model features remain here.

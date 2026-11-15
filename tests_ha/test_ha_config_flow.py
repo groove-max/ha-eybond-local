@@ -631,3 +631,177 @@ async def test_terminal_exception_rolls_back_only_this_flows_claim(
     hass.config_entries.flow.async_abort(init["flow_id"])
     await hass.config_entries.async_unload(boot.entry_id)
     await hass.async_block_till_done()
+
+async def test_experimental_map_save_and_reset_are_effective_after_real_reload(
+    hass: HomeAssistant, collector_entry: MockConfigEntry, fake_runtime, monkeypatch,
+) -> None:
+    """The saved map/reset choices must be the ones the reloaded runtime runs.
+
+    The entry starts with a NON-Auto hint in ``data`` (the maintainer's
+    reported scenario), so every reader falls back to that copy whenever
+    ``options`` has no hint.  Saving an experimental map must therefore make
+    the map driver effective, and releasing the map again must make automatic
+    detection effective -- not the stale data hint.
+    """
+
+    from conftest import FakeRuntimeManager
+    from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+        load_compiled_detection_catalog,
+    )
+
+    catalog = load_compiled_detection_catalog()
+    entry_key = next(
+        descriptor.key
+        for descriptor in catalog.devices.values()
+        if descriptor.explicit_selection_only
+    )
+    map_driver = catalog.surfaces[catalog.devices[entry_key].surface_key].driver_key
+
+    received: list[str] = []
+    original_init = FakeRuntimeManager.__init__
+
+    def initialize(self, *args, **kwargs):
+        received.append(kwargs["driver_hint"])
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(FakeRuntimeManager, "__init__", initialize)
+
+    hass.config_entries.async_update_entry(
+        collector_entry,
+        data={**collector_entry.data, "driver_hint": "modbus_smg"},
+    )
+    assert collector_entry.data["driver_hint"] == "modbus_smg"
+    assert "driver_hint" not in collector_entry.options
+
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # 1. Bind the experimental map through the real options manager.
+    menu = await hass.config_entries.options.async_init(collector_entry.entry_id)
+    assert menu["type"] is FlowResultType.MENU
+    assert "experimental_map" in menu["menu_options"]
+    form = await hass.config_entries.options.async_configure(
+        menu["flow_id"], {"next_step_id": "experimental_map"},
+    )
+    assert form["type"] is FlowResultType.FORM
+    assert form["step_id"] == "experimental_map"
+    result = await hass.config_entries.options.async_configure(
+        menu["flow_id"], user_input={"device_catalog_entry_key": entry_key},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+
+    assert collector_entry.options["device_catalog_entry_key"] == entry_key
+    assert collector_entry.options["driver_hint"] == map_driver
+    assert collector_entry.data["driver_hint"] == map_driver
+    assert collector_entry.state is ConfigEntryState.LOADED
+    assert received[-1] == map_driver
+
+    # 2. Return to automatic detection through the same real path.
+    menu = await hass.config_entries.options.async_init(collector_entry.entry_id)
+    form = await hass.config_entries.options.async_configure(
+        menu["flow_id"], {"next_step_id": "experimental_map"},
+    )
+    assert form["type"] is FlowResultType.FORM
+    result = await hass.config_entries.options.async_configure(
+        menu["flow_id"], user_input={"device_catalog_entry_key": "__automatic__"},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+
+    assert "device_catalog_entry_key" not in collector_entry.options
+    assert "device_catalog_entry_key" not in collector_entry.data
+    assert "driver_hint" not in collector_entry.options
+    assert "driver_hint" not in collector_entry.data
+    assert collector_entry.state is ConfigEntryState.LOADED
+    assert received[-1] == "auto", (
+        "automatic detection must be the effective driver after the reset"
+    )
+
+    # 3. A second reload proves the SAVED state is what the runtime runs.
+    assert await hass.config_entries.async_reload(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    assert received[-1] == "auto"
+
+    await hass.config_entries.async_unload(collector_entry.entry_id)
+    await hass.async_block_till_done()
+
+async def test_experimental_map_reset_releases_a_data_hint_after_real_reload(
+    hass: HomeAssistant, collector_entry: MockConfigEntry, fake_runtime, monkeypatch,
+) -> None:
+    """Step 1-4 of the reported flow: a map bound, then released.
+
+    The entry arrives with the map and its driver already saved (options) AND
+    with a different, non-Auto hint in ``data`` -- exactly the persisted shape
+    that used to survive the reset.  Choosing automatic detection must make
+    automatic detection the effective driver of the reloaded runtime, so both
+    copies of both keys have to go.
+    """
+
+    from conftest import FakeRuntimeManager
+    from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+        load_compiled_detection_catalog,
+    )
+
+    catalog = load_compiled_detection_catalog()
+    entry_key = next(
+        descriptor.key
+        for descriptor in catalog.devices.values()
+        if descriptor.explicit_selection_only
+    )
+    map_driver = catalog.surfaces[catalog.devices[entry_key].surface_key].driver_key
+
+    received: list[str] = []
+    original_init = FakeRuntimeManager.__init__
+
+    def initialize(self, *args, **kwargs):
+        received.append(kwargs["driver_hint"])
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(FakeRuntimeManager, "__init__", initialize)
+
+    hass.config_entries.async_update_entry(
+        collector_entry,
+        data={
+            **collector_entry.data,
+            "driver_hint": "modbus_smg",
+            "device_catalog_entry_key": entry_key,
+        },
+        options={
+            **collector_entry.options,
+            "driver_hint": map_driver,
+            "device_catalog_entry_key": entry_key,
+        },
+    )
+
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    assert received[-1] == map_driver
+
+    menu = await hass.config_entries.options.async_init(collector_entry.entry_id)
+    assert "experimental_map" in menu["menu_options"]
+    form = await hass.config_entries.options.async_configure(
+        menu["flow_id"], {"next_step_id": "experimental_map"},
+    )
+    assert form["type"] is FlowResultType.FORM
+    result = await hass.config_entries.options.async_configure(
+        menu["flow_id"], user_input={"device_catalog_entry_key": "__automatic__"},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+
+    assert "device_catalog_entry_key" not in collector_entry.options
+    assert "device_catalog_entry_key" not in collector_entry.data
+    assert "driver_hint" not in collector_entry.options
+    assert "driver_hint" not in collector_entry.data
+    assert collector_entry.state is ConfigEntryState.LOADED
+    assert received[-1] == "auto", (
+        "the reloaded runtime must run automatic detection, not the stale hint"
+    )
+
+    assert await hass.config_entries.async_reload(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    assert received[-1] == "auto"
+
+    await hass.config_entries.async_unload(collector_entry.entry_id)
+    await hass.async_block_till_done()

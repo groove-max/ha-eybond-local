@@ -7,7 +7,12 @@ from typing import Any
 
 from .branch_registry import get_connection_branch
 from .ui import ConnectionFormField
-from ..const import CONF_COLLECTOR_IP, CONF_DRIVER_HINT
+from ..const import (
+    CONF_COLLECTOR_IP,
+    CONF_DEVICE_CATALOG_ENTRY,
+    CONF_DRIVER_HINT,
+    DRIVER_HINT_AUTO,
+)
 
 
 def _ordered_unique_field_keys(fields: tuple[ConnectionFormField, ...]) -> tuple[str, ...]:
@@ -109,3 +114,81 @@ def with_driver_hint(
     if CONF_DRIVER_HINT in merged or driver_hint:
         merged[CONF_DRIVER_HINT] = driver_hint
     return merged
+
+
+def resolve_driver_hint(
+    data: Mapping[str, object],
+    options: Mapping[str, object],
+) -> str:
+    """Return the driver intent the entry really acts on.
+
+    Both dicts are read because a created entry carries the hint in data
+    while an edited one carries it in options. options outranks data; this
+    ordering is defined here once so no reader can drift from it, and so a
+    value left behind in the losing source stays harmless.
+    """
+
+    raw = options.get(CONF_DRIVER_HINT, data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO))
+    hint = str(raw or "").strip()
+    return hint or DRIVER_HINT_AUTO
+
+
+def resolve_catalog_entry_key(
+    data: Mapping[str, object],
+    options: Mapping[str, object],
+) -> str:
+    """Return the explicitly selected experimental map key, if any."""
+
+    raw = options.get(
+        CONF_DEVICE_CATALOG_ENTRY,
+        data.get(CONF_DEVICE_CATALOG_ENTRY, ""),
+    )
+    return str(raw or "").strip()
+
+
+def apply_driver_choice(
+    data: dict[str, Any],
+    options: dict[str, Any],
+    *,
+    driver_hint: str,
+) -> None:
+    """Persist one driver choice in BOTH entry sources.
+
+    Every reader resolves the hint options-then-data, so a choice written to
+    only one dict silently re-applies the other copy after a reload: an
+    options step could delete its own driver_hint while entry.data still
+    pinned a driver, and startup would then run the stale driver instead of
+    the automatic default. A real choice therefore writes both copies, and
+    the automatic default clears both copies, so auto means the same thing
+    to every reader.
+    """
+
+    hint = str(driver_hint or "").strip()
+    if hint and hint != DRIVER_HINT_AUTO:
+        data[CONF_DRIVER_HINT] = hint
+        options[CONF_DRIVER_HINT] = hint
+    else:
+        data.pop(CONF_DRIVER_HINT, None)
+        options.pop(CONF_DRIVER_HINT, None)
+
+
+def apply_catalog_choice(
+    data: dict[str, Any],
+    options: dict[str, Any],
+    *,
+    catalog_entry_key: str,
+) -> None:
+    """Persist, or release, the explicitly selected experimental map.
+
+    The map is an options-level choice, but readers also accept a ``data``
+    copy of the key, so releasing it must remove it from both dicts:
+    otherwise that documented fallback quietly re-binds a map the user had
+    just released.
+    """
+
+    key = str(catalog_entry_key or "").strip()
+    if key:
+        options[CONF_DEVICE_CATALOG_ENTRY] = key
+    else:
+        options.pop(CONF_DEVICE_CATALOG_ENTRY, None)
+    data.pop(CONF_DEVICE_CATALOG_ENTRY, None)

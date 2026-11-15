@@ -28,7 +28,13 @@ from ...collector.collector_wire import (
 )
 from ...connection.branch_registry import get_connection_branch
 from ...connection.connection_policy import resolve_connection_strategy
-from ...connection.entry import build_runtime_option_settings
+from ...connection.entry import (
+    apply_catalog_choice,
+    apply_driver_choice,
+    build_runtime_option_settings,
+    resolve_catalog_entry_key,
+    resolve_driver_hint,
+)
 from ..common.connection_form import (
     DRIVER_DISPLAY_LABELS as _DRIVER_DISPLAY_LABELS,
 )
@@ -227,12 +233,12 @@ class RuntimeOptionsMixin:
             else:
                 data = dict(self._config_entry.data)
                 options = dict(self._config_entry.options)
-                options[CONF_DRIVER_HINT] = selected
+                apply_driver_choice(data, options, driver_hint=selected)
                 # An explicit experimental map belongs to one driver. Keeping it
                 # after a driver switch would make startup reject the pair and
                 # leave the inverter unbound for a choice the user can no longer
                 # see, so the switch clears it.
-                options.pop(CONF_DEVICE_CATALOG_ENTRY, None)
+                apply_catalog_choice(data, options, catalog_entry_key="")
                 _clear_runtime_inverter_facts(data)
                 self.hass.config_entries.async_update_entry(
                     self._config_entry,
@@ -306,13 +312,10 @@ class RuntimeOptionsMixin:
             return await self.async_step_init()
 
         entry_by_key = {descriptor.key: descriptor for descriptor in entries}
-        current = str(
-            self._config_entry.options.get(
-                CONF_DEVICE_CATALOG_ENTRY,
-                self._config_entry.data.get(CONF_DEVICE_CATALOG_ENTRY, ""),
-            )
-            or ""
-        ).strip()
+        current = resolve_catalog_entry_key(
+            self._config_entry.data,
+            self._config_entry.options,
+        )
         if current not in entry_by_key:
             current = _EXPERIMENTAL_MAP_NONE
 
@@ -328,24 +331,39 @@ class RuntimeOptionsMixin:
                 data = dict(self._config_entry.data)
                 options = dict(self._config_entry.options)
                 if selected == _EXPERIMENTAL_MAP_NONE:
-                    options.pop(CONF_DEVICE_CATALOG_ENTRY, None)
-                    # Returning to automatic detection must also release the
-                    # driver the map had pinned, otherwise the entry keeps a
-                    # manual hint the user never chose on this path.
-                    options.pop(CONF_DRIVER_HINT, None)
+                    # Automatic detection must release BOTH copies of the
+                    # choice.  Readers accept the hint and the map key from
+                    # entry data as a fallback, so clearing only the options
+                    # copy left the old driver and map effective after the
+                    # reload the next setup performed.
+                    apply_driver_choice(
+                        data,
+                        options,
+                        driver_hint=DRIVER_HINT_AUTO,
+                    )
+                    apply_catalog_choice(data, options, catalog_entry_key="")
                 else:
-                    options[CONF_DEVICE_CATALOG_ENTRY] = selected
                     # The chosen map belongs to one driver.  A stale manual
                     # hint for a different driver would make startup refuse
-                    # the pair, so adopt the map's driver here instead of
-                    # leaving the entry silently unbound after a reload.
+                    # the pair, so adopt the map's driver here, in both
+                    # copies, instead of leaving the entry silently unbound
+                    # or picking the stale hint up again after a reload.
+                    apply_catalog_choice(
+                        data,
+                        options,
+                        catalog_entry_key=selected,
+                    )
                     selected_surface = catalog.surfaces.get(
                         entry_by_key[selected].surface_key
                     )
                     if selected_surface is not None and getattr(
                         selected_surface, "driver_key", ""
                     ):
-                        options[CONF_DRIVER_HINT] = selected_surface.driver_key
+                        apply_driver_choice(
+                            data,
+                            options,
+                            driver_hint=selected_surface.driver_key,
+                        )
                 _clear_runtime_inverter_facts(data)
                 self.hass.config_entries.async_update_entry(
                     self._config_entry,
@@ -709,11 +727,11 @@ class RuntimeOptionsMixin:
             or detection_strategy not in DRIVER_DETECTION_STRATEGIES
         ):
             detection_strategy = DEFAULT_DRIVER_DETECTION_STRATEGY
-        driver_intent = self._config_entry.options.get(
-            CONF_DRIVER_HINT,
-            self._config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
+        driver_intent = resolve_driver_hint(
+            self._config_entry.data,
+            self._config_entry.options,
         )
-        if type(driver_intent) is not str or driver_intent not in driver_options():
+        if driver_intent not in driver_options():
             driver_intent = DRIVER_HINT_AUTO
         schema_fields: dict[Any, Any] = {
             vol.Required(
@@ -813,16 +831,20 @@ class RuntimeOptionsMixin:
             # strategy. The runtime caller overwrites any stale posted strategy
             # with this value before reaching this boundary.
             data[CONF_CONNECTION_STRATEGY] = current_strategy
-        current_driver_intent = str(
-            self._config_entry.options.get(
-                CONF_DRIVER_HINT,
-                self._config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
-            )
-            or DRIVER_HINT_AUTO
-        ).strip()
+        current_driver_intent = resolve_driver_hint(
+            self._config_entry.data,
+            self._config_entry.options,
+        )
         submitted_driver_intent = str(
-            options.get(CONF_DRIVER_HINT, current_driver_intent) or DRIVER_HINT_AUTO
-        ).strip()
+            options[CONF_DRIVER_HINT]
+            if options.get(CONF_DRIVER_HINT) is not None
+            else current_driver_intent
+        ).strip() or DRIVER_HINT_AUTO
+        # The submitted driver intent is the entry's effective driver from now
+        # on, so it is written to both copies after the comparison above: a
+        # hint that survives in only one dict comes back on the next setup and
+        # silently undoes this save.
+        apply_driver_choice(data, options, driver_hint=submitted_driver_intent)
         current_detection_strategy = self._config_entry.options.get(
             CONF_DRIVER_DETECTION_STRATEGY,
             self._config_entry.data.get(

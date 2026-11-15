@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .connection.entry import resolve_driver_hint
 from .const import (
     CONF_COLLECTOR_CLOUD_FAMILY,
     CONF_COLLECTOR_IP,
@@ -193,10 +194,7 @@ def _entry_has_startup_entity_fallback(entry: ConfigEntry) -> bool:
 
     data = getattr(entry, "data", {}) or {}
     options = getattr(entry, "options", {}) or {}
-    driver_hint = str(
-        options.get(CONF_DRIVER_HINT, data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO))
-        or DRIVER_HINT_AUTO
-    ).strip()
+    driver_hint = resolve_driver_hint(data, options)
     if driver_hint and driver_hint != DRIVER_HINT_AUTO:
         return True
     return bool(
@@ -463,8 +461,7 @@ async def _async_self_heal_must_pv3300_metadata(hass: HomeAssistant, entry: Conf
         data.get("detected_driver") != "must_pv_ph18"
         or data.get("detection_confidence") != "high"
         or model not in stale_bindings
-        or options.get(CONF_DRIVER_HINT, data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO))
-        not in {DRIVER_HINT_AUTO, "must_pv_ph18"}
+        or resolve_driver_hint(data, options) not in {DRIVER_HINT_AUTO, "must_pv_ph18"}
         or snapshot.get("effective_owner_key") != "must_pv_ph18"
         or snapshot.get("profile_name") != "must_pv_ph18/base.json"
         or (snapshot.get("register_schema_name"), snapshot.get("variant_key"))

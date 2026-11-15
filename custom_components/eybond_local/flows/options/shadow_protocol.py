@@ -9,7 +9,7 @@ from time import monotonic
 import voluptuous as vol
 from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, SelectSelectorMode
 
-from ...const import CONF_DRIVER_HINT
+from ...connection.entry import apply_driver_choice
 from ...runtime.protocol_check import PROBE_ROUTE_OPTION, protocol_evidence
 from ..common.presentation import _clear_runtime_inverter_facts
 from ..common.translation import with_translation_bundle
@@ -107,7 +107,7 @@ class ShadowProtocolOptionsMixin:
                 # A previous driver's schema is not evidence for this choice.
                 # The normal probe must rebuild the new binding after reload.
                 options.pop("effective_metadata_snapshot", None)
-                options[CONF_DRIVER_HINT] = selected
+                apply_driver_choice(data, options, driver_hint=selected)
                 options[PROBE_ROUTE_OPTION] = dict(choices[selected]["route"])
                 _clear_runtime_inverter_facts(data)
                 self.hass.config_entries.async_update_entry(self._config_entry, data=data, options=options)
