@@ -19,13 +19,19 @@ RC1 below; newer model features remain here.
   newer unrelated settings or commit unverified connection/identity fields through this
   action. Unchanged settings no longer cause an unnecessary integration reload.
 
-- A short-ASCII auxiliary read no longer treats a complete EyeBond frame as
-  a 21-byte MPPT reply. When that frame is already buffered and its header
-  is also an AABB prefix, the session closes with `binary_frame_ambiguous`.
-  A checksum-valid 21-byte reply whose declared EyeBond length is longer
-  than the bytes in hand stays the MPPT sample when the outstanding subtype
-  matches (#45). The session still delivers that sample only while the claim
-  is current.
+- A short-ASCII mixed session closes with `binary_frame_ambiguous` when the
+  first eight bytes are a legal EyeBond header and an AABB prefix. A matching
+  claim does not publish that 21-byte reply, and the decision does not depend
+  on whether the declared tail has arrived. Collision wattages, where the
+  voltage word is a legal length and the low byte of power/10 is a runtime
+  function code, stay unpublished. A reply that starts with `aa bb` and is
+  not a legal EyeBond header remains the 21-byte sample when the claim
+  subtype matches (#45). An illegal EyeBond length header that does not start
+  with `aa bb` closes with `collector_frame_length_invalid`. The production
+  reader does not publish a following frame from bytes it has not read.
+  On a mixed session, same-chunk resync still decodes the next frame unless
+  that frame is itself the overlap, which closes with `binary_frame_ambiguous`.
+  An EyeBond-only session still decodes that next frame.
 
 - Retain SMG setting-write diagnostics when the acknowledgement is empty,
   malformed, rejected or interrupted (#88). Keep the acknowledgement outcome

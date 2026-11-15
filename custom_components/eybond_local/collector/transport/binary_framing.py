@@ -2,8 +2,8 @@
 
 This codec is an internal building block for the short-ASCII auxiliary channel.
 It does not negotiate a collector protocol or admit that channel itself.
-The session owner supplies the admitted grammar and any outstanding
-AuxiliaryReadClaim snapshot. A future merely being alive is never evidence.
+The session owner supplies the admitted grammar. A future merely being
+alive is never evidence. Delivery ownership stays with the auxiliary session.
 """
 
 from __future__ import annotations
@@ -38,7 +38,10 @@ RUNTIME_EYBOND_FCODES = frozenset({
 # first byte is often payload-too-large, not an illegal function. Discarding
 # that window on length alone adopts a misaligned header and stalls on its
 # payload (#39). Length and payload-size errors may drop one window only when
-# the whole next frame is already in this chunk.
+# the whole next frame is already inside the same feed() call. The production
+# reader never passes bytes it has not read into that decision, so an illegal
+# header that does not start with ``aa bb`` closes even when the next frame
+# is already buffered.
 # Desynchronized length junk (e.g. 000f02ff0000ff04): drop the entire illegal
 # 8-byte window once, then read a fresh header. Do not one-byte slide (that
 # forms false-legal headers such as ff0000ff04aabb02). Ambiguous AABB overlap
@@ -82,17 +85,6 @@ class BinaryFramingError(ValueError):
     """An invalid, incomplete or ambiguous boundary requires session recovery."""
 
 
-class AuxiliaryBoundaryClaim(Protocol):
-    """Delivery ownership captured when a frame starts: subtype only.
-
-    A matching subtype may select a 21-byte AABB reply only when the bytes
-    in hand are not already a complete legal EyeBond frame. ``accept`` still
-    checks the subtype. Do not infer intent from ``future.done()``.
-    """
-
-    subtype: bytes
-
-
 @dataclass(frozen=True, slots=True)
 class BinaryFrame:
     """One structural frame; interpreting payload values is a separate concern."""
@@ -126,21 +118,31 @@ class BinaryFrameDecoder:
     caller and must be processed independently (possibly as an AT line).
     The buffer, grammar and deadline never reset on fragmentation or retry.
 
-    Illegal EyeBond headers for length or payload-too-large drop the entire
-    8-byte window once only when the following frame is already complete
-    (its 8-byte header plus that header's payload), then require a fresh legal
-    header. ``collector_frame_function_invalid`` is fatal and is never
-    discarded. Skipped bytes are never published. A second illegal window
-    closes. Ambiguous AABB/EyeBond overlap, bad AABB checksum, and unowned
-    AABB stay terminal — no discard through them.
+    A single ``feed()`` call that already contains the next complete frame
+    keeps the same-chunk resync: an illegal EyeBond length or
+    payload-too-large header that does not start with ``aa bb`` drops that
+    8-byte window once. On ``MIXED``, the next frame in that same call is
+    decoded unless its eight bytes are a legal EyeBond header and an AABB
+    prefix, in which case the read closes with ``binary_frame_ambiguous``.
+    On ``EYBOND``, that next frame is decoded.
+    ``collector_frame_function_invalid`` is fatal and is never discarded.
+    Skipped bytes are never published. A second illegal window that does not
+    start with ``aa bb`` closes.
+    Ambiguous AABB/EyeBond overlap and a bad AABB checksum stay terminal. A
+    later ``feed()`` is not part of that decision, so a split read closes on
+    the illegal header that does not start with ``aa bb``.
+    ``async_read_binary_frame`` feeds only bytes it has already read. It
+    never relies on bytes that have not been read yet, so an illegal header
+    that does not start with ``aa bb`` closes there whether or not later
+    bytes are already buffered.
 
-    MIXED refuses an EyeBond/AABB overlap when a complete legal EyeBond frame
-    is already buffered. Do not publish the first 21 bytes of that frame.
-    When the declared EyeBond length is longer than the bytes in hand, a
-    matching auxiliary claim selects the 21-byte AABB reply and the checksum
-    is checked once those bytes arrive. No claim, or a subtype mismatch,
-    stays ambiguous. A valid checksum alone is never enough, and a future
-    merely being alive is never a grammar claim.
+    On ``MIXED``, eight bytes that are a legal EyeBond header and an AABB
+    prefix are ``binary_frame_ambiguous``. The declared tail is not consulted,
+    whether that tail is already buffered, arrives during the read, or arrives
+    after the reader returns. Bytes that start with ``aa bb`` and are not a
+    legal EyeBond header still select the 21-byte reply; the checksum is
+    checked once those bytes arrive. A future merely being alive is never a
+    grammar claim.
     """
 
     def __init__(
@@ -149,14 +151,12 @@ class BinaryFrameDecoder:
         *,
         started_at: float,
         timeout: float,
-        auxiliary_claim: AuxiliaryBoundaryClaim | None = None,
     ) -> None:
         if not isinstance(grammar, BinaryGrammar):
             raise ValueError("binary_grammar_invalid")
         if not math.isfinite(started_at) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("binary_deadline_invalid")
         self._grammar = grammar
-        self._auxiliary_claim = auxiliary_claim
         self._last_now = started_at
         self._deadline = started_at + timeout
         if not math.isfinite(self._deadline):
@@ -228,7 +228,7 @@ class BinaryFrameDecoder:
         self._size = 0
 
     def _maybe_discard_illegal_header(self, header_error: str, follow: bytes) -> bool:
-        """Discard one illegal window only when the whole next frame is buffered."""
+        """Discard one illegal window only when this feed() call holds the next frame."""
 
         if not is_resyncable_header_error(header_error):
             return False
@@ -279,20 +279,9 @@ class BinaryFrameDecoder:
             self._kind = BinaryGrammar.AABB
             self._size = AABB_FRAME_SIZE
         elif auxiliary_prefix and not header_error:
-            # Both grammars accept these eight bytes. A complete EyeBond frame
-            # already in hand must not be sliced into a 21-byte reply. A
-            # shorter buffer is that reply only when the outstanding subtype
-            # matches; the checksum is checked once 21 bytes are buffered.
-            claim = self._auxiliary_claim
-            owned = (
-                claim is not None
-                and wire[2:4] == claim.subtype
-                and len(wire) + len(follow) < header.total_len
-            )
-            if not owned:
-                self._fail("binary_frame_ambiguous")
-            self._kind = BinaryGrammar.AABB
-            self._size = AABB_FRAME_SIZE
+            # Both grammars accept these eight bytes. Choosing 21 bytes would
+            # depend on whether the declared tail has arrived. Close instead.
+            self._fail("binary_frame_ambiguous")
         elif not header_error:
             self._kind = BinaryGrammar.EYBOND
             self._header = header
@@ -306,12 +295,8 @@ class BinaryFrameDecoder:
         else:
             self._fail(header_error)
 
-    def feed(self, data: bytes, *, now: float, lookahead: bytes = b"") -> int:
-        """Consume only this frame's bytes, or fail without publishing a frame.
-
-        ``lookahead`` is unread input beyond ``data``. It can prove that a
-        complete EyeBond frame is already buffered, and it is not consumed.
-        """
+    def feed(self, data: bytes, *, now: float) -> int:
+        """Consume only this frame's bytes, or fail without publishing a frame."""
 
         self._check(now)
         if self._result is not None:
@@ -322,22 +307,10 @@ class BinaryFrameDecoder:
             take = min(target - len(self._buffer), len(data) - consumed)
             self._buffer.extend(data[consumed:consumed + take])
             consumed += take
-            pending = data[consumed:] + lookahead
             if not self._size and len(self._buffer) == HEADER_SIZE:
-                self._select_boundary(follow=pending)
+                self._select_boundary(follow=data[consumed:])
             if self._size and len(self._buffer) == self._size:
                 wire = bytes(self._buffer)
-                if (
-                    self._kind is BinaryGrammar.AABB
-                    and self._grammar is BinaryGrammar.MIXED
-                    and wire[:4] in AABB_PREFIXES
-                ):
-                    header = decode_header(wire)
-                    if (
-                        not runtime_eybond_header_error(header)
-                        and len(wire) + len(pending) >= header.total_len
-                    ):
-                        self._fail("binary_frame_ambiguous")
                 if self._kind is BinaryGrammar.AABB:
                     try:
                         validate_aabb_frame(wire)
@@ -372,55 +345,41 @@ async def async_read_binary_frame(
     grammar: BinaryGrammar,
     started_at: float,
     timeout: float,
-    auxiliary_claim: AuxiliaryBoundaryClaim | None = None,
 ) -> BinaryFrame:
     """Read the rest of a frame under its ORIGINAL first-byte deadline.
 
     Supply at most the fixed8-byte header as prefix. Cancellation is propagated
     to the owner: this function never retries or reuses a partly consumed stream.
     It must not be called by competing readers or after a guessed grammar switch.
-    ``auxiliary_claim`` selects a 21-byte reply only when the bytes already
-    buffered are not a complete legal EyeBond frame. Do not infer a grammar
-    from ``future.done()``.
+    On ``MIXED``, eight bytes that are a legal EyeBond header and an AABB
+    prefix are ``binary_frame_ambiguous``. This function does not wait for the
+    declared EyeBond length. Bytes that start with ``aa bb`` and are not a
+    legal EyeBond header still select the 21-byte reply. An illegal EyeBond
+    length or payload-too-large header that does not start with ``aa bb``
+    closes. Each ``feed()`` here contains
+    only bytes already read, so this reader does not use the decoder's
+    same-chunk resync: an illegal header that does not start with ``aa bb``
+    closes even when the next frame is already buffered.
+    Do not infer a grammar from ``future.done()``.
     """
 
     if not 0 < len(prefix) <= HEADER_SIZE:
         raise ValueError("binary_prefix_length_invalid")
     loop = asyncio.get_running_loop()
-    decoder = BinaryFrameDecoder(
-        grammar,
-        started_at=started_at,
-        timeout=timeout,
-        auxiliary_claim=auxiliary_claim,
-    )
-
-    def _lookahead() -> bytes:
-        parts: list[bytes] = []
-        seen: set[int] = set()
-        current: object = reader
-        while current is not None and id(current) not in seen:
-            seen.add(id(current))
-            buffered = getattr(current, "_buffer", None)
-            if isinstance(buffered, (bytes, bytearray)) and buffered:
-                parts.append(bytes(buffered))
-            current = getattr(current, "_reader", None)
-        return b"".join(parts)
-
-    decoder.feed(prefix, now=loop.time(), lookahead=_lookahead())
+    decoder = BinaryFrameDecoder(grammar, started_at=started_at, timeout=timeout)
+    decoder.feed(prefix, now=loop.time())
     while decoder.frame is None:
         now = loop.time()
         decoder.feed(b"", now=now)
         try:
-            needed = decoder.bytes_needed
             tail = await asyncio.wait_for(
-                reader.readexactly(needed),
+                reader.readexactly(decoder.bytes_needed),
                 timeout=decoder.deadline - now,
             )
         except asyncio.TimeoutError as exc:
             raise BinaryFramingError("binary_frame_timeout") from exc
         except asyncio.IncompleteReadError as exc:
-            decoder.feed(exc.partial, now=loop.time(), lookahead=_lookahead())
+            decoder.feed(exc.partial, now=loop.time())
             return decoder.finish(now=loop.time())
-        # Bytes that arrive while readexactly waits are still unread here.
-        decoder.feed(tail, now=loop.time(), lookahead=_lookahead())
+        decoder.feed(tail, now=loop.time())
     return decoder.finish(now=loop.time())

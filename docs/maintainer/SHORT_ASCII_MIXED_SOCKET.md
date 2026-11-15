@@ -133,69 +133,47 @@ failures are rejects. They must not become sensor values. Do not invent fields
 to “heal” a bad frame. Sample publication is a separate step after a
 structurally valid wire decode.
 
-## Current MIXED overlap behavior (landed)
+## MIXED overlap
 
-Source: `BinaryFrameDecoder._select_boundary`, the completion check in
-`BinaryFrameDecoder.feed`, and the post-read lookahead in
-`async_read_binary_frame`, all in
+Source: `BinaryFrameDecoder._select_boundary` in
 `custom_components/eybond_local/collector/transport/binary_framing.py`.
-The claim is the `auxiliary_claim` snapshot already taken in
-`connections.py` `_read_loop` and passed into `async_read_binary_frame`.
-A future merely being alive is **not** the claim.
+The claim is the `AuxiliaryReadClaim` captured in `connections.py`
+`_read_loop` before the frame is read. `AuxiliaryReadSession.accept` checks
+that snapshot when a 21-byte reply is delivered. A future merely being alive
+is **not** the claim, and the claim does not choose a grammar for the overlap
+below.
 
 When the session grammar is `MIXED` and the first eight bytes are both:
 
 - a legal EyeBond header (`runtime_eybond_header_error` empty), and
 - an AABB prefix (`wire[:4] in AABB_PREFIXES`),
 
-the decoder distinguishes a complete competing frame from a short reply:
-
-1. If the bytes already buffered cover `header.total_len`, fail with
-   `binary_frame_ambiguous`. Do not publish the first 21 bytes, and do not
-   read that frame as an MPPT sample. A matching claim does not change this.
-   A synthetic FC4 frame can satisfy both grammars (`tid=0xAABB`,
-   `devcode=0x0200`, a valid 21-byte checksum, and enough trailing bytes to
-   fill the declared length). That input is this reject.
-2. If the declared EyeBond length is longer than the bytes in hand, and an
-   outstanding `AuxiliaryReadClaim` has `claim.subtype == wire[2:4]`, choose
-   AABB (21 bytes), then `validate_aabb_frame`. Checksum failure is
-   `BinaryFramingError` with reason `aabb_checksum_invalid` and must not
-   publish a frame.
-3. If the claim is absent or the subtype does not match, fail with
-   `binary_frame_ambiguous`. Do not read a speculative longer EyeBond tail.
-
-Bytes already in the stream reader's buffer count as buffered.
-`async_read_binary_frame` reads that lookahead after `readexactly` returns,
-so bytes that arrive while the read is blocked are still unread input for
-the completion check in `feed`. Bytes still only in the kernel socket buffer
-are not counted. A 21-byte checksum-valid `0200` reply whose header merely
-looks legal can be case 2: its declared length comes from the PV-voltage
-field, normally far more bytes than were sent. The decoder returns that
-21-byte frame when fewer bytes than the declared EyeBond length are
-buffered, the claim subtype matches, and the checksum is valid. It still
-reads the rest of those 21 bytes. It does not wait for the declared EyeBond
-tail beyond them. A later tail of zeros closes on the next header. A later
-tail which itself looks like legal frames can be parsed after the 21-byte
-frame is returned.
-`AuxiliaryReadSession.accept` still raises `aabb_response_unowned` when the
-claim is no longer current.
-Next reconnect after case 1 is a normal session. Unsolicited `aa bb`
-with no claim stays unpublished. A `0202` claim must not be decoded as
-`0200` runtime telemetry: subtype match is required, and
-`parse_mppt_runtime` still rejects non-`0200`.
-
-AABB in MIXED is also selected when those eight bytes are **not** a legal
-EyeBond header (for example `collector_frame_function_invalid`) and they
-start with `aa bb`. Checksum failure on that path is still
-`BinaryFramingError` with reason `aabb_checksum_invalid`.
+the decoder closes with `binary_frame_ambiguous`. That decision is made at
+those eight bytes. It is the same when the declared tail is already buffered,
+arrives during `readexactly`, or arrives after the reader returns. A matching
+claim does not select the 21-byte reply, and the reader does not wait for
+the declared EyeBond length.
 
 On a 0200 reply, those eight bytes map as EyeBond
 `tid=0xAABB`, `devcode=0x0200`, `wire_len` = PV voltage raw word, and `fcode` =
 low byte of `(pv_power_w / 10)`. The header is legal when
-`(PV watts / 10) mod 256` is in `{1, 2, 3, 4, 17, 18, 19}` (and length stays in
-range)—the known collision set. That header shape alone does not close the
-session. The decoder returns the 21-byte reply when its declared EyeBond
-length is not buffered, the claim subtype matches, and the checksum is valid.
+`(PV watts / 10) mod 256` is in `{1, 2, 3, 4, 17, 18, 19}` and the length
+stays in range. Those collision wattages close with `binary_frame_ambiguous`
+and do not publish PV. A synthetic FC4 frame with `tid=0xAABB`,
+`devcode=0x0200`, and a checksum-valid 21-byte prefix is the same overlap.
+
+`AuxiliaryReadSession.accept` still raises `aabb_response_unowned` when the
+claim is no longer current. The next reconnect is a normal session.
+Unsolicited `aa bb` with no claim stays unpublished. A `0202` claim must not
+be decoded as `0200` runtime telemetry: subtype match is required, and
+`parse_mppt_runtime` still rejects non-`0200`.
+
+AABB in MIXED is selected when those eight bytes are **not** a legal
+EyeBond header (for example `collector_frame_function_invalid`) and they
+start with `aa bb`. That is how a non-colliding 0200 reply is delivered.
+Checksum failure on that path is `BinaryFramingError` with reason
+`aabb_checksum_invalid`. `accept` delivers the sample only to the current
+claim, and only when the subtype matches.
 
 ## Session-fatal vs sample-reject
 
@@ -251,7 +229,7 @@ Transitions:
 | Concern | Module |
 |---|---|
 | Header + runtime FCs | `collector/protocol.py` |
-| MIXED / AABB / `_select_boundary`, `feed` completion check, post-read lookahead | `collector/transport/binary_framing.py` |
+| MIXED / AABB / `_select_boundary` | `collector/transport/binary_framing.py` |
 | Claim, enable, allow-listed writes | `collector/transport/auxiliary_session.py` |
 | 0200 field scales | `payload/short_ascii_mppt.py` |
 | Optional 0200 solicit + health | `drivers/short_ascii_mppt_optional.py` |

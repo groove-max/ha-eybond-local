@@ -256,11 +256,10 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
                 (_reply()[:-1] + bytes([_reply()[-1] ^ 1]), "aabb_checksum_invalid"),
                 (_reply(b"\x02\x02"), "aabb_response_subtype_mismatch"),
                 (_reply(b"\x02\x03"), "aabb_subtype_unsupported"),
-                # 21-byte collision, declared EyeBond length not buffered.
-                # Matching claim reads AABB, then the checksum reject closes.
+                # Legal EyeBond header and AABB prefix: close before the checksum.
                 (
                     _collision_0200()[:-1] + bytes([_collision_0200()[-1] ^ 1]),
-                    "aabb_checksum_invalid",
+                    "binary_frame_ambiguous",
                 ),
             ):
                 with self.subTest(kind=kind, reason=reason):
@@ -304,17 +303,47 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(connection.collector_info.raw_response_count, 0)
 
     async def test_late_checksum_colliding_framed_reply_is_not_auxiliary(self):
-        # A 21-byte collision whose declared EyeBond length is not buffered is
-        # the auxiliary reply when the claim matches. A bad checksum rejects.
-        # A complete EyeBond frame already in the buffer is never that reply.
+        # A legal header that is also an AABB prefix closes the mixed session.
+        # The matching claim does not receive the 21-byte sample.
         for kind in ("framed", "at"):
             with self.subTest(kind=kind, arm="owned_valid"):
-                connection, reader, writer, _ = await self._open(kind)
+                connection, reader, writer, run = await self._open(kind)
                 wire = _collision_0200()
                 task = await self._start_read(connection, writer)
                 reader.feed_data(wire)
-                self.assertEqual(await task, wire)
-                self.assertTrue(connection.connected)
+                with self.assertRaises(ConnectionError):
+                    await task
+                await asyncio.gather(run, return_exceptions=True)
+                self.assertTrue(writer.closed)
+                self.assertEqual(
+                    connection.collector_info.last_disconnect_reason,
+                    "binary_frame_ambiguous",
+                )
+                self.assertEqual(
+                    connection.take_mppt_framing_failure_latch(),
+                    "binary_frame_ambiguous",
+                )
+                self.assertEqual(connection.collector_info.raw_response_count, 0)
+            with self.subTest(kind=kind, arm="owned_complete_frame"):
+                connection, reader, writer, run = await self._open(kind)
+                wire = (
+                    bytes.fromhex("aabb020004b00104020800fa000a010000000000ca")
+                    + bytes(1185)
+                )
+                task = await self._start_read(connection, writer)
+                reader.feed_data(wire)
+                with self.assertRaisesRegex(ConnectionError, "collector_disconnected"):
+                    await task
+                await asyncio.gather(run, return_exceptions=True)
+                self.assertTrue(writer.closed)
+                self.assertEqual(
+                    connection.collector_info.last_disconnect_reason,
+                    "binary_frame_ambiguous",
+                )
+                self.assertEqual(
+                    connection.take_mppt_framing_failure_latch(),
+                    "binary_frame_ambiguous",
+                )
                 self.assertEqual(connection.collector_info.raw_response_count, 0)
             with self.subTest(kind=kind, arm="owned_bad_checksum"):
                 connection, reader, writer, run = await self._open(kind)
@@ -327,11 +356,11 @@ class AuxiliaryConnectionTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.gather(run, return_exceptions=True)
                 self.assertEqual(
                     connection.collector_info.last_disconnect_reason,
-                    "aabb_checksum_invalid",
+                    "binary_frame_ambiguous",
                 )
                 self.assertEqual(
                     connection.take_mppt_framing_failure_latch(),
-                    "aabb_checksum_invalid",
+                    "binary_frame_ambiguous",
                 )
                 self.assertEqual(connection.collector_info.raw_response_count, 0)
             with self.subTest(kind=kind, arm="no_claim_overlap"):

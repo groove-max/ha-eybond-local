@@ -612,7 +612,6 @@ class _CollectorConnection:
                         reader, prefix=prefix, grammar=BinaryGrammar.MIXED,
                         started_at=frame_started,
                         timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
-                        auxiliary_claim=auxiliary_claim,
                     ))
                     if frame.grammar is BinaryGrammar.AABB:
                         auxiliary.accept(
@@ -1651,7 +1650,6 @@ class _CollectorAtConnection:
                             reader, prefix=prefix, grammar=BinaryGrammar.MIXED,
                             started_at=frame_started,
                             timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
-                            auxiliary_claim=auxiliary_claim,
                         ))
                         if frame.grammar is BinaryGrammar.AABB:
                             auxiliary.accept(

@@ -35,10 +35,11 @@ class AuxiliaryReadClaim:
 class AuxiliaryReadSession:
     """One physical session, independent of caller future lifetime.
 
-    A complete EyeBond frame that is already buffered and also an AABB prefix
-    is ``binary_frame_ambiguous`` (session-fatal). A matching claim may accept
-    a 21-byte reply only when that longer frame is not in hand. ``accept``
-    still requires the subtype. ``future.done()`` is not a grammar claim.
+    On a mixed session, eight bytes that are a legal EyeBond header and an
+    AABB prefix are ``binary_frame_ambiguous`` (session-fatal). A matching
+    claim does not select those 21 bytes. ``accept`` still requires the
+    subtype when the decoder does select a reply. ``future.done()`` is not a
+    grammar claim.
     """
 
     def __init__(self) -> None:

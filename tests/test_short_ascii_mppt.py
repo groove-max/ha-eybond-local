@@ -4,7 +4,6 @@ from dataclasses import FrozenInstanceError, asdict, replace
 import io
 import json
 from pathlib import Path
-from types import SimpleNamespace
 import struct
 import sys
 import unittest
@@ -16,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 from custom_components.eybond_local.collector.protocol import decode_header
 from custom_components.eybond_local.collector.transport.binary_framing import (
     BinaryFrame, BinaryFrameDecoder, BinaryFramingError, BinaryGrammar,
+    runtime_eybond_header_error,
 )
 from custom_components.eybond_local.payload.short_ascii_mppt import (
     MpptFault, MpptWorkMode, parse_mppt_runtime,
@@ -113,34 +113,17 @@ class MpptRuntimeTests(unittest.TestCase):
         frame = runtime_frame(voltage=1131, power=2)
         self.assertEqual(parse_mppt_runtime(frame).pv_voltage_v, 113.1)
         self.assertEqual(parse_mppt_runtime(frame).pv_power_w, 20)
-        # Offline explicit AABB assumption can inspect the sample. Without a
-        # claim, MIXED must still fail-close — checksum is not ownership.
+        # Offline explicit AABB assumption can inspect the sample. MIXED
+        # closes on the legal header.
         decoder = BinaryFrameDecoder(BinaryGrammar.MIXED, started_at=0, timeout=1)
         with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
             decoder.feed(frame.wire, now=0)
-        # The declared EyeBond length is longer than this 21-byte reply.
-        # A matching claim selects AABB; a bad checksum still rejects.
         self.assertGreater(decode_header(frame.wire).total_len, len(frame.wire))
-        owned = BinaryFrameDecoder(
-            BinaryGrammar.MIXED, started_at=0, timeout=1,
-            auxiliary_claim=SimpleNamespace(subtype=b"\x02\x00"),
-        )
-        self.assertEqual(owned.feed(frame.wire, now=0), 21)
-        self.assertEqual(parse_mppt_runtime(owned.finish(now=0)).pv_power_w, 20)
+        self.assertEqual(runtime_eybond_header_error(decode_header(frame.wire)), "")
         bad = frame.wire[:-1] + bytes([frame.wire[-1] ^ 1])
-        bad_decoder = BinaryFrameDecoder(
-            BinaryGrammar.MIXED, started_at=0, timeout=1,
-            auxiliary_claim=SimpleNamespace(subtype=b"\x02\x00"),
-        )
-        with self.assertRaisesRegex(BinaryFramingError, "aabb_checksum_invalid"):
-            bad_decoder.feed(bad, now=0)
-        # 0202 claim must not accept a 0200 colliding reply as its answer.
-        mismatched = BinaryFrameDecoder(
-            BinaryGrammar.MIXED, started_at=0, timeout=1,
-            auxiliary_claim=SimpleNamespace(subtype=b"\x02\x02"),
-        )
+        bad_decoder = BinaryFrameDecoder(BinaryGrammar.MIXED, started_at=0, timeout=1)
         with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
-            mismatched.feed(frame.wire, now=0)
+            bad_decoder.feed(bad, now=0)
         with self.assertRaises(ValueError):
             parse_mppt_runtime(runtime_frame(subtype=0x0202))
 

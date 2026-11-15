@@ -161,11 +161,13 @@ Only the request present at the start of a frame can receive that frame.
 Cancellation or timeout after sending closes that exact socket, since these
 replies have no transaction identifier. Reconnection starts a new owner.
 
-Integrity or boundary failures close the session. EyeBond and AABB can overlap
-on the first eight bytes. A checksum-valid AABB reply is accepted only when
-the outstanding auxiliary claim matches that subtype and a complete EyeBond
-frame is not already buffered. On that overlap, no claim, or a subtype
-mismatch, stays ambiguous and closes the session. The reject rules are in
+Integrity or boundary failures close the session. On a mixed socket, eight
+bytes that are both a legal EyeBond header and an AABB prefix close with
+`binary_frame_ambiguous`. A matching claim does not publish those 21 bytes,
+and the decision does not wait for the declared tail. Bytes that start with
+`aa bb` and are not a legal EyeBond header still select the 21-byte reply.
+`accept` delivers that reply only while the claim subtype matches. The reject
+rules are in
 [SHORT_ASCII_MIXED_SOCKET.md](SHORT_ASCII_MIXED_SOCKET.md). The foundation
 does not guarantee auxiliary availability for every possible payload.
 Driver-level admission, truthful model/field semantics and optional-data
