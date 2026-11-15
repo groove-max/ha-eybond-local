@@ -35,10 +35,10 @@ class AuxiliaryReadClaim:
 class AuxiliaryReadSession:
     """One physical session, independent of caller future lifetime.
 
-    MIXED overlap selection uses the outstanding AuxiliaryReadClaim subtype,
-    never future.done() or checksum preference alone. Matching claim plus AABB
-    validation admits the 21-byte reply; no claim or subtype mismatch on an
-    EyeBond/AABB overlap stays ``binary_frame_ambiguous`` (session-fatal).
+    A complete EyeBond frame that is already buffered and also an AABB prefix
+    is ``binary_frame_ambiguous`` (session-fatal). A matching claim may accept
+    a 21-byte reply only when that longer frame is not in hand. ``accept``
+    still requires the subtype. ``future.done()`` is not a grammar claim.
     """
 
     def __init__(self) -> None:

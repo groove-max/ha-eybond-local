@@ -118,15 +118,15 @@ class MpptRuntimeTests(unittest.TestCase):
         decoder = BinaryFrameDecoder(BinaryGrammar.MIXED, started_at=0, timeout=1)
         with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
             decoder.feed(frame.wire, now=0)
-        # Matching outstanding claim selects AABB; bad checksum still rejects.
+        # The declared EyeBond length is longer than this 21-byte reply.
+        # A matching claim selects AABB; a bad checksum still rejects.
+        self.assertGreater(decode_header(frame.wire).total_len, len(frame.wire))
         owned = BinaryFrameDecoder(
             BinaryGrammar.MIXED, started_at=0, timeout=1,
             auxiliary_claim=SimpleNamespace(subtype=b"\x02\x00"),
         )
         self.assertEqual(owned.feed(frame.wire, now=0), 21)
-        self.assertEqual(
-            parse_mppt_runtime(owned.finish(now=0)).pv_power_w, 20,
-        )
+        self.assertEqual(parse_mppt_runtime(owned.finish(now=0)).pv_power_w, 20)
         bad = frame.wire[:-1] + bytes([frame.wire[-1] ^ 1])
         bad_decoder = BinaryFrameDecoder(
             BinaryGrammar.MIXED, started_at=0, timeout=1,

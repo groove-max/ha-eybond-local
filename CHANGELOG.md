@@ -19,6 +19,14 @@ RC1 below; newer model features remain here.
   newer unrelated settings or commit unverified connection/identity fields through this
   action. Unchanged settings no longer cause an unnecessary integration reload.
 
+- A short-ASCII auxiliary read no longer treats a complete EyeBond frame as
+  a 21-byte MPPT reply. When that frame is already buffered and its header
+  is also an AABB prefix, the session closes with `binary_frame_ambiguous`.
+  A checksum-valid 21-byte reply whose declared EyeBond length is longer
+  than the bytes in hand stays the MPPT sample when the outstanding subtype
+  matches (#45). The session still delivers that sample only while the claim
+  is current.
+
 - Retain SMG setting-write diagnostics when the acknowledgement is empty,
   malformed, rejected or interrupted (#88). Keep the acknowledgement outcome
   separate from subsequent normal register reads, without resending the setting,

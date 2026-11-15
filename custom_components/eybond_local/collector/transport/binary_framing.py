@@ -83,10 +83,11 @@ class BinaryFramingError(ValueError):
 
 
 class AuxiliaryBoundaryClaim(Protocol):
-    """Ownership snapshot for MIXED overlap selection: subtype only.
+    """Delivery ownership captured when a frame starts: subtype only.
 
-    Callers pass the AuxiliaryReadClaim captured when the frame started.
-    Do not infer intent from future.done() or waiter lifetime.
+    A matching subtype may select a 21-byte AABB reply only when the bytes
+    in hand are not already a complete legal EyeBond frame. ``accept`` still
+    checks the subtype. Do not infer intent from ``future.done()``.
     """
 
     subtype: bytes
@@ -133,10 +134,13 @@ class BinaryFrameDecoder:
     closes. Ambiguous AABB/EyeBond overlap, bad AABB checksum, and unowned
     AABB stay terminal — no discard through them.
 
-    MIXED refuses EyeBond/AABB overlaps unless an outstanding claim's subtype
-    matches ``wire[2:4]``. A valid checksum alone is never enough, and a
-    future merely being alive is never a grammar claim. With a matching claim,
-    choose AABB then ``validate_aabb_frame``; checksum failure stays a reject.
+    MIXED refuses an EyeBond/AABB overlap when a complete legal EyeBond frame
+    is already buffered. Do not publish the first 21 bytes of that frame.
+    When the declared EyeBond length is longer than the bytes in hand, a
+    matching auxiliary claim selects the 21-byte AABB reply and the checksum
+    is checked once those bytes arrive. No claim, or a subtype mismatch,
+    stays ambiguous. A valid checksum alone is never enough, and a future
+    merely being alive is never a grammar claim.
     """
 
     def __init__(
@@ -275,15 +279,20 @@ class BinaryFrameDecoder:
             self._kind = BinaryGrammar.AABB
             self._size = AABB_FRAME_SIZE
         elif auxiliary_prefix and not header_error:
+            # Both grammars accept these eight bytes. A complete EyeBond frame
+            # already in hand must not be sliced into a 21-byte reply. A
+            # shorter buffer is that reply only when the outstanding subtype
+            # matches; the checksum is checked once 21 bytes are buffered.
             claim = self._auxiliary_claim
-            if claim is not None and wire[2:4] == claim.subtype:
-                # Outstanding claim subtype matches: choose AABB, then validate.
-                self._kind = BinaryGrammar.AABB
-                self._size = AABB_FRAME_SIZE
-            else:
-                # No claim or subtype mismatch: fail-close. Do not read a
-                # speculative longer EyeBond tail.
+            owned = (
+                claim is not None
+                and wire[2:4] == claim.subtype
+                and len(wire) + len(follow) < header.total_len
+            )
+            if not owned:
                 self._fail("binary_frame_ambiguous")
+            self._kind = BinaryGrammar.AABB
+            self._size = AABB_FRAME_SIZE
         elif not header_error:
             self._kind = BinaryGrammar.EYBOND
             self._header = header
@@ -297,8 +306,12 @@ class BinaryFrameDecoder:
         else:
             self._fail(header_error)
 
-    def feed(self, data: bytes, *, now: float) -> int:
-        """Consume only this frame's bytes, or fail without publishing a frame."""
+    def feed(self, data: bytes, *, now: float, lookahead: bytes = b"") -> int:
+        """Consume only this frame's bytes, or fail without publishing a frame.
+
+        ``lookahead`` is unread input beyond ``data``. It can prove that a
+        complete EyeBond frame is already buffered, and it is not consumed.
+        """
 
         self._check(now)
         if self._result is not None:
@@ -309,10 +322,22 @@ class BinaryFrameDecoder:
             take = min(target - len(self._buffer), len(data) - consumed)
             self._buffer.extend(data[consumed:consumed + take])
             consumed += take
+            pending = data[consumed:] + lookahead
             if not self._size and len(self._buffer) == HEADER_SIZE:
-                self._select_boundary(follow=data[consumed:])
+                self._select_boundary(follow=pending)
             if self._size and len(self._buffer) == self._size:
                 wire = bytes(self._buffer)
+                if (
+                    self._kind is BinaryGrammar.AABB
+                    and self._grammar is BinaryGrammar.MIXED
+                    and wire[:4] in AABB_PREFIXES
+                ):
+                    header = decode_header(wire)
+                    if (
+                        not runtime_eybond_header_error(header)
+                        and len(wire) + len(pending) >= header.total_len
+                    ):
+                        self._fail("binary_frame_ambiguous")
                 if self._kind is BinaryGrammar.AABB:
                     try:
                         validate_aabb_frame(wire)
@@ -354,8 +379,9 @@ async def async_read_binary_frame(
     Supply at most the fixed8-byte header as prefix. Cancellation is propagated
     to the owner: this function never retries or reuses a partly consumed stream.
     It must not be called by competing readers or after a guessed grammar switch.
-    Pass the claim snapshot from when the frame started; do not infer from
-    future.done().
+    ``auxiliary_claim`` selects a 21-byte reply only when the bytes already
+    buffered are not a complete legal EyeBond frame. Do not infer a grammar
+    from ``future.done()``.
     """
 
     if not 0 < len(prefix) <= HEADER_SIZE:
@@ -367,19 +393,34 @@ async def async_read_binary_frame(
         timeout=timeout,
         auxiliary_claim=auxiliary_claim,
     )
-    decoder.feed(prefix, now=loop.time())
+
+    def _lookahead() -> bytes:
+        parts: list[bytes] = []
+        seen: set[int] = set()
+        current: object = reader
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            buffered = getattr(current, "_buffer", None)
+            if isinstance(buffered, (bytes, bytearray)) and buffered:
+                parts.append(bytes(buffered))
+            current = getattr(current, "_reader", None)
+        return b"".join(parts)
+
+    decoder.feed(prefix, now=loop.time(), lookahead=_lookahead())
     while decoder.frame is None:
         now = loop.time()
         decoder.feed(b"", now=now)
         try:
+            needed = decoder.bytes_needed
             tail = await asyncio.wait_for(
-                reader.readexactly(decoder.bytes_needed),
+                reader.readexactly(needed),
                 timeout=decoder.deadline - now,
             )
         except asyncio.TimeoutError as exc:
             raise BinaryFramingError("binary_frame_timeout") from exc
         except asyncio.IncompleteReadError as exc:
-            decoder.feed(exc.partial, now=loop.time())
+            decoder.feed(exc.partial, now=loop.time(), lookahead=_lookahead())
             return decoder.finish(now=loop.time())
-        decoder.feed(tail, now=loop.time())
+        # Bytes that arrive while readexactly waits are still unread here.
+        decoder.feed(tail, now=loop.time(), lookahead=_lookahead())
     return decoder.finish(now=loop.time())

@@ -163,7 +163,8 @@ replies have no transaction identifier. Reconnection starts a new owner.
 
 Integrity or boundary failures close the session. EyeBond and AABB can overlap
 on the first eight bytes. A checksum-valid AABB reply is accepted only when
-the outstanding auxiliary claim matches that subtype. No claim, or a subtype
+the outstanding auxiliary claim matches that subtype and a complete EyeBond
+frame is not already buffered. On that overlap, no claim, or a subtype
 mismatch, stays ambiguous and closes the session. The reject rules are in
 [SHORT_ASCII_MIXED_SOCKET.md](SHORT_ASCII_MIXED_SOCKET.md). The foundation
 does not guarantee auxiliary availability for every possible payload.

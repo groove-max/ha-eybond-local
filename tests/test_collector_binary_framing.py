@@ -190,25 +190,25 @@ class BinaryFrameDecoderTests(unittest.TestCase):
     def test_dual_valid_21_bytes_requires_owner_not_checksum_preference(self) -> None:
         wire = _collision_0200()
         validate_aabb_frame(wire)
-        # Matching outstanding claim: AABB, not a long EyeBond frame.
+        header = decode_header(wire)
+        self.assertGreater(header.total_len, len(wire))
+        # The declared EyeBond frame is longer than these 21 bytes. A matching
+        # claim takes the checksum-valid reply and does not read that tail.
         owned = self._decoder(claim=_claim())
         self.assertEqual(owned.feed(wire + b"TAIL", now=10.1), 21)
         frame = owned.finish(now=10.1)
         self.assertEqual(frame.grammar, BinaryGrammar.AABB)
         self.assertEqual(frame.wire, wire)
-        # Bad checksum with the same claim: reject, never publish.
         bad = wire[:-1] + bytes([wire[-1] ^ 1])
         bad_decoder = self._decoder(claim=_claim())
         with self.assertRaisesRegex(BinaryFramingError, "aabb_checksum_invalid"):
             bad_decoder.feed(bad, now=10.1)
         self.assertIsNone(bad_decoder.frame)
-        # No claim: still ambiguous; checksum alone is not ownership.
         decoder = self._decoder()
         with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
             decoder.feed(wire, now=10.1)
         self.assertIsNone(decoder.frame)
         self.assertEqual(decoder.buffered_size, 8)
-        # Claim subtype mismatch: do not accept as that claim's reply.
         mismatched = self._decoder(claim=_claim(b"\x02\x02"))
         with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
             mismatched.feed(wire, now=10.1)
@@ -225,12 +225,36 @@ class BinaryFrameDecoderTests(unittest.TestCase):
             decoder.feed(wire + b"AT+SYST:123\r\n", now=10.1)
         self.assertEqual(decoder.buffered_size, 8)
         self.assertIsNone(decoder.frame)
-        # Matching claim: take AABB only; leftover EyeBond tail stays unconsumed.
+        # The whole EyeBond frame is already buffered, so a matching claim
+        # must not keep its first 21 bytes either.
         owned = self._decoder(claim=_claim())
-        chunk = wire + b"AT+SYST:123\r\n"
-        self.assertEqual(owned.feed(chunk, now=10.1), 21)
-        self.assertEqual(owned.finish(now=10.1).wire, wire[:21])
-        self.assertEqual(chunk[21:], wire[21:] + b"AT+SYST:123\r\n")
+        self.assertGreaterEqual(len(wire), decode_header(wire).total_len)
+        with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
+            owned.feed(wire + b"AT+SYST:123\r\n", now=10.1)
+        self.assertEqual(owned.buffered_size, 8)
+        self.assertIsNone(owned.frame)
+
+    def test_complete_eybond_frame_is_not_truncated_to_aabb(self) -> None:
+        """Maksym's counterexample: a full FC4 frame is also a valid 21-byte AABB."""
+
+        wire = bytes.fromhex("aabb020004b00104020800fa000a010000000000ca") + bytes(1185)
+        header = decode_header(wire)
+        self.assertEqual(len(wire), header.total_len)
+        self.assertEqual(header.total_len, 1206)
+        self.assertEqual(runtime_eybond_header_error(header), "")
+        validate_aabb_frame(wire[:21])
+        decoder = self._decoder(claim=_claim())
+        with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
+            decoder.feed(wire, now=10.1)
+        self.assertEqual(decoder.buffered_size, 8)
+        self.assertIsNone(decoder.frame)
+        # The same bytes, split after the header, still must not publish AABB
+        # once the remainder of the declared frame is in hand.
+        split = self._decoder(claim=_claim())
+        self.assertEqual(split.feed(wire[:8], now=10.1), 8)
+        with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
+            split.feed(wire[8:], now=10.2)
+        self.assertIsNone(split.frame)
 
     def test_plausible_1091_byte_header_does_not_swallow_following_traffic(self) -> None:
         wire = _collision_0200()
@@ -241,9 +265,11 @@ class BinaryFrameDecoderTests(unittest.TestCase):
             decoder.feed(wire + _framed(), now=10.1)
         self.assertEqual(decoder.buffered_size, 8)
         self.assertIsNone(decoder.frame)
-        # Matching 0200 claim: AABB of 21 bytes, not a ~1137-byte EyeBond frame.
+        # Matching 0200 claim: 21-byte reply, not the following EyeBond frame.
+        # The collision's own declared length is still unread.
         owned = self._decoder(claim=_claim())
         chunk = wire + _framed()
+        self.assertLess(len(chunk), decode_header(wire).total_len)
         self.assertEqual(owned.feed(chunk, now=10.1), 21)
         self.assertEqual(owned.finish(now=10.1).grammar, BinaryGrammar.AABB)
         self.assertEqual(chunk[21:], _framed())
@@ -643,7 +669,8 @@ class BinaryFrameReaderTests(unittest.IsolatedAsyncioTestCase):
                 started_at=asyncio.get_running_loop().time(), timeout=1.0,
             )
         self.assertEqual(await reader.read(), wire[8:] + b"AT+SYST:123\r\n")
-        # Matching claim: read exactly the remaining AABB bytes, leave the AT suffix.
+        # Matching claim: the declared EyeBond length is not buffered, so read
+        # the 21-byte reply and leave the AT suffix.
         owned_reader = asyncio.StreamReader()
         owned_reader.feed_data(wire[8:] + b"AT+SYST:123\r\n")
         owned_reader.feed_eof()
@@ -655,6 +682,64 @@ class BinaryFrameReaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.grammar, BinaryGrammar.AABB)
         self.assertEqual(result.wire, wire)
         self.assertEqual(await owned_reader.read(), b"AT+SYST:123\r\n")
+        # Subtype mismatch against the short collision does not consume the tail.
+        mismatch_reader = asyncio.StreamReader()
+        mismatch_reader.feed_data(wire[8:] + b"AT+SYST:123\r\n")
+        mismatch_reader.feed_eof()
+        with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
+            await async_read_binary_frame(
+                mismatch_reader, prefix=wire[:8], grammar=BinaryGrammar.MIXED,
+                started_at=asyncio.get_running_loop().time(), timeout=1.0,
+                auxiliary_claim=_claim(b"\x02\x02"),
+            )
+        self.assertEqual(await mismatch_reader.read(), wire[8:] + b"AT+SYST:123\r\n")
+
+    async def test_complete_frame_arriving_during_blocked_read_is_ambiguous(self) -> None:
+        """A complete EyeBond frame that arrives while the 21-byte read waits stays unpublished."""
+
+        wire = bytes.fromhex("aabb020004b00104020800fa000a010000000000ca") + bytes(1185)
+        self.assertEqual(len(wire), decode_header(wire).total_len)
+        # Prefix is at most the 8-byte header. Splits past that arrive in two
+        # feeds while readexactly is already blocked.
+        for split in (8, 9, 20):
+            with self.subTest(split=split):
+                reader = asyncio.StreamReader()
+                task = asyncio.create_task(async_read_binary_frame(
+                    reader, prefix=wire[:8], grammar=BinaryGrammar.MIXED,
+                    started_at=asyncio.get_running_loop().time(), timeout=1.0,
+                    auxiliary_claim=_claim(),
+                ))
+                await self._wait_until_read_blocks(reader, task)
+                if split > 8:
+                    reader.feed_data(wire[8:split])
+                    await self._wait_until_read_blocks(reader, task)
+                reader.feed_data(wire[split:])
+                with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
+                    await asyncio.wait_for(task, timeout=1.0)
+                self.assertEqual(bytes(reader._buffer), wire[21:])
+
+    async def _wait_until_read_blocks(self, reader, task) -> None:
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if task.done():
+                self.fail(f"read finished before blocking: {task.exception()!r}")
+            if getattr(reader, "_waiter", None) is not None:
+                return
+        self.fail("read did not block")
+
+    async def test_complete_frame_already_buffered_is_not_read_as_aabb(self) -> None:
+        wire = bytes.fromhex("aabb020004b00104020800fa000a010000000000ca") + bytes(1185)
+        self.assertEqual(len(wire), decode_header(wire).total_len)
+        reader = asyncio.StreamReader()
+        reader.feed_data(wire[8:])
+        reader.feed_eof()
+        with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
+            await async_read_binary_frame(
+                reader, prefix=wire[:8], grammar=BinaryGrammar.MIXED,
+                started_at=asyncio.get_running_loop().time(), timeout=1.0,
+                auxiliary_claim=_claim(),
+            )
+        self.assertEqual(await reader.read(), wire[8:])
         # Subtype mismatch with an outstanding claim stays ambiguous.
         mismatch_reader = asyncio.StreamReader()
         mismatch_reader.feed_data(wire[8:])
