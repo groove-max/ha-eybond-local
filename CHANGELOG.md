@@ -703,11 +703,9 @@ Support and validation remain specific to the collector, protocol and firmware.
 - Optional short-ASCII **live PV/MPPT** uses the documented auxiliary `0200`
   runtime read, gated by config-entry option `admit_short_ascii_mppt` (stock
   installs do not poll until admitted). Live PV/MPPT measurement sensors stay
-  **disabled by default**. Quiet fault diagnostics `q1_error_code`, `q1_error`,
-  `ups_fault`, `mppt_error_code`, and `mppt_error` are `enabled_default: true`
-  (entity state only — no per-poll WARNING spam). `q1_error_code` and
-  `ups_fault` replace the 0.3.0-rc.1 keys `short_ascii_fault_code` and
-  `inverter_fault`. History on those old ids does not move.
+  **disabled by default**. Quiet fault diagnostics `short_ascii_fault_code`,
+  `short_ascii_fault`, `inverter_fault`, `mppt_error_code`, and `mppt_error`
+  are `enabled_default: true` (entity state only — no per-poll WARNING spam).
 
 ### Fixed
 

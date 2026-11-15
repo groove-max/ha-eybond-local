@@ -26,7 +26,9 @@ from custom_components.eybond_local.payload.short_ascii_mppt import (
 )
 
 
-FAULT_MEASUREMENT_KEYS = ("q1_error_code", "q1_error", "mppt_error_code", "mppt_error")
+FAULT_MEASUREMENT_KEYS = (
+    "short_ascii_fault_code", "short_ascii_fault", "mppt_error_code", "mppt_error",
+)
 HEX_CAPTURE_KEYS = ("q1_raw_hex", "rb_raw_hex", "rb_tail_hex", "rb_body_len")
 
 
@@ -67,18 +69,33 @@ class FaultSchemaTests(unittest.TestCase):
                 description = self.schema.measurement_description(key)
                 self.assertTrue(description.diagnostic)
                 self.assertTrue(description.enabled_default)
-        ups = self.schema.binary_sensor_description("ups_fault")
-        self.assertTrue(ups.diagnostic)
-        self.assertTrue(ups.enabled_default)
-        self.assertEqual(ups.device_class, "problem")
+        fault = self.schema.binary_sensor_description("inverter_fault")
+        self.assertEqual(fault.name, "Inverter Fault")
+        self.assertTrue(fault.diagnostic)
+        self.assertTrue(fault.enabled_default)
+        self.assertEqual(fault.device_class, "problem")
+        self.assertEqual(
+            self.schema.measurement_description("short_ascii_fault_code").name,
+            "Inverter Fault Code",
+        )
+        self.assertEqual(
+            self.schema.measurement_description("short_ascii_fault").name,
+            "Inverter Fault Description",
+        )
         # Other diagnostics stay opt-in unless separately enabled.
         flags = self.schema.measurement_description("short_ascii_status_flags")
         self.assertTrue(flags.diagnostic)
         self.assertFalse(flags.enabled_default)
         keys = {item.key for item in self.schema.measurement_descriptions}
         binary = {item.key for item in self.schema.binary_sensor_descriptions}
-        self.assertNotIn("short_ascii_fault_code", keys)
-        self.assertNotIn("inverter_fault", binary)
+        self.assertIn("short_ascii_fault_code", keys)
+        self.assertIn("short_ascii_fault", keys)
+        self.assertNotIn("short_ascii_fault", binary)
+        self.assertIn("inverter_fault", binary)
+        self.assertNotIn("inverter_fault", keys)
+        self.assertNotIn("q1_error_code", keys)
+        self.assertNotIn("q1_error", keys)
+        self.assertNotIn("ups_fault", binary)
 
 
 class FaultPublishDriverTests(unittest.IsolatedAsyncioTestCase):
@@ -95,9 +112,12 @@ class FaultPublishDriverTests(unittest.IsolatedAsyncioTestCase):
             result = await self.driver.async_read_values(
                 transport, inverter, runtime_state={},
             )
-        self.assertEqual(result.values["q1_error_code"], 0)
-        self.assertEqual(result.values["q1_error"], "normal")
-        self.assertIs(result.values["ups_fault"], False)
+        self.assertEqual(result.values["short_ascii_fault_code"], 0)
+        self.assertEqual(result.values["short_ascii_fault"], "normal")
+        self.assertIs(result.values["inverter_fault"], False)
+        self.assertNotIn("q1_error_code", result.values)
+        self.assertNotIn("q1_error", result.values)
+        self.assertNotIn("ups_fault", result.values)
         for key in HEX_CAPTURE_KEYS:
             self.assertNotIn(key, result.values)
 

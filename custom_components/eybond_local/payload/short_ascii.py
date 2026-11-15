@@ -201,10 +201,10 @@ def parse_q1(frame: bytes) -> dict[str, object]:
         "battery_reference_voltage": _decimal(body[27:31], rb"[0-9]{2}\.[0-9]"),
         "temperature": _decimal(body[32:36], rb"(?:[0-9]{2}|-[0-9])\.[0-9]"),
         "short_ascii_status_flags": flags.decode("ascii"),
-        "q1_error_code": error_code,
-        "q1_error": q1_error_label(error_code),
+        "short_ascii_fault_code": error_code,
+        "short_ascii_fault": q1_error_label(error_code),
         # Q11: flags[1]=='1' is the UPS/inverter fault bit (19B4).
-        "ups_fault": flags[1] == 49,
+        "inverter_fault": flags[1] == 49,
         "grid_available": flags[2] == 48,
         "short_ascii_mains_input_connected": flags[3] == 48,
         "battery_low": flags[4] == 49,
