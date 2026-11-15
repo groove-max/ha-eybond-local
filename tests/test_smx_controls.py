@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
+from unittest.mock import AsyncMock, patch
 import unittest
 
 from custom_components.eybond_local.control_policy import (
@@ -37,8 +39,7 @@ class _WriteTraceTransport(FixtureTransport):
             53 + offset: ord(character)
             for offset, character in enumerate(identity[:20].ljust(20))
         })
-        registers[57088] = 0b1010  # Experimental power bitmask.
-        registers[0x0211] = 0  # Legacy default password status.
+        registers[0x0211] = 0  # SRNE V2.07: no user password entered.
         super().__init__(registers=registers, command_responses=None, probe_target=TARGET)
         self.requests: list[tuple[int, int, int]] = []
         self.holding_reads: list[tuple[int, int]] = []
@@ -90,18 +91,18 @@ class SmxControlsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_legacy_profile_has_full_controls_but_only_two_tested(self):
         capabilities = self.inverter.capabilities
-        self.assertEqual(len(capabilities), 36)
+        self.assertEqual(len(capabilities), 35)
         self.assertEqual(
             {c.key for c in capabilities if c.tested},
             {"output_priority", "charger_source_priority"},
         )
         self.assertTrue(all(c.requires_confirm for c in capabilities))
         # Full Control must expose the complete restored legacy settings set
-        # without requiring 34 per-entity enable actions. This only controls
+        # without requiring 33 per-entity enable actions. This only controls
         # the HA entity registry default; no Modbus write runs on startup.
         self.assertTrue(all(c.enabled_default for c in capabilities))
         self.assertFalse(next(c for c in capabilities if c.key == "battery_type").tested)
-        self.assertTrue(next(c for c in capabilities if c.key == "inverter_power").requires_confirm)
+        self.assertNotIn("inverter_power", {c.key for c in capabilities})
 
     async def test_existing_control_policy_auto_full_and_read_only(self):
         capabilities = self.inverter.capabilities
@@ -110,7 +111,7 @@ class SmxControlsTests(unittest.IsolatedAsyncioTestCase):
         ) for c in capabilities), 2)
         self.assertEqual(sum(can_expose_capability(
             c, control_mode="full", detection_confidence="high"
-        ) for c in capabilities), 36)
+        ) for c in capabilities), 35)
         self.assertFalse(any(can_expose_capability(
             c, control_mode="read_only", detection_confidence="high"
         ) for c in capabilities))
@@ -198,7 +199,7 @@ class SmxControlsTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(self.transport.requests, [])
 
-    async def test_default_password_retry_only_after_explicit_denial(self):
+    async def test_default_user_login_attempt_only_after_explicit_permission_denial(self):
         self.transport.deny_once_at = 0xE204
         result = await self.driver.async_write_capability(
             self.transport, self.inverter, "output_priority", "Utility First"
@@ -210,7 +211,7 @@ class SmxControlsTests(unittest.IsolatedAsyncioTestCase):
             (6, 0xE204, 1),
         ])
 
-    async def test_nondefault_password_status_never_unlocks(self):
+    async def test_user_authorized_status_does_not_trigger_default_login(self):
         self.transport._registers[0x0211] = 1
         self.transport.deny_once_at = 0xE204
         with self.assertRaises(ModbusError):
@@ -220,13 +221,15 @@ class SmxControlsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.transport.requests, [(6, 0xE204, 1)])
         self.assertNotIn(0xE203, self.transport._registers)
 
-    async def test_single_fc16_masked_write_preserves_other_bits(self):
-        result = await self.driver.async_write_capability(
-            self.transport, self.inverter, "inverter_power", True
-        )
-        self.assertTrue(result)
-        self.assertEqual(self.transport._registers[57088], 0b1011)
-        self.assertEqual(self.transport.requests, [(16, 57088, 0b1011)])
+    async def test_write_only_power_command_not_exposed_or_sent(self):
+        # SRNE V2.07: DF00 is a write command, not documented readable state.
+        # There is no normal-poll inverter_power key for mandatory hub readback.
+        self.assertNotIn("inverter_power", {c.key for c in self.inverter.capabilities})
+        with self.assertRaisesRegex(ValueError, "unknown_capability|unsupported_capability"):
+            await self.driver.async_write_capability(
+                self.transport, self.inverter, "inverter_power", True
+            )
+        self.assertEqual(self.transport.requests, [])
 
     async def test_write_ack_without_applied_value_is_error(self):
         self.transport.ignore_write_at = 0xE205

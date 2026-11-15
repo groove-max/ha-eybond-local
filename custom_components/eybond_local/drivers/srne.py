@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 import logging
 import math
@@ -68,6 +69,11 @@ _SMX_FAST_BLOCK_KEYS = frozenset({
     "status", "live", "energy_today", "energy_utility_today",
 })
 _LOGGER = logging.getLogger(__name__)
+
+
+class SmxSettingWriteOutcomeUnknown(RuntimeError):
+    """A setting command may have been sent; the hub must not resend it."""
+
 
 
 class SrneModbusDriver(ModbusWriteErrorMixin, InverterDriver):
@@ -253,27 +259,13 @@ class SrneModbusDriver(ModbusWriteErrorMixin, InverterDriver):
                 encoded_word=write_word,
             )
 
-        if capability.write_function == 6:
-            try:
-                await session.write_single_holding(capability.register, write_word)
-            except ModbusError as exc:
-                if not _can_retry_with_default_password(capability, exc):
-                    raise
-                # Exact-model legacy behavior: only an explicit 0x0B denial
-                # permits one user-password authorization attempt. Never touch
-                # 0xE202 (the password CHANGE register).
-                status = await session.read_holding(0x0211, 1)
-                if status != [0]:
-                    raise
-                await session.write_holding(0xE203, [0])
-                _LOGGER.info("SMX-II default-user authorization retried for 0x%04X", capability.register)
-                await session.write_single_holding(capability.register, write_word)
-        elif capability.write_function == 16:
-            await session.write_holding(capability.register, [write_word])
-        else:
+        if capability.write_function not in (6, 16):
             raise ValueError(f"unsupported_smx_ii_write_function:{capability.key}")
 
         native_value = decode_capability_value(capability, list(encoded_words))
+        # A pre-read is not a write. Start evidence only after it completes,
+        # immediately before issuing the actual setting command. An uncertain
+        # response replaces the previous attempt's trace, without a resend.
         trace = start_write_confirmation(
             runtime_state,
             capability_key=capability.key,
@@ -282,10 +274,66 @@ class SrneModbusDriver(ModbusWriteErrorMixin, InverterDriver):
             expected_value=native_value,
             requested_words=tuple(encoded_words),
         )
+
+        async def write_setting_once() -> None:
+            nonlocal trace
+            try:
+                if capability.write_function == 6:
+                    await session.write_single_holding(capability.register, write_word)
+                else:
+                    await session.write_holding(capability.register, [write_word])
+            except (Exception, asyncio.CancelledError) as exc:
+                # A decoded SRNE exception frame explicitly rejects the
+                # setting. Empty/malformed ACK, timeout and cancellation leave
+                # its application unknown. Never retry those uncertain writes.
+                trace = trace.with_write_outcome(
+                    error=exc, rejected=_is_srne_setting_rejection(exc),
+                ).with_immediate_unavailable(error=exc)
+                store_write_confirmation(runtime_state, trace)
+                # The generic hub may reconnect-and-resend a ConnectionError.
+                # After a setting's write boundary, delivery is uncertain:
+                # fail closed with a non-retryable exception instead. This is
+                # distinct from a connection failure during the pre-read.
+                if isinstance(exc, ConnectionError):
+                    raise SmxSettingWriteOutcomeUnknown(
+                        f"smx_ii_setting_write_outcome_unknown:{capability.key}"
+                    ) from exc
+                raise
+            else:
+                # ACK means accepted on the wire, not applied by the inverter.
+                trace = trace.with_write_outcome()
+                store_write_confirmation(runtime_state, trace)
+
+        try:
+            await write_setting_once()
+        except ModbusError as exc:
+            if not _can_retry_with_default_password(capability, exc):
+                raise
+            # SRNE V2.07: 0x0B = insufficient permissions, 0x05 = wrong
+            # password; 0x0211=0 = no user password entered, NOT evidence
+            # that the configured password is zero. A single default-user
+            # login attempt is allowed only after explicit setting denial.
+            # Login writes to 0xE203 are separate from setting-write evidence.
+            status = await session.read_holding(0x0211, 1)
+            if status != [0]:
+                raise
+            await session.write_holding(0xE203, [0])
+            _LOGGER.info(
+                "SMX-II default-user authorization attempted for 0x%04X",
+                capability.register,
+            )
+            # A second setting request is allowed only after the explicit
+            # 0x0B rejection and acknowledged authorization, never after an
+            # uncertain response from the first setting write.
+            await write_setting_once()
+
         try:
             readback = await session.read_holding(capability.register, 1)
             if len(readback) != 1:
                 raise ValueError("empty_register_readback")
+        except asyncio.CancelledError as exc:
+            store_write_confirmation(runtime_state, trace.with_immediate_unavailable(error=exc))
+            raise
         except Exception as exc:
             store_write_confirmation(runtime_state, trace.with_immediate_unavailable(error=exc))
             raise CapabilityPostWriteReadError(
@@ -554,8 +602,27 @@ def _is_exact_smx_ii(inverter: DetectedInverter) -> bool:
     )
 
 
+def _is_srne_setting_rejection(error: BaseException) -> bool:
+    """A valid SRNE exception frame is an explicit setting rejection.
+
+    SRNE Modbus V2.07, section 3.4: code 0x05 = wrong password;
+    code 0x0B = insufficient permissions. Malformed/empty replies and
+    timeouts are *not* rejection evidence.
+    """
+
+    if not isinstance(error, ModbusError):
+        return False
+    message = str(error)
+    if not message.startswith("exception_code:"):
+        return False
+    try:
+        return 1 <= int(message.split(":", 1)[1]) <= 11
+    except ValueError:
+        return False
+
+
 def _can_retry_with_default_password(capability, error: ModbusError) -> bool:
-    """Preserve the old exact-device one-time login retry after Modbus 0x0B."""
+    """Allow one default-user login attempt only after SRNE 0x0B denial."""
 
     return (
         str(error) == "exception_code:11"

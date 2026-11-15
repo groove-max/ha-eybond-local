@@ -236,7 +236,7 @@ class SmxTelemetryCompatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter.variant_key, "smx_ii_24v")
         self.assertEqual(inverter.register_schema_name, SCHEMA)
         self.assertEqual(inverter.profile_name, "srne_modbus/smx_ii.json")
-        self.assertEqual(len(inverter.capabilities), 36)
+        self.assertEqual(len(inverter.capabilities), 35)
         self.assertEqual({item.key for item in inverter.capabilities if item.tested}, {
             "output_priority", "charger_source_priority",
         })
@@ -279,7 +279,7 @@ class SmxTelemetryCompatTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(surface.read_only)
         self.assertEqual(surface.profile_name, "srne_modbus/smx_ii.json")
         self.assertEqual(len(schema.measurement_descriptions), 97)
-        self.assertEqual(len(legacy_profile.capabilities), 36)
+        self.assertEqual(len(legacy_profile.capabilities), 35)
         self.assertEqual(legacy_profile.presets, ())
         keys = {item.key for item in schema.measurement_descriptions}
         self.assertTrue({

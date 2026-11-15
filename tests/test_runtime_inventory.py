@@ -56,7 +56,7 @@ class RuntimeInventoryTests(unittest.TestCase):
 
         self.assertEqual(summary["profiles"], len(inventory["profiles"]))
         self.assertEqual(summary["profiles"], 34)
-        self.assertEqual(summary["capabilities"], 1279)
+        self.assertEqual(summary["capabilities"], 1278)
         # The separate PV3300 surface adds 27 controls: four owner-confirmed,
         # 23 untested. The common MUST surface remains wholly untested.
         # Exact Aninerel promotion adds five conditional, untested controls;
@@ -64,18 +64,18 @@ class RuntimeInventoryTests(unittest.TestCase):
         # The firmware-scoped PI30 surface inherits 20 existing MAX controls;
         # only its charger-priority enum differs, not validation of other maps.
         # Issue #88 adds nine model-scoped controls, retaining untested status.
-        # The exact EASUN SMX-II restoration adds 36 legacy controls:
-        # two previously tested and 34 conditional/untested.
-        self.assertEqual(summary["validation_state_counts"], {"tested": 460, "untested": 819})
+        # The exact EASUN SMX-II restoration adds 35 legacy controls:
+        # two previously tested and 33 conditional/untested. DF00 is deferred.
+        self.assertEqual(summary["validation_state_counts"], {"tested": 460, "untested": 818})
         self.assertEqual(
             summary["support_tier_counts"],
-            {"blocked": 31, "conditional": 846, "standard": 402},
+            {"blocked": 31, "conditional": 845, "standard": 402},
         )
 
         profile_by_key = {item["profile_key"]: item for item in inventory["profiles"]}
         self.assertEqual(
             profile_by_key["srne_modbus/smx_ii.json"]["validation_state_counts"],
-            {"tested": 2, "untested": 34},
+            {"tested": 2, "untested": 33},
         )
         self.assertEqual(
             profile_by_key["must_pv_ph18/base.json"]["validation_state_counts"],

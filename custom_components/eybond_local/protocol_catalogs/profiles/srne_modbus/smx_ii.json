@@ -241,12 +241,6 @@
       "key": "battery_equalize_now", "title": "Equalize Battery Now", "register": 57101,
       "value_kind": "bool", "group": "battery", "advanced": true,
       "change_summary": "Starts or stops an immediate equalization cycle."
-    },
-    {
-      "key": "inverter_power", "title": "Inverter Power", "register": 57088,
-      "value_kind": "bool", "write_function": 16, "bitmask": 1, "group": "advanced",
-      "advanced": true, "unsafe_while_running": true, "provenance": "inferred", "experimental": true,
-      "change_summary": "Turns inverter operation on or off through the community-documented control register."
     }
   ]
 }
