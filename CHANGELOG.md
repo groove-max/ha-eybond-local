@@ -13,6 +13,12 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Include the existing read-only historical learning review inventory in support
+  exports, without requiring Core Python access from an HA OS terminal (#94).
+  Scope it to the current entry, bound trace reads, and report unavailable history
+  without blocking the archive or exposing private paths. Exporting is not
+  recovery approval and does not release learning protection.
+
 - Preserve existing inverter, polling and saved cloud-endpoint options when
   choosing to keep settings after a failed connection-mode change. Merge only
   the explicitly staged runtime edits; do not clear other options, overwrite

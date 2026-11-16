@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import stat
 
+from ...collector_identity import validated_collector_pn
 from ...connection.cloud_learning_protection import CloudLearningHold
 from . import session
 from .protection_store import CloudLearningProtectionStore, _sync_directory, _unique_keys
@@ -22,6 +23,7 @@ from .protection_store import CloudLearningProtectionStore, _sync_directory, _un
 _MAX_RUNS = 32
 _MAX_RECORD = 65536
 _MAX_TRACE = 16 * 1024 * 1024
+_MAX_INSPECTION_TRACE_BYTES = 32 * 1024 * 1024
 _VOLATILE = frozenset({"status", "updated_at", "restore_attempt_count", "last_restore_attempt_at", "last_restore_error"})
 
 
@@ -121,7 +123,7 @@ class ReviewedLearningRecoveryStore(CloudLearningProtectionStore):
     def _current(self, entry_id):
         return _state(_json(session._owned_session_path(self._config_dir, entry_id)))
 
-    def _history(self, hold, current) -> list[dict]:
+    def _history(self, hold, current, *, trace_byte_budget=None) -> list[dict]:
         root = session.shadow_learning_session_root(self._config_dir).resolve()
         archive = root / "retained_runs"
         if archive.is_symlink():
@@ -171,7 +173,12 @@ class ReviewedLearningRecoveryStore(CloudLearningProtectionStore):
                 raise ValueError("review_trace_path_invalid")
             if not trace.resolve().is_relative_to(root):
                 raise ValueError("review_trace_outside_storage")
-            data = _read(trace, _MAX_TRACE)
+            limit = _MAX_TRACE if trace_byte_budget is None else min(_MAX_TRACE, trace_byte_budget)
+            if limit <= 0:
+                raise ValueError("review_history_trace_budget_exceeded")
+            data = _read(trace, limit)
+            if trace_byte_budget is not None:
+                trace_byte_budget -= len(data)
             if not data:
                 raise ValueError("review_trace_empty")
             _check_trace_scope(data, state)
@@ -198,13 +205,20 @@ class ReviewedLearningRecoveryStore(CloudLearningProtectionStore):
         return {"schema_version": 1, "outcome": "maintainer_reviewed_terminal_history",
                 "hold": hold.to_record(), "history": history, "evidence": evidence}
 
-    def inspect(self, collector_pn) -> dict:
+    def inspect(self, collector_pn, *, entry_id=None) -> dict:
         """Shareable inventory, not the private receipt, paths, PN or endpoints."""
         hold = self.load(collector_pn)
         if hold is None:
             return {"status": "no_hold"}
+        if entry_id is not None and hold.entry_id != entry_id:
+            raise ValueError("review_scope_mismatch")
         current = self._current(hold.entry_id)
-        history = self._history(hold, current)
+        history = self._history(hold, current, trace_byte_budget=_MAX_INSPECTION_TRACE_BYTES)
+        # Inspection is not an ownership transaction. If recovery/retry changed
+        # its scope while reading, report unavailable rather than mixed history.
+        self.require_exact_hold(hold)
+        if _view(self._current(hold.entry_id)) != _view(current):
+            raise ValueError("review_scope_mismatch")
         return {"status": "review_required", "run_count": len(history),
                 "history_sha256": _digest({"hold": hold.to_record(), "history": history}),
                 "runs": [{"index": index, "source": run["state"]["cloud_source"],
@@ -325,3 +339,33 @@ class ReviewedLearningRecoveryStore(CloudLearningProtectionStore):
         plan, hold = self.require_review(state)
         self.require_no_hold(hold.collector_pn)
         return plan
+
+
+_PUBLIC_INSPECTION_ERRORS = frozenset({
+    "review_scope_mismatch", "review_original_run_missing_or_duplicate",
+    "review_state_not_stopped", "review_trace_not_drained",
+    "review_trace_lifecycle_incomplete", "review_trace_identity_mismatch",
+    "review_record_too_large", "review_history_trace_budget_exceeded",
+    "review_history_inventory_too_large", "review_history_scope", "review_history_order",
+    "cloud_learning_hold_invalid", "cloud_learning_hold_unreadable",
+    "cloud_learning_hold_changed",
+})
+
+
+def inspect_reviewed_learning_history(config_dir: Path, *, entry_id: str, collector_pn: str) -> dict:
+    """Best-effort, entry-scoped CLI inventory for support exports; never approve.
+
+    Run in a filesystem executor, not the HA event loop. Unreadable, active or
+    changed history must not prevent downloading the rest of the support data.
+    Do not export exception text: it may contain paths, identifiers or content.
+    """
+    if not entry_id or not validated_collector_pn(collector_pn):
+        return {"status": "unavailable", "reason": "identity_unavailable"}
+    try:
+        return ReviewedLearningRecoveryStore(config_dir).inspect(collector_pn, entry_id=entry_id)
+    except Exception as exc:  # noqa: BLE001 - diagnostics are never recovery authority
+        reason = str(exc)
+        return {
+            "status": "unavailable",
+            "reason": reason if reason in _PUBLIC_INSPECTION_ERRORS else "history_invalid_or_unreadable",
+        }
