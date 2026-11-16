@@ -32,6 +32,20 @@ RC1 below; newer model features remain here.
   newer unrelated settings or commit unverified connection/identity fields through this
   action. Unchanged settings no longer cause an unnecessary integration reload.
 
+- A short-ASCII mixed session closes with `binary_frame_ambiguous` when the
+  first eight bytes are a legal EyeBond header and an AABB prefix. A matching
+  claim does not publish that 21-byte reply, and the decision does not depend
+  on whether the declared tail has arrived. Collision wattages, where the
+  voltage word is a legal length and the low byte of power/10 is a runtime
+  function code, stay unpublished. A reply that starts with `aa bb` and is
+  not a legal EyeBond header remains the 21-byte sample when the claim
+  subtype matches (#45). An illegal EyeBond length header that does not start
+  with `aa bb` closes with `collector_frame_length_invalid`. The production
+  reader does not publish a following frame from bytes it has not read.
+  On a mixed session, same-chunk resync still decodes the next frame unless
+  that frame is itself the overlap, which closes with `binary_frame_ambiguous`.
+  An EyeBond-only session still decodes that next frame.
+
 - Retain SMG setting-write diagnostics when the acknowledgement is empty,
   malformed, rejected or interrupted (#88). Keep the acknowledgement outcome
   separate from subsequent normal register reads, without resending the setting,
@@ -695,10 +709,22 @@ Support and validation remain specific to the collector, protocol and firmware.
   or inverter controls are inferred.
 
 - Short-ASCII devices can also expose documented BMS and rated readings through
-  optional read-only RB/F queries. These entities are disabled by default.
+  optional read-only RB/F/RH queries. These entities are disabled by default.
   Missing, invalid or expired BMS samples remove their old values without
-  interrupting basic telemetry. BMS current scaling and PV remain unqualified;
-  this is not full device or control support (#45).
+  interrupting basic telemetry. Charge/discharge currents and measured
+  `battery_power` publish at 19B4 segment-7 `multiply=0.1` only while optional
+  RH reports BMS current display accuracy `1` (with decimals) and F ratings are
+  present for I/P bounds; RH `0`, unread or failed RH omits those keys. RH=1 is
+  the discriminator (no retail-model gate). One live family member has
+  SmartValue correlation for that path; other members (e.g. Maxinn) are not
+  separately live-proven. This is not full device or control support (#45).
+
+- Optional short-ASCII **live PV/MPPT** uses the documented auxiliary `0200`
+  runtime read, gated by config-entry option `admit_short_ascii_mppt` (stock
+  installs do not poll until admitted). Live PV/MPPT measurement sensors stay
+  **disabled by default**. Quiet fault diagnostics `short_ascii_fault_code`,
+  `short_ascii_fault`, `inverter_fault`, `mppt_error_code`, and `mppt_error`
+  are `enabled_default: true` (entity state only — no per-poll WARNING spam).
 
 ### Fixed
 

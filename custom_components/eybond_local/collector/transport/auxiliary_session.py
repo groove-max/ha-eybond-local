@@ -35,9 +35,11 @@ class AuxiliaryReadClaim:
 class AuxiliaryReadSession:
     """One physical session, independent of caller future lifetime.
 
-    MIXED remains conservative: a checksum cannot disambiguate a valid EyeBond
-    frame with TID0xAABB. Neither a current waiter nor historical request absence
-    is permission to guess. An ambiguous boundary is a terminal framing error.
+    On a mixed session, eight bytes that are a legal EyeBond header and an
+    AABB prefix are ``binary_frame_ambiguous`` (session-fatal). A matching
+    claim does not select those 21 bytes. ``accept`` still requires the
+    subtype when the decoder does select a reply. ``future.done()`` is not a
+    grammar claim.
     """
 
     def __init__(self) -> None:

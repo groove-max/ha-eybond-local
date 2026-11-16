@@ -19,6 +19,12 @@ from .base import InverterDriver
 from .catalog_probe import async_probe_ascii_catalog, catalog_model_name
 from .read_result import DriverReadMode, DriverReadResult
 from .support_marker import DriverSupportMarker
+from .short_ascii_battery_dc import battery_dc_power_values
+from .short_ascii_bms_held import bms_held_for
+from .short_ascii_estimates import (
+    best_available_ac_load_estimate_values,
+    estimated_ac_load_values,
+)
 from .short_ascii_optional import optional_reads_for
 
 
@@ -115,7 +121,8 @@ class EybondShortAsciiDriver(InverterDriver):
         optional = optional_reads_for(state, transport, inverter, now)
         session = self._session(transport, inverter.probe_target)
         try:
-            values = parse_q1(await session.request("Q1"))
+            q1_frame = await session.request("Q1")
+            values = parse_q1(q1_frame)
             values.pop("short_ascii_q1_length")
             extra, diagnostics = await optional.refresh_one(session, state, clock)
         except BaseException:
@@ -125,9 +132,24 @@ class EybondShortAsciiDriver(InverterDriver):
             raise
         # FULL absence invalidates expired/failed optional fields in the hub.
         # Q1 and RB have distinct owners: reference V is never pack/BMS V.
-        return DriverReadResult(values=values | extra, mode=DriverReadMode.FULL, diagnostics=diagnostics)
+        # Measured battery DC needs RB currents gated by RH+F (optional path).
+        merged = values | extra
+        merged.update(battery_dc_power_values(merged))
+        # Keep pure power keys separate. %×VA and the house-load composite are labelled.
+        # House load uses live battery_power only, before held mirrors exist.
+        merged.update(estimated_ac_load_values(merged))
+        merged.update(best_available_ac_load_estimate_values(merged))
+        # Labelled held mirrors are diagnostics, not FULL measurement keys.
+        # A present FULL value is fresh to the hub; link-loss and hard-reject
+        # must not look like a new BMS sample. Live BMS keys stay omitted there.
+        now = clock()
+        held = bms_held_for(state)
+        if optional.rb_live_read:
+            held.observe(merged, now)
+        diagnostics.update(held.project(now))
+        return DriverReadResult(values=merged, mode=DriverReadMode.FULL, diagnostics=diagnostics)
 
-    async def async_capture_support_evidence(self, transport, inverter):
+    async def async_capture_support_evidence(self, transport, inverter, runtime_state=None):
         session = self._session(transport, inverter.probe_target)
         responses, failures = {}, {}
         for command in READ_COMMANDS:
@@ -135,6 +157,13 @@ class EybondShortAsciiDriver(InverterDriver):
                 responses[command] = (await session.request(command)).hex()
             except (ShortAsciiError, ConnectionError, asyncio.TimeoutError) as exc:
                 failures[command] = type(exc).__name__
+        # Correlated aux 0200 only when the site admitted MPPT, same gate as poll.
+        try:
+            from .short_ascii_mppt_optional import capture_runtime_exchange, is_admitted
+            if is_admitted(runtime_state if isinstance(runtime_state, dict) else {}):
+                responses.update(await capture_runtime_exchange(transport))
+        except (TypeError, ValueError, ConnectionError, asyncio.TimeoutError) as exc:
+            failures["0200"] = type(exc).__name__
         return {
             "capture_kind": "short_ascii_read_only", "responses_hex": responses,
             "failures": failures,

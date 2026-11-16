@@ -197,6 +197,9 @@ class EybondLocalCoordinator(
         ):
             # The runtime filters ``collector:`` keys out of the driver table.
             set_unsupported(tuple(persisted_unsupported))
+        set_admit_mppt = getattr(self._runtime, "set_admit_short_ascii_mppt", None)
+        if callable(set_admit_mppt):
+            set_admit_mppt(bool(entry.options.get("admit_short_ascii_mppt")))
         # Metadata dead channels seed from the dedicated option AND (one-time
         # migration) any legacy ``collector:`` keys still riding the driver
         # option. The option REWRITE that strips them from the driver table +

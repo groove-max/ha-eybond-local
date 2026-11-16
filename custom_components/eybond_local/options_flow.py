@@ -6,6 +6,7 @@ from .flows.options.base import OptionsFlowBase
 from .flows.options.ble_inspection import BleInspectionOptionsMixin
 from .flows.options.diagnostics import DiagnosticsOptionsMixin
 from .flows.options.inverter_display import InverterDisplayOptionsMixin
+from .flows.options.short_ascii_mppt import ShortAsciiMpptOptionsMixin
 from .flows.options.local_register_observation import LocalRegisterObservationOptionsMixin
 from .flows.options.proxy import ProxyCaptureOptionsMixin
 from .flows.options.runtime import RuntimeOptionsMixin
@@ -20,6 +21,7 @@ class EybondLocalOptionsFlow(
     StrategyTransitionOptionsMixin,
     RuntimeOptionsMixin,
     InverterDisplayOptionsMixin,
+    ShortAsciiMpptOptionsMixin,
     LocalRegisterObservationOptionsMixin,
     ShadowLearningRunMixin,
     ShadowLearningReviewMixin,
