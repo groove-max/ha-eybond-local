@@ -12,6 +12,34 @@ from custom_components.eybond_local.support.masking import mask_numeric_identifi
 
 
 class SupportMaskingTests(unittest.TestCase):
+    def test_review_digests_preserve_numeric_and_ascii_encoded_digit_runs(self):
+        digests = (
+            "abcdef" + "1234567890123456" + "abcdef" * 7,
+            "31323334353637383930313233343536" + "a" * 32,
+        )
+        for key in ("history_sha256", "trace_sha256"):
+            for digest in digests:
+                with self.subTest(key=key, digest=digest):
+                    self.assertEqual(len(digest), 64)
+                    payload = {"nested": [{key: digest, "serial": "92632500000001"}]}
+                    expected = {"nested": [{key: digest, "serial": "9263******0001"}]}
+                    self.assertEqual(mask_numeric_identifiers(payload), expected)
+                    self.assertEqual(mask_numeric_identifiers(expected), expected)
+                    self.assertEqual(payload["nested"][0]["serial"], "92632500000001")
+
+    def test_review_digest_exception_requires_exact_field_and_shape(self):
+        digest = "abcdef" + "1234567890123456" + "abcdef" * 7
+        for key in ("serial", "note", "arbitrary_sha256", "history_sha256_extra"):
+            with self.subTest(key=key):
+                self.assertIn("*", mask_numeric_identifiers({key: digest})[key])
+        for key in ("history_sha256", "trace_sha256"):
+            for value in ("92632500000001", digest + "\n", digest + "f", "g" + digest[1:]):
+                with self.subTest(key=key, value=value):
+                    self.assertIn("*", mask_numeric_identifiers({key: value})[key])
+            nested = {key: {"serial": "92632500000001"}}
+            self.assertEqual(mask_numeric_identifiers(nested),
+                             {key: {"serial": "9263******0001"}})
+
     def test_declared_binary_response_map_preserves_numeric_hex_runs(self):
         for raw in (bytes(range(36)), bytes(40), b"230.0 04 03 115.0\x00\r"):
             payload = {"responses_hex": {"MP": raw.hex()}}

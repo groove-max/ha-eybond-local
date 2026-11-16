@@ -27,11 +27,16 @@ _WIRE_HEX_FIELDS = frozenset({
     "command_hex", "request_hex",
 })
 
-# Explicit package identity fields, not arbitrary user-provided *_hash values.
-_BUILD_DIGEST_FIELDS = {
+# Explicit build and historical-review evidence digests, not arbitrary *_hash
+# or *_sha256 fields. Hash bytes must survive export unchanged, including digit
+# runs that resemble identifiers in either text or decoded hex. These values
+# identify evidence only; exporting them grants no recovery authority.
+_DIAGNOSTIC_DIGEST_FIELDS = {
     "integration_build_git_commit": re.compile(r"(?:[0-9a-f]{7}|[0-9a-f]{12}|[0-9a-f]{40})\Z"),
     "integration_build_fingerprint": re.compile(r"[0-9a-f]{64}\Z"),
     "integration_build_id": re.compile(r"sha256:[0-9a-f]{64}\Z"),
+    "history_sha256": re.compile(r"[0-9a-f]{64}\Z"),
+    "trace_sha256": re.compile(r"[0-9a-f]{64}\Z"),
 }
 
 
@@ -50,7 +55,7 @@ def mask_numeric_identifiers(value):
         masked = {}
         for key, item in value.items():
             masked_key = mask_numeric_identifiers(key) if isinstance(key, str) else key
-            digest = _BUILD_DIGEST_FIELDS.get(key)
+            digest = _DIAGNOSTIC_DIGEST_FIELDS.get(key)
             if digest is not None and isinstance(item, str) and digest.fullmatch(item):
                 masked[masked_key] = item
             elif key in _WIRE_HEX_FIELDS and isinstance(item, str):

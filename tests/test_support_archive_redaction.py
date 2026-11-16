@@ -13,6 +13,32 @@ from custom_components.eybond_local.support.redaction import sanitize_support_pa
 
 
 class SupportArchiveRedactionTests(unittest.TestCase):
+    def test_review_hashes_survive_zip_without_exempting_credentials_or_serials(self):
+        digest = "abcdef" + "1234567890123456" + "abcdef" * 7
+        inventory = {"history_sha256": digest, "runs": [{"trace_sha256": digest}]}
+        bundle = {"runtime": {"metadata": {
+            "cloud_learning_protection_review_inventory": inventory,
+            "collector_pn": "E50000200000000001", "password": digest,
+            "history_sha256_token": digest,
+        }}}
+        original = deepcopy(bundle)
+        with tempfile.TemporaryDirectory() as directory:
+            result = export_support_package(
+                config_dir=Path(directory), entry_id="synthetic", entry_title="Synthetic",
+                support_bundle=bundle, raw_capture=None, fixture=None,
+                anonymized_fixture=None, profile_source=None, register_schema_source=None,
+                publish_download_copy=True,
+            )
+            self.assertEqual(result.path.read_bytes(), result.download_path.read_bytes())
+            with ZipFile(result.path) as archive:
+                self.assertIsNone(archive.testzip())
+                exported = json.loads(archive.read("support_bundle.json"))["runtime"]["metadata"]
+                self.assertEqual(exported["cloud_learning_protection_review_inventory"], inventory)
+                self.assertNotIn("password", exported)
+                self.assertNotIn("history_sha256_token", exported)
+                self.assertNotEqual(exported["collector_pn"], "E50000200000000001")
+        self.assertEqual(bundle, original)
+
     def test_all_members_and_download_copy_remove_old_unmasked_session(self):
         credentials = {
             "token": "SYNTHETIC-TOKEN", "Secret": "SYNTHETIC-SECRET",

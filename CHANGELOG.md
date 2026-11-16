@@ -9,6 +9,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Preserve valid historical-learning SHA-256 digests unchanged in support
+  archives, even when they contain digit runs resembling serial numbers (#94).
+  Keep identifier and credential masking for other fields and malformed values.
+  This fixes exported evidence only, not saved history or recovery approval.
+
 - Scope every detection pass to its own explicit catalog-map choice, including
   the empty one. A ContextVar is inherited by child tasks, so a hub with no
   selection inherited whichever map its parent task had chosen and could bind

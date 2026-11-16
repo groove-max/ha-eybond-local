@@ -3,6 +3,7 @@
 from io import BytesIO
 import json
 from pathlib import Path
+import re
 import threading
 from unittest.mock import AsyncMock
 from zipfile import ZipFile
@@ -19,10 +20,12 @@ KEY = "cloud_learning_protection_review_inventory"
 
 
 @pytest.mark.parametrize("kind", ["bundle", "archive"])
-@pytest.mark.parametrize("history", ["valid", "corrupt", "absent"])
+@pytest.mark.parametrize("history,digest_collision", [
+    ("valid", False), ("valid", True), ("corrupt", False), ("absent", False),
+])
 async def test_support_export_contains_safe_worker_inventory_without_recovery(
     hass, collector_entry, fake_runtime, monkeypatch, tmp_path, hass_client_no_auth,
-    kind, history,
+    kind, history, digest_collision,
 ):
     monkeypatch.setattr(hass.config, "config_dir", str(tmp_path))
     assert await hass.config_entries.async_setup(collector_entry.entry_id)
@@ -39,12 +42,22 @@ async def test_support_export_contains_safe_worker_inventory_without_recovery(
 
     loop_thread = threading.get_ident()
     inspected = []
+    inventories = []
     original = review.ReviewedLearningRecoveryStore.inspect
     def inspect(self, collector_pn, **kwargs):
         assert threading.get_ident() != loop_thread
         assert collector_pn == pn and kwargs["entry_id"] == collector_entry.entry_id
         inspected.append(True)
-        return original(self, collector_pn, **kwargs)
+        inventory = original(self, collector_pn, **kwargs)
+        if digest_collision:
+            # Exercise export with deterministic synthetic hash values containing
+            # digit runs. Real history inspection still runs; no approval or
+            # receipt is built from these test-only hashes.
+            inventory["history_sha256"] = "abcdef" + "1234567890123456" + "abcdef" * 7
+            for run in inventory["runs"]:
+                run["trace_sha256"] = "31323334353637383930313233343536" + "a" * 32
+        inventories.append(inventory)
+        return inventory
     monkeypatch.setattr(review.ReviewedLearningRecoveryStore, "inspect", inspect)
     def forbidden(*args, **kwargs):
         raise AssertionError("support inspection must not approve or restore")
@@ -73,7 +86,9 @@ async def test_support_export_contains_safe_worker_inventory_without_recovery(
     if history == "valid":
         assert result["status"] == "review_required" and result["run_count"] == 2
         assert [run["original"] for run in result["runs"]] == [True, False]
-        assert all(len(run["trace_sha256"]) == 64 for run in result["runs"])
+        assert result == inventories[-1]
+        assert re.fullmatch(r"[0-9a-f]{64}", result["history_sha256"])
+        assert all(re.fullmatch(r"[0-9a-f]{64}", run["trace_sha256"]) for run in result["runs"])
         for secret in (pn, str(root), hold.entry_id, states[0].original_endpoint, states[-1].route_owner_id):
             assert secret not in json.dumps(result)
     else:
