@@ -504,6 +504,7 @@
       "control_discovery_cloud_timeout": "The cloud service did not respond in time. Try again later.",
       "control_discovery_cloud_network": "Home Assistant could not reach the cloud service. Check its internet connection.",
       "control_discovery_cloud_unexpected": "The cloud service returned an unexpected response.",
+      "control_discovery_local_route_failed": "The local collector connection could not be prepared or verified. This does not establish a cloud login or API problem. Check the connection/restoration status before retrying. If the error repeats, download a Support Archive and a debug log covering the attempt.",
       "control_discovery_cloud_protocol_unconfirmed": "No matching cloud read confirmed the PI30 protocol during preparation. No test controls were sent. Download a Support Archive and check the connection/restoration status below before trying again.",
       "control_discovery_cloud_register_seed_required": "Modbus reads were observed from the cloud while local polling uses PI30. No test controls were sent. Once the previous connection is restored, use the Modbus compatibility check if offered, or share a Support Archive. A successful register read alone does not confirm a compatible map.",
       "cloud_modbus_check": "Check cloud protocol compatibility (read-only)",

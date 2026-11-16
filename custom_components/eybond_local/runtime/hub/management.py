@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ...collector.management import CollectorManagementTransportError
+from ...connection.session_handle import ADAPTER_COLLECTOR_FRAMED_COMMANDS, ADAPTER_NONE
 from ...const import CONF_PI30_FLAG_COMMAND_CASE
 from ..write_rejection import with_write_rejection_hint
 from .common import (
@@ -467,6 +468,19 @@ class HubManagementMixin:
                 if d.get("channel_id")
             )
 
+    def _management_adapter_diagnostic(self) -> str:
+        """Observe a bounded adapter ID without resolving transports or raising."""
+        getter = getattr(self._link_manager, "collector_management_adapter_id", None)
+        try:
+            adapter_id = getter() if callable(getter) else None
+        except Exception:  # diagnostics must not mask the operation/guard error
+            return "unknown"
+        if type(adapter_id) is str and adapter_id in {
+            ADAPTER_COLLECTOR_AT_COMMANDS, ADAPTER_COLLECTOR_FRAMED_COMMANDS, ADAPTER_NONE,
+        }:
+            return adapter_id
+        return "unknown"
+
     async def _run_management_operation(self, name: str, operation):
         """Execute one management operation, recording non-sensitive diagnostics.
 
@@ -482,7 +496,9 @@ class HubManagementMixin:
             "error_class": "",
             "error_code": "",
             "timestamp": _wall_time(),
+            "adapter_start": self._management_adapter_diagnostic(),
         }
+        transport_error = None
         generation = getattr(self._link_manager, "owned_session_generation", None)
         session_identity = getattr(self._link_manager, "owned_session_identity", None)
         if type(generation) is int:
@@ -521,6 +537,7 @@ class HubManagementMixin:
             record["error_class"] = type(exc).__name__
             record["error_code"] = str(exc).split(":", 1)[0]
             if isinstance(exc, CollectorManagementTransportError):
+                transport_error = exc
                 record["error_code"] = exc.diagnostic_code
                 request = exc.request_diagnostics
                 if request:
@@ -531,6 +548,7 @@ class HubManagementMixin:
             record["error_class"] = type(exc).__name__
             raise
         finally:
+            record["adapter_end"] = self._management_adapter_diagnostic()
             if session_identity is not None:
                 record["session_identity_changed"] = session_identity != getattr(
                     self._link_manager, "owned_session_identity", None,
@@ -541,6 +559,14 @@ class HubManagementMixin:
             record["duration_ms"] = int(
                 round((asyncio.get_running_loop().time() - started) * 1000.0)
             )
+            if transport_error is not None:
+                transport_error.operation_context = {
+                    key: record[key] for key in (
+                        "operation", "adapter_start", "adapter_end", "timestamp",
+                        "duration_ms", "session_generation_start", "session_generation_end",
+                        "session_identity_changed",
+                    ) if key in record
+                }
             self._last_management_operation = record
             if record["status"] == "error":
                 # Preserve one timestamped failure when recovery's successful
@@ -666,8 +692,24 @@ class HubManagementMixin:
         )
 
         adapter = self._collector_management_adapter()
+        identity = getattr(self._link_manager, "owned_session_identity", None)
+        generation = getattr(self._link_manager, "owned_session_generation", None)
+
+        def check_session() -> None:
+            # Do not continue a compound read on a replacement session. The
+            # live ownership token is authoritative; the monitor counter can
+            # lag behind it and is only a fallback for older link providers.
+            changed = (
+                identity != getattr(self._link_manager, "owned_session_identity", None)
+                if identity is not None else type(generation) is int
+                and generation != getattr(self._link_manager, "owned_session_generation", None)
+            )
+            if changed:
+                raise CollectorManagementTransportError("collector_management_session_changed")
+
         state = await self._run_management_operation(
-            "read_endpoint_state", adapter.async_read_endpoint_state
+            "read_endpoint_state",
+            lambda: adapter.async_read_endpoint_state(check_session=check_session),
         )
 
         overlay: dict[str, object] = {}

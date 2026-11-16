@@ -105,7 +105,7 @@ class SmartEssActiveCorrelationOperation(CloudActiveCorrelationOperation):
         start_shadow_route,
         on_learning,
     ) -> CloudLearningOutcome:
-        progress(0.08, "fetching")
+        progress(0.08, "connecting")
         await start_shadow_route()
         progress(0.18, "fetching")
         cloud_bundle = await executor(
@@ -290,6 +290,7 @@ class ValueCloudActiveCorrelationOperation(CloudActiveCorrelationOperation):
                 timeout=self.timeout_policy.action_request,
             )
         )
+        progress(0.12, "connecting")
         await start_shadow_route()
         progress(0.18, "fetching")
         cloud_bundle = await executor(

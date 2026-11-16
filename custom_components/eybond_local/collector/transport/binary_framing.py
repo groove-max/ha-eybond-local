@@ -1,8 +1,9 @@
-"""Bounded binary framing, independent of inverter metadata and live waiters.
+"""Bounded binary framing, independent of inverter metadata and future liveness.
 
 This codec is an internal building block for the short-ASCII auxiliary channel.
 It does not negotiate a collector protocol or admit that channel itself.
-The session owner supplies the admitted grammar, never a future's done() state.
+The session owner supplies the admitted grammar. A future merely being
+alive is never evidence. Delivery ownership stays with the auxiliary session.
 """
 
 from __future__ import annotations
@@ -37,7 +38,10 @@ RUNTIME_EYBOND_FCODES = frozenset({
 # first byte is often payload-too-large, not an illegal function. Discarding
 # that window on length alone adopts a misaligned header and stalls on its
 # payload (#39). Length and payload-size errors may drop one window only when
-# the whole next frame is already in this chunk.
+# the whole next frame is already inside the same feed() call. The production
+# reader never passes bytes it has not read into that decision, so an illegal
+# header that does not start with ``aa bb`` closes even when the next frame
+# is already buffered.
 # Desynchronized length junk (e.g. 000f02ff0000ff04): drop the entire illegal
 # 8-byte window once, then read a fresh header. Do not one-byte slide (that
 # forms false-legal headers such as ff0000ff04aabb02). Ambiguous AABB overlap
@@ -114,21 +118,40 @@ class BinaryFrameDecoder:
     caller and must be processed independently (possibly as an AT line).
     The buffer, grammar and deadline never reset on fragmentation or retry.
 
-    Illegal EyeBond headers for length or payload-too-large drop the entire
-    8-byte window once only when the following frame is already complete
-    (its 8-byte header plus that header's payload), then require a fresh legal
-    header. ``collector_frame_function_invalid`` is fatal and is never
-    discarded. Skipped bytes are never published. A second illegal window
-    closes. Ambiguous AABB/EyeBond overlap, bad AABB checksum, and unowned
-    AABB stay terminal — no discard through them.
+    A single ``feed()`` call that already contains the next complete frame
+    keeps the same-chunk resync: an illegal EyeBond length or
+    payload-too-large header that does not start with ``aa bb`` drops that
+    8-byte window once. On ``MIXED``, the next frame in that same call is
+    decoded unless its eight bytes are a legal EyeBond header and an AABB
+    prefix, in which case the read closes with ``binary_frame_ambiguous``.
+    On ``EYBOND``, that next frame is decoded.
+    ``collector_frame_function_invalid`` is fatal and is never discarded.
+    Skipped bytes are never published. A second illegal window that does not
+    start with ``aa bb`` closes.
+    Ambiguous AABB/EyeBond overlap and a bad AABB checksum stay terminal. A
+    later ``feed()`` is not part of that decision, so a split read closes on
+    the illegal header that does not start with ``aa bb``.
+    ``async_read_binary_frame`` feeds only bytes it has already read. It
+    never relies on bytes that have not been read yet, so an illegal header
+    that does not start with ``aa bb`` closes there whether or not later
+    bytes are already buffered.
 
-    MIXED deliberately refuses overlaps, even with a valid checksum. Selecting
-    AABB instead requires an independently established wire contract; merely
-    waiting for an AABB response is NOT such evidence. The codec cannot invent
-    this contract or distinguish two identical, valid representations.
+    On ``MIXED``, eight bytes that are a legal EyeBond header and an AABB
+    prefix are ``binary_frame_ambiguous``. The declared tail is not consulted,
+    whether that tail is already buffered, arrives during the read, or arrives
+    after the reader returns. Bytes that start with ``aa bb`` and are not a
+    legal EyeBond header still select the 21-byte reply; the checksum is
+    checked once those bytes arrive. A future merely being alive is never a
+    grammar claim.
     """
 
-    def __init__(self, grammar: BinaryGrammar, *, started_at: float, timeout: float) -> None:
+    def __init__(
+        self,
+        grammar: BinaryGrammar,
+        *,
+        started_at: float,
+        timeout: float,
+    ) -> None:
         if not isinstance(grammar, BinaryGrammar):
             raise ValueError("binary_grammar_invalid")
         if not math.isfinite(started_at) or not math.isfinite(timeout) or timeout <= 0:
@@ -205,7 +228,7 @@ class BinaryFrameDecoder:
         self._size = 0
 
     def _maybe_discard_illegal_header(self, header_error: str, follow: bytes) -> bool:
-        """Discard one illegal window only when the whole next frame is buffered."""
+        """Discard one illegal window only when this feed() call holds the next frame."""
 
         if not is_resyncable_header_error(header_error):
             return False
@@ -256,8 +279,8 @@ class BinaryFrameDecoder:
             self._kind = BinaryGrammar.AABB
             self._size = AABB_FRAME_SIZE
         elif auxiliary_prefix and not header_error:
-            # No checksum or future state can prove which of these two binary
-            # grammars the peer intended. Don't consume a speculative tail.
+            # Both grammars accept these eight bytes. Choosing 21 bytes would
+            # depend on whether the declared tail has arrived. Close instead.
             self._fail("binary_frame_ambiguous")
         elif not header_error:
             self._kind = BinaryGrammar.EYBOND
@@ -328,6 +351,16 @@ async def async_read_binary_frame(
     Supply at most the fixed8-byte header as prefix. Cancellation is propagated
     to the owner: this function never retries or reuses a partly consumed stream.
     It must not be called by competing readers or after a guessed grammar switch.
+    On ``MIXED``, eight bytes that are a legal EyeBond header and an AABB
+    prefix are ``binary_frame_ambiguous``. This function does not wait for the
+    declared EyeBond length. Bytes that start with ``aa bb`` and are not a
+    legal EyeBond header still select the 21-byte reply. An illegal EyeBond
+    length or payload-too-large header that does not start with ``aa bb``
+    closes. Each ``feed()`` here contains
+    only bytes already read, so this reader does not use the decoder's
+    same-chunk resync: an illegal header that does not start with ``aa bb``
+    closes even when the next frame is already buffered.
+    Do not infer a grammar from ``future.done()``.
     """
 
     if not 0 < len(prefix) <= HEADER_SIZE:

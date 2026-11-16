@@ -105,6 +105,23 @@ entry, and compares it with the cached state. This check does not change the
 collector's address or clear recovery. An absent record alone does not confirm
 that restoration succeeded; older learning traces can still be included as history.
 
+For a **retained learning-protection hold**, the archive also includes a read-only
+inventory of the original session and retained retries, when their local records
+and traces can be validated. It uses the same inspection as the maintainer CLI:
+no Terminal add-on, Python installation, cloud credentials or new learning run is
+needed. Choose the existing/saved cloud-data option when creating the archive.
+Find the result in `support_bundle.json` under
+`runtime.metadata.cloud_learning_protection_review_inventory`.
+
+This inventory contains timestamps, counts and SHA-256 digests, not collector
+identifiers, endpoints, private paths or raw commands. Active, incomplete,
+unreadable or oversized history is reported as unavailable without blocking the
+archive; inspection reads at most 32 MiB of traces across the retained runs.
+Neither `review_required` nor `no_hold` confirms that cloud service is restored.
+This check does not approve recovery, clear protection or change the endpoint;
+maintainer review and the normal owned restoration remain separate. Other
+existing support-archive checks may still read the device as described below.
+
 If traffic capture fails while reading the collector's server address, create
 the archive just after that attempt. It includes the last collector-management
 result and, when available, which read failed and whether the connection changed

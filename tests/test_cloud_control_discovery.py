@@ -106,6 +106,28 @@ class RegistryTests(unittest.TestCase):
 
 
 class ProviderIsolationTests(unittest.TestCase):
+    def test_route_failure_is_connecting_not_cloud_fetching(self) -> None:
+        for source in ("smartess", "valuecloud"):
+            with self.subTest(source=source):
+                stages = []
+
+                async def fail_route():
+                    self.assertEqual(stages[-1], "connecting")
+                    raise TimeoutError("local route unavailable")
+
+                with (
+                    patch.object(ccd, "fetch_control_discovery_bundle_for_collector") as smart_fetch,
+                    patch.object(ccd.valuecloud_cloud_module, "login_with_password",
+                                 return_value=(object(), object())),
+                    patch.object(ccd.valuecloud_cloud_module,
+                                 "fetch_device_bundle_for_collector_with_session") as value_fetch,
+                ):
+                    with self.assertRaisesRegex(TimeoutError, "local route unavailable"):
+                        _run(_runner(source), start_shadow_route=fail_route,
+                             progress=lambda _fraction, stage, **kw: stages.append(stage))
+                smart_fetch.assert_not_called()
+                value_fetch.assert_not_called()
+
     def test_smartess_runner_runs_only_smartess_code(self) -> None:
         bundle = {
             "request": {"params": {"pn": "E1", "sn": "S1", "devcode": 1, "devaddr": 1}},

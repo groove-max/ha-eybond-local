@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 from custom_components.eybond_local.collector.protocol import decode_header
 from custom_components.eybond_local.collector.transport.binary_framing import (
     BinaryFrame, BinaryFrameDecoder, BinaryFramingError, BinaryGrammar,
+    runtime_eybond_header_error,
 )
 from custom_components.eybond_local.payload.short_ascii_mppt import (
     MpptFault, MpptWorkMode, parse_mppt_runtime,
@@ -108,13 +109,23 @@ class MpptRuntimeTests(unittest.TestCase):
                 parse_mppt_runtime(value)
 
     def test_semantics_do_not_relax_ambiguous_transport_grammar(self):
-        frame = runtime_frame(voltage=1085, power=4)
-        # Offline explicit assumption can inspect 40 W. It is NOT evidence that
-        # this packet can be safely split out of a mixed live stream.
-        self.assertEqual(parse_mppt_runtime(frame).pv_power_w, 40)
+        # PV ~113.1 V / 20 W: legal EyeBond header AND AABB/0200.
+        frame = runtime_frame(voltage=1131, power=2)
+        self.assertEqual(parse_mppt_runtime(frame).pv_voltage_v, 113.1)
+        self.assertEqual(parse_mppt_runtime(frame).pv_power_w, 20)
+        # Offline explicit AABB assumption can inspect the sample. MIXED
+        # closes on the legal header.
         decoder = BinaryFrameDecoder(BinaryGrammar.MIXED, started_at=0, timeout=1)
         with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
             decoder.feed(frame.wire, now=0)
+        self.assertGreater(decode_header(frame.wire).total_len, len(frame.wire))
+        self.assertEqual(runtime_eybond_header_error(decode_header(frame.wire)), "")
+        bad = frame.wire[:-1] + bytes([frame.wire[-1] ^ 1])
+        bad_decoder = BinaryFrameDecoder(BinaryGrammar.MIXED, started_at=0, timeout=1)
+        with self.assertRaisesRegex(BinaryFramingError, "binary_frame_ambiguous"):
+            bad_decoder.feed(bad, now=0)
+        with self.assertRaises(ValueError):
+            parse_mppt_runtime(runtime_frame(subtype=0x0202))
 
     def test_all_tcp_splits_of_explicit_aabb_frame_keep_semantics(self):
         frame = runtime_frame()

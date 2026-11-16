@@ -32,6 +32,7 @@ OPTIONS_MODULES = {
     "flows/options/base.py": "OptionsFlowBase",
     "flows/options/runtime.py": "RuntimeOptionsMixin",
     "flows/options/inverter_display.py": "InverterDisplayOptionsMixin",
+    "flows/options/short_ascii_mppt.py": "ShortAsciiMpptOptionsMixin",
     "flows/options/strategy.py": "StrategyTransitionOptionsMixin",
     "flows/options/local_register_observation.py": (
         "LocalRegisterObservationOptionsMixin"
@@ -396,6 +397,7 @@ class OptionsFlowDecompositionBoundaryTests(unittest.TestCase):
         "StrategyTransitionOptionsMixin",
         "RuntimeOptionsMixin",
         "InverterDisplayOptionsMixin",
+        "ShortAsciiMpptOptionsMixin",
         "LocalRegisterObservationOptionsMixin",
         "ShadowLearningRunMixin",
         "ShadowLearningReviewMixin",

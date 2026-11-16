@@ -60,6 +60,7 @@ from ...support.runtime_projection import (
     metadata_source_payload,
 )
 from ...support.shadow_learning.review_model import normalize_activation_selection
+from ...support.shadow_learning.reviewed_recovery import inspect_reviewed_learning_history
 from ...support.shadow_learning.session import inspect_shadow_learning_recovery
 from ...support.shadow_learning.read_evidence import (
     LearnedReadActivationContext,
@@ -85,9 +86,14 @@ class CoordinatorSupportMixin:
         entry_id = self.config_entry.entry_id
         collector_pn = self.smartess_collector_pn
         values = await self.hass.async_add_executor_job(
-            lambda: inspect_shadow_learning_recovery(
-                config_dir, entry_id=entry_id, collector_pn=collector_pn,
-            )
+            lambda: {
+                **inspect_shadow_learning_recovery(
+                    config_dir, entry_id=entry_id, collector_pn=collector_pn,
+                ),
+                "cloud_learning_protection_review_inventory": inspect_reviewed_learning_history(
+                    config_dir, entry_id=entry_id, collector_pn=collector_pn,
+                ),
+            }
         )
         values["shadow_learning_recovery_cache_loaded"] = bool(
             getattr(self, "_shadow_learning_session_state_loaded", False)

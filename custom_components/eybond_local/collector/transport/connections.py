@@ -121,6 +121,18 @@ class _CollectorConnection:
         self._collector.heartbeat_fresh = self._has_fresh_heartbeat()
         return _copy_collector_info(self._collector)
 
+    def peek_mppt_framing_failure_latch(self) -> str:
+        """Read the live MIXED framing-kill latch without clearing it."""
+
+        return self._collector.mppt_framing_failure_latch or ""
+
+    def take_mppt_framing_failure_latch(self) -> str:
+        """Return and clear the live MIXED framing-kill latch (not a snapshot)."""
+
+        reason = self._collector.mppt_framing_failure_latch
+        self._collector.mppt_framing_failure_latch = ""
+        return reason
+
     def set_heartbeat_interval(self, interval: float) -> None:
         self._heartbeat_interval = float(interval)
 
@@ -557,6 +569,7 @@ class _CollectorConnection:
         read = auxiliary.read
         try:
             while not auxiliary.closed:
+                padding_deadline = self._empty_forward_replies.take_padding_deadline()
                 auxiliary.at_boundary = True
                 first = await read(reader.readexactly(1))
                 auxiliary.at_boundary = False
@@ -626,6 +639,11 @@ class _CollectorConnection:
                             prefix.hex(),
                         )
                         return
+                    if await read(self._empty_forward_replies.async_consume_padding(
+                        header_bytes, padding_deadline, reader.readexactly,
+                        timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
+                    )):
+                        continue
                     header = decode_header(header_bytes)
                     if self._empty_forward_replies.consume(header, self._pending):
                         continue
@@ -810,8 +828,13 @@ class _CollectorConnection:
                     payload.hex(),
                 )
         except BinaryFramingError as exc:
-            diagnostic.close(str(exc))
-            self._collector.last_disconnect_reason = str(exc)
+            reason = str(exc)
+            diagnostic.close(reason)
+            self._collector.last_disconnect_reason = reason
+            if reason in ("binary_frame_ambiguous", "aabb_checksum_invalid"):
+                # Latch survives run() clearing last_disconnect_reason on
+                # reconnect; the MPPT poller take-clears after reading.
+                self._collector.mppt_framing_failure_latch = reason
             logger.warning("Closing collector binary session remote=%s reason=%s",
                            self._collector.remote_ip, exc)
         except asyncio.IncompleteReadError:
@@ -974,6 +997,18 @@ class _CollectorAtConnection:
     @property
     def collector_info(self) -> CollectorInfo:
         return _copy_collector_info(self._collector)
+
+    def peek_mppt_framing_failure_latch(self) -> str:
+        """Read the live MIXED framing-kill latch without clearing it."""
+
+        return self._collector.mppt_framing_failure_latch or ""
+
+    def take_mppt_framing_failure_latch(self) -> str:
+        """Return and clear the live MIXED framing-kill latch (not a snapshot)."""
+
+        reason = self._collector.mppt_framing_failure_latch
+        self._collector.mppt_framing_failure_latch = ""
+        return reason
 
     @property
     def mixed_frame_observed(self) -> bool:
@@ -1511,6 +1546,7 @@ class _CollectorAtConnection:
             pi30_diagnostic = self._diagnostic_pi30
             runtime_modbus = self._runtime_modbus
             while not auxiliary.closed:
+                padding_deadline = self._empty_forward_replies.take_padding_deadline()
                 auxiliary.at_boundary = not buffered_prefix
                 if buffered_prefix:
                     first = buffered_prefix[:1]
@@ -1636,6 +1672,11 @@ class _CollectorAtConnection:
                             HEADER_SIZE - len(prefix),
                         ))
                         header_bytes = prefix + header_tail
+                        if await read(self._empty_forward_replies.async_consume_padding(
+                            header_bytes, padding_deadline, reader.readexactly,
+                            timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
+                        )):
+                            continue
                         header = decode_header(header_bytes)
                         if self._empty_forward_replies.consume(
                             header, self._pending_framed_response,
@@ -1729,9 +1770,14 @@ class _CollectorAtConnection:
                     record_exchange=not reader.line_from_prefix_only(),
                 )
         except BinaryFramingError as exc:
-            diagnostic.close(str(exc))
-            runtime_modbus.close(str(exc))
-            self._collector.last_disconnect_reason = str(exc)
+            reason = str(exc)
+            diagnostic.close(reason)
+            runtime_modbus.close(reason)
+            self._collector.last_disconnect_reason = reason
+            if reason in ("binary_frame_ambiguous", "aabb_checksum_invalid"):
+                # Latch survives run() clearing last_disconnect_reason on
+                # reconnect; the MPPT poller take-clears after reading.
+                self._collector.mppt_framing_failure_latch = reason
             logger.warning("Closing collector binary session remote=%s reason=%s",
                            self._collector.remote_ip, exc)
         except asyncio.IncompleteReadError:

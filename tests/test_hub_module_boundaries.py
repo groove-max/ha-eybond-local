@@ -33,7 +33,7 @@ EXPECTED_MRO = [
 ]
 
 EXPECTED_METHOD_MULTISET_SHA256 = (
-    "3e07877c7de145824a0b7b915fc4894066c462118c8b6e9187da27c55140d795"
+    "b5fa9580e71d73f72e8a969d4b0f550a007a002b0024f61bbf9705a755797dc8"
 )
 
 
@@ -97,8 +97,11 @@ class HubCompositionBoundaryTests(unittest.TestCase):
         duplicates = {name: paths for name, paths in owners.items() if len(paths) != 1}
         self.assertEqual(duplicates, {})
         payload = "\n".join(f"{name}:{count}" for name, count in sorted(counts.items()))
-        self.assertEqual(sum(counts.values()), 114)
-        self.assertEqual(len(counts), 109)
+        # Includes the new read-only adapter diagnostic helper; ownership and
+        # the exact method multiset remain pinned, not merely a size ceiling.
+        self.assertEqual(sum(counts.values()), 117)
+        self.assertEqual(len(counts), 112)
+        self.assertEqual(owners["_management_adapter_diagnostic"], {"management.py"})
         for method in (
             "_configure_runtime_measurement_freshness",
             "_renew_runtime_measurement_freshness",

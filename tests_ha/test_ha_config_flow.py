@@ -1007,4 +1007,3 @@ async def test_runtime_driver_change_releases_the_bound_map_after_real_reload(
 
     await hass.config_entries.async_unload(collector_entry.entry_id)
     await hass.async_block_till_done()
-

@@ -5951,6 +5951,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             [
                 "connection",
                 "runtime",
+                "short_ascii_mppt",
                 "inverter_display",
                 "experimental_map",
                 "collector_wifi",
@@ -6074,6 +6075,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             [
                 "collector_endpoint",
                 "runtime",
+                "short_ascii_mppt",
                 "inverter_display",
                 "experimental_map",
                 "collector_wifi",
@@ -10535,6 +10537,39 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("cloud-secret", str(coordinator.published) + str(logs.output))
                 self.assertEqual(coordinator.started, [])
                 self.assertEqual(coordinator.stopped, [])
+
+    async def test_local_route_failure_is_not_classified_as_cloud_api_failure(self) -> None:
+        from custom_components.eybond_local.collector.management import CollectorManagementTransportError
+
+        for restore_pending in (False, True):
+            with self.subTest(restore_pending=restore_pending):
+                coordinator = self._RunnerCoordinator(ready=False)
+                options = self._runner_options_flow(coordinator)
+                options._shadow_learning_state.update({
+                    "wizard_source": "smartess", "progress": {"stage": "connecting"},
+                })
+                error = CollectorManagementTransportError("TimeoutError", query_parameter=21)
+                error.operation_context = {"adapter_start": "framed_collector_commands"}
+
+                async def restore(_coordinator):
+                    if restore_pending:
+                        options._shadow_learning_state["session"] = {"status": "restore_failed"}
+
+                with (
+                    patch.object(options, "_async_execute_control_discovery", new=AsyncMock(side_effect=error)),
+                    patch.object(options, "_control_discovery_requires_shadow_route", return_value=True),
+                    patch.object(options, "_control_discovery_learning_engine") as engine,
+                    patch.object(options, "_async_control_discovery_failsafe_stop", new=restore),
+                    self.assertLogs("custom_components.eybond_local.flows.options.shadow_run", level="ERROR"),
+                ):
+                    await options._async_run_control_discovery()
+                engine.assert_not_called()
+                failure = coordinator.published[-1]["orchestration"]["failure"]
+                self.assertEqual(failure["primary_failure_reason"], "control_discovery_local_route_failed")
+                self.assertEqual(failure["reason"], "shadow_learning_restore_pending" if restore_pending
+                                 else "control_discovery_local_route_failed")
+                self.assertEqual(failure["management_failure"]["operation_context"], error.operation_context)
+                self.assertEqual(failure["stage"], "connecting")
 
     async def test_valuecloud_failure_survives_failed_endpoint_recovery(self) -> None:
         from custom_components.eybond_local.valuecloud_cloud import ValueCloudError
@@ -17499,15 +17534,71 @@ class OptionsStrategyTransitionStepsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_keep_settings_saves_options_without_strategy(self) -> None:
         flow, _calls = self._make_flow()
+        flow._config_entry.options = {
+            "poll_mode": "manual",
+            "poll_interval": 40,
+            "control_mode": "read_only",
+            "driver_hint": "modbus_catalog",
+            "device_catalog_entry_key": "explicit_test_map",
+            "collector_original_server_endpoint": "cloud.example.invalid:18899",
+            "future_option": {"enabled": True},
+        }
+        before = dict(flow._config_entry.options)
+        data_before = dict(flow._config_entry.data)
         flow._transition_error = "transition_session_unavailable"
         result = await flow.async_step_strategy_transition_keep_settings()
         self.assertEqual(result["type"], "create_entry")
-        self.assertEqual(result["data"], {"poll_mode": "auto"})
+        expected = {**before, "poll_mode": "auto"}
+        self.assertEqual(result["data"], expected)
         updates = flow.hass.config_entries.updates
         self.assertEqual(len(updates), 1)
         self.assertNotIn("data", updates[0])
-        self.assertEqual(updates[0]["options"], {"poll_mode": "auto"})
-        self.assertEqual(flow._config_entry.data["connection_strategy"], "inbound")
+        self.assertEqual(updates[0]["options"], expected)
+        self.assertEqual(flow._config_entry.data, data_before)
+        self.assertEqual(flow._transition_options_payload, {})
+        self.assertEqual(flow._transition_target_strategy, "")
+
+    async def test_keep_settings_preserves_latest_options_without_staged_edits(self) -> None:
+        flow, calls = self._make_flow()
+        flow._stage_connection_strategy_transition("callback_on_demand")
+        flow._config_entry.options = {
+            "driver_hint": "modbus_smg", "poll_interval": 45,
+            "collector_original_server_endpoint": "cloud.example.invalid:18899",
+            "device_catalog_entry_key": "explicit_test_map",
+        }
+        before = dict(flow._config_entry.options)
+        flow._config_entry.data["strategy_transition_state"] = "recovery_still_pending"
+        data_before = dict(flow._config_entry.data)
+
+        result = await flow.async_step_strategy_transition_keep_settings()
+
+        self.assertEqual(result["data"], before)
+        self.assertEqual(flow._config_entry.data, data_before)
+        self.assertEqual(calls, [])
+
+    async def test_keep_settings_cannot_commit_rejected_topology_payload(self) -> None:
+        from custom_components.eybond_local.connection.strategy_transition import (
+            TRANSITION_PAYLOAD_FORBIDDEN,
+        )
+
+        for key in (
+            "connection_strategy", "endpoint_control_policy", "collector_ip",
+            "server_ip", "tcp_port", "advertised_server_ip", "recovery_contract",
+            "driver_hint", "device_catalog_entry_key", "future_topology_field",
+        ):
+            with self.subTest(key=key):
+                flow, calls = self._make_flow()
+                flow._config_entry.options = {"poll_interval": 45}
+                flow._transition_options_payload = {"poll_interval": 20, key: "unproven"}
+                data_before = dict(flow._config_entry.data)
+                result = await flow.async_step_strategy_transition_keep_settings()
+                self.assertEqual(result["type"], "menu")
+                self.assertEqual(result["step_id"], "strategy_transition_failed")
+                self.assertEqual(flow._transition_error, TRANSITION_PAYLOAD_FORBIDDEN)
+                self.assertEqual(flow._config_entry.options, {"poll_interval": 45})
+                self.assertEqual(flow._config_entry.data, data_before)
+                self.assertEqual(flow.hass.config_entries.updates, [])
+                self.assertEqual(calls, [])
 
     async def test_cancel_leaves_everything_untouched(self) -> None:
         flow, _calls = self._make_flow()
