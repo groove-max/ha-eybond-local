@@ -10327,6 +10327,39 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(coordinator.started, [])
                 self.assertEqual(coordinator.stopped, [])
 
+    async def test_local_route_failure_is_not_classified_as_cloud_api_failure(self) -> None:
+        from custom_components.eybond_local.collector.management import CollectorManagementTransportError
+
+        for restore_pending in (False, True):
+            with self.subTest(restore_pending=restore_pending):
+                coordinator = self._RunnerCoordinator(ready=False)
+                options = self._runner_options_flow(coordinator)
+                options._shadow_learning_state.update({
+                    "wizard_source": "smartess", "progress": {"stage": "connecting"},
+                })
+                error = CollectorManagementTransportError("TimeoutError", query_parameter=21)
+                error.operation_context = {"adapter_start": "framed_collector_commands"}
+
+                async def restore(_coordinator):
+                    if restore_pending:
+                        options._shadow_learning_state["session"] = {"status": "restore_failed"}
+
+                with (
+                    patch.object(options, "_async_execute_control_discovery", new=AsyncMock(side_effect=error)),
+                    patch.object(options, "_control_discovery_requires_shadow_route", return_value=True),
+                    patch.object(options, "_control_discovery_learning_engine") as engine,
+                    patch.object(options, "_async_control_discovery_failsafe_stop", new=restore),
+                    self.assertLogs("custom_components.eybond_local.flows.options.shadow_run", level="ERROR"),
+                ):
+                    await options._async_run_control_discovery()
+                engine.assert_not_called()
+                failure = coordinator.published[-1]["orchestration"]["failure"]
+                self.assertEqual(failure["primary_failure_reason"], "control_discovery_local_route_failed")
+                self.assertEqual(failure["reason"], "shadow_learning_restore_pending" if restore_pending
+                                 else "control_discovery_local_route_failed")
+                self.assertEqual(failure["management_failure"]["operation_context"], error.operation_context)
+                self.assertEqual(failure["stage"], "connecting")
+
     async def test_valuecloud_failure_survives_failed_endpoint_recovery(self) -> None:
         from custom_components.eybond_local.valuecloud_cloud import ValueCloudError
         from custom_components.eybond_local.support.cloud_api_adapters import ValueCloudApiAdapter

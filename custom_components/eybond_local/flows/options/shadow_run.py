@@ -24,6 +24,7 @@ from ...collector_identity import pn_is_same_identity, validated_collector_pn
 from ...drivers.local_register_evidence import LocalRegisterSnapshot
 from ..common.presentation import _smartess_credential_schema_fields
 from ..common.translation import with_translation_bundle as _with_translation_bundle
+from .learning_failure import _learning_failure_location, _learning_management_failure
 from .shared import (
     _BOOLEAN_SELECTOR,
     CONTROL_DISCOVERY_FAILURE_GENERIC,
@@ -59,40 +60,6 @@ logger = logging.getLogger(__name__)
 
 
 CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS = 40
-
-
-def _learning_failure_location(exc: Exception) -> str:
-    """Return code coordinates only, never exception text, locals or URLs."""
-    location = "unknown"
-    trace = exc.__traceback__
-    while trace is not None:
-        code = trace.tb_frame.f_code
-        path = Path(code.co_filename)
-        if "eybond_local" in path.parts:
-            location = f"{path.name}:{code.co_name}:{trace.tb_lineno}"
-        trace = trace.tb_next
-    return location
-
-
-def _learning_management_failure(exc: Exception) -> dict[str, object]:
-    """Preserve the primary typed failure even if endpoint recovery fails too."""
-    from ...collector.management import CollectorManagementTransportError
-
-    if not isinstance(exc, CollectorManagementTransportError):
-        return {}
-    calls = []
-    trace = exc.__traceback__
-    while trace is not None:
-        code = trace.tb_frame.f_code
-        path = Path(code.co_filename)
-        if "eybond_local" in path.parts:
-            calls.append(f"{path.name}:{code.co_name}:{trace.tb_lineno}")
-        trace = trace.tb_next
-    return {"management_failure": {
-        "error_code": exc.diagnostic_code,
-        "failed_request": exc.request_diagnostics,
-        "call_path": calls[-12:],
-    }}
 
 
 def _metadata_with_local_coverage(
@@ -202,6 +169,7 @@ class ShadowLearningRunMixin:
         exc: Exception,
         *,
         cloud_error_code: object = "",
+        stage: str = "",
     ) -> str:
         """Reduce internal exceptions to a closed user-facing reason set."""
 
@@ -232,6 +200,8 @@ class ShadowLearningRunMixin:
         cloud_reason = control_discovery_cloud_failure_reason(cloud_error_code)
         if cloud_reason:
             return cloud_reason
+        if stage == "connecting":
+            return "control_discovery_local_route_failed"
         return CONTROL_DISCOVERY_FAILURE_GENERIC
 
     def _control_discovery_error_detail(self) -> str:
@@ -267,6 +237,12 @@ class ShadowLearningRunMixin:
             }:
                 reason = primary
         defaults = {
+            "control_discovery_local_route_failed": (
+                "The local collector connection could not be prepared or verified. "
+                "This does not establish a cloud login or API problem. Check the "
+                "connection/restoration status before retrying. If the error repeats, "
+                "download a Support Archive and a debug log covering the attempt."
+            ),
             "control_discovery_cloud_protocol_unconfirmed": (
                 "No matching cloud read confirmed the PI30 protocol during preparation. "
                 "No test controls were sent. Download a Support Archive and check the "
@@ -878,6 +854,7 @@ class ShadowLearningRunMixin:
             failure_reason = self._control_discovery_failure_reason(
                 exc,
                 cloud_error_code=cloud_error_code,
+                stage=str(progress.get("stage") or ""),
             )
             primary_failure_reason = failure_reason
             failure_location = _learning_failure_location(exc)

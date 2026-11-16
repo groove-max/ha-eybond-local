@@ -27,6 +27,146 @@ CONTEXT_FIELDS = ("failed_request", "session_generation_start", "session_generat
 
 
 class CollectorManagementArchiveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_endpoint_read_stops_before_second_query_after_session_handover(self):
+        for use_identity in (False, True):
+            with self.subTest(use_identity=use_identity):
+                hub, link = self.make_hub()
+                if use_identity:
+                    link.owned_session_identity = ("entry", "old-session")
+                send = link.transport.async_send_collector
+
+                async def replace_session(**kwargs):
+                    response = await send(**kwargs)
+                    if use_identity:
+                        # The monitor counter has not observed the replacement yet.
+                        link.owned_session_identity = ("entry", "new-session")
+                    else:
+                        link.owned_session_generation += 1
+                    return response
+
+                with patch.object(link.transport, "async_send_collector", side_effect=replace_session):
+                    with self.assertRaisesRegex(CollectorManagementTransportError,
+                                                "collector_management_session_changed"):
+                        await hub.async_get_collector_server_endpoint_state()
+                self.assertEqual(link.transport.requests, [(2, b"\x15")])
+                self.assertEqual(link.reset_calls, 0)
+
+    async def test_endpoint_reads_follow_framed_at_framed_handover(self):
+        hub, link = self.make_hub()
+        framed = link.transport
+        at = _CollectorAtQueryTransport({"CLDSRVHOST1": "at.example.test,18899,TCP"})
+        first = await hub.async_get_collector_server_endpoint_state()
+        self.assertEqual(first["current_endpoint"], framed.endpoint)
+        link.transport = object()
+        link.collector_at_transport = at
+        with patch.object(at, "async_query", wraps=at.async_query) as query:
+            second = await hub.async_get_collector_server_endpoint_state()
+        query.assert_awaited_once_with("CLDSRVHOST1")
+        self.assertEqual(second["current_endpoint"], "at.example.test,18899,TCP")
+        link.collector_at_transport = None
+        link.transport = framed
+        third = await hub.async_get_collector_server_endpoint_state()
+        self.assertEqual(third, first)
+        self.assertEqual(framed.requests, [(2, b"\x15"), (2, b"\x1e")] * 2)
+
+    async def test_at_read_does_not_publish_state_from_replaced_session(self):
+        hub, link = self.make_hub()
+        link.transport = object()
+        link.owned_session_identity = ("entry", "old-session")
+        at = link.collector_at_transport = _CollectorAtQueryTransport({
+            "CLDSRVHOST1": "private-endpoint.example.test,18899,TCP",
+        })
+        query = at.async_query
+
+        async def replace_session(command):
+            response = await query(command)
+            link.owned_session_identity = ("entry", "new-session")
+            return response
+
+        with patch.object(at, "async_query", side_effect=replace_session) as read:
+            with self.assertRaisesRegex(CollectorManagementTransportError,
+                                        "collector_management_session_changed"):
+                await hub.async_get_collector_server_endpoint_state()
+        read.assert_awaited_once_with("CLDSRVHOST1")
+        self.assertNotIn("private-endpoint.example.test", json.dumps(self.archive(hub)))
+
+    async def test_read_uses_live_identity_not_lagging_monitor_counter(self):
+        hub, link = self.make_hub()
+        link.owned_session_identity = ("entry", "same-session")
+        send = link.transport.async_send_collector
+
+        async def monitor_tick(**kwargs):
+            response = await send(**kwargs)
+            link.owned_session_generation += 1
+            return response
+
+        with patch.object(link.transport, "async_send_collector", side_effect=monitor_tick):
+            state = await hub.async_get_collector_server_endpoint_state()
+        self.assertEqual(state["current_endpoint"], link.transport.endpoint)
+        self.assertEqual(link.transport.requests, [(2, b"\x15"), (2, b"\x1e")])
+
+    async def test_failed_wire_context_survives_successful_at_recovery(self):
+        hub, link = self.make_hub()
+        link.owned_session_identity = ("entry", "same-session")
+        with patch.object(link.transport, "async_send_collector",
+                          side_effect=TimeoutError("private endpoint and credentials")):
+            with self.assertRaises(CollectorManagementTransportError) as caught:
+                await hub.async_get_collector_server_endpoint_state()
+        link.transport = object()
+        link.collector_at_transport = _CollectorAtQueryTransport({
+            "CLDSRVHOST1": "recovered.example.test,18899,TCP",
+        })
+        await hub.async_get_collector_server_endpoint_state()
+        self.assertEqual(caught.exception.request_diagnostics["parameter"], 21)
+        operation = caught.exception.operation_context
+        self.assertEqual(operation["adapter_start"], "framed_collector_commands")
+        self.assertEqual(operation["adapter_end"], "framed_collector_commands")
+        self.assertFalse(operation["session_identity_changed"])
+        for view in self.views(self.archive(hub)):
+            self.assertEqual(view[PREFIX + "status"], "ok")
+            self.assertEqual(view[PREFIX + "failure"]["adapter_start"], operation["adapter_start"])
+        self.assertNotIn("private endpoint", json.dumps(operation))
+
+    async def test_timeout_records_handover_during_request_without_cross_wire_retry(self):
+        hub, link = self.make_hub()
+        link.owned_session_identity = ("entry", "old-session")
+        at = _CollectorAtQueryTransport({})
+
+        async def replace_and_timeout(**kwargs):
+            link.transport = object()
+            link.collector_at_transport = at
+            link.owned_session_identity = ("entry", "new-session")
+            raise TimeoutError("private socket details")
+
+        with (
+            patch.object(link.transport, "async_send_collector", side_effect=replace_and_timeout) as framed,
+            patch.object(at, "async_query", wraps=at.async_query) as at_query,
+        ):
+            with self.assertRaises(CollectorManagementTransportError) as caught:
+                await hub.async_get_collector_server_endpoint_state()
+        self.assertEqual(framed.await_count, 1)
+        at_query.assert_not_awaited()
+        context = caught.exception.operation_context
+        self.assertEqual(context["adapter_start"], "framed_collector_commands")
+        self.assertEqual(context["adapter_end"], "at_commands")
+        self.assertTrue(context["session_identity_changed"])
+        self.assertEqual(caught.exception.diagnostic_code, "TimeoutError")
+        self.assertEqual(link.reset_calls, 0)
+
+    async def test_diagnostic_adapter_lookup_cannot_mask_error_or_export_arbitrary_text(self):
+        for kwargs in ({"side_effect": ValueError("private adapter detail")},
+                       {"return_value": "private adapter detail"}):
+            with self.subTest(kwargs=kwargs):
+                hub, link = self.make_hub()
+                error = CollectorManagementTransportError("TimeoutError", query_parameter=21)
+                with patch.object(link, "collector_management_adapter_id", **kwargs):
+                    with self.assertRaises(CollectorManagementTransportError) as caught:
+                        await hub._run_management_operation("read_endpoint_state", AsyncMock(side_effect=error))
+                self.assertIs(caught.exception, error)
+                self.assertEqual(error.operation_context["adapter_start"], "unknown")
+                self.assertEqual(error.operation_context["adapter_end"], "unknown")
+                self.assertNotIn("private adapter detail", json.dumps(self.archive(hub)))
+
     def make_hub(self):
         hub = EybondHub(connection=EybondConnectionSpec(
             server_ip="192.0.2.10", collector_ip="192.0.2.14", tcp_port=8899,

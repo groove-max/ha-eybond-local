@@ -58,8 +58,10 @@ async def test_failed_collector_read_context_reaches_downloaded_archive(
     ))
     hub._link_manager = link
     adapter = FramedCollectorManagementAdapter(lambda: link.transport)
-    with pytest.raises(CollectorManagementTransportError):
+    with pytest.raises(CollectorManagementTransportError) as caught:
         await hub._run_management_operation("read_endpoint_state", adapter.async_read_endpoint_state)
+    assert caught.value.operation_context["adapter_start"] == ADAPTER_COLLECTOR_FRAMED_COMMANDS
+    assert caught.value.operation_context["session_identity_changed"] is identity_changed
 
     async def refresh(self, *, poll_interval=None):
         snapshot = hub._build_snapshot()
@@ -105,6 +107,7 @@ async def test_failed_collector_read_context_reaches_downloaded_archive(
         bundle["roles"]["collector"]["values"],
         bundle["roles"]["diagnostics"]["collector_management_route"],
     ):
+        assert view["collector_management_last_failure"]["adapter_start"] == ADAPTER_COLLECTOR_FRAMED_COMMANDS
         assert view["collector_management_last_failed_request"] == {
             "protocol": "eybond_framed", "function": 2, "parameter": parameter,
         }

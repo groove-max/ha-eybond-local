@@ -4979,8 +4979,8 @@ class HubCollectorManagementTests(unittest.TestCase):
             adapter = hub._collector_management_adapter()
             read = adapter.async_read_endpoint_state
 
-            async def changed():
-                result = await read()
+            async def changed(*, check_session=None):
+                result = await read(check_session=check_session)
                 link.owned_session_generation += 1
                 return result
 
@@ -5006,8 +5006,8 @@ class HubCollectorManagementTests(unittest.TestCase):
             adapter = hub._collector_management_adapter()
             read = adapter.async_read_endpoint_state
 
-            async def observed():
-                result = await read()
+            async def observed(*, check_session=None):
+                result = await read(check_session=check_session)
                 if replaced:
                     # The replacement is real even before the 200ms monitor tick.
                     link.owned_session_identity = ("listener-synthetic-b", 8899)

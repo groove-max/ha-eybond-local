@@ -113,6 +113,9 @@ class CollectorManagementTransportError(CollectorManagementError):
         # Numeric request context only; never endpoint values or response text.
         self.query_parameter = query_parameter
         self.operation_phase = ""
+        # Filled by the runtime from its bounded diagnostic record, not from
+        # exception text or transport payloads. Survives subsequent recovery.
+        self.operation_context: dict[str, object] = {}
 
     @property
     def diagnostic_code(self) -> str:
@@ -241,8 +244,10 @@ class CollectorManagementAdapter(ABC):
         """Return which operations this adapter can confirm."""
 
     @abstractmethod
-    async def async_read_endpoint_state(self) -> CollectorEndpointState:
-        ...
+    async def async_read_endpoint_state(
+        self, *, check_session: Callable[[], None] | None = None,
+    ) -> CollectorEndpointState:
+        """Read one session's state, checking ownership at each await boundary."""
 
     @abstractmethod
     async def async_write_endpoint(
@@ -467,10 +472,18 @@ class FramedCollectorManagementAdapter(CollectorManagementAdapter):
             return decode_reboot_required(response)
         return str(getattr(response, "text", "") or "").strip().strip("\x00")
 
-    async def async_read_endpoint_state(self) -> CollectorEndpointState:
+    async def async_read_endpoint_state(
+        self, *, check_session: Callable[[], None] | None = None,
+    ) -> CollectorEndpointState:
+        if check_session is not None:
+            check_session()
         session, _ = self._session()
         current = await self._query_confirmed(session, SET_SERVER_ENDPOINT)
+        if check_session is not None:
+            check_session()
         reboot_required = await self._query_flag(session, QUERY_REBOOT_REQUIRED)
+        if check_session is not None:
+            check_session()
         return CollectorEndpointState(
             current_endpoint=current,
             reboot_required=reboot_required,
@@ -755,9 +768,15 @@ class AtTextCollectorManagementAdapter(CollectorManagementAdapter):
             )
         return status
 
-    async def async_read_endpoint_state(self) -> CollectorEndpointState:
+    async def async_read_endpoint_state(
+        self, *, check_session: Callable[[], None] | None = None,
+    ) -> CollectorEndpointState:
+        if check_session is not None:
+            check_session()
         transport = self._resolve_transport()
         current = await self._query(transport, _AT_ENDPOINT_COMMAND)
+        if check_session is not None:
+            check_session()
         # The AT wire has no confirmed reboot-required read.
         return CollectorEndpointState(
             current_endpoint=current, reboot_required="", adapter_id=self.adapter_id
@@ -884,7 +903,9 @@ class UnavailableCollectorManagementAdapter(CollectorManagementAdapter):
             "collector_local_management_not_supported"
         )
 
-    async def async_read_endpoint_state(self) -> CollectorEndpointState:
+    async def async_read_endpoint_state(
+        self, *, check_session: Callable[[], None] | None = None,
+    ) -> CollectorEndpointState:
         self._fail()
 
     async def async_write_endpoint(

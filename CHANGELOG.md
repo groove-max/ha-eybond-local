@@ -13,6 +13,13 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Stop endpoint verification between read requests if the collector session is
+  replaced, rather than continuing on the new connection before rejecting the
+  result. Preserve the management adapter and session-change context of a failed
+  learning operation even after successful recovery. Label local route preparation
+  separately from cloud metadata fetching, with a specific localized error. This
+  does not change cloud providers, retry writes or relax recovery requirements.
+
 - Handle the fixed 29-zero suffix observed after correlated empty FC4 replies
   in #89's packet capture, on framed and AT/mixed collector sessions. It remains
   a negative result, never telemetry or a write acknowledgement. Consume only
