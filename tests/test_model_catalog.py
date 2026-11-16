@@ -154,8 +154,11 @@ class RealCatalogTests(unittest.TestCase):
         }
         self.assertEqual(family, (runtime_keys - referenced) | family_default_keys)
         self.assertIn("pi30_family", family)
-        self.assertIn("smg_variant_4200", family)
         self.assertIn("modbus_smg.protocol_4_family_fallback", family)
+        # smg_variant_4200 is mapped by a model record, so it must not be
+        # reported as family-level coverage any more.
+        self.assertNotIn("smg_variant_4200", family)
+        self.assertIn("smg_variant_4200", referenced)
         # Family-level descriptors are rendered as coverage, not in Model Details.
         journal = render_markdown(runtime_catalog=RUNTIME)
         self.assertIn("## Family-Level Runtime Coverage", journal)

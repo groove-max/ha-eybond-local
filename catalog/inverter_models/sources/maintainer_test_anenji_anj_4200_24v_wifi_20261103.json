@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_key": "maintainer_test_anenji_anj_4200_24v_wifi_20261103",
+  "kind": "maintainer_test",
+  "title": "Anenji ANJ-4.2KW-24V-WIFI nameplate, live identity and telemetry capture",
+  "reference": "private:maintainer-test-anenji-anj-4200-24v-20261103",
+  "captured_at": "2026-11-03",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "Read-only Modbus probe on a live Anenji ANJ-4.2KW-24V-WIFI: registers 171=30721 (0x7801), 184=11, 643=4200 and 644=2; the program version at register 626 reads 7801_A6250708v1, while the device-name text at register 172 is empty. A photograph of the unit's nameplate confirms the printed commercial model name ANJ-4.2KW-24V-WIFI and states 4200 VA/4200 W, 24 VDC input at 175 A, 230 VAC 50/60 Hz output at 18.3 A and a 28 A AC charger; the plate prints the same serial that the registers 186-197 block decodes, and prints no SMG-II or ANJ-4200-24V name. Runtime resolved to the smg_variant_4200 descriptor (runtime evidence fingerprint 99a4c0601a95c6d06078696ad5cf3cd34ac3edf87c57a50eb484b0dfdabfc128). Live telemetry at capture time: output 230.2 V at 50.0 Hz, load 327 W, battery 26.4 V and -13.5 A (-356 W), grid 0 V during a real outage, with battery power matching voltage times current. The serial value is withheld under the catalog privacy rule, and the nameplate photograph is not committed because it shows the serial and barcode. This capture is a separate unit from the donor corpus behind the existing descriptor. No writes were performed.",
+  "assertions": [
+    "commercial_identity",
+    "fingerprint",
+    "runtime_compatibility",
+    "telemetry_validation"
+  ]
+}
