@@ -4,20 +4,26 @@ This is NOT a relaxed binary grammar. Only an aligned eight-byte header matching
 a recently transmitted FC4's full route is consumable, once. It can only fail a
 request, never return telemetry or acknowledge a write. Timed-out requests retain
 a short tombstone so a late no-result reply cannot poison the next transaction.
+The #89 PCAP also proves a fixed29-zero suffix. Only the immediately following
+boundary may consume this exact suffix, under the original evidence deadline.
+There is no zero-byte scanning, guessed length, or TCP-packet-boundary framing.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable
 import logging
 from time import monotonic
 
-from ..protocol import EybondHeader, FC_FORWARD_TO_DEVICE
+from ..protocol import EybondHeader, FC_FORWARD_TO_DEVICE, HEADER_SIZE
+from .binary_framing import BinaryFramingError
 
 logger = logging.getLogger(__name__)
 _MAX_REQUESTS = 16
 _RETENTION_SECONDS = 10.0
+_OBSERVED_PADDING = bytes(29)
 
 
 class EmptyForwardReplyWindow:
@@ -25,6 +31,33 @@ class EmptyForwardReplyWindow:
 
     def __init__(self) -> None:
         self._requests: OrderedDict[int, tuple[int, int, float]] = OrderedDict()
+        self._padding_deadline: float | None = None
+
+    def take_padding_deadline(self) -> float | None:
+        """Capture once at the next boundary, including AT/raw/heartbeat reads."""
+        deadline, self._padding_deadline = self._padding_deadline, None
+        return deadline
+
+    async def async_consume_padding(
+        self, header: bytes, deadline: float | None,
+        readexactly: Callable[[int], Awaitable[bytes]], *, timeout: float,
+    ) -> bool:
+        """Recognize the fixed suffix only; bad/truncated tails close the owner."""
+        if deadline is None or header != _OBSERVED_PADDING[:HEADER_SIZE]:
+            return False
+        remaining = min(timeout, deadline - monotonic())
+        if remaining <= 0:
+            raise BinaryFramingError("collector_empty_forward_padding_timeout")
+        try:
+            tail = await asyncio.wait_for(
+                readexactly(len(_OBSERVED_PADDING) - HEADER_SIZE), remaining,
+            )
+        except asyncio.TimeoutError as exc:
+            raise BinaryFramingError("collector_empty_forward_padding_timeout") from exc
+        if header + tail != _OBSERVED_PADDING:
+            raise BinaryFramingError("collector_empty_forward_padding_invalid")
+        logger.debug("Consumed fixed29-zero suffix of correlated empty FC4; no inverter result")
+        return True
 
     def forget(self, tid: int) -> None:
         self._requests.pop(tid, None)
@@ -63,6 +96,7 @@ class EmptyForwardReplyWindow:
         active = future is not None and not future.done()
         if active:
             future.set_exception(TimeoutError("collector_empty_forward_response"))
+        self._padding_deadline = expires
         logger.debug(
             "Consumed correlated empty FC4 envelope tid=%d devcode=0x%04X "
             "devaddr=0x%02X active_request=%s; no inverter result",

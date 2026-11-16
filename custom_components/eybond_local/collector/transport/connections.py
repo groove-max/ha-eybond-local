@@ -557,6 +557,7 @@ class _CollectorConnection:
         read = auxiliary.read
         try:
             while not auxiliary.closed:
+                padding_deadline = self._empty_forward_replies.take_padding_deadline()
                 auxiliary.at_boundary = True
                 first = await read(reader.readexactly(1))
                 auxiliary.at_boundary = False
@@ -626,6 +627,11 @@ class _CollectorConnection:
                             prefix.hex(),
                         )
                         return
+                    if await read(self._empty_forward_replies.async_consume_padding(
+                        header_bytes, padding_deadline, reader.readexactly,
+                        timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
+                    )):
+                        continue
                     header = decode_header(header_bytes)
                     if self._empty_forward_replies.consume(header, self._pending):
                         continue
@@ -1511,6 +1517,7 @@ class _CollectorAtConnection:
             pi30_diagnostic = self._diagnostic_pi30
             runtime_modbus = self._runtime_modbus
             while not auxiliary.closed:
+                padding_deadline = self._empty_forward_replies.take_padding_deadline()
                 auxiliary.at_boundary = not buffered_prefix
                 if buffered_prefix:
                     first = buffered_prefix[:1]
@@ -1636,6 +1643,11 @@ class _CollectorAtConnection:
                             HEADER_SIZE - len(prefix),
                         ))
                         header_bytes = prefix + header_tail
+                        if await read(self._empty_forward_replies.async_consume_padding(
+                            header_bytes, padding_deadline, reader.readexactly,
+                            timeout=_FRAMED_PAYLOAD_COMPLETION_TIMEOUT,
+                        )):
+                            continue
                         header = decode_header(header_bytes)
                         if self._empty_forward_replies.consume(
                             header, self._pending_framed_response,

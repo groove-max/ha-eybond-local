@@ -13,6 +13,13 @@ RC1 below; newer model features remain here.
 
 ### Fixed
 
+- Handle the fixed 29-zero suffix observed after correlated empty FC4 replies
+  in #89's packet capture, on framed and AT/mixed collector sessions. It remains
+  a negative result, never telemetry or a write acknowledgement. Consume only
+  this exact, immediately adjacent suffix within the request-evidence deadline;
+  malformed tails and replies from a previous socket still require recovery.
+  Do not infer a supported inverter protocol from an empty reply.
+
 - Include the existing read-only historical learning review inventory in support
   exports, without requiring Core Python access from an HA OS terminal (#94).
   Scope it to the current entry, bound trace reads, and report unavailable history
