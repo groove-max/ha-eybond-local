@@ -25,6 +25,7 @@ def create_runtime_manager(
     pi30_flag_command_case: str = PI30_FLAG_CASE_PROFILE,
     connection_mode: str = "",
     collector_mutation_guard: Callable[[], Awaitable[None]] | None = None,
+    explicit_catalog_entry_key: str = "",
 ) -> RuntimeManager:
     """Create the concrete runtime manager for one connection branch."""
 
@@ -44,4 +45,5 @@ def create_runtime_manager(
         pi30_flag_command_case=pi30_flag_command_case,
         connection_mode=connection_mode,
         collector_mutation_guard=collector_mutation_guard,
+        explicit_catalog_entry_key=explicit_catalog_entry_key,
     )

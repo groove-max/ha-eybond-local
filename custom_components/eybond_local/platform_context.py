@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .connection.entry import resolve_driver_hint
 from .const import (
     CONF_DETECTED_MODEL,
     CONF_DETECTED_SERIAL,
-    CONF_DRIVER_HINT,
     DRIVER_HINT_AUTO,
 )
 from .models import CapabilityPreset, WriteCapability
@@ -30,10 +30,7 @@ def persisted_driver(entry: Any):
 
     data = getattr(entry, "data", {}) or {}
     options = getattr(entry, "options", {}) or {}
-    driver_hint = str(
-        options.get(CONF_DRIVER_HINT, data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO))
-        or DRIVER_HINT_AUTO
-    ).strip()
+    driver_hint = resolve_driver_hint(data, options)
     if not driver_hint or driver_hint == DRIVER_HINT_AUTO:
         return None
     try:

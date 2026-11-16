@@ -13,13 +13,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
+from ...connection.entry import resolve_catalog_entry_key, resolve_driver_hint
 from ...connection.spec_factory import build_connection_spec
 from ...const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_CONNECTION_MODE,
     CONF_DETECTED_DRIVER,
     CONF_DRIVER_DETECTION_STRATEGY,
-    CONF_DRIVER_HINT,
     CONF_POLL_INTERVAL,
     CONF_PI30_FLAG_COMMAND_CASE,
     PI30_FLAG_CASE_PROFILE,
@@ -109,13 +109,7 @@ class EybondLocalCoordinator(
         self.config_entry = entry
         connection_spec = build_connection_spec(entry.data, entry.options)
         self._connection_spec = connection_spec
-        driver_intent = str(
-            entry.options.get(
-                CONF_DRIVER_HINT,
-                entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
-            )
-            or DRIVER_HINT_AUTO
-        ).strip()
+        driver_intent = resolve_driver_hint(entry.data, entry.options)
         detected_driver = str(entry.data.get(CONF_DETECTED_DRIVER) or "").strip()
         runtime_driver_key = (
             driver_intent
@@ -137,9 +131,17 @@ class EybondLocalCoordinator(
         self._cloud_learning_mutation_fence = CloudLearningMutationFence(
             Path(hass.config.config_dir), connection_spec.collector_pn,
         )
+        # An experimental catalog entry may only bind when the user named it.
+        # Passing it here keeps that choice attached to the runtime's probes
+        # instead of widening the shared detection API with a label.
+        explicit_catalog_entry_key = resolve_catalog_entry_key(
+            entry.data,
+            entry.options,
+        )
         self._runtime: RuntimeManager = create_runtime_manager(
             connection_spec,
             driver_hint=runtime_driver_key,
+            explicit_catalog_entry_key=explicit_catalog_entry_key,
             **({"inverter_probe_target": selected_probe_target(
                 entry.options[PROBE_ROUTE_OPTION], driver_intent,
             )} if PROBE_ROUTE_OPTION in entry.options else {}),

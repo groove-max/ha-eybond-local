@@ -346,5 +346,180 @@ class RecoveryFailureLocalizationTests(unittest.TestCase):
         )
 
 
+class StringsJsonParityTests(unittest.TestCase):
+    """strings.json must carry every English key the runtime can render.
+
+    Home Assistant reads strings.json as the source bundle, while the shipped
+    translations/*.json are generated from it.  A key that exists only in
+    translations/en.json therefore works in development and silently falls back
+    to the hardcoded default everywhere else.  Nothing else in the suite
+    compares the two key sets, so this pins the parity directly.
+    """
+
+    def _flatten(self, payload: dict, prefix: str = "") -> dict[str, object]:
+        flat: dict[str, object] = {}
+        for key, value in payload.items():
+            path = f"{prefix}/{key}" if prefix else key
+            if isinstance(value, dict):
+                flat.update(self._flatten(value, path))
+            else:
+                flat[path] = value
+        return flat
+
+    def test_strings_json_has_every_english_key(self) -> None:
+        strings = self._flatten(
+            json.loads(
+                (COMPONENT / "strings.json").read_text(encoding="utf-8")
+            )
+        )
+        english = self._flatten(
+            json.loads(
+                (COMPONENT / "translations" / "en.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        )
+        missing = sorted(set(english) - set(strings))
+        self.assertEqual(
+            missing,
+            [],
+            f"keys present in translations/en.json but absent from "
+            f"strings.json: {missing}",
+        )
+
+    def test_every_non_english_bundle_defines_the_same_paths(self) -> None:
+        reference = set(
+            self._flatten(
+                json.loads(
+                    (COMPONENT / "strings.json").read_text(encoding="utf-8")
+                )
+            )
+        )
+        for path in sorted((COMPONENT / "translations").glob("*.json")):
+            with self.subTest(bundle=path.name):
+                localized = set(
+                    self._flatten(
+                        json.loads(path.read_text(encoding="utf-8"))
+                    )
+                )
+                missing = sorted(reference - localized)
+                self.assertEqual(
+                    missing,
+                    [],
+                    f"{path.name} is missing keys from strings.json: "
+                    f"{missing}",
+                )
+
+
+class ExperimentalMapLabelTests(unittest.IsolatedAsyncioTestCase):
+    """The dropdown's "no map" label lives in the runtime-flow bundle.
+
+    Hassfest rejects any key it does not define under options, so the label
+    may only be resolved through common.dynamic.  These tests pin both halves
+    of that move: the label really resolves in every shipped language through
+    the production _tr path, and the unsupported HA-schema key does not come
+    back to strings.json or translations/*.json.
+    """
+
+    LABEL_KEY = "experimental_map_none_option"
+    LANGUAGE_MARKERS = {
+        "en": "Automatic detection",
+        "ru": "Автоматическое определение",
+        "uk": "Автоматичне визначення",
+    }
+
+    def _flow(self, language: str):
+        # The provided options-flow scaffold, driven with a real language so
+        # the production loader (flow_translations included) is what runs.
+        import test_config_flow as scaffold
+
+        flow = scaffold.ConfigFlowTests()._make_options_flow()
+        flow.context = {"language": language}
+        return flow
+
+    def _labels(self, data_schema) -> dict:
+        for key, validator in data_schema.schema.items():
+            if str(key) != "device_catalog_entry_key":
+                continue
+            config = getattr(validator, "config", None)
+            options = config.kwargs.get("options", [])
+            return {
+                option["value"]: option["label"]
+                for option in options
+                if isinstance(option, dict)
+            }
+        raise AssertionError("experimental map selector is missing")
+
+    async def _label(self, language: str) -> str:
+        flow = self._flow(language)
+        result = await flow.async_step_experimental_map()
+        self.assertEqual(result["type"], "form")
+        labels = self._labels(result["data_schema"])
+        return labels["__automatic__"]
+
+    async def test_label_resolves_in_every_shipped_language(self) -> None:
+        rendered = set()
+        for language, marker in self.LANGUAGE_MARKERS.items():
+            with self.subTest(language=language):
+                label = await self._label(language)
+                # Real localized text, not the English string embedded in
+                # runtime.py as the fallback.
+                self.assertIn(marker, label)
+                rendered.add(label)
+        self.assertEqual(len(rendered), len(self.LANGUAGE_MARKERS))
+
+    def test_label_key_is_declared_in_the_runtime_flow_bundle(self) -> None:
+        reference = {}
+        for path in FLOW_TRANSLATION_FILES:
+            with self.subTest(bundle=path.name):
+                dynamic = json.loads(path.read_text(encoding="utf-8"))["common"][
+                    "dynamic"
+                ]
+                value = dynamic.get(self.LABEL_KEY)
+                self.assertIsInstance(value, str)
+                self.assertTrue(value.strip())
+                reference[path.name] = value
+        self.assertEqual(
+            len(set(reference.values())),
+            len(FLOW_TRANSLATION_FILES),
+            f"{self.LABEL_KEY} is not distinct across bundles",
+        )
+
+    # The only keys hassfest's data-entry schema accepts under "options"
+    # (hassfest/translations.py: flow_title, step, error, abort, progress,
+    # create_entry, initiate_flow). Anything else is rejected as
+    # "not a valid option", which is what broke this integration's schema.
+    HASSTFEST_OPTIONS_KEYS = frozenset(
+        {
+            "flow_title",
+            "step",
+            "error",
+            "abort",
+            "progress",
+            "create_entry",
+            "initiate_flow",
+        }
+    )
+
+    def test_unsupported_schema_key_stays_out_of_ha_translation_files(self) -> None:
+        # Hassfest only defines the HA schema; any other top-level options key
+        # fails it, so this label must never be reintroduced there.
+        for path in TRANSLATION_FILES:
+            with self.subTest(file=path.name):
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                options = payload.get("options")
+                self.assertIsInstance(options, dict)
+                self.assertNotIn(self.LABEL_KEY, options)
+                unsupported = sorted(set(options) - self.HASSTFEST_OPTIONS_KEYS)
+                self.assertEqual(
+                    unsupported,
+                    [],
+                    f"{path.name} declares options keys hassfest rejects: "
+                    f"{unsupported}",
+                )
+                # The valid step translations stay where hassfest expects them.
+                self.assertIn("experimental_map", options["step"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -296,6 +296,10 @@ import custom_components.eybond_local.flows.config.common as config_common_modul
 import custom_components.eybond_local.flows.config.network as config_network_module
 import custom_components.eybond_local.flows.config.scan as config_scan_module
 import custom_components.eybond_local.connection.admission_transaction as admission_transaction_module
+from custom_components.eybond_local.connection.entry import (
+    resolve_catalog_entry_key,
+    resolve_driver_hint,
+)
 import custom_components.eybond_local.const as const_module
 import custom_components.eybond_local.options_flow as options_flow_module
 import custom_components.eybond_local.flows.options.proxy as options_proxy_module
@@ -5023,7 +5027,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "SMG / Modbus",
                 "SRNE / Modbus",
                 "MUST PV/PH18",
-                "Каталог пристроїв / Modbus (Aohai FSA…)",
+                "Каталог пристроїв / Modbus (модель визначається автоматично)",
                 "PI30",
                 "EyeBond G-ASCII",
                 "SmartESS 0925 / Modbus",
@@ -5732,6 +5736,211 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "runtime")
 
+
+    async def test_experimental_map_choice_adopts_the_maps_driver(self) -> None:
+        """A stale hint for another driver must not survive the choice."""
+
+        from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+            load_compiled_detection_catalog,
+        )
+
+        catalog = load_compiled_detection_catalog()
+        entry_key = next(
+            descriptor.key
+            for descriptor in catalog.devices.values()
+            if descriptor.explicit_selection_only
+        )
+        map_driver = catalog.surfaces[
+            catalog.devices[entry_key].surface_key
+        ].driver_key
+
+        options = self._make_options_flow()
+        options._config_entry.options = {"driver_hint": "not_the_map_driver"}
+        # Startup falls back to the data copy of the hint, so a stale value
+        # there would win over the map driver the user just chose.
+        options._config_entry.data["driver_hint"] = "modbus_smg"
+
+        result = await options.async_step_experimental_map(
+            {"device_catalog_entry_key": entry_key}
+        )
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(
+            options._config_entry.options["device_catalog_entry_key"], entry_key
+        )
+        self.assertEqual(
+            options._config_entry.options["driver_hint"], map_driver
+        )
+        self.assertEqual(
+            options._config_entry.data["driver_hint"], map_driver
+        )
+        self.assertNotIn(
+            "device_catalog_entry_key", options._config_entry.data
+        )
+
+    async def test_experimental_map_reset_releases_the_pinned_driver(self) -> None:
+        """Returning to automatic detection must not keep a pinned driver."""
+
+        from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+            load_compiled_detection_catalog,
+        )
+
+        catalog = load_compiled_detection_catalog()
+        entry_key = next(
+            descriptor.key
+            for descriptor in catalog.devices.values()
+            if descriptor.explicit_selection_only
+        )
+        map_driver = catalog.surfaces[
+            catalog.devices[entry_key].surface_key
+        ].driver_key
+
+        options = self._make_options_flow()
+        options._config_entry.options = {
+            "device_catalog_entry_key": entry_key,
+            "driver_hint": map_driver,
+        }
+        # A non-Auto hint in entry data is the case that used to survive the
+        # reset: the options step cleared only the options copies, the
+        # documented data fallback then re-bound the released driver and map,
+        # and the next setup ran them again.
+        options._config_entry.data["driver_hint"] = "modbus_smg"
+        options._config_entry.data["device_catalog_entry_key"] = entry_key
+
+        result = await options.async_step_experimental_map(
+            {"device_catalog_entry_key": "__automatic__"}
+        )
+
+        self.assertEqual(result["type"], "create_entry")
+        self.assertNotIn(
+            "device_catalog_entry_key", options._config_entry.options
+        )
+        self.assertNotIn("driver_hint", options._config_entry.options)
+        self.assertNotIn(
+            "device_catalog_entry_key", options._config_entry.data
+        )
+        self.assertNotIn("driver_hint", options._config_entry.data)
+        # Automatic detection is the effective runtime driver again.
+        self.assertEqual(
+            resolve_driver_hint(
+                options._config_entry.data,
+                options._config_entry.options,
+            ),
+            "auto",
+        )
+        self.assertEqual(
+            resolve_catalog_entry_key(
+                options._config_entry.data,
+                options._config_entry.options,
+            ),
+            "",
+        )
+
+    async def test_runtime_options_save_keeps_the_explicit_map_it_cannot_post(self) -> None:
+        """A polling/control save must not silently release the experimental map.
+
+        The runtime form has no field for the map, so rebuilding the options
+        from its fields alone dropped the key. Such a map may only bind when
+        the user named it, so losing it unbinds the inverter on the next
+        reload instead of merely forgetting a preference.
+        """
+
+        from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+            load_compiled_detection_catalog,
+        )
+
+        catalog = load_compiled_detection_catalog()
+        entry_key = next(
+            descriptor.key
+            for descriptor in catalog.devices.values()
+            if descriptor.explicit_selection_only
+        )
+        map_driver = catalog.surfaces[
+            catalog.devices[entry_key].surface_key
+        ].driver_key
+
+        options = self._make_options_flow()
+        options._config_entry.data["driver_hint"] = "modbus_smg"
+        options._config_entry.options = {
+            "device_catalog_entry_key": entry_key,
+            "driver_hint": map_driver,
+        }
+
+        result = await options.async_step_runtime({
+            CONF_DRIVER_HINT: map_driver,
+            "control_mode": "auto",
+            "poll_mode": "manual",
+            "poll_interval": 30,
+            "connection": {
+                "server_ip": "192.168.1.50",
+                "collector_ip": "192.168.1.55",
+                "tcp_port": 8899,
+                "udp_port": 58899,
+                "discovery_target": "192.168.1.255",
+                "discovery_interval": 3,
+                "heartbeat_interval": 60,
+            },
+        })
+
+        self.assertEqual(result["type"], "create_entry", result)
+        self.assertEqual(result["data"]["device_catalog_entry_key"], entry_key)
+        self.assertEqual(result["data"]["driver_hint"], map_driver)
+        self.assertEqual(
+            resolve_catalog_entry_key(
+                options._config_entry.data,
+                options._config_entry.options,
+            ),
+            entry_key,
+        )
+
+    async def test_runtime_options_save_releases_the_map_of_another_driver(self) -> None:
+        """A deliberate driver change retires a map that belongs to the old one.
+
+        Startup refuses a map together with a foreign driver and unbinds the
+        unit, so the stale key has to leave BOTH sources even when the map key
+        is only present in entry data.
+        """
+
+        from custom_components.eybond_local.metadata.compiled_detection_catalog import (
+            load_compiled_detection_catalog,
+        )
+
+        catalog = load_compiled_detection_catalog()
+        entry_key = next(
+            descriptor.key
+            for descriptor in catalog.devices.values()
+            if descriptor.explicit_selection_only
+        )
+        map_driver = catalog.surfaces[
+            catalog.devices[entry_key].surface_key
+        ].driver_key
+
+        options = self._make_options_flow()
+        options._config_entry.data["device_catalog_entry_key"] = entry_key
+        options._config_entry.options = {"driver_hint": map_driver}
+
+        result = await options.async_step_runtime({
+            CONF_DRIVER_HINT: "modbus_smg",
+            "control_mode": "auto",
+            "poll_mode": "manual",
+            "poll_interval": 30,
+            "connection": {
+                "server_ip": "192.168.1.50",
+                "collector_ip": "192.168.1.55",
+                "tcp_port": 8899,
+                "udp_port": 58899,
+                "discovery_target": "192.168.1.255",
+                "discovery_interval": 3,
+                "heartbeat_interval": 60,
+            },
+        })
+
+        self.assertEqual(result["type"], "create_entry", result)
+        self.assertEqual(result["data"]["driver_hint"], "modbus_smg")
+        self.assertNotIn("device_catalog_entry_key", result["data"])
+        self.assertNotIn("device_catalog_entry_key", options._config_entry.data)
+        self.assertNotIn("device_catalog_entry_key", options._config_entry.options)
+
     async def test_options_init_menu_exposes_collector_wifi(self) -> None:
         options = self._make_options_flow()
 
@@ -5744,6 +5953,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "runtime",
                 "short_ascii_mppt",
                 "inverter_display",
+                "experimental_map",
                 "collector_wifi",
                 "diagnostics",
             ],
@@ -5867,6 +6077,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "runtime",
                 "short_ascii_mppt",
                 "inverter_display",
+                "experimental_map",
                 "collector_wifi",
                 "collector_uart",
                 "diagnostics",

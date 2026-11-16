@@ -40,10 +40,10 @@ from ..common.connection_form import (
 from ..common.connection_form import (
     selector_for_connection_field as _shared_connection_field_selector,
 )
+from ...connection.entry import resolve_driver_hint
 from ...const import (
     CONF_COLLECTOR_PN,
     CONF_DETECTED_DRIVER,
-    CONF_DRIVER_HINT,
     CONF_STRATEGY_TRANSITION_STATE,
     DRIVER_HINT_AUTO,
 )
@@ -105,12 +105,9 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
     def _poll_policy_driver_key(self) -> str:
         """Return the persisted detected driver that owns poll limits."""
 
-        driver_intent = str(
-            self._config_entry.options.get(
-                CONF_DRIVER_HINT,
-                self._config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
-            )
-            or DRIVER_HINT_AUTO
+        driver_intent = resolve_driver_hint(
+            self._config_entry.data,
+            self._config_entry.options,
         )
         if driver_intent != DRIVER_HINT_AUTO:
             return driver_intent
@@ -130,6 +127,23 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
         if not all(type(item) is RuntimeInverterCandidate for item in candidates):
             return ()
         return candidates
+
+    def _experimental_catalog_entries(self) -> tuple[str, ...]:
+        """Return catalog entries that may only bind by explicit selection."""
+
+        try:
+            from ...metadata.compiled_detection_catalog import (
+                load_compiled_detection_catalog,
+            )
+
+            catalog = load_compiled_detection_catalog()
+        except Exception:
+            return ()
+        return tuple(
+            descriptor.key
+            for descriptor in catalog.devices.values()
+            if descriptor.explicit_selection_only
+        )
 
     def _server_ip_field(self) -> SelectSelector | TextSelector:
         """Return the user-friendly selector for one local server IP."""
@@ -430,6 +444,19 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
 
         if len(self._runtime_inverter_protocol_candidates()) > 1:
             menu_options.insert(0 if not marker_present else 1, "inverter_protocol")
+        # An experimental map never binds from an automatic sweep, so the menu
+        # must offer the explicit choice even when nothing is ambiguous: a
+        # single-candidate entry still has to be named by the user.  Keep it
+        # after the ambiguity choice so that entry stays the first action.
+        if self._experimental_catalog_entries():
+            # Anchor after the display/short-ASCII entries so the menu order
+            # does not depend on how many steps upstream inserts after runtime.
+            anchor = (
+                menu_options.index("inverter_display") + 1
+                if "inverter_display" in menu_options
+                else menu_options.index("runtime") + 2
+            )
+            menu_options.insert(anchor, "experimental_map")
 
         return self.async_show_menu(
             step_id="init",

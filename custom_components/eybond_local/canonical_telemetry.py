@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .models import MeasurementDescription
@@ -32,6 +32,14 @@ class CanonicalTelemetryVariant:
     # semantics (source-key meaning, sign conventions) on every future pack
     # served by the same generic driver.
     variant_keys: tuple[str, ...] = ()
+    # Optional per-pack override of the shared description's diagnostic flag.
+    # A canonical alias is one description shared by every driver, but whether
+    # a value is "diagnostic" depends on the pack: a grid-tied unit reports
+    # grid voltage as a first-class measurement, while for another family the
+    # same alias may be an internal cross-check. Overriding here keeps the
+    # shared flag honest for the other drivers instead of forcing one pack's
+    # presentation on all of them.
+    diagnostic_override: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +98,16 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("ac_input_voltage",),
                 compute="passthrough",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("mains_voltage",),
+                compute="passthrough",
+                # A grid-tied unit reports mains voltage as first-class
+                # telemetry, so it belongs next to the output values rather
+                # than under Diagnostics.
+                diagnostic_override=False,
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -112,6 +130,13 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 driver_keys=("smartess_local",),
                 source_keys=("ac_input_frequency",),
                 compute="passthrough",
+            ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("mains_frequency",),
+                compute="passthrough",
+                diagnostic_override=False,
             ),
         ),
     ),
@@ -154,6 +179,12 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 ),
                 compute="sum",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("output_active_power",),
+                compute="passthrough",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -173,6 +204,12 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
             CanonicalTelemetryVariant(
                 driver_keys=("eybond_g_ascii",),
                 source_keys=("output_load_percentage",),
+                compute="passthrough",
+            ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("load_percent",),
                 compute="passthrough",
             ),
         ),
@@ -318,6 +355,12 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("battery_capacity",),
                 compute="passthrough",
             ),
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("battery_percent",),
+                compute="passthrough",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -389,6 +432,22 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("battery_power_magnitude", "battery_current_direction"),
                 compute="magnitude_with_direction",
             ),
+            # LVYUAN register 129 is signed, but its polarity is the opposite
+            # of the canonical convention: DISCHARGE is positive on the wire
+            # and charge is negative. Measured on the live unit (2026-11-11):
+            #   +29.8 A / 52.5 V -> AC input 0 W, load 1400 W (pack supplying)
+            #    -6.4 A / 52.9 V -> AC input 1839 W, load 1488 W (pack
+            #                       absorbing; the +351 W surplus matches
+            #                       |V*I| = 339 W)
+            # The magnitude is right but the sign must be flipped. A plain
+            # multiply reported a charging pack as discharging, and
+            # estimated_battery_discharge_energy accumulated that error.
+            CanonicalTelemetryVariant(
+                driver_keys=("modbus_catalog",),
+                variant_keys=("lvyuan_ty_sic_6_5kbe_w1",),
+                source_keys=("battery_voltage", "battery_current"),
+                compute="multiply_negate",
+            ),
         ),
     ),
     CanonicalTelemetryDescription(
@@ -409,6 +468,17 @@ _CANONICAL_TELEMETRY: tuple[CanonicalTelemetryDescription, ...] = (
                 source_keys=("grid_port_power",),
                 compute="negate",
             ),
+            # LVYUAN register 33290 is deliberately NOT mapped onto this
+            # canonical key. It reads the power the unit draws from the mains
+            # (min 1811 W, max 1899 W over 36 captured cycles, never negative,
+            # never above the mains apparent power from registers 80/81), but
+            # no genuine export cycle was ever captured, the sign convention on
+            # an export is therefore unobserved, and the pack has a single
+            # passive operating period behind it. Publishing it as "Grid
+            # Power" would assert a direction the fixture cannot establish and
+            # would silently drive grid-import statistics from an unproven
+            # sign. The pack exposes it as its own provisional measurement,
+            # "Input Active Power", instead.
         ),
     ),
     CanonicalTelemetryDescription(
@@ -598,19 +668,41 @@ def canonical_measurements_for_driver(
 
     if not driver_key:
         return ()
-    return tuple(
-        spec.description
-        for spec in _CANONICAL_TELEMETRY
-        if any(
-            driver_key in variant.driver_keys
+    resolved: list[MeasurementDescription] = []
+    for spec in _CANONICAL_TELEMETRY:
+        matching = [
+            variant
+            for variant in spec.variants
+            if driver_key in variant.driver_keys
             and (
                 not variant.variant_keys
                 or variant_key is None
                 or variant_key in variant.variant_keys
             )
-            for variant in spec.variants
+        ]
+        if not matching:
+            continue
+        # A presentation override is pack-specific, so it only applies when
+        # the caller named that pack. Without a variant_key the surface is
+        # driver-wide, shared by every pack the driver serves, and inheriting
+        # one pack's presentation there would leak it onto the others.
+        override = (
+            next(
+                (
+                    variant.diagnostic_override
+                    for variant in matching
+                    if variant.diagnostic_override is not None
+                ),
+                None,
+            )
+            if variant_key is not None
+            else None
         )
-    )
+        description = spec.description
+        if override is not None and override != description.diagnostic:
+            description = replace(description, diagnostic=override)
+        resolved.append(description)
+    return tuple(resolved)
 
 
 def apply_canonical_measurements(
@@ -788,6 +880,20 @@ def _compute_variant(
 
     if variant.compute == "eybond_g_ascii_battery_power":
         return _compute_eybond_g_ascii_battery_power(values, variant)
+
+    if variant.compute == "multiply_negate":
+        # Multiply the sources, then flip the sign. Used when a pack reports a
+        # magnitude-proportional quantity on a wire whose sign convention is
+        # the opposite of the canonical one (charge > 0).
+        product = 1.0
+        for key in variant.source_keys:
+            numeric = _numeric(values.get(key))
+            if numeric is None:
+                return None
+            product *= numeric
+        # Normalize -0.0 so an idle pack reports "0.0 W", not "-0.0 W".
+        result = round(-product, 4)
+        return result if result else 0.0
 
     if variant.compute == "negate":
         value = values.get(variant.source_keys[0])

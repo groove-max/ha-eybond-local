@@ -10,6 +10,7 @@ from ...collector_endpoint import (
     DEFAULT_COLLECTOR_SERVER_PROTOCOL,
     format_collector_server_endpoint as format_runtime_collector_server_endpoint,
 )
+from ...connection.entry import resolve_catalog_entry_key, resolve_driver_hint
 from ...const import (
     CONF_COLLECTOR_ORIGINAL_SERVER_ENDPOINT,
     CONF_CONNECTION_MODE,
@@ -17,12 +18,14 @@ from ...const import (
     CONF_DETECTED_DRIVER,
     CONF_DETECTED_MODEL,
     CONF_DETECTED_SERIAL,
-    CONF_DRIVER_HINT,
     DRIVER_HINT_AUTO,
 )
 from ...drivers.registry import get_driver
 from ...metadata.compiled_detection_catalog import (
-    load_compiled_detection_catalog, resolve_unique_persisted_model_surface,
+    catalog_surface_may_bind_automatically,
+    load_compiled_detection_catalog,
+    resolve_explicitly_selected_model_surface,
+    resolve_unique_persisted_model_surface,
 )
 from ...metadata.profile_loader import load_driver_profile
 from ...metadata.register_schema_loader import load_register_schema
@@ -240,7 +243,11 @@ class CoordinatorStartupIdentityMixin:
         detected_serial = str(
             self.config_entry.data.get(CONF_DETECTED_SERIAL) or ""
         ).strip()
-        if not (detected_model or detected_serial):
+        selected_entry_key = resolve_catalog_entry_key(
+            self.config_entry.data,
+            self.config_entry.options,
+        )
+        if not (detected_model or detected_serial or selected_entry_key):
             return None
 
         snapshot = self.effective_metadata_snapshot
@@ -252,21 +259,52 @@ class CoordinatorStartupIdentityMixin:
 
         catalog_identity_source = ""
         catalog_surface = None
-        driver_key = str(
-            self.config_entry.options.get(
-                CONF_DRIVER_HINT,
-                self.config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO),
-            )
-            or ""
-        ).strip()
+        driver_key = resolve_driver_hint(
+            self.config_entry.data,
+            self.config_entry.options,
+        )
         if not driver_key or driver_key == DRIVER_HINT_AUTO:
             driver_key = str(
                 self.config_entry.data.get(CONF_DETECTED_DRIVER) or ""
             ).strip()
-        if getattr(snapshot, "is_valid", False) and not profile_name:
+        if selected_entry_key:
+            # The user named this catalog entry. That choice outranks both the
+            # persisted snapshot and the detected-model path, because an
+            # explicit_selection_only entry is never allowed to bind any other
+            # way; dropping it here would silently unbind a unit the user
+            # configured on purpose.
+            selected_resolution = resolve_explicitly_selected_model_surface(
+                selected_entry_key
+            )
+            if selected_resolution is None:
+                return None
+            _descriptor, surface = selected_resolution
+            if (
+                driver_key
+                and driver_key != DRIVER_HINT_AUTO
+                and driver_key != surface.driver_key
+            ):
+                return None
+            driver_key = surface.driver_key
+            profile_name = surface.profile_name
+            register_schema_name = surface.register_schema_name
+            variant_key = surface.variant_key
+            catalog_identity_source = "explicitly_selected_catalog_entry"
+            catalog_surface = surface
+        elif getattr(snapshot, "is_valid", False) and not profile_name:
             # Schema-only snapshots pass an explicit current read-only catalog
             # check. Do not replace this choice with driver-default controls.
-            catalog_surface = load_compiled_detection_catalog().surfaces[snapshot.surface_key]
+            catalog = load_compiled_detection_catalog()
+            if not catalog_surface_may_bind_automatically(
+                catalog, snapshot.surface_key
+            ):
+                # A snapshot written before an entry became explicit-selection
+                # only is not a user choice, it is the record of an automatic
+                # match this boundary now refuses. Reconstructing the binding
+                # from it would restore exactly the automatic adoption the
+                # explicit choice is meant to prevent.
+                return None
+            catalog_surface = catalog.surfaces[snapshot.surface_key]
             if driver_key not in {"", DRIVER_HINT_AUTO, catalog_surface.driver_key}:
                 return None
             driver_key = catalog_surface.driver_key
@@ -355,7 +393,7 @@ class CoordinatorStartupIdentityMixin:
 
         probe_target = selected_probe_target(
             self.config_entry.options.get(PROBE_ROUTE_OPTION),
-            self.config_entry.options.get(CONF_DRIVER_HINT, self.config_entry.data.get(CONF_DRIVER_HINT, DRIVER_HINT_AUTO)),
+            resolve_driver_hint(self.config_entry.data, self.config_entry.options),
         ) or probe_target
         return DetectedInverter(
             driver_key=str(getattr(driver, "key", "") or driver_key),

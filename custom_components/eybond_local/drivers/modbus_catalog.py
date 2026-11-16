@@ -184,6 +184,13 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
                 "evidence_fingerprint": resolution.evidence_fingerprint,
                 "evidence": {key: evidence[key] for key in sorted(evidence)},
                 "decision_path": list(resolution.decision_path),
+                # A provisional pack is bound from capture evidence that is
+                # sound for telemetry but not for automatic exact-model
+                # identity. Carry the flag all the way into the detection
+                # result so no surface can present it as an exact auto match.
+                "provisional_identity": bool(
+                    descriptor is not None and descriptor.provisional_identity
+                ),
             },
         }
         return DetectedInverter(

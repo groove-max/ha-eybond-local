@@ -13,6 +13,7 @@ from .detection_decision_tree import (
     build_detection_decision_tree,
     evaluate_detection_decision_tree,
 )
+from .anchor_matching import anchor_condition_matches
 from .detection_descriptor_loader import (
     DetectionAnchorCondition,
     DetectionDescriptorCatalog,
@@ -20,8 +21,8 @@ from .detection_descriptor_loader import (
     DetectionProtocolDescriptor,
     load_detection_descriptor_catalog,
 )
-from .anchor_matching import anchor_condition_matches
 from .device_catalog_loader import load_device_catalog
+from .explicit_selection import explicitly_selected_catalog_entry
 
 
 PROBE_ACTION_MODBUS_READ = "modbus_read"
@@ -119,6 +120,16 @@ class CompiledDeviceDescriptor:
     priority: int = 100
     detection_supersedes_protocols: tuple[str, ...] = ()
     revision: str = ""
+    # Capture evidence is sufficient for telemetry but not for automatic
+    # exact-model identity. Such a descriptor still binds its read-only
+    # surface, yet the resolution is downgraded to family/medium so nothing
+    # downstream can present it as an exact, high-confidence match.
+    provisional_identity: bool = False
+    # A provisional descriptor is not merely labelled: the user must name this
+    # exact catalog entry before it may bind at all. Automatic sweeps never
+    # resolve it, so a plausible scan cannot turn experimental evidence into a
+    # supported runtime identity.
+    explicit_selection_only: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +213,17 @@ class CompiledDetectionCatalog:
             for key in candidate_keys
             if key in self.devices and self.devices[key].protocol_key == protocol_key
         )
+        # A descriptor that declares explicit_selection_only never binds from an
+        # automatic sweep. Naming it is the ONLY way in, so the check happens
+        # here -- before any candidate is trusted -- rather than as a label that
+        # a downstream consumer could ignore.
+        selected_entry = explicitly_selected_catalog_entry()
+        candidates = tuple(
+            candidate
+            for candidate in candidates
+            if not candidate.explicit_selection_only
+            or candidate.key == selected_entry
+        )
         if not candidates:
             return self._build_resolution(
                 protocol_key=protocol_key,
@@ -214,12 +236,17 @@ class CompiledDetectionCatalog:
             )
         if len(candidates) == 1:
             descriptor = candidates[0]
+            # A provisional descriptor is bound from capture evidence that is
+            # sound for telemetry but not sufficient for automatic exact-model
+            # identity, so it is reported like a family match and can never
+            # reach the exact/high path with a single captured data point.
+            downgraded = descriptor.family_fallback or descriptor.provisional_identity
             return self._build_resolution(
                 protocol_key=protocol_key,
-                resolution=RESOLUTION_FAMILY if descriptor.family_fallback else RESOLUTION_EXACT,
+                resolution=RESOLUTION_FAMILY if downgraded else RESOLUTION_EXACT,
                 candidates=candidates,
                 surface_key=descriptor.surface_key,
-                confidence="medium" if descriptor.family_fallback else "high",
+                confidence="medium" if downgraded else "high",
                 evidence=evidence,
                 decision_path=decision_path,
             )
@@ -319,7 +346,76 @@ def resolve_unique_persisted_model_surface(
     if len(device_keys) != 1:
         return None
     descriptor = resolved.devices.get(device_keys[0])
-    if descriptor is None or descriptor.family_fallback:
+    # A provisional descriptor is a deliberate, still-experimental binding.
+    # Reconstructing a durable startup metadata choice from it would launder
+    # an unproven identity into a persisted one, so it fails closed here just
+    # like a family fallback; such entries keep their live detection path.
+    if (
+        descriptor is None
+        or descriptor.family_fallback
+        or descriptor.provisional_identity
+    ):
+        return None
+    surface = resolved.surfaces.get(descriptor.surface_key)
+    if (
+        surface is None
+        or not surface.driver_key
+        or not surface.register_schema_name
+        or (not surface.read_only and not surface.profile_name)
+    ):
+        return None
+    return descriptor, surface
+
+
+def catalog_surface_may_bind_automatically(
+    catalog: CompiledDetectionCatalog,
+    surface_key: str,
+) -> bool:
+    """Whether a persisted snapshot surface may still bind without a choice.
+
+    A snapshot records what detection matched, not what the user asked for.  Once
+    an entry that owns the surface becomes explicit-selection-only, that record
+    is exactly the automatic adoption the boundary refuses, so the snapshot must
+    not be replayed into a binding.  Unknown surfaces and surfaces shared with
+    both kinds of entry fail closed.
+    """
+
+    normalized = str(surface_key or "").strip()
+    if not normalized or normalized not in catalog.surfaces:
+        return False
+    owners = tuple(
+        catalog.devices[key]
+        for key in catalog.devices_by_surface.get(normalized, ())
+        if key in catalog.devices
+    )
+    if not owners:
+        return False
+    return not any(owner.explicit_selection_only for owner in owners)
+
+
+def resolve_explicitly_selected_model_surface(
+    entry_key: str,
+    *,
+    catalog: CompiledDetectionCatalog | None = None,
+) -> tuple[CompiledDeviceDescriptor, CompiledSurfaceDescriptor] | None:
+    """Resolve one catalog entry the user named explicitly.
+
+    This is the deliberate counterpart to resolve_unique_persisted_model_surface.
+    That function refuses a provisional descriptor because reconstructing a
+    durable identity from an unproven match would launder a guess into
+    persisted state.  Here the identity is not a guess: the user named this
+    exact entry, which is the only way an entry marked explicit_selection_only
+    may bind at all.  The resolution therefore honours the same choice the live
+    probe honours, and it still fails closed on an unknown entry or a surface
+    without a register schema.
+    """
+
+    normalized = str(entry_key or "").strip()
+    if not normalized:
+        return None
+    resolved = catalog if catalog is not None else load_compiled_detection_catalog()
+    descriptor = resolved.devices.get(normalized)
+    if descriptor is None:
         return None
     surface = resolved.surfaces.get(descriptor.surface_key)
     if (
@@ -406,6 +502,8 @@ def compile_detection_catalog(
                 descriptor.detection_supersedes_protocols
             ),
             revision=_descriptor_revision(descriptor),
+            provisional_identity=descriptor.provisional_identity,
+            explicit_selection_only=descriptor.explicit_selection_only,
         )
 
     devices_by_protocol = _group_device_keys(
@@ -710,6 +808,7 @@ def _descriptor_revision(descriptor: DetectionDeviceDescriptor) -> str:
         "detection_supersedes_protocols": (
             descriptor.detection_supersedes_protocols
         ),
+        "provisional_identity": descriptor.provisional_identity,
         "anchors": [
             {
                 "key": anchor.key,

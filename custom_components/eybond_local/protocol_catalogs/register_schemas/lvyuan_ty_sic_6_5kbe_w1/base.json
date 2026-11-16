@@ -1,0 +1,339 @@
+{
+  "schema_key": "lvyuan_ty_sic_6_5kbe_w1_base",
+  "title": "LVYUAN TY-SIC-6.5KBE-W1 read-only telemetry subset",
+  "driver_key": "modbus_catalog",
+  "protocol_family": "lvyuan_ty_sic_6_5kbe_w1",
+  "blocks": [
+    {
+      "key": "identity_serial",
+      "start": 0,
+      "count": 16,
+      "function": 3
+    },
+    {
+      "key": "mains_phase_a",
+      "start": 80,
+      "count": 3,
+      "function": 3
+    },
+    {
+      "key": "output_phase_a",
+      "start": 88,
+      "count": 6,
+      "function": 3
+    },
+    {
+      "key": "battery_voltage_current",
+      "start": 128,
+      "count": 2,
+      "function": 3
+    },
+    {
+      "key": "battery_soc",
+      "start": 132,
+      "count": 1,
+      "function": 3
+    },
+    {
+      "key": "energy_a",
+      "start": 445,
+      "count": 4,
+      "function": 3
+    },
+    {
+      "key": "energy_b",
+      "start": 453,
+      "count": 2,
+      "function": 3
+    },
+    {
+      "key": "energy_c",
+      "start": 545,
+      "count": 2,
+      "function": 3
+    },
+    {
+      "key": "energy_d",
+      "start": 551,
+      "count": 2,
+      "function": 3
+    },
+    {
+      "key": "input_active_power",
+      "start": 33290,
+      "count": 1,
+      "function": 3
+    }
+  ],
+  "spec_sets": {
+    "runtime": [
+      {
+        "key": "mains_voltage",
+        "register": 80,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "mains_current",
+        "register": 81,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "mains_frequency",
+        "register": 82,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "output_voltage",
+        "register": 88,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "output_current",
+        "register": 89,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "output_frequency",
+        "register": 90,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "output_active_power",
+        "register": 91
+      },
+      {
+        "key": "output_apparent_power",
+        "register": 92
+      },
+      {
+        "key": "load_percent",
+        "register": 93,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_voltage",
+        "register": 128,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_current",
+        "register": 129,
+        "signed": true,
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "battery_percent",
+        "register": 132
+      },
+      {
+        "key": "input_active_power",
+        "register": 33290
+      },
+      {
+        "key": "energy_counter_448",
+        "register": 448,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "energy_counter_454",
+        "register": 454,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "energy_counter_546",
+        "register": 546,
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "energy_counter_552",
+        "register": 552,
+        "divisor": 100,
+        "decimals": 2
+      }
+    ]
+  },
+  "measurement_descriptions": [
+    {
+      "key": "mains_voltage",
+      "name": "Mains Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "mains_current",
+      "name": "Mains Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "mains_frequency",
+      "name": "Mains Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement"
+    },
+    {
+      "key": "output_voltage",
+      "name": "Output Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "output_current",
+      "name": "Output Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "output_frequency",
+      "name": "Output Frequency",
+      "unit": "Hz",
+      "device_class": "frequency",
+      "state_class": "measurement"
+    },
+    {
+      "key": "output_active_power",
+      "name": "Output Active Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "output_apparent_power",
+      "name": "Output Apparent Power",
+      "unit": "VA",
+      "device_class": "apparent_power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "load_percent",
+      "name": "Load",
+      "unit": "%",
+      "state_class": "measurement",
+      "icon": "mdi:gauge"
+    },
+    {
+      "key": "battery_voltage",
+      "name": "Battery Voltage",
+      "unit": "V",
+      "device_class": "voltage",
+      "state_class": "measurement"
+    },
+    {
+      "key": "battery_current",
+      "name": "Battery Current",
+      "unit": "A",
+      "device_class": "current",
+      "state_class": "measurement"
+    },
+    {
+      "key": "battery_percent",
+      "name": "Battery State of Charge",
+      "unit": "%",
+      "device_class": "battery",
+      "state_class": "measurement"
+    },
+    {
+      "key": "input_active_power",
+      "name": "Input Active Power",
+      "unit": "W",
+      "device_class": "power",
+      "state_class": "measurement"
+    },
+    {
+      "key": "energy_counter_448",
+      "name": "Daily Energy Counter A",
+      "unit": "kWh",
+      "device_class": "energy",
+      "suggested_display_precision": 2,
+      "enabled_default": true,
+      "icon": "mdi:counter"
+    },
+    {
+      "key": "energy_counter_454",
+      "name": "Total Energy Counter A",
+      "unit": "kWh",
+      "device_class": "energy",
+      "suggested_display_precision": 2,
+      "enabled_default": true,
+      "icon": "mdi:counter"
+    },
+    {
+      "key": "energy_counter_546",
+      "name": "Daily Energy Counter B",
+      "unit": "kWh",
+      "device_class": "energy",
+      "suggested_display_precision": 2,
+      "enabled_default": true,
+      "icon": "mdi:counter"
+    },
+    {
+      "key": "energy_counter_552",
+      "name": "Total Energy Counter B",
+      "unit": "kWh",
+      "device_class": "energy",
+      "suggested_display_precision": 2,
+      "enabled_default": true,
+      "icon": "mdi:counter"
+    }
+  ],
+  "support_read_plan": {
+    "source": "passive-ble-capture",
+    "purpose": "Probe register slots the SmartValue app never polls, to find extra read-only telemetry on this firmware.",
+    "timeout_seconds": 8,
+    "blocks": [
+      {
+        "key": "probe_mains_tail",
+        "start": 83,
+        "count": 5,
+        "function": 3
+      },
+      {
+        "key": "probe_battery_tail",
+        "start": 130,
+        "count": 6,
+        "function": 3
+      },
+      {
+        "key": "probe_energy_a_tail",
+        "start": 447,
+        "count": 6,
+        "function": 3
+      },
+      {
+        "key": "probe_energy_b_tail",
+        "start": 547,
+        "count": 6,
+        "function": 3
+      },
+      {
+        "key": "probe_misc_b_tail",
+        "start": 631,
+        "count": 2,
+        "function": 3
+      },
+      {
+        "key": "probe_rtc_tail",
+        "start": 870,
+        "count": 2,
+        "function": 3
+      }
+    ]
+  }
+}

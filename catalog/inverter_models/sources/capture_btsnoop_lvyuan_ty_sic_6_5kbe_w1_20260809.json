@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_key": "capture_btsnoop_lvyuan_ty_sic_6_5kbe_w1_20260809",
+  "kind": "maintainer_test",
+  "title": "Passive BLE btsnoop capture of the SmartValue app and EyeBond dongle",
+  "reference": "sha256:6c1a6d1e0b0f9c1d0a3f8e5c7b2d4a69e0c3b8f1d2a5e7c9b4f6d8a0e2c4b6d8",
+  "captured_at": "2026-08-09",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "A passive btsnoop_hci.log from the Android host records 3215 ATT frames of the SmartValue app talking to an EyeBond dongle over BLE. Decoding the GATT writes and notifications recovers 1068 Modbus RTU function-3 request/response pairs with slave address 1 at 9600 8N1, covering 125 distinct registers polled in 36 clean cycles of about 14.4 s. Every request and response CRC verified. No write function codes are present in the capture.",
+  "assertions": [
+    "register_map",
+    "telemetry_validation",
+    "fingerprint"
+  ]
+}

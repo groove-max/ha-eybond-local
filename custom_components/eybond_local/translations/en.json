@@ -455,7 +455,8 @@
           "diagnostics": "Diagnostics and service tools",
           "strategy_transition_repair": "Finish the connection switch (recovery required)",
           "strategy_transition_activation_retry": "Load the verified connection",
-          "strategy_transition_cancel": "Cancel"
+          "strategy_transition_cancel": "Cancel",
+          "experimental_map": "Choose experimental inverter map"
         }
       },
       "inverter_display": {
@@ -555,7 +556,7 @@
           "pi30_flag_command_case": "PI30 flag command case"
         },
         "data_description": {
-          "driver_hint": "Keep Auto for normal operation, or choose a specific driver. Saving a changed value starts a new identification on this collector.",
+          "driver_hint": "Keep Auto for normal operation, or choose a specific driver. Saving a changed value starts a new identification on this collector. Keeping the same driver also keeps this entry's experimental inverter map; a different driver releases it.",
           "driver_detection_strategy": "Used when the driver is Auto. Fast mode stops at the first reliable match; full scan checks all supported drivers and can report several compatible results. Saving a changed mode starts a new identification.",
           "poll_mode": "Automatic lets EyeBond Local choose a safe refresh interval from device response time. Manual uses the interval below.",
           "poll_interval": "Manual mode only. Target interval between starts of polls. After three successful cycles that take longer than this target, EyeBond Local temporarily adds measured recovery time. Your setting is preserved; normal timing resumes after three faster cycles. Automatic mode adapts continuously.",
@@ -800,6 +801,16 @@
           "strategy_transition_activation_retry": "Retry loading the integration",
           "strategy_transition_cancel": "Close"
         }
+      },
+      "experimental_map": {
+        "title": "Choose experimental inverter map",
+        "description": "This integration knows {count} inverter map(s) that carry confirmed telemetry but no non-settable identity word, so automatic detection cannot tell them apart from a sibling model. Such a map never binds on its own. Select the exact model below only if you know the inverter is that model; leave it empty to keep automatic detection. Choosing a map here also switches this entry's inverter driver to the driver that map belongs to, so a driver saved earlier is replaced; the automatic choice releases that driver choice together with the map.",
+        "data": {
+          "device_catalog_entry_key": "Experimental inverter map"
+        },
+        "data_description": {
+          "device_catalog_entry_key": "Only choose a map here when you are certain of the model. Choosing a map also repoints the inverter driver at that map's driver, and returning to automatic detection releases both the map and that driver choice, so the entry really runs automatic detection again. The automatic detection never binds these experimental maps."
+        }
       }
     },
     "progress": {
@@ -1037,7 +1048,7 @@
         "modbus_smg": "SMG / Modbus",
         "srne_modbus": "SRNE / Modbus",
         "must_pv_ph18": "MUST PV/PH18",
-        "modbus_catalog": "Device Catalog / Modbus (Aohai FSA…)",
+        "modbus_catalog": "Device Catalog / Modbus (detected model)",
         "smartess_local": "SmartESS 0925 / Modbus",
         "marsrock_grid_tie": "MarsRock grid-tie (manual; read-only)",
         "pi30": "PI30",

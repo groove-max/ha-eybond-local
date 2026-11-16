@@ -137,6 +137,7 @@ def _install_coordinator_stubs() -> None:
     const.PI30_FLAG_COMMAND_CASES = ("profile", "lower", "upper")
     const.CONF_DETECTED_MODEL = "detected_model"
     const.CONF_DETECTED_DRIVER = "detected_driver"
+    const.CONF_DEVICE_CATALOG_ENTRY = "device_catalog_entry_key"
     const.CONF_DETECTED_SERIAL = "detected_serial"
     const.CONF_DETECTION_CONFIDENCE = "detection_confidence"
     const.CONF_DISCOVERY_INTERVAL = "discovery_interval"
