@@ -449,10 +449,14 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
         # single-candidate entry still has to be named by the user.  Keep it
         # after the ambiguity choice so that entry stays the first action.
         if self._experimental_catalog_entries():
-            menu_options.insert(
-                menu_options.index("runtime") + 2,
-                "experimental_map",
+            # Anchor after the display/short-ASCII entries so the menu order
+            # does not depend on how many steps upstream inserts after runtime.
+            anchor = (
+                menu_options.index("inverter_display") + 1
+                if "inverter_display" in menu_options
+                else menu_options.index("runtime") + 2
             )
+            menu_options.insert(anchor, "experimental_map")
 
         return self.async_show_menu(
             step_id="init",

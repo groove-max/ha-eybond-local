@@ -57,8 +57,7 @@ class EybondHub(
         explicit_catalog_entry_key: str = "",
     ) -> None:
         self._driver_hint = driver_hint
-        # An experimental catalog entry never binds from an automatic sweep;
-        # this is the user's explicit choice of one, scoped to its probes.
+        # An experimental map binds only when the user names it, never from a sweep.
         self._explicit_catalog_entry_key = str(explicit_catalog_entry_key or "").strip()
         self._inverter_probe_target = inverter_probe_target
         if type(pi30_flag_command_case) is not str or pi30_flag_command_case not in PI30_FLAG_COMMAND_CASES:
