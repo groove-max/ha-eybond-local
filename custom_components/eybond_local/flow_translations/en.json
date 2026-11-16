@@ -584,7 +584,8 @@
       "runtime_driver_current": "{driver} — currently detected",
       "runtime_driver_candidate": "{driver} — also detected",
       "control_discovery_leaked": "SAFETY STOP: the inverter dropped off the local proxy during the scan and a control command may have reached the real inverter. Check the inverter now, especially its output state. Do not repeat control discovery until the proxy-route problem is resolved.",
-      "collector_endpoint_operation_busy": "Another operation is currently changing this collector's connection (for example proxy capture, control discovery, or an endpoint action). Nothing was changed. Wait for it to finish, then try again."
+      "collector_endpoint_operation_busy": "Another operation is currently changing this collector's connection (for example proxy capture, control discovery, or an endpoint action). Nothing was changed. Wait for it to finish, then try again.",
+      "experimental_map_none_option": "Automatic detection (do not bind an experimental map)"
     }
   }
 }

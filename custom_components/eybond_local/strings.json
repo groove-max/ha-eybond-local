@@ -820,8 +820,7 @@
     },
     "abort": {
       "already_configured": "That collector is already set up in another entry."
-    },
-    "experimental_map_none_option": "Automatic detection (do not bind an experimental map)"
+    }
   },
   "entity": {
     "select": {

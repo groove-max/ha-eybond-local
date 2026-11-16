@@ -386,7 +386,7 @@ class RuntimeOptionsMixin:
             SelectOptionDict(
                 value=_EXPERIMENTAL_MAP_NONE,
                 label=self._tr(
-                    "options.experimental_map_none_option",
+                    "common.dynamic.experimental_map_none_option",
                     "Automatic detection (do not bind an experimental map)",
                 ),
             ),

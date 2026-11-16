@@ -39,6 +39,17 @@ the GitHub release body should be rendered from the matching version section her
   polling, save and reload with a non-Auto hint already in entry data, and
   through a deliberate driver change that must leave no map in either source.
 
+- Keep the experimental-map "automatic detection" dropdown label inside the
+  runtime-flow translation bundle. That label is built in code for a selector
+  option, not an HA-defined options field, so declaring it under the top-level
+  options key in strings.json and translations/*.json made hassfest reject the
+  integration schema (not a valid option at
+  options.experimental_map_none_option). It now lives at
+  common.dynamic.experimental_map_none_option in every flow_translations/*.json,
+  which the shared flow loader already merges, and a regression pins the label
+  resolving in EN/RU/UK while the unsupported key stays out of the HA
+  translation files (#93).
+
 - Make an options save actually change what the reloaded runtime runs. Every
   reader takes the driver hint and the explicit map key from entry options and
   falls back to entry data, but the options steps only wrote and cleared the
