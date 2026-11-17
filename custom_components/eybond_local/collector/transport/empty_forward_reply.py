@@ -4,8 +4,8 @@ This is NOT a relaxed binary grammar. Only an aligned eight-byte header matching
 a recently transmitted FC4's full route is consumable, once. It can only fail a
 request, never return telemetry or acknowledge a write. Timed-out requests retain
 a short tombstone so a late no-result reply cannot poison the next transaction.
-The #89 PCAP also proves a fixed29-zero suffix. Only the immediately following
-boundary may consume this exact suffix, under the original evidence deadline.
+The #89 PCAPs prove suffixes of exactly 29 or 45 zeros. Only adjacent boundaries
+may consume those exact suffixes, under the original evidence deadline.
 There is no zero-byte scanning, guessed length, or TCP-packet-boundary framing.
 """
 
@@ -24,7 +24,7 @@ from .binary_framing import BinaryFramingError
 logger = logging.getLogger(__name__)
 _MAX_REQUESTS = 16
 _RETENTION_SECONDS = 10.0
-_OBSERVED_PADDING = bytes(29)
+_OBSERVED_PADDING_LENGTHS = (29, 45)
 _DIAGNOSTIC_PEEK_LIMIT = 256
 
 
@@ -36,7 +36,7 @@ class EmptyForwardPaddingBoundary:
     tid: int
     devcode: int
     devaddr: int
-    consumed: bool = False
+    consumed_bytes: int = 0
 
 
 class EmptyForwardReplyWindow:
@@ -57,15 +57,14 @@ class EmptyForwardReplyWindow:
         peek_buffered: Callable[[int], bytes] | None = None,
     ) -> bool:
         """Recognize the fixed suffix only; bad/truncated tails close the owner."""
-        if boundary is None or header != _OBSERVED_PADDING[:HEADER_SIZE]:
+        if boundary is None or header != bytes(HEADER_SIZE):
             return False
         remaining = min(timeout, boundary.deadline - monotonic())
         if remaining <= 0:
             raise BinaryFramingError("collector_empty_forward_padding_timeout")
-        if boundary.consumed:
-            # #89's later log proves MORE than 29 zeros, not the exact length.
-            # Do not let the framed reader's one-window resync turn 29+8 zeros
-            # into a valid response merely because TCP coalesced the next frame.
+        if boundary.consumed_bytes == _OBSERVED_PADDING_LENGTHS[-1]:
+            # No third segment is authorized. Do not let a generic one-window
+            # resync accept more zeros depending on TCP coalescing.
             # Count only buffered bytes; never wait, drain, or log their content.
             follow = peek_buffered(_DIAGNOSTIC_PEEK_LIMIT) if peek_buffered else b""
             zeros = len(follow) - len(follow.lstrip(b"\x00"))
@@ -75,20 +74,28 @@ class EmptyForwardReplyWindow:
                 "additional_zero_prefix_bytes=%d buffered_peek_bytes=%d "
                 "peek_limit=%d exact_padding_length=unknown; closing session",
                 boundary.tid, boundary.devcode, boundary.devaddr,
-                len(_OBSERVED_PADDING), HEADER_SIZE + zeros, len(follow),
+                boundary.consumed_bytes, HEADER_SIZE + zeros, len(follow),
                 _DIAGNOSTIC_PEEK_LIMIT,
             )
             raise BinaryFramingError("collector_empty_forward_padding_excess")
+        target = (
+            _OBSERVED_PADDING_LENGTHS[0] if boundary.consumed_bytes == 0
+            else _OBSERVED_PADDING_LENGTHS[1]
+        )
+        segment_length = target - boundary.consumed_bytes
         try:
             tail = await asyncio.wait_for(
-                readexactly(len(_OBSERVED_PADDING) - HEADER_SIZE), remaining,
+                readexactly(segment_length - HEADER_SIZE), remaining,
             )
         except asyncio.TimeoutError as exc:
             raise BinaryFramingError("collector_empty_forward_padding_timeout") from exc
-        if header + tail != _OBSERVED_PADDING:
+        if header + tail != bytes(segment_length):
             raise BinaryFramingError("collector_empty_forward_padding_invalid")
-        logger.debug("Consumed fixed29-zero suffix of correlated empty FC4; no inverter result")
-        self._padding_boundary = replace(boundary, consumed=True)
+        logger.debug(
+            "Consumed fixed%d-zero suffix of correlated empty FC4; no inverter result",
+            target,
+        )
+        self._padding_boundary = replace(boundary, consumed_bytes=target)
         return True
 
     def forget(self, tid: int) -> None:

@@ -58,8 +58,9 @@ class PaddedEmptyReplyTests(unittest.IsolatedAsyncioTestCase):
                 await c.disconnect()
 
     async def test_wrong_length_nonzero_or_intervening_frame_stay_fatal(self):
-        bad_tails = [bytes(n) for n in (16, 28, 30, 37, 45, 58)]
+        bad_tails = [bytes(n) for n in (16, 28, 30, 37, 44, 46, 53, 58)]
         bad_tails += [bytes(20) + b"\x01" + bytes(8)]
+        bad_tails += [bytes(29) + b"abcdefgh", bytes(45) + b"abcdefgh"]
         bad_tails += [frame(0, fc=1) + bytes(29)]
         bad_tails += [b"AT+WSSQ=75\r\n" + bytes(29)]
         for kind in ("framed", "at"):
@@ -133,7 +134,7 @@ class PaddedEmptyReplyTests(unittest.IsolatedAsyncioTestCase):
         # fixed29 consumed, then generic resync discarded the extra eight bytes.
         # Lengths are synthetic regression cases, NOT a claim about #89's wire.
         for kind in ("framed", "at"):
-            for count in (37, 45, 58):
+            for count in (37, 53, 58):
                 for split in (8, 36, 37, 38, 44, 45, 46):
                     with self.subTest(kind=kind, count=count, split=split):
                         c, r, w, run = await self.open(kind)
@@ -151,7 +152,8 @@ class PaddedEmptyReplyTests(unittest.IsolatedAsyncioTestCase):
                         self.assertTrue(w.closed)
                         self.assertIsNone(c.last_framed_exchange_monotonic)
                         self.assertEqual(c.collector_info.last_disconnect_reason,
-                                         "collector_empty_forward_padding_excess")
+                                         "collector_empty_forward_padding_invalid" if count == 37
+                                         else "collector_empty_forward_padding_excess")
 
     async def test_excess_evidence_is_one_boundary_bounded_and_never_logs_content(self):
         window = EmptyForwardReplyWindow()
@@ -160,8 +162,12 @@ class PaddedEmptyReplyTests(unittest.IsolatedAsyncioTestCase):
         boundary = window.take_padding_boundary()
         read = AsyncMock(return_value=bytes(21))
         await window.async_consume_padding(bytes(8), boundary, read, timeout=.1)
+        read.return_value = bytes(8)
+        await window.async_consume_padding(
+            bytes(8), window.take_padding_boundary(), read, timeout=.1,
+        )
         excess_boundary = window.take_padding_boundary()
-        self.assertTrue(excess_boundary.consumed)
+        self.assertEqual(excess_boundary.consumed_bytes, 45)
         self.assertEqual(excess_boundary.deadline, boundary.deadline)
         self.assertIsNone(window.take_padding_boundary())
 

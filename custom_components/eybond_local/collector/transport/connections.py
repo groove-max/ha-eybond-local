@@ -664,7 +664,10 @@ class _CollectorConnection:
                             decode_header(follow) if len(follow) >= HEADER_SIZE else None
                         )
                         resync = (
-                            is_resyncable_header_error(header_error)
+                            # An accepted negative-response suffix is a strict
+                            # boundary, not permission to discard another window.
+                            (padding_boundary is None or not padding_boundary.consumed_bytes)
+                            and is_resyncable_header_error(header_error)
                             and next_header is not None
                             and not _runtime_eybond_header_error(next_header)
                             and len(follow) >= next_header.total_len

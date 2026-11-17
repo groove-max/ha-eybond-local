@@ -9,12 +9,20 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
-- Reject excess zero bytes after the correlated 29-byte empty-FC4 suffix
+- Handle the second captured empty-FC4 suffix variant: exactly 45 zero bytes,
+  as well as 29 (#89). Accept the additional 16 bytes only at the adjacent
+  boundary of a negative reply correlated to a request on the same socket;
+  keep the original deadline and never interpret either suffix as telemetry or
+  a successful write. Unknown lengths, corrupt/truncated tails and replies from
+  a previous socket still fail closed. Neither reader may resynchronize over
+  arbitrary extra bytes after an accepted suffix.
+
+- Reject excess zero bytes after recognized empty-FC4 suffixes
   consistently in framed and AT sessions (#89). The framed reader could skip
   another eight zero bytes when TCP delivered a complete following reply in
   the same buffer. Report the original request route and bounded zero-prefix
-  counts without recording subsequent payload content. This does not yet add
-  support for the longer, incompletely captured response seen in deep scans.
+  counts without recording subsequent payload content. Unobserved suffix
+  lengths and unmatched responses remain unsupported.
 
 - Preserve valid historical-learning SHA-256 digests unchanged in support
   archives, even when they contain digit runs resembling serial numbers (#94).
