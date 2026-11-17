@@ -74,6 +74,13 @@ class TransportModuleBoundaryTests(unittest.TestCase):
             node for node in _tree(_TRANSPORT / "common.py").body
             if isinstance(node, ast.ClassDef) and node.name == "_PrefixedAsyncReader"
         )
+        peek_extension = ("FunctionDef", "peek_buffered")
+        self.assertEqual(definitions.count(peek_extension), 1)
+        self.assertEqual(sum(
+            isinstance(node, ast.FunctionDef) and node.name == peek_extension[1]
+            for node in reader_class.body
+        ), 1)
+        definitions.remove(peek_extension)
         self.assertEqual(sum(
             isinstance(node, ast.AsyncFunctionDef) and node.name == "read_framed_prefix"
             for node in reader_class.body

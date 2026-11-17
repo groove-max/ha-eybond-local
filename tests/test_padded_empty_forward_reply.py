@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 import test_empty_forward_reply as helpers
 from custom_components.eybond_local.collector.protocol import decode_header
+from custom_components.eybond_local.collector.transport.common import _PrefixedAsyncReader
 from custom_components.eybond_local.collector.transport.empty_forward_reply import EmptyForwardReplyWindow
 
 frame = helpers.frame
@@ -57,7 +58,7 @@ class PaddedEmptyReplyTests(unittest.IsolatedAsyncioTestCase):
                 await c.disconnect()
 
     async def test_wrong_length_nonzero_or_intervening_frame_stay_fatal(self):
-        bad_tails = [bytes(n) for n in (16, 28, 30, 58)]
+        bad_tails = [bytes(n) for n in (16, 28, 30, 37, 45, 58)]
         bad_tails += [bytes(20) + b"\x01" + bytes(8)]
         bad_tails += [frame(0, fc=1) + bytes(29)]
         bad_tails += [b"AT+WSSQ=75\r\n" + bytes(29)]
@@ -118,14 +119,96 @@ class PaddedEmptyReplyTests(unittest.IsolatedAsyncioTestCase):
         with patch(path, return_value=100):
             window.record(decode_header(frame(15)))
             self.assertTrue(window.consume(decode_header(frame(15, empty=True)), {}))
-            deadline = window.take_padding_deadline()
-            self.assertEqual(deadline, 110)
-            self.assertIsNone(window.take_padding_deadline())
+            boundary = window.take_padding_boundary()
+            self.assertEqual(boundary.deadline, 110)
+            self.assertIsNone(window.take_padding_boundary())
         read = AsyncMock(return_value=bytes(21))
         with patch(path, return_value=111):
             with self.assertRaisesRegex(ValueError, "collector_empty_forward_padding_timeout"):
-                await window.async_consume_padding(bytes(8), deadline, read, timeout=.1)
+                await window.async_consume_padding(bytes(8), boundary, read, timeout=.1)
         read.assert_not_awaited()
+
+    async def test_excess_padding_never_resyncs_to_a_following_reply(self):
+        # 37 used to pass in the framed reader when coalesced with a whole reply:
+        # fixed29 consumed, then generic resync discarded the extra eight bytes.
+        # Lengths are synthetic regression cases, NOT a claim about #89's wire.
+        for kind in ("framed", "at"):
+            for count in (37, 45, 58):
+                for split in (8, 36, 37, 38, 44, 45, 46):
+                    with self.subTest(kind=kind, count=count, split=split):
+                        c, r, w, run = await self.open(kind)
+                        old, old_tid = await self.send(kind, c, w, timeout=.01)
+                        with self.assertRaises(TimeoutError):
+                            await old
+                        current, tid = await self.send(kind, c, w, payload=b"synthetic-write")
+                        wire = frame(old_tid, empty=True) + bytes(count)
+                        r.feed_data(wire[:split])
+                        await asyncio.sleep(0)
+                        r.feed_data(wire[split:] + frame(tid, payload=b"ACK"))
+                        await asyncio.wait_for(run, .5)
+                        with self.assertRaises(ConnectionError):
+                            await current
+                        self.assertTrue(w.closed)
+                        self.assertIsNone(c.last_framed_exchange_monotonic)
+                        self.assertEqual(c.collector_info.last_disconnect_reason,
+                                         "collector_empty_forward_padding_excess")
+
+    async def test_excess_evidence_is_one_boundary_bounded_and_never_logs_content(self):
+        window = EmptyForwardReplyWindow()
+        window.record(decode_header(frame(15)))
+        self.assertTrue(window.consume(decode_header(frame(15, empty=True)), {}))
+        boundary = window.take_padding_boundary()
+        read = AsyncMock(return_value=bytes(21))
+        await window.async_consume_padding(bytes(8), boundary, read, timeout=.1)
+        excess_boundary = window.take_padding_boundary()
+        self.assertTrue(excess_boundary.consumed)
+        self.assertEqual(excess_boundary.deadline, boundary.deadline)
+        self.assertIsNone(window.take_padding_boundary())
+
+        r = asyncio.StreamReader()
+        secret = b"private-wire-content-not-for-logs"
+        r.feed_data(bytes(400) + secret)
+        reader = _PrefixedAsyncReader(r)
+        read.reset_mock()
+        with self.assertLogs(
+            "custom_components.eybond_local.collector.transport.empty_forward_reply",
+            level="WARNING",
+        ) as logs:
+            with self.assertRaisesRegex(ValueError, "collector_empty_forward_padding_excess"):
+                await window.async_consume_padding(
+                    bytes(8), excess_boundary, read, timeout=.1,
+                    peek_buffered=reader.peek_buffered,
+                )
+        message = " ".join(logs.output)
+        self.assertIn("additional_zero_prefix_bytes=264", message)
+        self.assertIn("buffered_peek_bytes=256", message)
+        self.assertIn("exact_padding_length=unknown", message)
+        self.assertNotIn(secret.decode(), message)
+        read.assert_not_awaited()
+        self.assertEqual(await reader.readexactly(400 + len(secret)), bytes(400) + secret)
+
+    async def test_intervening_frame_consumes_excess_boundary_marker(self):
+        window = EmptyForwardReplyWindow()
+        window.record(decode_header(frame(15)))
+        window.consume(decode_header(frame(15, empty=True)), {})
+        await window.async_consume_padding(
+            bytes(8), window.take_padding_boundary(), AsyncMock(return_value=bytes(21)), timeout=.1,
+        )
+        marker = window.take_padding_boundary()
+        read = AsyncMock()
+        self.assertFalse(await window.async_consume_padding(frame(0, fc=1), marker, read, timeout=.1))
+        self.assertIsNone(window.take_padding_boundary())
+        read.assert_not_awaited()
+
+    async def test_buffer_peek_respects_prefix_and_does_not_consume(self):
+        r = asyncio.StreamReader()
+        r.feed_data(b"inner-buffer")
+        reader = _PrefixedAsyncReader(r, b"prefix-")
+        self.assertEqual(reader.peek_buffered(-1), b"")
+        self.assertEqual(reader.peek_buffered(0), b"")
+        self.assertEqual(reader.peek_buffered(3), b"pre")
+        self.assertEqual(reader.peek_buffered(9), b"prefix-in")
+        self.assertEqual(await reader.readexactly(19), b"prefix-inner-buffer")
 
 
 if __name__ == "__main__":

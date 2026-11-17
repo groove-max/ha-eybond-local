@@ -9,6 +9,13 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Reject excess zero bytes after the correlated 29-byte empty-FC4 suffix
+  consistently in framed and AT sessions (#89). The framed reader could skip
+  another eight zero bytes when TCP delivered a complete following reply in
+  the same buffer. Report the original request route and bounded zero-prefix
+  counts without recording subsequent payload content. This does not yet add
+  support for the longer, incompletely captured response seen in deep scans.
+
 - Preserve valid historical-learning SHA-256 digests unchanged in support
   archives, even when they contain digit runs resembling serial numbers (#94).
   Keep identifier and credential masking for other fields and malformed values.

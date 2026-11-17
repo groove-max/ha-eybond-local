@@ -502,6 +502,12 @@ class _PrefixedAsyncReader:
         # framed-prefix parser. This evidence belongs only to this reader.
         self._at_idle_boundary: tuple[int, bytes] | None = None
 
+    def peek_buffered(self, limit: int) -> bytes:
+        """Inspect a bounded prefix without reading or changing wire ownership."""
+        limit = max(0, limit)
+        prefix = bytes(self._buffer[:limit])
+        return prefix + bytes(self._reader._buffer[:limit - len(prefix)])
+
     def begin_line(self) -> None:
         """Start a response whose prefix-vs-socket origin is still unknown."""
         self._line_live = 0
