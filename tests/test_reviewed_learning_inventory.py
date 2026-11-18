@@ -3,9 +3,14 @@
 from dataclasses import asdict, replace
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from custom_components.eybond_local.support.shadow_learning import reviewed_recovery as review
 from custom_components.eybond_local.support.shadow_learning import session

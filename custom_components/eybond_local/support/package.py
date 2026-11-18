@@ -17,10 +17,12 @@ from ..const import (
     LOCAL_REGISTER_SCHEMAS_DIR,
     LOCAL_SUPPORT_PACKAGES_DIR,
 )
+from ..collector_identity import validated_collector_pn
 from .masking import mask_numeric_identifiers
 from .redaction import sanitize_support_payload
 from .diagnostic_evidence import load_diagnostic_evidence, scope_from_bundle
 from .shadow_learning.review_model import build_control_discovery_evidence
+from .shadow_learning.reviewed_recovery import ReviewedLearningRecoveryStore
 
 
 _CLOUD_EVIDENCE_ARCHIVE_MEMBER = "evidence/cloud_evidence.json"
@@ -92,6 +94,9 @@ def export_support_package(
     diagnostic_summary, diagnostic_members = load_diagnostic_evidence(
         config_dir, entry_id, scope_from_bundle(entry_id, support_bundle),
     )
+    history_summary, history_members = _build_learning_history_archive_members(
+        config_dir=config_dir, entry_id=entry_id, support_bundle=support_bundle,
+    )
 
     packages_root = support_packages_root(config_dir)
     packages_root.mkdir(parents=True, exist_ok=True)
@@ -137,6 +142,7 @@ def export_support_package(
             "cloud_evidence": _CLOUD_EVIDENCE_ARCHIVE_MEMBER if cloud_evidence is not None else None,
             "shadow_learning": shadow_manifest_members or None,
             "diagnostic_evidence": diagnostic_summary,
+            "learning_history": history_summary,
         },
     }
 
@@ -178,6 +184,12 @@ def export_support_package(
         ])
     if shadow_manifest_members:
         readme_lines.append(f"- {_SHADOW_ARCHIVE_ROOT}/... (optional shadow-learning evidence)")
+    if history_members:
+        readme_lines.extend([
+            "- evidence/learning_history/... (all retained stopped runs for the current hold)",
+            "The history index hashes refer to original local traces; shared traces are redacted.",
+            "History export does not approve recovery or confirm delivery of cloud commands.",
+        ])
     if shadow_manifest_members.get("control_discovery"):
         readme_lines.append(
             f"- {_SHADOW_CONTROL_DISCOVERY_MEMBER} "
@@ -210,6 +222,7 @@ def export_support_package(
     }
     archive_members.update(shadow_members)
     archive_members.update(diagnostic_members)
+    archive_members.update(history_members)
 
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for member_name, payload in archive_members.items():
@@ -257,6 +270,40 @@ def export_support_package(
         download_path=public_destination,
         download_url=support_package_download_url(destination.name),
     )
+
+
+def _build_learning_history_archive_members(*, config_dir, entry_id, support_bundle):
+    """Include every retained run, not only the latest selected shadow trace.
+
+    The store validates identity, containment, lifecycle and total byte budget.
+    The common archive writer sanitizes/masks every member before publication.
+    If any run is incomplete/unreadable, export no partial historical set.
+    """
+    entry = _dict_value(support_bundle, "entry")
+    configured = validated_collector_pn(_scalar_string(_dict_value(entry, "data"), "collector_pn"))
+    live = validated_collector_pn(_scalar_string(
+        _dict_value(_dict_value(support_bundle, "runtime"), "collector"), "collector_pn"))
+    if (not entry_id or (entry.get("entry_id") and entry["entry_id"] != entry_id)
+            or (configured and live and configured != live)):
+        return {"status": "unavailable", "reason": "identity_mismatch"}, {}
+    pn = configured or live
+    if not pn:
+        return {"status": "unavailable", "reason": "identity_unavailable"}, {}
+    try:
+        inventory, traces = ReviewedLearningRecoveryStore(config_dir).export_evidence(pn, entry_id=entry_id)
+        if inventory["status"] != "review_required":
+            return inventory, {}
+        members = {}
+        for run, raw in zip(inventory["runs"], traces, strict=True):
+            member = f"evidence/learning_history/run_{run['index']:02d}.jsonl"
+            run["trace_member"] = member
+            members[member] = raw.decode("utf-8")
+        index_member = "evidence/learning_history/index.json"
+        members[index_member] = inventory
+        return {"status": "exported", "run_count": len(traces), "index": index_member}, members
+    except Exception:  # noqa: BLE001 - optional evidence must not block the support ZIP
+        # Never expose exception text or a subset which looks like full history.
+        return {"status": "unavailable", "reason": "history_invalid_or_unreadable"}, {}
 
 
 def _support_bundle_cloud_evidence(support_bundle: dict[str, Any]) -> dict[str, Any] | None:

@@ -7,7 +7,23 @@ the GitHub release body should be rendered from the matching version section her
 
 ## [Unreleased]
 
+### Added
+
+- Add a manual-only **Q1-compatible (experimental; read-only)** driver for the
+  captured Q1-only device in #97. One FC4 `Q1` request supplies input/output
+  voltage, load percentage, reported AC frequency and temperature. Battery
+  scaling and status-bit meanings remain unqualified and are kept in support
+  evidence only. No controls, inferred power/energy or additional probes are
+  enabled, and automatic full-09C1 identification is unchanged.
+
 ### Fixed
+
+- Include all retained, stopped Shadow Learning runs in the support ZIP when
+  an active protection hold needs historical review (#94), not just the latest
+  trace. Read the same bounded, identity-checked history as the inventory and
+  redact each exported run. Incomplete or changed history is reported as
+  unavailable without blocking the rest of the ZIP. Export does not authorize
+  recovery, clear protection or start a new learning run.
 
 - Correct the PI18 fault/warning query to `^P006FWS`: its declared length must
   include the three command bytes, CRC and terminator (#99).

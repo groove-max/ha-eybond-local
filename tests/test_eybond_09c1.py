@@ -608,3 +608,7 @@ class PvRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(evidence["responses_hex"]["PV1"], b"NAK\r".hex())
         self.assertEqual(evidence["failures"], {"PV2": "TimeoutError"})
         self.assertEqual(self.transport.requests, [command.encode() + b"\r" for command in READ_COMMANDS])
+
+
+if __name__ == "__main__":
+    unittest.main()

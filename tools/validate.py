@@ -20,6 +20,10 @@ HA_TEST_ROOT = REPO_ROOT / "tests_ha"
 
 _FAMILY_TESTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
+        "custom_components/eybond_local/protocol_catalogs/register_schemas/eybond_q1/",
+        ("test_eybond_q1.py", "test_effective_metadata_snapshot.py"),
+    ),
+    (
         "custom_components/eybond_local/protocol_catalogs/register_schemas/eybond_099e/",
         ("test_eybond_099e.py", "test_effective_metadata_snapshot.py"),
     ),
@@ -189,6 +193,8 @@ _EXACT_TESTS: dict[str, tuple[str, ...]] = {
         "test_fc1_identity_onboarding.py",
     ),
     "custom_components/eybond_local/payload/urtu09c1.py": ("test_eybond_09c1.py",),
+    "custom_components/eybond_local/payload/q1.py": ("test_eybond_q1.py", "test_eybond_09c1.py"),
+    "custom_components/eybond_local/drivers/eybond_q1.py": ("test_eybond_q1.py",),
     "custom_components/eybond_local/payload/vphb.py": ("test_eybond_099e.py",),
     "custom_components/eybond_local/drivers/eybond_099e.py": ("test_eybond_099e.py",),
     "custom_components/eybond_local/drivers/eybond_09c1.py": ("test_eybond_09c1.py",),
@@ -225,6 +231,13 @@ _EXACT_TESTS: dict[str, tuple[str, ...]] = {
     ),
     "custom_components/eybond_local/drivers/registry.py": (
         "test_eybond_short_ascii.py", "test_eybond_09c1.py", "test_device_catalog.py", "test_config_flow.py",
+        "test_eybond_q1.py",
+    ),
+    "custom_components/eybond_local/support/package.py": (
+        "test_support_package.py", "test_shadow_learning_support_package.py", "test_learning_history_support_export.py",
+    ),
+    "custom_components/eybond_local/support/shadow_learning/reviewed_recovery.py": (
+        "test_reviewed_learning_recovery.py", "test_reviewed_learning_inventory.py", "test_learning_history_support_export.py",
     ),
     "custom_components/eybond_local/metadata/effective_metadata_snapshot.py": (
         "test_eybond_short_ascii.py", "test_eybond_09c1.py", "test_effective_metadata_snapshot.py",

@@ -14,6 +14,19 @@ from tools.validate import affected_test_files
 
 
 class AffectedValidationSelectionTests(unittest.TestCase):
+    def test_q1_manual_driver_and_shared_decoder_select_regressions(self):
+        for path in ("payload/q1.py", "drivers/eybond_q1.py",
+                     "protocol_catalogs/register_schemas/eybond_q1/base.json"):
+            with self.subTest(path=path):
+                self.assertIn("test_eybond_q1.py", self._selected(f"custom_components/eybond_local/{path}"))
+        self.assertIn("test_eybond_09c1.py", self._selected("custom_components/eybond_local/payload/q1.py"))
+
+    def test_historical_export_selects_complete_redacted_archive_regressions(self):
+        for path in ("support/package.py", "support/shadow_learning/reviewed_recovery.py"):
+            with self.subTest(path=path):
+                self.assertIn("test_learning_history_support_export.py",
+                              self._selected(f"custom_components/eybond_local/{path}"))
+
     def test_vphb_payload_driver_and_schema_select_regressions(self):
         for path in (
             "payload/vphb.py", "drivers/eybond_099e.py",

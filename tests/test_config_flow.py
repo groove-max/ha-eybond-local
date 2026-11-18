@@ -5070,6 +5070,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 "EyeBond 09C1",
                 "MarsRock мережевий (вручну; лише читання)",
                 "EyeBond 099E / VPHB (експериментальний; лише читання)",
+                "Q1-сумісний (експериментальний; лише читання)",
             ],
         )
 

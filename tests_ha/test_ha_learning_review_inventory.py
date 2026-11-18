@@ -59,6 +59,14 @@ async def test_support_export_contains_safe_worker_inventory_without_recovery(
         inventories.append(inventory)
         return inventory
     monkeypatch.setattr(review.ReviewedLearningRecoveryStore, "inspect", inspect)
+    export_original = review.ReviewedLearningRecoveryStore.export_evidence
+    exported = []
+    def export_evidence(self, collector_pn, **kwargs):
+        assert threading.get_ident() != loop_thread
+        assert collector_pn == pn and kwargs["entry_id"] == collector_entry.entry_id
+        exported.append(True)
+        return export_original(self, collector_pn, **kwargs)
+    monkeypatch.setattr(review.ReviewedLearningRecoveryStore, "export_evidence", export_evidence)
     def forbidden(*args, **kwargs):
         raise AssertionError("support inspection must not approve or restore")
     monkeypatch.setattr(review.ReviewedLearningRecoveryStore, "approve", forbidden)
@@ -79,6 +87,22 @@ async def test_support_export_contains_safe_worker_inventory_without_recovery(
         assert downloaded == await hass.async_add_executor_job(path.read_bytes)
         with ZipFile(BytesIO(downloaded)) as archive:
             bundle = json.loads(archive.read("support_bundle.json"))
+            summary = json.loads(archive.read("manifest.json"))["archive_members"]["learning_history"]
+            assert exported
+            if history == "valid":
+                assert summary["status"] == "exported" and summary["run_count"] == 2
+                index = json.loads(archive.read(summary["index"]))
+                assert [run["original"] for run in index["runs"]] == [True, False]
+                for run in index["runs"]:
+                    events = [json.loads(line) for line in archive.read(run["trace_member"]).splitlines()]
+                    assert events[1]["run"] == run["index"]
+                    assert events[-1]["kind"] == "shadow_completion_summary"
+                    assert pn not in archive.read(run["trace_member"]).decode()
+                if not digest_collision:
+                    assert index["history_sha256"] == bundle["runtime"]["metadata"][KEY]["history_sha256"]
+            else:
+                assert summary["status"] == ("no_hold" if history == "absent" else "unavailable")
+                assert not any(name.startswith("evidence/learning_history/") for name in archive.namelist())
 
     result = bundle["runtime"]["metadata"][KEY]
     assert inspected

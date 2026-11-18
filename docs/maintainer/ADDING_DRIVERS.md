@@ -2,6 +2,31 @@
 
 This project is designed to grow through transport-aware payload drivers plus declarative metadata, not through hardcoded model logic inside Home Assistant entities.
 
+### Experimental Q1-only telemetry
+
+`eybond_q1` is explicitly selected as **Q1-compatible (experimental; read-only)**.
+It is not a fallback match in Auto, a retail-model identification, or a relaxed
+09C1 probe. The [#97 owner's capture](https://github.com/groove-max/ha-eybond-local/issues/97)
+contains a valid 47-byte Q1 reply, but `QF`, `PV?` and `F` return empty payloads.
+Full 09C1 still requires all four responses.
+
+The common strict decoder in `payload/q1.py` checks fixed columns, separators,
+numeric formats and the eight-bit status string. The owning 09C1 profile retains
+its qualified scaling and status meanings. The Q1-only driver exposes five basic
+readings: input/output voltage, load percentage, reported AC frequency and
+temperature. Frequency is intentionally not labelled as input or output frequency.
+Neither `x.xx` nor `xx.x` establishes battery-pack voltage for this unknown family;
+the unscaled field, fault-voltage field, uninterpreted flags and complete response
+remain in support evidence. There are no controls, inferred power/energy, SOC,
+status alarms, UART changes or active learning.
+
+Probe, poll and support capture each send one `Q1\r` on the captured FC4 route
+`(devcode=1, collector_addr=255)`. The driver uses the existing payload-link,
+read-result, metadata-schema and support-evidence interfaces, with no HA entity
+special cases. No implicit raw/AT fallback or extra dialect probes are enabled.
+Offline capture replay and HA entity/reload tests establish implementation
+behaviour, not hardware qualification of this new profile.
+
 ### Experimental 099E / VPHB telemetry
 
 `eybond_099e` is manual-only and read-only. Its payload codec and typed FC4

@@ -123,7 +123,7 @@ class ReviewedLearningRecoveryStore(CloudLearningProtectionStore):
     def _current(self, entry_id):
         return _state(_json(session._owned_session_path(self._config_dir, entry_id)))
 
-    def _history(self, hold, current, *, trace_byte_budget=None) -> list[dict]:
+    def _history(self, hold, current, *, trace_byte_budget=None, trace_snapshots=None) -> list[dict]:
         root = session.shadow_learning_session_root(self._config_dir).resolve()
         archive = root / "retained_runs"
         if archive.is_symlink():
@@ -183,6 +183,8 @@ class ReviewedLearningRecoveryStore(CloudLearningProtectionStore):
                 raise ValueError("review_trace_empty")
             _check_trace_scope(data, state)
             history.append({"state": _view(state), "trace_sha256": hashlib.sha256(data).hexdigest()})
+            if trace_snapshots is not None:
+                trace_snapshots.append(data)
         return history
 
     def prepare(self, *, collector_pn, entry_id, study_id, evidence_files, command_counts) -> dict:
@@ -207,13 +209,28 @@ class ReviewedLearningRecoveryStore(CloudLearningProtectionStore):
 
     def inspect(self, collector_pn, *, entry_id=None) -> dict:
         """Shareable inventory, not the private receipt, paths, PN or endpoints."""
+        return self._inspect(collector_pn, entry_id=entry_id)
+
+    def export_evidence(self, collector_pn, *, entry_id) -> tuple[dict, tuple[bytes, ...]]:
+        """Read bounded stopped traces for the archive's redaction pipeline.
+
+        These bytes are PRIVATE until sanitized by the archive writer. Capture
+        exactly the bytes hashed during inspection, not a second path read.
+        No approval, terminal-delivery inference or endpoint change occurs.
+        """
+        traces = []
+        inventory = self._inspect(collector_pn, entry_id=entry_id, trace_snapshots=traces)
+        return inventory, tuple(traces)
+
+    def _inspect(self, collector_pn, *, entry_id=None, trace_snapshots=None) -> dict:
         hold = self.load(collector_pn)
         if hold is None:
             return {"status": "no_hold"}
         if entry_id is not None and hold.entry_id != entry_id:
             raise ValueError("review_scope_mismatch")
         current = self._current(hold.entry_id)
-        history = self._history(hold, current, trace_byte_budget=_MAX_INSPECTION_TRACE_BYTES)
+        history = self._history(hold, current, trace_byte_budget=_MAX_INSPECTION_TRACE_BYTES,
+                                trace_snapshots=trace_snapshots)
         # Inspection is not an ownership transaction. If recovery/retry changed
         # its scope while reading, report unavailable rather than mixed history.
         self.require_exact_hold(hold)

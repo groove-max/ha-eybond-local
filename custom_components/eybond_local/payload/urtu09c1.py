@@ -12,6 +12,7 @@ import re
 
 from ..link_models import EybondLinkRoute
 from ..link_transport import PayloadLinkTransport, async_send_payload
+from .q1 import Q1Error, decode_q1
 
 PV_CHANNEL_COMMANDS = ("PV1", "PV2")
 READ_COMMANDS = ("Q1", "QF", "PV?", "F", "G?", *PV_CHANNEL_COMMANDS)
@@ -48,41 +49,39 @@ def _spaces(body: bytes, positions: tuple[int, ...]) -> None:
 
 
 def parse_q1(frame: bytes) -> dict[str, object]:
-    body = _body(frame, 47)
-    _spaces(body, (5, 11, 17, 21, 26, 31, 36))
-    flags = body[37:45]
-    if re.fullmatch(rb"[01]{8}", flags) is None:
-        raise Urtu09C1Error("09c1_status_flags")
-    battery_field = body[27:31]
-    battery_value = _number(battery_field, rb"(?:[0-9]{2}\.[0-9]|[0-9]\.[0-9]{2})")
+    try:
+        sample = decode_q1(frame)
+    except Q1Error as exc:
+        raise Urtu09C1Error(str(exc).replace("q1_", "09c1_", 1)) from exc
+    flags = sample.flags
     # #50 qualifies xx.x as pack volts. #97 also supplies x.xx, which the
     # vendor's four-character double field permits, but its voltage basis is
     # not qualified. Keep it as evidence, never a 2.34 V pack reading or an
     # inferred cell count derived from the inverter's nominal voltage.
     battery_key = (
-        "battery_voltage" if battery_field[2:3] == b"."
+        "battery_voltage" if sample.battery_text[2:3] == "."
         else "urtu09c1_battery_voltage_unscaled"
     )
     return {
         "urtu09c1_q1_length": len(frame),
-        "grid_voltage": _number(body[:5], rb"[0-9]{3}\.[0-9]"),
-        "urtu09c1_fault_voltage": _number(body[6:11], rb"[0-9]{3}\.[0-9]"),
-        "output_voltage": _number(body[12:17], rb"[0-9]{3}\.[0-9]"),
-        "load_percent": _number(body[18:21], rb"[0-9]{3}"),
+        "grid_voltage": sample.input_voltage,
+        "urtu09c1_fault_voltage": sample.fault_voltage,
+        "output_voltage": sample.output_voltage,
+        "load_percent": sample.load_percent,
         # Unlike URTU1920, this column is INPUT frequency. QF owns output Hz.
-        "grid_frequency": _number(body[22:26], rb"[0-9]{2}\.[0-9]"),
-        battery_key: battery_value,
-        "temperature": _number(body[32:36], rb"(?:[0-9]{2}|-[0-9])\.[0-9]"),
-        "urtu09c1_status_flags": flags.decode("ascii"),
-        "grid_available": flags[0] == 48,
-        "battery_low": flags[1] == 49,
-        "urtu09c1_ac_charger_enabled": flags[2] == 49,
-        "inverter_fault": flags[3] == 49,
+        "grid_frequency": sample.frequency,
+        battery_key: sample.battery_value,
+        "temperature": sample.temperature,
+        "urtu09c1_status_flags": flags,
+        "grid_available": flags[0] == "0",
+        "battery_low": flags[1] == "1",
+        "urtu09c1_ac_charger_enabled": flags[2] == "1",
+        "inverter_fault": flags[3] == "1",
         "operating_mode": {
-            b"00": "Bypass", b"01": "AVR", b"10": "Battery (energy saving)",
-            b"11": "Inverter failure",
+            "00": "Bypass", "01": "AVR", "10": "Battery (energy saving)",
+            "11": "Inverter failure",
         }[flags[4:6]],
-        "urtu09c1_buzzer_enabled": flags[7] == 49,
+        "urtu09c1_buzzer_enabled": flags[7] == "1",
     }
 
 
