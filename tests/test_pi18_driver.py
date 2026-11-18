@@ -11,7 +11,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.drivers.pi18 import Pi18Driver
+from custom_components.eybond_local.drivers.pi18 import Pi18Driver, _RUNTIME_COMMAND_SPECS
+from custom_components.eybond_local.payload.pi18 import build_request
 from custom_components.eybond_local.drivers.read_result import (
     DriverReadMode,
     DriverReadResult,
@@ -49,6 +50,8 @@ class _FakeTransport:
 
     async def async_send_payload(self, payload: bytes, *, route) -> bytes:
         command = payload[:-3].decode("ascii")
+        if int(payload[2:5]) != len(payload[5:]):
+            raise AssertionError(f"PI18 request length mismatch: {command}")
         self.commands.append(command)
         key = (route.devcode, route.collector_addr, command)
         if key not in self._responses:
@@ -57,6 +60,12 @@ class _FakeTransport:
 
 
 class Pi18DriverTests(unittest.IsolatedAsyncioTestCase):
+    def test_runtime_requests_declare_command_crc_and_terminator_length(self) -> None:
+        for spec in _RUNTIME_COMMAND_SPECS:
+            with self.subTest(command=spec.command):
+                request = build_request(spec.command)
+                self.assertEqual(int(request[2:5]), len(request[5:]))
+
     async def test_optional_values_are_carried_then_removed_on_unsupported_verdict(self) -> None:
         driver = Pi18Driver()
         target = ProbeTarget(devcode=0x0994, collector_addr=0x01, device_addr=0)
@@ -141,7 +150,7 @@ class Pi18DriverTests(unittest.IsolatedAsyncioTestCase):
                     (0x0994, 0x01, "^P005GS"): "2301,500,2300,500,4500,4200,80,520,515,514,20,30,90,35,33,34,1200,800,3200,3100,1,2,1,1,2,2,1,0",
                     (0x0994, 0x01, "^P006MOD"): "05",
                     (0x0994, 0x01, "^P007FLAG"): "1,1,0,0,0,1,1,1,0",
-                    (0x0994, 0x01, "^P005FWS"): "00,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0",
+                    (0x0994, 0x01, "^P006FWS"): "00,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0",
                     (0x0994, 0x01, "^P005ET"): "00001234",
                     (0x0994, 0x01, "^P004T"): "20160214201314",
                     (0x0994, 0x01, "^P009EY2016"): "00000123",
@@ -212,7 +221,7 @@ class Pi18DriverTests(unittest.IsolatedAsyncioTestCase):
                     (0x0994, 0x01, "^P005GS"): "2301,500,2300,500,4500,4200,80,520,515,514,20,30,90,35,33,34,1200,800,3200,3100,1,2,1,1,2,2,1,0",
                     (0x0994, 0x01, "^P006MOD"): "05",
                     (0x0994, 0x01, "^P007FLAG"): "1,1,0,0,0,1,1,1,0",
-                    (0x0994, 0x01, "^P005FWS"): "00,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0",
+                    (0x0994, 0x01, "^P006FWS"): "00,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0",
                     (0x0994, 0x01, "^P005ET"): "00001234",
                     (0x0994, 0x01, "^P004T"): "20160214201314",
                     (0x0994, 0x01, "^P009EY2016"): "00000123",

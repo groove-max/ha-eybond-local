@@ -84,3 +84,39 @@ async def test_manual_flow_keeps_local_listener_separate_from_advertised_callbac
     assert request.advertised_tcp_port == 18899
     assert request.target_ip == "198.51.100.7"
     hass.config_entries.flow.async_abort(flow_id)
+
+
+async def test_disabled_entry_releases_nat_scan_route_but_not_durable_identity(hass):
+    from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from custom_components.eybond_local.models import CollectorCandidate, CollectorInfo, OnboardingResult
+
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id="collector:Q0000000000001",
+        data={"collector_ip": "203.0.113.9", "collector_pn": "Q0000000000001"},
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    entry.add_to_hass(hass)
+    enabled = MockConfigEntry(domain=DOMAIN, data={"collector_ip": "198.51.100.7"})
+    enabled.add_to_hass(hass)
+    assert entry.state is ConfigEntryState.NOT_LOADED
+    flow_id, flow = await _advanced_setup(hass)
+    await hass.config_entries.flow.async_configure(flow_id, {"next_step_id": "scan_targets"})
+    detector = AsyncMock()
+    detector.async_scan.return_value = ()
+    with patch("custom_components.eybond_local.flows.config.scan.create_onboarding_manager", return_value=detector), \
+         patch.object(flow, "_async_passive_scan_results", new=AsyncMock(return_value=())), \
+         patch.object(flow, "_shared_registry_scan_results", return_value=()):
+        await hass.config_entries.flow.async_configure(flow_id, {"known_collector_ips": "203.0.113.9"})
+        await flow._scan_task
+    assert detector.async_scan.call_args.kwargs["skip_probe_ips"] == {"198.51.100.7"}
+    assert DiscoveryTarget("203.0.113.9", "known_ip") in detector.async_scan.call_args.kwargs["discovery_targets"]
+    for pn, expected in (("Q0000000000001", entry), ("I30000200000000001", None), ("", None)):
+        result = OnboardingResult(collector=CollectorCandidate(
+            target_ip="203.0.113.9", source="known_ip", ip="203.0.113.9",
+            collector=CollectorInfo(remote_ip="203.0.113.9", collector_pn=pn),
+        ))
+        assert flow._existing_entry_for_result(result) is expected
+    assert entry.disabled_by is ConfigEntryDisabler.USER
+    assert not flow._autodetect_results
+    hass.config_entries.flow.async_abort(flow_id)

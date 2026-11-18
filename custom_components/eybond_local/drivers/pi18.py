@@ -61,7 +61,7 @@ _RUNTIME_COMMAND_SPECS: tuple[Pi18CommandSpec, ...] = (
         value_keys=PI18_QFLAG_VALUE_KEYS,
     ),
     Pi18CommandSpec(
-        command="^P005FWS",
+        command="^P006FWS",
         parser=parse_qfws,
         optional=True,
         value_keys=PI18_QFWS_VALUE_KEYS,

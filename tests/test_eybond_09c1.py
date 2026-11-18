@@ -60,6 +60,25 @@ class Transport:
 
 
 class PayloadTests(unittest.TestCase):
+    def test_issue_97_q1_accepts_single_digit_voltage_without_inventing_pack_voltage(self):
+        # Owner diagnostic capture: the complete 47-byte Q1 reply. The owner
+        # suspects per-cell units, but neither LCD nor a multiplier is qualified.
+        values = parse_q1(b"(249.6 000.0 234.5 000 60.0 2.34 30.0 10000000\r")
+        self.assertEqual(values["grid_voltage"], 249.6)
+        self.assertEqual(values["output_voltage"], 234.5)
+        self.assertEqual(values["urtu09c1_battery_voltage_unscaled"], 2.34)
+        self.assertNotIn("battery_voltage", values)
+        self.assertEqual(values["urtu09c1_q1_length"], 47)
+
+    def test_battery_field_formats_are_exact_not_arbitrary_floats(self):
+        for field in (b"0.00", b"2.34", b"9.99"):
+            values = parse_q1(responses()["Q1"][:28] + field + responses()["Q1"][32:])
+            self.assertEqual(values["urtu09c1_battery_voltage_unscaled"], float(field))
+            self.assertNotIn("battery_voltage", values)
+        for field in (b" 2.3", b".234", b"2.3 ", b"-2.3", b"+2.3", b"2e01", b"234."):
+            with self.subTest(field=field), self.assertRaises(Urtu09C1Error):
+                parse_q1(responses()["Q1"][:28] + field + responses()["Q1"][32:])
+
     def test_exact_allowlisted_commands_no_address_or_checksum(self):
         for command in READ_COMMANDS:
             self.assertEqual(build_request(command), command.encode() + b"\r")
@@ -171,6 +190,33 @@ class PayloadTests(unittest.TestCase):
 
 
 class DriverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_single_digit_battery_keeps_probe_contract_and_runtime_evidence(self):
+        inverter = await self.driver.async_probe(self.transport, self.target)
+        before = await self.driver.async_read_values(self.transport, inverter)
+        self.assertEqual(before.values["battery_voltage"], 52.4)
+        self.transport.responses["Q1"] = b"(249.6 000.0 234.5 000 60.0 2.34 30.0 10000000\r"
+        self.assertTrue(await self.driver.async_probe_signature(self.transport, self.target))
+        self.assertIsNotNone(await self.driver.async_probe(self.transport, self.target))
+        after = await self.driver.async_read_values(self.transport, inverter)
+        self.assertEqual(after.mode, DriverReadMode.FULL)
+        self.assertNotIn("battery_voltage", after.values)
+        self.assertNotIn("urtu09c1_battery_voltage_unscaled", after.values)
+        self.assertEqual(after.diagnostics["urtu09c1_battery_voltage_unscaled"], 2.34)
+        self.assertEqual(after.values["urtu09c1_rated_battery_voltage"], 48)
+        self.assertEqual(after.values["grid_voltage"], 249.6)
+        # A nominal 48 V rating alone does not authorize cell-count scaling.
+        evidence = await self.driver.async_capture_support_evidence(self.transport, inverter)
+        self.assertEqual(evidence["responses_hex"]["Q1"], self.transport.responses["Q1"].hex())
+        for command in ("QF", "PV?", "F"):
+            original = self.transport.responses[command]
+            self.transport.responses[command] = b"NAK\r"
+            self.assertIsNone(await self.driver.async_probe(self.transport, self.target), command)
+            self.transport.responses[command] = original
+        self.transport.responses["Q1"] = responses()["Q1"]
+        recovered = await self.driver.async_read_values(self.transport, inverter)
+        self.assertEqual(recovered.values["battery_voltage"], 52.4)
+        self.assertNotIn("urtu09c1_battery_voltage_unscaled", recovered.diagnostics)
+
     def test_new_driver_is_appended_without_changing_existing_scan_priority(self):
         self.assertEqual([driver.key for driver in iter_drivers("auto")], [
             "modbus_smg", "srne_modbus", "must_pv_ph18", "modbus_catalog", "pi30",

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from homeassistant.config_entries import ConfigEntryState
+
 from ...collector.smartess_ble import (
     SmartEssBleCandidate,
 )
@@ -244,6 +246,15 @@ class ScanResultPresentationMixin:
         ips: set[str] = set()
         for entry in self.hass.config_entries.async_entries(DOMAIN):
             if entry.entry_id == self.context.get("entry_id"):
+                continue
+            # A deliberately disabled, fully unloaded entry does not own the
+            # scan route. Another collector can share its NAT address (#98).
+            # Keep enabled/retrying entries and incomplete unloads protected;
+            # durable PN deduplication below still includes disabled entries.
+            if (
+                getattr(entry, "disabled_by", None) is not None
+                and getattr(entry, "state", None) is ConfigEntryState.NOT_LOADED
+            ):
                 continue
             ip = str(entry.data.get(CONF_COLLECTOR_IP, "") or "").strip()
             if ip:

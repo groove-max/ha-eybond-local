@@ -2840,6 +2840,40 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         # The PN-carrying duplicate wins so the line shows the identity.
         self.assertEqual(merged.collector.collector.collector_pn, "Q0000000000001")
 
+    def test_disabled_unloaded_entry_does_not_reserve_shared_nat_scan_address(self) -> None:
+        from homeassistant.config_entries import ConfigEntryState
+
+        entry = _FakeSetupEntry("external", {
+            "collector_ip": "203.0.113.9", "collector_pn": "Q0000000000001",
+        })
+        entry.disabled_by = "user"
+        entry.state = ConfigEntryState.NOT_LOADED
+        flow = self._make_flow(entries=[entry])
+        self.assertEqual(flow._configured_collector_probe_skip_ips(), frozenset())
+        for disabled, state in (
+            (None, ConfigEntryState.NOT_LOADED),
+            (None, ConfigEntryState.SETUP_RETRY),
+            ("user", ConfigEntryState.LOADED),
+            ("user", ConfigEntryState.FAILED_UNLOAD),
+        ):
+            with self.subTest(disabled=disabled, state=state):
+                entry.disabled_by, entry.state = disabled, state
+                self.assertEqual(flow._configured_collector_probe_skip_ips(), {"203.0.113.9"})
+
+        entry.disabled_by, entry.state = "user", ConfigEntryState.NOT_LOADED
+        def result(pn):
+            return OnboardingResult(collector=CollectorCandidate(
+                target_ip="203.0.113.9", source="known_ip", ip="203.0.113.9",
+                collector=CollectorInfo(remote_ip="203.0.113.9", collector_pn=pn),
+            ))
+        self.assertIs(flow._existing_entry_for_result(result("Q0000000000001")), entry)
+        self.assertIsNone(flow._existing_entry_for_result(result("I30000200000000001")))
+        self.assertIsNone(flow._existing_entry_for_result(result("")))
+        # A second enabled entry sharing the address still owns its route.
+        enabled = _FakeSetupEntry("other", {"collector_ip": "203.0.113.9"})
+        flow.hass.config_entries._entries.append(enabled)
+        self.assertEqual(flow._configured_collector_probe_skip_ips(), {"203.0.113.9"})
+
     async def test_scan_results_refresh_label_names_unified_scan(self) -> None:
         flow = self._make_flow()
         flow._autodetect_results = {}

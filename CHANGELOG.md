@@ -9,6 +9,20 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Correct the PI18 fault/warning query to `^P006FWS`: its declared length must
+  include the three command bytes, CRC and terminator (#99).
+
+- Accept the captured four-character `x.xx` battery field in 09C1 Q1 replies
+  without rejecting all telemetry (#97). Preserve it unscaled in diagnostics
+  until its voltage basis is qualified; do not publish it as pack voltage or
+  infer a cell count. Existing `xx.x` pack readings and the four-response
+  protocol-identification contract remain unchanged.
+
+- Allow explicit discovery of an address used by a disabled, fully unloaded
+  entry, including a second collector behind the same NAT (#98). Enabled or
+  incompletely unloaded entries remain protected, and collector PN checks still
+  prevent duplicates and binding another collector's session.
+
 - Handle the second captured empty-FC4 suffix variant: exactly 45 zero bytes,
   as well as 29 (#89). Accept the additional 16 bytes only at the adjacent
   boundary of a negative reply correlated to a request on the same socket;

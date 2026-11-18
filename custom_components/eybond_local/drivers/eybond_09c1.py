@@ -133,6 +133,9 @@ class Eybond09C1Driver(InverterDriver):
                 optional.clear()
             raise
         values = {key: value for key, value in values.items() if not key.endswith("_length")}
+        unscaled_battery_key = "urtu09c1_battery_voltage_unscaled"
+        if unscaled_battery_key in values:
+            diagnostics[unscaled_battery_key] = values.pop(unscaled_battery_key)
         values["protocol_id"] = PROTOCOL_ID
         # Legacy groups never carry over; new channels have explicit freshness.
         # Neither PV? nor differently timed PV1/PV2 samples are a combined total.

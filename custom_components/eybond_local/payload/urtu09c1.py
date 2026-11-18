@@ -53,6 +53,16 @@ def parse_q1(frame: bytes) -> dict[str, object]:
     flags = body[37:45]
     if re.fullmatch(rb"[01]{8}", flags) is None:
         raise Urtu09C1Error("09c1_status_flags")
+    battery_field = body[27:31]
+    battery_value = _number(battery_field, rb"(?:[0-9]{2}\.[0-9]|[0-9]\.[0-9]{2})")
+    # #50 qualifies xx.x as pack volts. #97 also supplies x.xx, which the
+    # vendor's four-character double field permits, but its voltage basis is
+    # not qualified. Keep it as evidence, never a 2.34 V pack reading or an
+    # inferred cell count derived from the inverter's nominal voltage.
+    battery_key = (
+        "battery_voltage" if battery_field[2:3] == b"."
+        else "urtu09c1_battery_voltage_unscaled"
+    )
     return {
         "urtu09c1_q1_length": len(frame),
         "grid_voltage": _number(body[:5], rb"[0-9]{3}\.[0-9]"),
@@ -61,7 +71,7 @@ def parse_q1(frame: bytes) -> dict[str, object]:
         "load_percent": _number(body[18:21], rb"[0-9]{3}"),
         # Unlike URTU1920, this column is INPUT frequency. QF owns output Hz.
         "grid_frequency": _number(body[22:26], rb"[0-9]{2}\.[0-9]"),
-        "battery_voltage": _number(body[27:31], rb"[0-9]{2}\.[0-9]"),
+        battery_key: battery_value,
         "temperature": _number(body[32:36], rb"(?:[0-9]{2}|-[0-9])\.[0-9]"),
         "urtu09c1_status_flags": flags.decode("ascii"),
         "grid_available": flags[0] == 48,
