@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "source_key": "github_comment_97_vs10048amn_live_map",
+  "kind": "github_comment",
+  "title": "VS10048AMN owner verifies the six readings on the installed Q1 map",
+  "reference": "https://github.com/groove-max/ha-eybond-local/issues/97#issuecomment-7039639856",
+  "captured_at": "2026-11-20",
+  "visibility": "public",
+  "summary": "After updating to 3c652a66, restarting HA and selecting the 24-cell map, the owner reported that the five existing readings remained and Battery Voltage tracked the inverter LCD during normal PV charging (56.16 V in HA, 56.2 V on the LCD). This confirms the read-only map on the reported configuration, not automatic recognition of other Q1 devices or write support.",
+  "assertions": ["hardware_test", "telemetry_validation"]
+}

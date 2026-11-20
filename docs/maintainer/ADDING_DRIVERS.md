@@ -34,8 +34,11 @@ Probe, poll and support capture each send one `Q1\r` on the captured FC4 route
 `(devcode=1, collector_addr=255)`. The driver uses the existing payload-link,
 read-result, metadata-schema and support-evidence interfaces, with no HA entity
 special cases. No implicit raw/AT fallback or extra dialect probes are enabled.
-Offline capture replay and HA entity/reload tests establish implementation
-behaviour, not hardware qualification of this new profile.
+In addition to the offline replay and HA entity/reload tests, the
+[#97 owner verified the installed map](https://github.com/groove-max/ha-eybond-local/issues/97#issuecomment-7039639856)
+on `3c652a66`: all five existing readings remained and Battery Voltage tracked
+the LCD during PV charging (56.16 V in HA, 56.2 V on the LCD). This confirms
+read-only telemetry for that configuration, not automatic Q1 identification.
 
 ### Experimental 099E / VPHB telemetry
 

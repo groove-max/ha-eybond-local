@@ -46,7 +46,7 @@ This page describes what has been confirmed for a specific inverter model or mod
 | MUST | PV18-3024 | must_pv_ph18 | anchors | full | partial | partial | captured |
 | MUST | PV3900 | must_pv_ph18 | anchors | full | partial | none | captured |
 | MUST-compatible | PV3300 | must_pv_ph18 | anchors | full | partial | partial | captured |
-| Panda (retail brand) | VS10048AMN | eybond_q1 | anchors | partial | partial | none | captured |
+| Panda (retail brand) | VS10048AMN | eybond_q1 | anchors | partial | confirmed | none | confirmed |
 | Sandisolar | SD 11KP48V WIFI | modbus_smg | fingerprint | full | partial | partial | captured |
 | SRNE-compatible | Modbus family | srne_modbus | anchors | partial | partial | none | none |
 | Victor | NM-PRO-6.2KW | pi30 | anchors | full | confirmed | partial | captured |
@@ -520,11 +520,12 @@ Runtime descriptors with no specific commercial model record. These are generic 
 
 - Lifecycle: experimental
 - Aliases: —
-- Validation: hardware captured, telemetry partial, controls none
+- Validation: hardware confirmed, telemetry confirmed, controls none
 - Coverage: runtime read_only, cloud unknown, vendor map unknown
   - Coverage notes:
     - The owner confirmed five live Q1 readings; output voltage is line-to-line on this split-phase unit.
-- Summary: One FC4 Q1 read supplies AC input and output voltages, load percentage, reported AC frequency and temperature. Two owner LCD comparisons support pack voltage for the selected 48 V variant, without another request to the inverter.
+    - On main 3c652a66, selecting the 24-cell map preserved those readings and added Battery Voltage. During PV charging, HA showed 56.16 V against 56.2 V on the LCD.
+- Summary: The owner verified six readings on the selected 48 V variant. One FC4 Q1 read supplies AC input and output voltages, load percentage, reported AC frequency, temperature and pack voltage. The generic Q1 map exposes only the first five.
 - Variants:
   - `vs10048amn_24_cell` — Q1 read-only, 48 V lead-acid bank (24 cells)
     - Descriptors: vs10048amn_q1_24_cell
@@ -536,7 +537,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Known limitations:
   - Q1 alone supplies no model identity or cell count. Battery voltage requires explicit selection of the 24-cell map.
   - No decoded flags, SOC, current, power, energy or controls. A Q1 response does not qualify the full 09C1 driver.
-- Evidence: 1 source(s)
+- Evidence: 2 source(s)
 
 ### PowMr — 4.2KW (`powmr_4_2kw`)
 
