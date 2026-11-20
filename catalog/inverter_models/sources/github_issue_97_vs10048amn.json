@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_97_vs10048amn",
+  "kind": "github_issue",
+  "title": "VS10048AMN owner Q1 captures and LCD comparisons",
+  "reference": "https://github.com/groove-max/ha-eybond-local/issues/97#issuecomment-7021589968",
+  "captured_at": "2026-11-19",
+  "visibility": "public",
+  "summary": "The owner reports four series-connected 12 V lead-acid batteries. A Q1 field of 2.30 corresponded to 55.5 V on the LCD and 2.16 to 51.9 V. This supports a factor of 24 for this unit; the number of cells is not encoded in the response.",
+  "assertions": ["commercial_identity", "runtime_compatibility"]
+}

@@ -32,6 +32,10 @@ class Q1Sample:
     temperature: float
     flags: str
 
+    @property
+    def battery_decimals(self) -> int:
+        return len(self.battery_text.partition(".")[2])
+
 
 def decode_q1(frame: bytes) -> Q1Sample:
     """Decode syntax only; the owning profile decides the battery/flag meaning."""
@@ -69,6 +73,12 @@ class Q1Session:
     transport: PayloadLinkTransport
     route: EybondLinkRoute
     timeout: float = 4.0
+
+    async def request(self, command: str) -> bytes:
+        """Catalog probe adapter; this session only supports the one proven read."""
+        if command != "Q1":
+            raise Q1Error("q1_unsupported_command")
+        return await self.read_status()
 
     async def read_status(self) -> bytes:
         if type(self.route) is not EybondLinkRoute:

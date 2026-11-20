@@ -15,6 +15,7 @@ from custom_components.eybond_local.drivers.eybond_q1 import EybondQ1Driver, PRO
 from custom_components.eybond_local.drivers.read_result import DriverReadMode
 from custom_components.eybond_local.drivers.registry import driver_options, iter_drivers, serial_is_stable
 from custom_components.eybond_local.link_models import EybondLinkRoute, RawSerialLinkRoute
+from custom_components.eybond_local.metadata.explicit_selection import explicit_catalog_entry
 from custom_components.eybond_local.payload.q1 import Q1Error, Q1Session, STATUS_REQUEST, decode_q1
 
 # Public owner capture in #97; no collector/account identifiers.
@@ -82,6 +83,45 @@ class PayloadTests(unittest.TestCase):
 
 
 class DriverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_vs10048amn_voltage_is_scoped_to_explicit_map_and_live_field_shape(self):
+        driver = EybondQ1Driver()
+        cases = (
+            (b"(227.1 000.0 227.1 000 60.0 2.30 30.0 00000000\r", 55.2),
+            (b"(233.4 000.0 234.7 001 60.0 2.16 30.0 10000000\r", 51.84),
+        )
+        transport = Replay(cases[0][0])
+        with explicit_catalog_entry("vs10048amn_q1_24_cell"):
+            selected = await driver.async_probe(transport, driver.probe_targets[0])
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(selected.details["catalog_detection"]["confidence"], "medium")
+        self.assertEqual(selected.serial_number, "")
+        self.assertEqual(selected.capabilities, ())
+        self.assertTrue(driver.support_marker(variant_key=selected.variant_key).read_only)
+        with explicit_catalog_entry("lvyuan_ty_sic_6_5kbe_w1"):
+            self.assertIsNone(await driver.async_probe(transport, driver.probe_targets[0]))
+        generic = await driver.async_probe(transport, driver.probe_targets[0])
+        for raw, expected in cases:
+            transport.response = raw
+            before = len(transport.calls)
+            result = await driver.async_read_values(transport, selected)
+            self.assertEqual(result.values["battery_voltage"], expected)
+            self.assertNotIn("battery_soc", result.values)
+            capture = await driver.async_capture_support_evidence(transport, selected)
+            self.assertEqual(capture["q1_status_evidence"], result.diagnostics["q1_status_evidence"])
+            self.assertEqual(capture["q1_status_evidence"]["battery_voltage_scale"], 24)
+            self.assertNotIn("battery_voltage", (await driver.async_read_values(transport, generic)).values)
+            self.assertEqual(len(transport.calls) - before, 3)
+        transport.response = OWNER.replace(b"2.34", b"56.2")
+        with explicit_catalog_entry("vs10048amn_q1_24_cell"):
+            self.assertIsNone(await driver.async_probe(transport, driver.probe_targets[0]))
+        result = await driver.async_read_values(transport, selected)
+        self.assertEqual(result.mode, DriverReadMode.FULL)
+        self.assertEqual(result.values, EXPECTED)  # a different format never becomes 1348.8 V
+        self.assertNotIn("battery_voltage_scale", result.diagnostics["q1_status_evidence"])
+        self.assertNotIn("eybond_q1", {d.key for d in iter_drivers("auto")})
+        with self.assertRaisesRegex(Q1Error, "unsupported_command"):
+            await Q1Session(transport, driver.probe_targets[0].link_route).request("I")
+
     async def test_manual_detection_and_no_live_identity_fields(self):
         from custom_components.eybond_local.runtime.driver_detection import async_detect_inverter
         transport = Replay()
@@ -167,7 +207,7 @@ class DriverTests(unittest.IsolatedAsyncioTestCase):
                     cancelled.set()
 
         with self.assertRaises(TimeoutError):
-            await Q1Session(Hung(), EybondQ1Driver.probe_targets[0].link_route, timeout=0.01).read_status()
+            await Q1Session(Hung(), EybondQ1Driver().probe_targets[0].link_route, timeout=0.01).read_status()
         self.assertTrue(cancelled.is_set())
         self.assertEqual(calls, [STATUS_REQUEST])
 

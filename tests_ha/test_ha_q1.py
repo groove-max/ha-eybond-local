@@ -12,6 +12,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.eybond_local.const import DOMAIN
 from custom_components.eybond_local.drivers.eybond_q1 import EybondQ1Driver
 from custom_components.eybond_local.flows.common.connection_form import driver_selector
+from custom_components.eybond_local.metadata.explicit_selection import explicit_catalog_entry
 from custom_components.eybond_local.models import CollectorInfo, RuntimeSnapshot
 from custom_components.eybond_local.payload.q1 import STATUS_REQUEST, Q1Error
 from custom_components.eybond_local.telemetry import TypedTelemetryFrame, fold_driver_telemetry
@@ -19,10 +20,11 @@ from synthetic import SYNTHETIC_COLLECTOR_IP, SYNTHETIC_COLLECTOR_PN, SYNTHETIC_
 
 
 @pytest.mark.parametrize("mode", ["read_only", "full"])
-async def test_manual_q1_entities_archive_failure_and_reload(hass, fake_runtime, monkeypatch, mode):
+@pytest.mark.parametrize("map_key", ["", "vs10048amn_q1_24_cell"])
+async def test_manual_q1_entities_archive_failure_and_reload(hass, fake_runtime, monkeypatch, mode, map_key):
     from conftest import FakeRuntimeManager
 
-    response = b"(249.6 000.0 234.5 000 60.0 2.34 30.0 10000000\r"
+    response = b"(233.4 000.0 234.7 001 60.0 2.16 30.0 10000000\r"
     assert driver_selector()("eybond_q1") == "eybond_q1"
     assert next(option["label"] for option in driver_selector().config["options"]
                 if option["value"] == "eybond_q1") == "Q1-compatible (experimental; read-only)"
@@ -33,11 +35,12 @@ async def test_manual_q1_entities_archive_failure_and_reload(hass, fake_runtime,
 
         async def async_send_payload(self, payload, *, route, request_timeout=None):
             assert payload == STATUS_REQUEST, "No additional dialect/setting commands"
-            assert route == EybondQ1Driver.probe_targets[0].link_route
+            assert route == driver.probe_targets[0].link_route
             return response[:-1] if self.fail else response
 
     driver, transport = EybondQ1Driver(), Transport()
-    inverter = await driver.async_probe(transport, driver.probe_targets[0])
+    with explicit_catalog_entry(map_key):
+        inverter = await driver.async_probe(transport, driver.probe_targets[0])
     assert inverter is not None
 
     async def refresh(self, *, poll_interval=None):
@@ -67,7 +70,7 @@ async def test_manual_q1_entities_archive_failure_and_reload(hass, fake_runtime,
             "connection_strategy": "callback_on_demand", "endpoint_control_policy": "external",
             "detected_driver": driver.key, "detected_model": inverter.model_name,
             "detected_serial": "", "detection_confidence": "high",
-        }, options={"poll_interval": 30, "poll_mode": "manual"})
+        }, options={"poll_interval": 30, "poll_mode": "manual", "device_catalog_entry_key": map_key})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -78,8 +81,12 @@ async def test_manual_q1_entities_archive_failure_and_reload(hass, fake_runtime,
     def entity_id(key):
         return registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{key}")
 
-    expected = {"grid_voltage": 249.6, "output_voltage": 234.5, "load_percent": 0,
+    expected = {"grid_voltage": 233.4, "output_voltage": 234.7, "load_percent": 1,
                 "q1_frequency": 60, "temperature": 30}
+    if map_key:
+        expected["battery_voltage"] = 51.84
+    else:
+        assert entity_id("battery_voltage") is None
     ids = {key: entity_id(key) for key in expected}
     for key, value in expected.items():
         assert ids[key] is not None
@@ -88,7 +95,7 @@ async def test_manual_q1_entities_archive_failure_and_reload(hass, fake_runtime,
     inverter_device = registry.async_get(ids["output_voltage"]).device_id
     assert not [e for e in registry.entities.values() if e.device_id == inverter_device
                 and e.domain in {"number", "select", "switch", "binary_sensor"}]
-    for key in ("battery_voltage", "battery_soc", "output_power", "pv_power", "battery_power",
+    for key in ("battery_soc", "output_power", "pv_power", "battery_power",
                 "grid_frequency", "output_frequency", "operating_mode",
                 "estimated_load_energy_daily", "estimated_pv_energy_daily"):
         assert entity_id(key) is None
@@ -100,7 +107,8 @@ async def test_manual_q1_entities_archive_failure_and_reload(hass, fake_runtime,
         assert raw["capture_kind"] == "q1_read_only"
         assert raw["responses_hex"]["Q1"] == response.hex()
         evidence = raw["q1_status_evidence"]
-        assert evidence["battery_voltage_unscaled"] == 2.34
+        assert evidence["battery_voltage_unscaled"] == 2.16
+        assert evidence.get("battery_voltage_scale") == (24 if map_key else None)
         assert evidence["status_flags"] == "10000000"
         assert evidence["field_map_verification"] == "experimental_replay_only"
         assert SYNTHETIC_COLLECTOR_PN not in archive.read("support_bundle.json").decode()
@@ -115,6 +123,17 @@ async def test_manual_q1_entities_archive_failure_and_reload(hass, fake_runtime,
     transport.fail = False
     await entry.runtime_data.async_refresh()
     await hass.async_block_till_done()
-    assert float(hass.states.get(ids["output_voltage"]).state) == 234.5
+    assert float(hass.states.get(ids["output_voltage"]).state) == 234.7
+    if map_key:
+        assert float(hass.states.get(ids["battery_voltage"]).state) == 51.84
+        response = response.replace(b"2.16", b"51.8")
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        assert hass.states.get(ids["battery_voltage"]).state in {"unknown", "unavailable"}
+        assert float(hass.states.get(ids["output_voltage"]).state) == 234.7
+        response = response.replace(b"51.8", b"2.30")
+        await entry.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+        assert float(hass.states.get(ids["battery_voltage"]).state) == 55.2
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()

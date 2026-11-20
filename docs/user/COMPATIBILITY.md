@@ -31,6 +31,12 @@ Not every unit sold under one model name has the same firmware or register map.
 Likewise `VMII-NXPW5KW` is a shared PI30 firmware identity, not a unique brand
 or a reliable power rating. The collector and inverter are different devices.
 
+**VS10048AMN with a 48 V lead-acid bank (24 × 2 V):** if the manual Q1
+driver already shows the five basic readings, open **Configure → Choose
+experimental inverter map → VS10048AMN (Q1, 48 V / 24 × 2 V)** to add battery
+voltage from the same poll. The generic Q1 driver does not infer cell count.
+Do not select this map for another model just because it answers Q1.
+
 ## If your model is not listed
 
 Try normal discovery and check the identified driver and live readings. Do not

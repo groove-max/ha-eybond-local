@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "model_key": "panda_vs10048amn",
+  "manufacturer": "Panda (retail brand)",
+  "model": "VS10048AMN",
+  "aliases": [],
+  "lifecycle": "experimental",
+  "variants": [{
+    "variant_key": "vs10048amn_24_cell",
+    "label": "Q1 read-only, 48 V lead-acid bank (24 cells)",
+    "device_descriptor_keys": ["vs10048amn_q1_24_cell"],
+    "known_firmware": []
+  }],
+  "validation": {"hardware": "captured", "telemetry": "partial", "controls": "none"},
+  "coverage": {
+    "runtime_control_surface": "read_only",
+    "smartess_control_surface": "unknown",
+    "vendor_register_map": "unknown",
+    "notes": ["The owner confirmed five live Q1 readings; output voltage is line-to-line on this split-phase unit."]
+  },
+  "known_limitations": [
+    "Q1 alone supplies no model identity or cell count. Battery voltage requires explicit selection of the 24-cell map.",
+    "No decoded flags, SOC, current, power, energy or controls. A Q1 response does not qualify the full 09C1 driver."
+  ],
+  "knowledge_summary": "One FC4 Q1 read supplies AC input and output voltages, load percentage, reported AC frequency and temperature. Two owner LCD comparisons support pack voltage for the selected 48 V variant, without another request to the inverter.",
+  "source_keys": ["github_issue_97_vs10048amn"]
+}

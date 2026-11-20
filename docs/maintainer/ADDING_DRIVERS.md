@@ -20,6 +20,16 @@ the unscaled field, fault-voltage field, uninterpreted flags and complete respon
 remain in support evidence. There are no controls, inferred power/energy, SOC,
 status alarms, UART changes or active learning.
 
+For the VS10048AMN with a 48 V bank of 24 lead-acid cells, two
+[paired Q1/LCD observations](https://github.com/groove-max/ha-eybond-local/issues/97#issuecomment-7021589968)
+support scaling the `x.xx` field by 24: 2.30 → 55.20 V (LCD 55.5 V) and
+2.16 → 51.84 V (LCD 51.9 V). Select **Configure → Choose experimental inverter
+map → VS10048AMN (Q1, 48 V / 24 × 2 V)** on the existing entry; no new
+entry, cloud access or learning run is needed. The choice identifies the
+configuration; a Q1 packet alone does not. A later `xx.x` field is not
+scaled. To return to the five basic measurements, clear the experimental map
+and select the generic Q1 driver again (clearing a map returns the driver to Auto).
+
 Probe, poll and support capture each send one `Q1\r` on the captured FC4 route
 `(devcode=1, collector_addr=255)`. The driver uses the existing payload-link,
 read-result, metadata-schema and support-evidence interfaces, with no HA entity

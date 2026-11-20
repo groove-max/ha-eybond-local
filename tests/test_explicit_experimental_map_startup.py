@@ -241,7 +241,7 @@ class PersistedSurfaceGateTests(unittest.TestCase):
         catalog.devices_by_surface = {}
         self.assertFalse(self._may_bind(catalog, "test_surface"))
 
-    def test_real_catalog_blocks_only_the_experimental_surface(self):
+    def test_real_catalog_blocks_both_opt_in_surfaces_from_automatic_binding(self):
         from custom_components.eybond_local.metadata import (
             compiled_detection_catalog as module,
         )
@@ -254,7 +254,7 @@ class PersistedSurfaceGateTests(unittest.TestCase):
             )
         }
         self.assertEqual(
-            blocked, {"lvyuan_ty_sic_6_5kbe_w1_read_only"}
+            blocked, {"lvyuan_ty_sic_6_5kbe_w1_read_only", "vs10048amn_q1_24_cell_read_only"}
         )
 
 if __name__ == "__main__":

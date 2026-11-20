@@ -566,6 +566,25 @@
    "layouts": []
   },
   {
+   "key": "eybond_q1",
+   "transport_key": "eybond_q1",
+   "probe_timeout": 5,
+   "probe_targets": [{"devcode": 1, "collector_addr": 255, "device_addr": 1}],
+   "probe_actions": [
+    {
+     "key": "q1.status",
+     "kind": "ascii_command",
+     "command": "Q1",
+     "parser_key": "q1.status",
+     "cost": 1,
+     "timeout": 4,
+     "optional": false,
+     "evidence_fields": [{"key": "shape.q1_battery_decimals", "source_key": "battery_decimals"}]
+    }
+   ],
+   "layouts": []
+  },
+  {
    "key": "eybond_09c1",
    "transport_key": "eybond_09c1",
    "probe_timeout": 16,
@@ -1440,6 +1459,10 @@
     "Bounded read-only MP/Q1/MD/F/RB FC4 evidence only. F/RB are optional runtime reads, not detection prerequisites. No raw UART, auxiliary query or write command."
    ]
   },
+  "eybond_q1": {
+   "ranges": [],
+   "notes": ["One read-only Q1 over FC4; no model identification, settings or flag decoding."]
+  },
   "eybond_09c1": {
    "ranges": [],
    "notes": [
@@ -2071,6 +2094,17 @@
    "tier": "full",
    "read_only": false,
    "support_capture_policy": "eybond_g_ascii"
+  },
+  {
+   "key": "vs10048amn_q1_24_cell_read_only",
+   "protocol_key": "eybond_q1",
+   "driver_key": "eybond_q1",
+   "variant_key": "vs10048amn_24_cell",
+   "profile_name": "",
+   "register_schema_name": "eybond_q1/models/vs10048amn_24_cell.json",
+   "tier": "partial",
+   "read_only": true,
+   "support_capture_policy": "eybond_q1"
   },
   {
    "key": "eybond_09c1_read_only",
@@ -3464,6 +3498,20 @@
      "SmartValue shadow-learning evidence from the same device correlated 36 cloud write attempts to 12 local G-ASCII setting commands without applying them to the inverter."
     ],
     "confidence": "offline-fingerprint-user-reported-model"
+   }
+  },
+  {
+   "entry_key": "vs10048amn_q1_24_cell",
+   "surface_key": "vs10048amn_q1_24_cell_read_only",
+   "model_name": "VS10048AMN (Q1, 48 V / 24 × 2 V)",
+   "priority": 80,
+   "provisional_identity": true,
+   "explicit_selection_only": true,
+   "provisional_reason": "A valid Q1 reply cannot identify the inverter or battery configuration. Only the owner can select this model and 24-cell interpretation.",
+   "anchors": [{"key": "shape.q1_battery_decimals", "equals": 2, "required": true}],
+   "provenance": {
+    "sources": ["Issue #97: 2.30 vs 55.5 V on LCD; 2.16 vs 51.9 V on LCD with four 12 V lead-acid batteries in series. Other Q1 models and battery configurations are not qualified."],
+    "confidence": "owner-lcd-comparison-read-only"
    }
   },
   {

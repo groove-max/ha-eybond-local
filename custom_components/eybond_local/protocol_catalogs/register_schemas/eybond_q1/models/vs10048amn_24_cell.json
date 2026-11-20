@@ -1,0 +1,8 @@
+{
+  "extends": "../base.json",
+  "schema_key": "eybond_q1_vs10048amn_24_cell",
+  "title": "VS10048AMN — 48 V, 24-cell Q1 read map",
+  "measurement_descriptions": [
+    {"key": "battery_voltage", "name": "Battery Voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"}
+  ]
+}

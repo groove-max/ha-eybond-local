@@ -12,8 +12,10 @@ the GitHub release body should be rendered from the matching version section her
 - Add a manual-only **Q1-compatible (experimental; read-only)** driver for the
   captured Q1-only device in #97. One FC4 `Q1` request supplies input/output
   voltage, load percentage, reported AC frequency and temperature. Battery
-  scaling and status-bit meanings remain unqualified and are kept in support
-  evidence only. No controls, inferred power/energy or additional probes are
+  scaling is opt-in only: **Choose experimental inverter map → VS10048AMN
+  (Q1, 48 V / 24 × 2 V)** adds pack voltage for the owner's confirmed
+  24-cell configuration. The generic map never scales voltage and neither map
+  interprets the status bits. No controls, inferred power/energy or additional probes are
   enabled, and automatic full-09C1 identification is unchanged.
 
 ### Fixed

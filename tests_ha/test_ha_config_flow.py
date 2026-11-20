@@ -632,8 +632,9 @@ async def test_terminal_exception_rolls_back_only_this_flows_claim(
     await hass.config_entries.async_unload(boot.entry_id)
     await hass.async_block_till_done()
 
+@pytest.mark.parametrize("entry_key", ["lvyuan_ty_sic_6_5kbe_w1", "vs10048amn_q1_24_cell"])
 async def test_experimental_map_save_and_reset_are_effective_after_real_reload(
-    hass: HomeAssistant, collector_entry: MockConfigEntry, fake_runtime, monkeypatch,
+    hass: HomeAssistant, collector_entry: MockConfigEntry, fake_runtime, monkeypatch, entry_key,
 ) -> None:
     """The saved map/reset choices must be the ones the reloaded runtime runs.
 
@@ -650,11 +651,7 @@ async def test_experimental_map_save_and_reset_are_effective_after_real_reload(
     )
 
     catalog = load_compiled_detection_catalog()
-    entry_key = next(
-        descriptor.key
-        for descriptor in catalog.devices.values()
-        if descriptor.explicit_selection_only
-    )
+    assert catalog.devices[entry_key].explicit_selection_only
     map_driver = catalog.surfaces[catalog.devices[entry_key].surface_key].driver_key
 
     received: list[str] = []
