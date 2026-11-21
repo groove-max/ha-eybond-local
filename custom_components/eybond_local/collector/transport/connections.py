@@ -255,7 +255,7 @@ class _CollectorConnection:
 
             try:
                 empty_replies = self._empty_forward_replies
-                empty_replies.record(decode_header(frame))
+                empty_replies.record(decode_header(frame), payload)
                 try:
                     await self._async_write(frame, owner=owner, trace=trace)
                 except BaseException:
@@ -623,6 +623,13 @@ class _CollectorConnection:
                     header = frame.header
                     payload = frame.wire[HEADER_SIZE:]
                 else:
+                    if padding_boundary is not None:
+                        prefix = await read(self._empty_forward_replies.read_padding_prefix(
+                            prefix, padding_boundary, reader.readexactly,
+                            timeout=_FRAMED_HEADER_COMPLETION_TIMEOUT,
+                        ))
+                        if not prefix:
+                            continue
                     try:
                         header_bytes = prefix + await read(asyncio.wait_for(
                             reader.readexactly(HEADER_SIZE - len(prefix)),
@@ -1305,7 +1312,7 @@ class _CollectorAtConnection:
                 self._pending_framed_parameter[tid] = payload[0]
             try:
                 empty_replies = self._empty_forward_replies
-                empty_replies.record(decode_header(frame))
+                empty_replies.record(decode_header(frame), payload)
                 try:
                     await self._async_write(frame, owner=owner, trace=trace)
                 except BaseException:
@@ -1671,6 +1678,13 @@ class _CollectorAtConnection:
                         header = frame.header
                         payload = frame.wire[HEADER_SIZE:]
                     else:
+                        if padding_boundary is not None:
+                            prefix = await read(self._empty_forward_replies.read_padding_prefix(
+                                prefix, padding_boundary, reader.readexactly,
+                                timeout=_FRAMED_HEADER_COMPLETION_TIMEOUT,
+                            ))
+                            if not prefix:
+                                continue
                         header_tail = await read(self._read_mixed_frame_tail(
                             reader,
                             HEADER_SIZE - len(prefix),
