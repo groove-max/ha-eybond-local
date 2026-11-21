@@ -44,9 +44,9 @@ class RecoveryCoordinator(CoordinatorManagementMixin, DataUpdateCoordinator):
             return self.snapshot
 
 
-@pytest.mark.parametrize("reply", [b"", b"\x01\x06\x01\xa9"])
+@pytest.mark.parametrize("reply_size", [0, 4])
 @pytest.mark.parametrize("following_write_also_short", [False, True])
-async def test_eq_error_releases_lock_for_next_select_without_resending(hass, reply, following_write_also_short):
+async def test_eq_error_releases_lock_for_next_select_without_resending(hass, reply_size, following_write_also_short):
     name = "modbus_smg/models/anenji_4200_protocol_1.json"
     profile = load_driver_profile(name)
     target = ProbeTarget(1, 255, 1)
@@ -62,10 +62,10 @@ async def test_eq_error_releases_lock_for_next_select_without_resending(hass, re
         async def async_send_payload(self, payload, *, route):
             if payload[1] in (6, 16):
                 self.writes.append(payload)
-                if int.from_bytes(payload[2:4], "big") == 425:
-                    return reply
-                if following_write_also_short and len(self.writes) == 2:
-                    return reply
+                if int.from_bytes(payload[2:4], "big") == 425 or (
+                    following_write_also_short and len(self.writes) == 2
+                ):
+                    return payload[:reply_size]  # Empty or truncated echo for this register.
             return await super().async_send_payload(payload, route=route)
 
     transport = Transport(registers={322: 1}, command_responses=None, probe_target=target)
@@ -94,15 +94,16 @@ async def test_eq_error_releases_lock_for_next_select_without_resending(hass, re
             await asyncio.wait_for(hass.services.async_call(
                 "button", "press", {"entity_id": button.entity_id}, blocking=True,
             ), timeout=2)
-        assert "FC06, register 425" in str(caught.value)
-        assert f"{len(reply)} response bytes" in str(caught.value)
+        assert "FC16, register 425" in str(caught.value)
+        assert f"{reply_size} response bytes" in str(caught.value)
         assert "was not resent" in str(caught.value)
         assert not coordinator._runtime_operation_lock.locked()
         assert hub._write_blockers == {}
         assert len(transport.writes) == 1
+        assert transport.writes[0][1:4] == bytes.fromhex("1001a9")
         assert hass.states.get(select.entity_id).state == "Flooded"
         if following_write_also_short:
-            with pytest.raises((ValueError, HomeAssistantError), match="register 322"):
+            with pytest.raises((ValueError, HomeAssistantError), match="FC16, register 322"):
                 await asyncio.wait_for(hass.services.async_call(
                     "select", "select_option", {"entity_id": select.entity_id, "option": "Flooded"},
                     blocking=True,
@@ -116,7 +117,7 @@ async def test_eq_error_releases_lock_for_next_select_without_resending(hass, re
             blocking=True,
         ), timeout=2)
         assert len(transport.writes) == (3 if following_write_also_short else 2)
-        assert int.from_bytes(transport.writes[-1][2:4], "big") == 322
+        assert all(write[1:4] == bytes.fromhex("100142") for write in transport.writes[1:])
         assert not coordinator._runtime_operation_lock.locked()
         assert hub._write_blockers == {}
     finally:
