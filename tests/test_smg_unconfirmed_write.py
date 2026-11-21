@@ -40,11 +40,11 @@ class UnconfirmedWriteTests(unittest.IsolatedAsyncioTestCase):
                     writes = 0
                     reads = 0
 
-                    def _handle_write_single(self, payload):
+                    def _handle_write_multiple(self, payload):
                         self.writes += 1
                         self.last_write = payload
                         if apply_write:
-                            super()._handle_write_single(payload)
+                            super()._handle_write_multiple(payload)
                         return b""
 
                     def _handle_read_holding(self, payload):
@@ -63,7 +63,7 @@ class UnconfirmedWriteTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(ModbusError, "response_too_short"):
                     await driver.async_write_capability(device, inverter, "battery_type", "Flooded", runtime_state=state)
                 self.assertEqual(device.writes, 1)
-                self.assertEqual(device.last_write.hex(), "010601420001e9e2")
+                self.assertEqual(device.last_write.hex(), "0110014200010200017872")
                 self.assertEqual(device.reads, 0)  # no hidden recovery traffic
                 trace = write_confirmation_diagnostics(state)[WRITE_CONFIRMATION_DIAGNOSTIC_KEY]
                 self.assertEqual(trace["capability_key"], "battery_type")
@@ -95,13 +95,14 @@ class UnconfirmedWriteTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(error=type(error).__name__):
                 state = {}
                 session = AsyncMock()
-                session.write_single_holding.side_effect = error
+                session.write_holding.side_effect = error
                 with patch.object(SmgModbusDriver, "_session", return_value=session):
                     with self.assertRaises(type(error)):
                         await SmgModbusDriver().async_write_capability(
                             object(), inverter, "battery_type", "Flooded", runtime_state=state,
                         )
-                self.assertEqual(session.write_single_holding.await_count, 1)
+                session.write_holding.assert_awaited_once_with(322, [1])
+                session.write_single_holding.assert_not_awaited()
                 session.read_holding.assert_not_awaited()
                 trace = write_confirmation_diagnostics(state)[WRITE_CONFIRMATION_DIAGNOSTIC_KEY]
                 self.assertEqual(trace["write_status"], expected)

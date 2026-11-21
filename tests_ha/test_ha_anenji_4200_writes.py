@@ -61,11 +61,11 @@ async def controls(hass):
             super().__init__(registers=registers, command_responses=None, probe_target=inverter.probe_target)
             self.writes, self.reject = [], False
 
-        def _handle_write_single(self, payload):
+        def _handle_write_multiple(self, payload):
             self.writes.append(payload)
             if self.reject:
                 raise ModbusError("exception_code:3")
-            response = super()._handle_write_single(payload)
+            response = super()._handle_write_multiple(payload)
             register = int.from_bytes(payload[2:4], "big")
             if register == 322:
                 # Device-owned side effect, never restored by HA automatically.
@@ -74,8 +74,8 @@ async def controls(hass):
                 self._registers[425] = 0  # Momentary action, no persistent-state assertion.
             return response
 
-        def _handle_write_multiple(self, payload):
-            raise AssertionError("These two controls must use FC06, not FC16")
+        def _handle_write_single(self, payload):
+            raise AssertionError("These two controls must use FC16, not FC06")
 
     device = Device()
     hub = HubManagementMixin()
@@ -121,7 +121,7 @@ async def test_type_write_refreshes_device_side_effects_and_eq_requires_enabled_
     assert hass.states.get(c.select.entity_id).state == "Flooded"
     assert c.coordinator.data.runtime_value("battery_bulk_voltage") == 28.2
     assert len(c.device.writes) == 1
-    assert c.device.writes[0][:6] == bytes.fromhex("010601420001")
+    assert c.device.writes[0][:-2] == bytes.fromhex("011001420001020001")
     assert hass.states.get(c.button.entity_id).state == "unavailable"
     # HA skips an unavailable target; the runtime must also reject a direct call.
     await hass.services.async_call("button", "press", {"entity_id": c.button.entity_id}, blocking=True)
@@ -134,7 +134,7 @@ async def test_type_write_refreshes_device_side_effects_and_eq_requires_enabled_
     assert hass.states.get(c.button.entity_id).state != "unavailable"
     await hass.services.async_call("button", "press", {"entity_id": c.button.entity_id}, blocking=True)
     assert len(c.device.writes) == 2
-    assert c.device.writes[1][:6] == bytes.fromhex("010601a90001")
+    assert c.device.writes[1][:-2] == bytes.fromhex("011001a90001020001")
     assert c.device._registers[425] == 0
 
 
@@ -150,7 +150,7 @@ async def test_write_guard_rechecks_type_after_ui_was_available(hass, controls):
     assert c.device.writes == []
 
 
-async def test_rejected_type_is_not_published_or_retried_with_fc16(hass, controls):
+async def test_rejected_type_is_not_published_or_retried_with_another_function(hass, controls):
     c = controls
     c.device.reject = True
     with pytest.raises((ValueError, HomeAssistantError), match="Modbus exception 03"):

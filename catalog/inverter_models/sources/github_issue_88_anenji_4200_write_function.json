@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "source_key": "github_issue_88_anenji_4200_write_function",
+  "kind": "github_issue",
+  "title": "Anenji 4200 Protocol 1 owner A/B comparison of battery-type writes",
+  "reference": "https://github.com/groove-max/ha-eybond-local/issues/88#issuecomment-7068173634",
+  "captured_at": "2026-11-21",
+  "visibility": "public",
+  "summary": "The owner reports an empty FC06 response at register 322 on 8ab3664 and successful changes on patched beta.5. That driver's write_holding path used FC16 despite the declared FC06; this also corrects the attribution of the earlier register-425 observation. No successful FC16 packet capture or completed equalization cycle was reported.",
+  "assertions": ["control_behavior", "write_validation"]
+}

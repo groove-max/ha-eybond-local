@@ -154,7 +154,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
 - Validation: hardware captured, telemetry confirmed, controls partial
 - Coverage: runtime device_scoped_overlay, cloud device_scoped_overlay, vendor map documented
   - Coverage notes:
-    - The November 8 follow-up to #88 confirms the owner's patched HA writes for battery type (322/FC06, six choices) and LCD acceptance of the momentary EQ command (425/FC06), with the battery disconnected. These built-in controls remain untested and opt-in; an EQ charging cycle was not validated.
+    - Issue #88: the owner verified six battery-type choices (322) and LCD acceptance of immediate EQ (425) with the battery disconnected on a patched beta.5. The driver used FC16 (0x10), not the FC06 declared by the patch. A later explicit FC06 battery-type write returned no data. Successful writes were not wire-captured; these controls remain opt-in and a complete EQ cycle was not validated.
     - Issue #88 adds a model-scoped, still-untested built-in overlay from the single-output 24 V owner's LCD/control report. It does not promote the layout-11 Anenji 4200 or all 0925 devices.
     - The common runtime surface comes from the documented classic SMG RS232 V1 map; the observed register-184 value 1 is separate runtime identity evidence.
     - Full cloud shadow-learning correlated 77 cloud write attempts and activated eight device-scoped learned controls; writes were captured but intentionally not applied.
@@ -172,7 +172,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
   - Voltage/SOC dependency formulas still need verification against the original manual. Program 46 uses the owner's observed 0-500 A LCD range, not a universal SMG limit. Unknown programs 25/42 remain unmapped.
   - Runtime telemetry is confirmed by user support archives.
   - Full shadow-learning completed and activated eight device-scoped learned controls; the learning proxy intentionally captured but did not apply cloud writes, so direct Home Assistant write/readback validation is still pending.
-- Evidence: 8 source(s)
+- Evidence: 9 source(s)
 
 ### Anenji — ANJ-6200-48PL (`anenji_anj_6200_48pl`)
 

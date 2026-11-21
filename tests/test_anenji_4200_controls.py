@@ -88,7 +88,9 @@ class Anenji4200ControlTests(unittest.IsolatedAsyncioTestCase):
     def test_followup_controls_are_opt_in_not_promoted_to_auto_or_read_only(self):
         for key in ("battery_type", "equalization_activate_now"):
             cap = self.profile.get_capability(key)
-            self.assertEqual(cap.write_function, 6)
+            self.assertEqual(cap.write_function, 16)
+            sibling = load_driver_profile("modbus_smg/models/smg_variant_4200.json")
+            self.assertEqual(sibling.get_capability(key).write_function, 6)
             self.assertFalse(cap.enabled_default)
             self.assertFalse(cap.tested)
             self.assertTrue(cap.advanced)
@@ -152,7 +154,7 @@ class Anenji4200ControlTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             encode_capability_words(self.profile.get_capability("charge_source_priority"), 0)
 
-    async def test_six_battery_types_use_fc06_and_match_normal_readback(self):
+    async def test_six_battery_types_use_fc16_and_match_normal_readback(self):
         inverter = self.inverter()
         registers = dict.fromkeys(range(800), 0)
         registers.update({171: 0x3501, 184: 1, 322: 6})
@@ -175,7 +177,7 @@ class Anenji4200ControlTests(unittest.IsolatedAsyncioTestCase):
             await driver.async_write_capability(transport, inverter, cap.key, label)
             writes = [p for p in wire if p[1] in (6, 16)]
             self.assertEqual(len(writes), 1)
-            self.assertEqual(writes[0][:6], bytes.fromhex("01060142") + raw.to_bytes(2, "big"))
+            self.assertEqual(writes[0][:-2], bytes.fromhex("01100142000102") + raw.to_bytes(2, "big"))
             self.assertTrue(any(p[1:6] == bytes.fromhex("0301420001") for p in wire))
             result = await driver.async_read_values(transport, inverter)
             self.assertEqual(result.values["battery_type"], label)
@@ -185,7 +187,7 @@ class Anenji4200ControlTests(unittest.IsolatedAsyncioTestCase):
                 await driver.async_write_capability(transport, inverter, cap.key, invalid)
         self.assertEqual(wire, [])
 
-    async def test_eq_action_is_single_fc06_without_persistent_readback_or_extra_poll(self):
+    async def test_eq_action_is_single_fc16_without_persistent_readback_or_extra_poll(self):
         inverter = self.inverter()
         registers = dict.fromkeys(range(800), 0)
         registers.update({171: 0x3501, 184: 1, 322: 1, 313: 1})
@@ -202,7 +204,7 @@ class Anenji4200ControlTests(unittest.IsolatedAsyncioTestCase):
         driver = SmgModbusDriver()
         await driver.async_write_capability(transport, inverter, "equalization_activate_now", None)
         self.assertEqual(len(wire), 1)
-        self.assertEqual(wire[0][:6], bytes.fromhex("010601a90001"))
+        self.assertEqual(wire[0][:-2], bytes.fromhex("011001a90001020001"))
         wire.clear()
         await driver.async_read_values(transport, inverter)
         for payload in wire:
