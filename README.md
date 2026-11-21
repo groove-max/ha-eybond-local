@@ -90,6 +90,7 @@ Create a **Support Archive** from **Configure → Diagnostics and service tools*
 
 - [EyeBond Local Card](https://github.com/groove-max/ha-eybond-local-card) — an optional dashboard, not required for the integration.
 - [ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector) — community collector firmware for supported wired inverters. It does not supply vendor-cloud features.
+- [iSolar EyeBond USB Bridge](https://github.com/tac2sc/isolar-eybond-bridge-addon) - Home Assistant app that connects supported SRNE/EASUN inverters with USB interface to EyeBond Local by emulating an EyeBond TCP collector. Tested with EASUN iSolar SMX-II.
 
 ## Documentation
 
