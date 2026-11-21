@@ -386,6 +386,16 @@ def _write_readback_matches(
     if readback_value == written_value or readback_value == requested_value:
         return True
 
+    if capability.value_kind == "bool" and type(readback_value) is str:
+        # Some register schemas expose a physical switch as "On"/"Off",
+        # whereas the corresponding writable capability uses True/False.
+        # Normalize only these two explicit labels, not arbitrary truthy text.
+        normalized = {"On": True, "Off": False}.get(readback_value)
+        if normalized is not None and (
+            normalized == written_value or normalized == requested_value
+        ):
+            return True
+
     if type(readback_value) is int and capability.enum_value_map:
         label = capability.enum_value_map.get(readback_value)
         if label is not None and label in (requested_value, written_value):

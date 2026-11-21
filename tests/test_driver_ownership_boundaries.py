@@ -509,19 +509,25 @@ class TypedWorkflowBoundaryGuard(unittest.TestCase):
         )
 
 
-# --- Follow-up fix 3: read-only SRNE does not opt into write classification ----
+# --- SRNE exact-model write errors are classified; family stays write-denied ---
 
 
-class SrneReadOnlyClassificationGuard(unittest.TestCase):
-    def test_srne_does_not_inherit_modbus_write_error_mixin(self) -> None:
-        self.assertNotIsInstance(SrneModbusDriver(), ModbusWriteErrorMixin)
-        self.assertNotIn(ModbusWriteErrorMixin, SrneModbusDriver.__mro__)
+class SrneExactModelClassificationGuard(unittest.TestCase):
+    def test_srne_exact_control_path_uses_modbus_write_error_mixin(self) -> None:
+        self.assertIsInstance(SrneModbusDriver(), ModbusWriteErrorMixin)
+        self.assertIn(ModbusWriteErrorMixin, SrneModbusDriver.__mro__)
 
-    def test_srne_classification_is_empty_for_modbus_exception(self) -> None:
-        classification = SrneModbusDriver().classify_write_error(
-            _capability(), ModbusError("exception_code:1"), operating_mode="Off-Grid"
+    def test_srne_classifies_a_supported_profile_register_error(self) -> None:
+        from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
+
+        capability = load_driver_profile("srne_modbus/smx_ii.json").get_capability(
+            "output_priority"
         )
-        self.assertTrue(classification.is_empty)
+        classification = SrneModbusDriver().classify_write_error(
+            capability, ModbusError("exception_code:1"), operating_mode="Off-Grid"
+        )
+        self.assertFalse(classification.is_empty)
+        self.assertEqual(classification.blocker.code, "illegal_function")
 
     def test_write_capable_modbus_drivers_still_classify(self) -> None:
         from custom_components.eybond_local.drivers.modbus_catalog import ModbusCatalogDriver
@@ -533,6 +539,7 @@ class SrneReadOnlyClassificationGuard(unittest.TestCase):
             MustPvPh18Driver(),
             SmartEssLocalDriver(),
             ModbusCatalogDriver(),
+            SrneModbusDriver(),
         ):
             self.assertIsInstance(driver, ModbusWriteErrorMixin, msg=driver.key)
 
