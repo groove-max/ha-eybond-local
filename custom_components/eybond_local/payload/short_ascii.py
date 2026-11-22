@@ -79,12 +79,24 @@ def parse_f(frame: bytes) -> dict[str, object]:
     }
 
 
+def _mp_label(table: dict[int, str], code: int) -> str:
+    return table.get(code, str(code))
+
+
+# Choice rows publish the known string for 0 and 1. Any other code stays decimal
+# so a single unknown byte does not drop the rest of the frame, including byte 8.
+_RH_MAINS_AUTO_START = {0: "Allow automatic startup", 1: "Do not allow automatic startup"}
+_RH_CLOCK_SWITCH = {0: "Do not enable time control", 1: "Enable time control"}
+_RH_AC_OUTPUT_ENHANCE = {0: "Prohibit enhanced mode", 1: "Enable enhanced mode"}
+
+
 def parse_rh(frame: bytes) -> dict[str, object]:
     """Qualified RH settings block: 27-byte body, sum8, trailing CR.
 
-    Live proxy captures match vendor 19B4 segment-5 length/checksum. Only the
-    BMS current-display-accuracy enum (``rh_crtu_39``) is decoded: ``0`` =
-    without decimals, ``1`` = with decimals. Other RH fields stay unpublished.
+    Live proxy captures match vendor 19B4 segment-5 length/checksum. Byte 8 is
+    BMS current display accuracy (``0`` without decimals, ``1`` with decimals).
+    Bytes 10, 11, and 13 publish the known string for 0 or 1 and the decimal
+    otherwise. Byte 12 is the integer switch count. Reserved bytes stay unpublished.
     """
     _envelope(frame, length=30, status=True)
     body = frame[1:-2]
@@ -93,7 +105,13 @@ def parse_rh(frame: bytes) -> dict[str, object]:
     accuracy = body[8]
     if accuracy not in (0, 1):
         raise ShortAsciiError("short_ascii_rh_field")
-    return {"short_ascii_bms_current_display_accuracy": accuracy}
+    return {
+        "short_ascii_bms_current_display_accuracy": accuracy,
+        "rh_mains_auto_start": _mp_label(_RH_MAINS_AUTO_START, body[10]),
+        "rh_clock_switch": _mp_label(_RH_CLOCK_SWITCH, body[11]),
+        "rh_battery_priority_switch_count": body[12],
+        "rh_ac_output_enhance": _mp_label(_RH_AC_OUTPUT_ENHANCE, body[13]),
+    }
 
 
 def parse_rb(frame: bytes) -> dict[str, object]:

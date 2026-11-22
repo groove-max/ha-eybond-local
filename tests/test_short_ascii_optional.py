@@ -76,10 +76,12 @@ class OptionalPayloadTests(unittest.TestCase):
     def test_rh_parses_display_accuracy_and_rejects_corrupt_frames(self):
         self.assertEqual(parse_rh(_rh(accuracy=1)), {
             "short_ascii_bms_current_display_accuracy": 1,
+            "rh_mains_auto_start": "Allow automatic startup",
+            "rh_clock_switch": "Do not enable time control",
+            "rh_battery_priority_switch_count": 0,
+            "rh_ac_output_enhance": "Prohibit enhanced mode",
         })
-        self.assertEqual(parse_rh(_rh(accuracy=0)), {
-            "short_ascii_bms_current_display_accuracy": 0,
-        })
+        self.assertEqual(parse_rh(_rh(accuracy=0))["short_ascii_bms_current_display_accuracy"], 0)
         # Live proxy capture (RH=1, remaining settings zero).
         live = bytes.fromhex(
             "01000000000000000001000000000000000000000000000000000000010d"
@@ -97,6 +99,14 @@ class OptionalPayloadTests(unittest.TestCase):
         wire[-2] ^= 1
         with self.assertRaises(ShortAsciiError):
             parse_rh(bytes(wire))
+
+    def test_rh_unknown_mains_auto_start_keeps_accuracy(self):
+        frame = bytearray(_rh(accuracy=1))
+        frame[11] = 2  # body[10]
+        frame[-2] = sum(frame[1:-2]) & 255
+        values = parse_rh(bytes(frame))
+        self.assertEqual(values["short_ascii_bms_current_display_accuracy"], 1)
+        self.assertEqual(values["rh_mains_auto_start"], "2")
 
     def test_rb_current_scale_matches_documented_decimal_fields(self):
         values = parse_rb(_rb(charge_raw=294, discharge_raw=1510))
