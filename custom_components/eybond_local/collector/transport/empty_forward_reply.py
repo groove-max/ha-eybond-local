@@ -120,7 +120,16 @@ class EmptyForwardReplyWindow:
             )
         except asyncio.TimeoutError as exc:
             raise BinaryFramingError("collector_empty_forward_padding_timeout") from exc
-        if header + tail != bytes(segment_length):
+        segment = header + tail
+        if segment != bytes(segment_length):
+            # The first nonzero byte is an observation, not proof that the
+            # preceding zeros were padding. Do not read ahead or log payload.
+            logger.debug(
+                "Invalid suffix after empty FC4 tid=%d consumed_padding_bytes=%d "
+                "expected_zero_boundary=%d first_nonzero_offset=%d",
+                boundary.tid, boundary.consumed_bytes, target,
+                boundary.consumed_bytes + len(segment) - len(segment.lstrip(b"\x00")),
+            )
             raise BinaryFramingError("collector_empty_forward_padding_invalid")
         logger.debug(
             "Consumed fixed%d-zero suffix of correlated empty FC4; no inverter result",

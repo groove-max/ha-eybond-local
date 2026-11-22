@@ -632,6 +632,8 @@ async def async_detect_inverter_candidates(
                     match=_build_driver_match(driver, inverter),
                 )
             )
+            logger.debug("Deep detection found candidate driver=%s elapsed_ms=%d; "
+                         "selection pending", driver.key, elapsed_ms)
         else:
             # None from async_probe is NOT evidence of an answer: drivers
             # swallow read timeouts internally. Only the transport-observed

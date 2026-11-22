@@ -114,6 +114,28 @@ class PaddedEmptyReplyTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(w.closed)
                     self.assertIsNone(c.last_framed_exchange_monotonic)
 
+    async def test_invalid_suffix_logs_offset_not_payload_or_inferred_length(self):
+        for consumed, width, offset in ((0, 29, 18), (29, 16, 10)):
+            window = EmptyForwardReplyWindow()
+            window.record(decode_header(frame(15)))
+            self.assertTrue(window.consume(decode_header(frame(15, empty=True)), {}))
+            if consumed:
+                await window.async_consume_padding(
+                    bytes(8), window.take_padding_boundary(), AsyncMock(return_value=bytes(21)),
+                    timeout=1,
+                )
+            segment = bytes(offset) + b"x" * (width - offset)
+            with self.assertLogs(
+                "custom_components.eybond_local.collector.transport.empty_forward_reply", level="DEBUG",
+            ) as logs, self.assertRaisesRegex(ValueError, "^collector_empty_forward_padding_invalid$"):
+                await window.async_consume_padding(
+                    segment[:8], window.take_padding_boundary(), AsyncMock(return_value=segment[8:]),
+                    timeout=1,
+                )
+            self.assertEqual(logs.records[-1].getMessage(),
+                             f"Invalid suffix after empty FC4 tid=15 consumed_padding_bytes={consumed} "
+                             f"expected_zero_boundary={consumed + width} first_nonzero_offset={consumed + offset}")
+
     async def test_padding_permission_is_single_use_and_keeps_original_deadline(self):
         window = EmptyForwardReplyWindow()
         path = "custom_components.eybond_local.collector.transport.empty_forward_reply.monotonic"

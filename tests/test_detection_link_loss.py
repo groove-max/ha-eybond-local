@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from custom_components.eybond_local.models import ProbeTarget
+from custom_components.eybond_local.models import DetectedInverter, ProbeTarget
 from custom_components.eybond_local.runtime.driver_detection import (
     DriverSweepNoMatch, async_detect_inverter, async_detect_inverter_candidates,
 )
@@ -80,6 +80,35 @@ class DetectionLinkLossTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(DriverSweepNoMatch):
                 await async_detect_inverter(SimpleNamespace(connected=True), driver_hint="auto")
         self.assertEqual(len(calls), 2)
+
+    async def test_candidate_before_disconnect_is_logged_but_not_selected(self):
+        transport = SimpleNamespace(connected=True)
+
+        class Match:
+            key = protocol_family = "modbus_smg"
+            signature_timeout = 0
+            probe_timeout = 1
+            probe_targets = (ProbeTarget(1, 255, 1),)
+
+            async def async_probe(self, _, target):
+                return DetectedInverter(driver_key=self.key, protocol_family=self.protocol_family,
+                                        model_name="family", serial_number="private-serial", probe_target=target)
+
+        class Interrupt(Match):
+            key = "other"
+
+            async def async_probe(self, _, target):
+                transport.connected = False
+                return None
+
+        logger = "custom_components.eybond_local.runtime.driver_detection"
+        with patch(logger + ".iter_drivers", return_value=(Match(), Interrupt())), self.assertLogs(
+            logger, level="DEBUG",
+        ) as logs, self.assertRaisesRegex(RuntimeError, "^collector_disconnected$"):
+            await async_detect_inverter_candidates(transport, driver_hint="auto")
+        messages = [record.getMessage() for record in logs.records if "selection pending" in record.getMessage()]
+        self.assertEqual(len(messages), 1)
+        self.assertRegex(messages[0], r"^Deep detection found candidate driver=modbus_smg elapsed_ms=\d+; selection pending$")
 
 
 if __name__ == "__main__":
