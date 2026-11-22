@@ -1,4 +1,7 @@
-"""Vendor 19B4 segment-4 semantics for an already framed MPPT runtime reply.
+"""Vendor 19B4 segment-4 semantics for framed MPPT replies.
+
+0200 is the runtime sample. 0202 settings are decoded only by
+``parse_mppt_settings_wire``. Device Control MP is not decoded here.
 
 This module cannot find a TCP boundary, admit a session or send a query. AABB
 and EyeBond can overlap on the wire; the caller must establish the grammar
@@ -119,6 +122,45 @@ def parse_mppt_runtime(frame: BinaryFrame) -> MpptRuntimeSample:
         total_energy_kwh=word(17) / 10,
         fault_code=wire[19],
     )
+
+
+_MPPT_SETTINGS_BATTERY = {
+    0: "LEAD Battery",
+    1: "FLD Battery",
+    2: "GEL Battery",
+    3: "Li Battery",
+    4: "USE",
+}
+
+
+def parse_mppt_settings_wire(wire: bytes) -> dict[str, object]:
+    """Decode one checksum-valid AABB/0202 settings reply.
+
+    The two subtype bytes are the XML reserved pair. The next bytes are the
+    MPPT's own charge settings, not the inverter MP menu and not 0200 telemetry.
+    Constant-voltage, float, lamp undervoltage, and lamp recovery are
+    big-endian tenths of a volt.
+    """
+
+    if type(wire) is not bytes:
+        raise ValueError("mppt_frame_contract_invalid")
+    validate_aabb_frame(wire)
+    if wire[2:4] != b"\x02\x02":
+        raise ValueError("mppt_not_settings")
+
+    def word(offset: int) -> int:
+        return int.from_bytes(wire[offset:offset + 2], "big")
+
+    battery = wire[5]
+    return {
+        "mppt_settings_charge_current": wire[4],
+        "mppt_settings_battery_type": _MPPT_SETTINGS_BATTERY.get(battery, str(battery)),
+        "mppt_settings_constant_voltage": word(6) / 10,
+        "mppt_settings_float_voltage": word(8) / 10,
+        "mppt_settings_lamp_current": wire[10],
+        "mppt_settings_lamp_undervoltage": word(11) / 10,
+        "mppt_settings_lamp_recovery_voltage": word(13) / 10,
+    }
 
 
 def parse_mppt_runtime_wire(wire: bytes) -> MpptRuntimeSample:

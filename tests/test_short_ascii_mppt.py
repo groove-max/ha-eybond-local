@@ -18,7 +18,7 @@ from custom_components.eybond_local.collector.transport.binary_framing import (
     runtime_eybond_header_error,
 )
 from custom_components.eybond_local.payload.short_ascii_mppt import (
-    MpptFault, MpptWorkMode, parse_mppt_runtime,
+    MpptFault, MpptWorkMode, parse_mppt_runtime, parse_mppt_settings_wire,
 )
 from tools.decode_short_ascii_mppt import decode_assumed_runtime, main
 
@@ -75,6 +75,31 @@ class MpptRuntimeTests(unittest.TestCase):
             self.assertEqual(sample.mppt_battery_voltage_v, raw / 10)
             self.assertEqual(sample.total_energy_kwh, raw / 10)
             self.assertFalse(hasattr(sample, "available"))
+
+    def test_settings_0202_constant_voltage_is_not_runtime_battery_voltage(self):
+        # USE, constant 56.0 V, float 53.6 V. Checksum covers bytes 2..19.
+        body = bytearray(18)
+        body[0:2] = b"\x02\x02"
+        body[2] = 80
+        body[3] = 4
+        body[4:6] = (560).to_bytes(2, "big")
+        body[6:8] = (536).to_bytes(2, "big")
+        body[8] = 15
+        body[9:11] = (222).to_bytes(2, "big")
+        body[11:13] = (246).to_bytes(2, "big")
+        wire = b"\xaa\xbb" + bytes(body) + bytes([sum(body) & 255])
+        values = parse_mppt_settings_wire(wire)
+        self.assertEqual(values, {
+            "mppt_settings_charge_current": 80,
+            "mppt_settings_battery_type": "USE",
+            "mppt_settings_constant_voltage": 56.0,
+            "mppt_settings_float_voltage": 53.6,
+            "mppt_settings_lamp_current": 15,
+            "mppt_settings_lamp_undervoltage": 22.2,
+            "mppt_settings_lamp_recovery_voltage": 24.6,
+        })
+        with self.assertRaises(ValueError):
+            parse_mppt_runtime(BinaryFrame(BinaryGrammar.AABB, wire))
 
     def test_settings_and_unknown_subtypes_are_not_runtime(self):
         for subtype in (0x0202, 0x0201, 0xFFFF):

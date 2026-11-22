@@ -103,7 +103,7 @@ Documented read queries (auxiliary allow-list) are exactly:
 - runtime: `5a a5 02 00` + 16 zero bytes + `02`
 - settings: `5a a5 02 02` + 16 zero bytes + `04`
 
-Optional live MPPT uses only the runtime query
+Optional live MPPT sends the runtime query. The same admission sends the settings query on an idle cycle
 (`drivers/short_ascii_mppt_optional.py`).
 
 ## MIXED admission and claims

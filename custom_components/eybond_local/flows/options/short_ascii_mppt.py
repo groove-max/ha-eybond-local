@@ -1,4 +1,4 @@
-"""Options step that writes short-ASCII auxiliary 0200 admission."""
+"""Options step that admits PV 0200, Device Control MP, and MPPT settings 0202."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from ...const import CONF_ADMIT_SHORT_ASCII_MPPT, DEFAULT_ADMIT_SHORT_ASCII_MPPT
 
 
 class ShortAsciiMpptOptionsMixin:
-    """Admit or revoke the short-ASCII auxiliary 0200 poll for this entry."""
+    """Admit or revoke PV 0200, Device Control MP, and settings 0202 for this entry."""
 
     async def async_step_short_ascii_mppt(
         self, user_input: dict[str, Any] | None = None,

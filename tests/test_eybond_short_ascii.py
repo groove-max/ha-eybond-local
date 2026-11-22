@@ -167,13 +167,98 @@ class ShortAsciiPayloadTests(unittest.TestCase):
             with self.assertRaises(ShortAsciiError):
                 parse_q1(_q1(bytes(body)))
 
-    def test_mp_qualifies_shape_only_without_interpreting_settings(self):
+    def test_mp_interprets_each_setting_from_its_byte(self):
         frame = _responses()["MP"]
         self.assertIn(b"\r", frame[:-1])
-        self.assertEqual(parse_mp(frame), {"short_ascii_mp_length": 38})
+        shaped = parse_mp(frame)
+        self.assertEqual(shaped["short_ascii_mp_length"], 38)
+        # Fixture body[3] == 3 would have been 0.3 V. Tenths in one byte stop at 25.5 V.
+        self.assertNotIn(0.3, shaped.values())
+        self.assertEqual(set(shaped), {
+            "short_ascii_mp_length",
+            "mp_operating_mode",
+            "mp_battery_type",
+            "mp_mains_charge_current",
+            "mp_buzzer",
+            "mp_energy_saving_percent",
+            "mp_frequency_setting",
+            "mp_mains_charge_allowed",
+            "mp_mains_frequency_low",
+            "mp_mains_frequency_high",
+            "mp_short_circuit_restart",
+            "mp_generator_mode",
+            "mp_solar_charge_current_limit",
+        })
         for bad in (frame[:-1], frame + b"\r", b"\x02" + frame[1:]):
             with self.assertRaises(ShortAsciiError):
                 parse_mp(bad)
+
+        body = bytearray(35)
+        body[1] = 6
+        body[2] = 5
+        body[3] = 3
+        body[4] = 134
+        body[5] = 40
+        body[6] = 1
+        body[7] = 15
+        body[9] = 50
+        body[10] = 124
+        body[11] = 110
+        body[12] = 2
+        body[15] = 45
+        body[16] = 65
+        body[17] = 100
+        body[18] = 90
+        body[19] = 8
+        body[21] = 160
+        body[22] = 7
+        body[23] = 105
+        body[25] = 30
+        parsed = parse_mp(b"\x01" + bytes(body) + b"\x00\r")
+        self.assertEqual(parsed, {
+            "short_ascii_mp_length": 38,
+            "mp_operating_mode": "Priority given to increasing the presence of solar energy",
+            "mp_battery_type": "LFP",
+            "mp_mains_charge_current": 40,
+            "mp_buzzer": "ON",
+            "mp_energy_saving_percent": 15,
+            "mp_frequency_setting": 50,
+            "mp_mains_charge_allowed": "AUTO",
+            "mp_mains_frequency_low": 45,
+            "mp_mains_frequency_high": 65,
+            "mp_short_circuit_restart": "8",
+            "mp_generator_mode": "7",
+            "mp_solar_charge_current_limit": 30,
+        })
+
+    def test_mp_omits_one_byte_ac_voltage_settings(self):
+        body = bytearray(35)
+        body[8] = 230
+        body[9] = 60
+        body[13] = 230
+        body[14] = 230
+        body[15] = 45
+        body[16] = 65
+        parsed = parse_mp(b"\x01" + bytes(body) + b"\x00\r")
+        self.assertNotIn(230, parsed.values())
+        self.assertEqual(set(parsed), {
+            "short_ascii_mp_length",
+            "mp_operating_mode",
+            "mp_battery_type",
+            "mp_mains_charge_current",
+            "mp_buzzer",
+            "mp_energy_saving_percent",
+            "mp_frequency_setting",
+            "mp_mains_charge_allowed",
+            "mp_mains_frequency_low",
+            "mp_mains_frequency_high",
+            "mp_short_circuit_restart",
+            "mp_generator_mode",
+            "mp_solar_charge_current_limit",
+        })
+        self.assertEqual(parsed["mp_frequency_setting"], 60)
+        self.assertEqual(parsed["mp_mains_frequency_low"], 45)
+        self.assertEqual(parsed["mp_mains_frequency_high"], 65)
 
     def test_md_is_firmware_not_serial_and_padding_is_not_free_form(self):
         for firmware in (b"S2-8127-260101-V7.00", b"S2-8127-260202-V7.3B"):
