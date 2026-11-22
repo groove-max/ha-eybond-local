@@ -82,6 +82,13 @@ locally, see [Write Controls learning](LEARNING.md). A rejected or unconfirmed
 write needs read-back and diagnostics, not arbitrary wider limits or repeated
 commands. Avoid simultaneous changes from HA and the vendor app.
 
+On the **Anenji 4200 (Protocol 1)** profile, programs **08** (nominal output
+voltage) and **09** (nominal output frequency) are editable only when the
+inverter reports **Standby**. Check the operating-mode sensor, not just the
+front-panel switch. If the reported mode is **Bypass**, both selectors stay
+unavailable even with the switch off. There is no need to disconnect the
+battery or change bypass settings to test this.
+
 ## After replacing files
 
 Fully restart HA. Keep only the intended integration directory inside

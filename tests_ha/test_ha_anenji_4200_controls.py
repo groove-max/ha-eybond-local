@@ -101,13 +101,13 @@ async def test_upgrade_replaces_numeric_controls_and_applies_live_conditions(has
     assert hass.states.get(ids["equalization_activate_now"]).state == "unavailable"
     assert hass.states.get(ids["battery_equalization_time"]).state == "unavailable"
     assert hass.states.get(ids["battery_equalization_mode"]).state == "unavailable"
-    for mode in ("Line", "Fault", "Power On", None, "Standby"):
+    for mode in ("Line", "Fault", "Power On", None, "Standby", "Bypass", "Standby"):
         values["operating_mode"] = mode
         values["configuration_safe_mode"] = True  # Broader flag is NOT proof of Standby.
         await entry.runtime_data.async_refresh()
         await hass.async_block_till_done()
-        expected = "230 V" if mode == "Standby" else "unavailable"
-        assert hass.states.get(ids["output_rating_voltage"]).state == expected
+        for key, active in (("output_rating_voltage", "230 V"), ("output_rating_frequency", "50 Hz")):
+            assert hass.states.get(ids[key]).state == (active if mode == "Standby" else "unavailable")
     values["battery_type"] = "Flooded"
     await entry.runtime_data.async_refresh()
     await hass.async_block_till_done()
