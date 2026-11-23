@@ -18,6 +18,7 @@ from custom_components.eybond_local.drivers.smg import (  # noqa: E402
     SmgModbusDriver,
     _apply_capability_read_back,
     _decode_block,
+    _derive_runtime_states,
     _read_optional_specs,
     _support_capture_ranges,
 )
@@ -63,6 +64,175 @@ def _register_map_for_ranges(ranges: tuple[tuple[int, int], ...]) -> dict[int, i
         for register in range(start, start + count):
             registers[register] = register & 0xFFFF
     return registers
+
+
+class SmgMainsBatteryLoadClassificationTests(unittest.TestCase):
+    """Regression coverage for ANENJI Mains-mode load presentation."""
+
+    _ANENJI_VARIANT = "anenji_anj_5kw_48v_wifi"
+
+    @staticmethod
+    def _values(
+        *,
+        operating_mode: str = "Mains",
+        battery_average_power: object = 0.0,
+        pv_power: object = 0.0,
+    ) -> dict[str, object]:
+        return {
+            "operating_mode": operating_mode,
+            "battery_connected": True,
+            "battery_average_power": battery_average_power,
+            "output_power": 850.0,
+            "grid_power": 854.0,
+            "pv_power": pv_power,
+        }
+
+    def _states(
+        self,
+        values: dict[str, object],
+        *,
+        variant_key: str = _ANENJI_VARIANT,
+    ) -> dict[str, object]:
+        return _derive_runtime_states(values, variant_key=variant_key)
+
+    def test_anenji_mains_uses_50_w_inclusive_load_supply_threshold(self) -> None:
+        cases = (
+            (0.0, "Utility", "Idle", False),
+            (-10.0, "Utility", "Idle", False),
+            (-19.0, "Utility", "Idle", False),
+            (-20.0, "Utility", "Discharging", True),
+            (-38.0, "Utility", "Discharging", True),
+            (-49.9, "Utility", "Discharging", True),
+            (-50.0, "Utility + Battery", "Supplying Load", True),
+            (-50.1, "Utility + Battery", "Supplying Load", True),
+            (-150.0, "Utility + Battery", "Supplying Load", True),
+        )
+
+        for power, load_supply, battery_role, discharging in cases:
+            with self.subTest(power=power):
+                values = self._values(battery_average_power=power)
+                states = self._states(values)
+
+                self.assertEqual(values["battery_average_power"], power)
+                self.assertEqual(states["battery_discharging"], discharging)
+                self.assertEqual(states["load_supply_state"], load_supply)
+                self.assertEqual(states["battery_role_state"], battery_role)
+                self.assertEqual(states["site_mode_state"], f"Grid-Connected via {load_supply}")
+
+    def test_anenji_mains_small_discharge_oscillation_keeps_load_states_stable(self) -> None:
+        for power in (0.0, -38.0, 0.0, -38.0, 0.0):
+            with self.subTest(power=power):
+                values = self._values(battery_average_power=power)
+                states = self._states(values)
+
+                self.assertEqual(values["battery_average_power"], power)
+                self.assertEqual(states["load_supply_state"], "Utility")
+                self.assertNotEqual(states["battery_role_state"], "Supplying Load")
+                self.assertNotIn("Utility + Battery", states["power_flow_summary"])
+
+    def test_power_flow_summary_matches_the_mains_load_policy(self) -> None:
+        small_discharge = self._states(self._values(battery_average_power=-38.0))
+        material_discharge = self._states(self._values(battery_average_power=-50.0))
+
+        self.assertEqual(
+            small_discharge["power_flow_summary"],
+            "Load: Utility | Battery: Discharging | Utility: Supplying Load",
+        )
+        self.assertEqual(
+            material_discharge["power_flow_summary"],
+            "Load: Utility + Battery | Battery: Supplying Load | Utility: Supplying Load",
+        )
+
+    def test_anenji_off_grid_discharge_is_unchanged(self) -> None:
+        for power in (-38.0, -500.0, -2174.0):
+            with self.subTest(power=power):
+                states = self._states(
+                    self._values(
+                        operating_mode="Off-Grid",
+                        battery_average_power=power,
+                    )
+                )
+
+                self.assertTrue(states["battery_discharging"])
+                self.assertEqual(states["load_supply_state"], "Battery")
+                self.assertEqual(states["battery_role_state"], "Supplying Load")
+                self.assertEqual(states["site_mode_state"], "Off-Grid on Battery")
+
+    def test_anenji_pv_and_charging_states_remain_consistent(self) -> None:
+        small_mains = self._states(
+            self._values(battery_average_power=-38.0, pv_power=300.0)
+        )
+        material_mains = self._states(
+            self._values(battery_average_power=-50.0, pv_power=300.0)
+        )
+        off_grid = self._states(
+            self._values(
+                operating_mode="Off-Grid",
+                battery_average_power=-38.0,
+                pv_power=300.0,
+            )
+        )
+        off_grid_pv = self._states(
+            self._values(
+                operating_mode="Off-Grid",
+                battery_average_power=0.0,
+                pv_power=300.0,
+            )
+        )
+        charging = self._states(self._values(battery_average_power=100.0))
+
+        self.assertEqual(small_mains["load_supply_state"], "Utility + PV")
+        self.assertEqual(small_mains["battery_role_state"], "Discharging")
+        self.assertEqual(material_mains["load_supply_state"], "Utility + PV + Battery")
+        self.assertEqual(material_mains["battery_role_state"], "Supplying Load")
+        self.assertEqual(off_grid["load_supply_state"], "PV + Battery")
+        self.assertEqual(off_grid["battery_role_state"], "Supplying Load")
+        self.assertEqual(off_grid_pv["load_supply_state"], "PV")
+        self.assertEqual(off_grid_pv["battery_role_state"], "Idle")
+        self.assertTrue(charging["battery_charging"])
+        self.assertEqual(charging["battery_role_state"], "Charging")
+        self.assertEqual(charging["load_supply_state"], "Utility")
+
+    def test_unavailable_values_and_negative_zero_do_not_create_load_supply(self) -> None:
+        for power, discharging in (
+            (None, False),
+            ("unavailable", False),
+            (-0.0, False),
+            (-49.9999999, True),
+        ):
+            with self.subTest(power=power):
+                states = self._states(self._values(battery_average_power=power))
+
+                self.assertEqual(states["battery_discharging"], discharging)
+                self.assertEqual(states["load_supply_state"], "Utility")
+                self.assertEqual(
+                    states["battery_role_state"],
+                    "Discharging" if discharging else "Idle",
+                )
+
+    def test_disconnected_or_delayed_battery_measurements_do_not_fabricate_supply(self) -> None:
+        disconnected = self._values(battery_average_power=None)
+        disconnected["battery_connected"] = False
+        delayed = self._values(battery_average_power=None)
+        delayed.pop("output_power")
+
+        disconnected_states = self._states(disconnected)
+        delayed_states = self._states(delayed)
+
+        self.assertEqual(disconnected_states["battery_role_state"], "Disconnected")
+        self.assertEqual(disconnected_states["load_supply_state"], "Utility")
+        self.assertEqual(delayed_states["output_state"], "Unknown")
+        self.assertEqual(delayed_states["load_supply_state"], "Idle")
+
+    def test_other_smg_variants_keep_the_existing_20_w_mains_behavior(self) -> None:
+        states = self._states(
+            self._values(battery_average_power=-38.0),
+            variant_key="default",
+        )
+
+        self.assertTrue(states["battery_discharging"])
+        self.assertEqual(states["load_supply_state"], "Utility + Battery")
+        self.assertEqual(states["battery_role_state"], "Supplying Load")
 
 
 class SmgSupportCaptureRangeTests(unittest.TestCase):

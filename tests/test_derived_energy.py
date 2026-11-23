@@ -109,6 +109,13 @@ class DerivedEnergyTests(unittest.TestCase):
             ),
             315.0,
         )
+        self.assertEqual(
+            compute_derived_power(
+                {"battery_average_power": -38.0},
+                descriptions["estimated_battery_discharge_energy"],
+            ),
+            38.0,
+        )
 
     def test_compute_derived_power_uses_signed_grid_power_for_import_export(self) -> None:
         descriptions = {
