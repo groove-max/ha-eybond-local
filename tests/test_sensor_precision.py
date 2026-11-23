@@ -361,6 +361,64 @@ class SensorPrecisionTests(unittest.TestCase):
             },
         )
 
+    def test_anenji_small_mains_discharge_keeps_power_flow_attributes_stable(self) -> None:
+        from custom_components.eybond_local.drivers.smg import _derive_runtime_states
+
+        coordinator = _FakeCoordinator("power_flow_summary", "")
+        coordinator.data.inverter = types.SimpleNamespace(
+            variant_key="anenji_anj_5kw_48v_wifi"
+        )
+        description = MeasurementDescription(
+            key="power_flow_summary", name="Power flow"
+        )
+        sensor = EybondValueSensor(coordinator, description)
+        observed = []
+        for battery_power in (0.0, -38.0, 0.0):
+            values = {
+                "operating_mode": "Mains",
+                "battery_connected": True,
+                "output_power": 850.0,
+                "grid_power": 854.0,
+                "pv_power": 0.0,
+                "battery_average_power": battery_power,
+            }
+            states = _derive_runtime_states(
+                values, variant_key="anenji_anj_5kw_48v_wifi"
+            )
+            coordinator.data.values = {**values, **states}
+            observed.append((sensor.native_value, sensor.extra_state_attributes))
+            self.assertEqual(states["battery_power_direction"],
+                             "Discharging" if battery_power < 0 else "Idle")
+        self.assertEqual(observed[0], observed[1])
+        self.assertEqual(observed[1], observed[2])
+        self.assertNotIn("battery_direction", observed[0][1])
+
+        # Preserve the original attribute for other variants.
+        coordinator.data.inverter.variant_key = "default"
+        values["battery_average_power"] = -38.0
+        states = _derive_runtime_states(values, variant_key="default")
+        coordinator.data.values = {**values, **states}
+        self.assertEqual(sensor.extra_state_attributes["battery_direction"], "Discharging")
+        self.assertEqual(states["battery_role_state"], "Supplying Load")
+
+        # At the inclusive 50 W boundary, the ANENJI summary exposes it.
+        coordinator.data.inverter.variant_key = "anenji_anj_5kw_48v_wifi"
+        values["battery_average_power"] = -50.0
+        states = _derive_runtime_states(
+            values, variant_key="anenji_anj_5kw_48v_wifi"
+        )
+        coordinator.data.values = {**values, **states}
+        self.assertEqual(sensor.extra_state_attributes["battery_direction"], "Discharging")
+
+        # Off-Grid keeps the original battery-direction presentation.
+        values["battery_average_power"] = -38.0
+        values["operating_mode"] = "Off-Grid"
+        states = _derive_runtime_states(
+            values, variant_key="anenji_anj_5kw_48v_wifi"
+        )
+        coordinator.data.values = {**values, **states}
+        self.assertEqual(sensor.extra_state_attributes["battery_direction"], "Discharging")
+
     def test_explicit_precision_overrides_float_fallback(self) -> None:
         coordinator = _FakeCoordinator("battery_voltage", 52.0)
         description = MeasurementDescription(

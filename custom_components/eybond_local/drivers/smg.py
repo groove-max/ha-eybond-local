@@ -1931,6 +1931,8 @@ def _battery_role_state(
             return "Charging from PV + Utility"
         return "Charging"
     if battery_discharging:
+        if battery_supplying_load is False:
+            return "Idle"
         if load_active and (
             battery_discharging
             if battery_supplying_load is None

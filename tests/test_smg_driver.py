@@ -100,9 +100,9 @@ class SmgMainsBatteryLoadClassificationTests(unittest.TestCase):
             (0.0, "Utility", "Idle", False),
             (-10.0, "Utility", "Idle", False),
             (-19.0, "Utility", "Idle", False),
-            (-20.0, "Utility", "Discharging", True),
-            (-38.0, "Utility", "Discharging", True),
-            (-49.9, "Utility", "Discharging", True),
+            (-20.0, "Utility", "Idle", True),
+            (-38.0, "Utility", "Idle", True),
+            (-49.9, "Utility", "Idle", True),
             (-50.0, "Utility + Battery", "Supplying Load", True),
             (-50.1, "Utility + Battery", "Supplying Load", True),
             (-150.0, "Utility + Battery", "Supplying Load", True),
@@ -127,8 +127,12 @@ class SmgMainsBatteryLoadClassificationTests(unittest.TestCase):
 
                 self.assertEqual(values["battery_average_power"], power)
                 self.assertEqual(states["load_supply_state"], "Utility")
-                self.assertNotEqual(states["battery_role_state"], "Supplying Load")
-                self.assertNotIn("Utility + Battery", states["power_flow_summary"])
+                self.assertEqual(states["battery_role_state"], "Idle")
+                self.assertEqual(states["site_mode_state"], "Grid-Connected via Utility")
+                self.assertEqual(
+                    states["power_flow_summary"],
+                    "Load: Utility | Utility: Supplying Load",
+                )
 
     def test_power_flow_summary_matches_the_mains_load_policy(self) -> None:
         small_discharge = self._states(self._values(battery_average_power=-38.0))
@@ -136,8 +140,10 @@ class SmgMainsBatteryLoadClassificationTests(unittest.TestCase):
 
         self.assertEqual(
             small_discharge["power_flow_summary"],
-            "Load: Utility | Battery: Discharging | Utility: Supplying Load",
+            "Load: Utility | Utility: Supplying Load",
         )
+        self.assertTrue(small_discharge["battery_discharging"])
+        self.assertEqual(small_discharge["battery_power_direction"], "Discharging")
         self.assertEqual(
             material_discharge["power_flow_summary"],
             "Load: Utility + Battery | Battery: Supplying Load | Utility: Supplying Load",
@@ -182,7 +188,7 @@ class SmgMainsBatteryLoadClassificationTests(unittest.TestCase):
         charging = self._states(self._values(battery_average_power=100.0))
 
         self.assertEqual(small_mains["load_supply_state"], "Utility + PV")
-        self.assertEqual(small_mains["battery_role_state"], "Discharging")
+        self.assertEqual(small_mains["battery_role_state"], "Idle")
         self.assertEqual(material_mains["load_supply_state"], "Utility + PV + Battery")
         self.assertEqual(material_mains["battery_role_state"], "Supplying Load")
         self.assertEqual(off_grid["load_supply_state"], "PV + Battery")
@@ -205,10 +211,7 @@ class SmgMainsBatteryLoadClassificationTests(unittest.TestCase):
 
                 self.assertEqual(states["battery_discharging"], discharging)
                 self.assertEqual(states["load_supply_state"], "Utility")
-                self.assertEqual(
-                    states["battery_role_state"],
-                    "Discharging" if discharging else "Idle",
-                )
+                self.assertEqual(states["battery_role_state"], "Idle")
 
     def test_disconnected_or_delayed_battery_measurements_do_not_fabricate_supply(self) -> None:
         disconnected = self._values(battery_average_power=None)

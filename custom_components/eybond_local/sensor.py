@@ -386,6 +386,17 @@ class EybondValueSensor(CoordinatorEntity[EybondLocalCoordinator], SensorEntity)
         if fields:
             values = snapshot.runtime_values()
             for attribute_key, value_key in fields:
+                # Keep small Mains-mode DC discharge visible in its own sensor,
+                # without making the ANENJI power-flow summary change attributes
+                # on every 0 W / -38 W sample. Other models/modes are unchanged.
+                if (
+                    self._description.key == "power_flow_summary"
+                    and attribute_key == "battery_direction"
+                    and getattr(snapshot.inverter, "variant_key", "") == "anenji_anj_5kw_48v_wifi"
+                    and values.get("operating_mode") == "Mains"
+                    and values.get("battery_role_state") == "Idle"
+                ):
+                    continue
                 value = values.get(value_key)
                 if value is None or value == "":
                     continue
