@@ -59,11 +59,56 @@ def parse_md(frame: bytes) -> dict[str, object]:
     }
 
 
+# MP body byte 0 is a leading zero. Menu rows start at byte 1, one byte each.
+# One-byte battery voltage settings stay unpublished: tenths in one byte stop at 25.5 V, and no other scale is established.
+# Frequency rows are the raw number the panel shows.
+# Unknown codes stay decimal.
+_MP_OPERATING_MODE = {
+    1: "Mains priority",
+    2: "Energy saving mode",
+    3: "Battery priority mode",
+    4: "Mains priority unattended mode",
+    5: "Battery priority unattended mode",
+    6: "Priority given to increasing the presence of solar energy",
+    7: "Time controlled mode",
+}
+_MP_BATTERY_TYPE = {
+    0: "LEAD Battery",
+    1: "FLD Battery",
+    2: "GEL Battery",
+    3: "Li Battery",
+    4: "USE",
+    5: "LFP",
+}
+_MP_ON_OFF = {0: "OFF", 1: "ON"}
+_MP_MAINS_CHARGE = {0: "DIS", 1: "EN", 2: "AUTO"}
+
+
+def _mp_label(table: dict[int, str], code: int) -> str:
+    return table.get(code, str(code))
+
+
 def parse_mp(frame: bytes) -> dict[str, object]:
+    """Device Control settings. Body may contain CR; do not truncate it."""
     _envelope(frame, length=38, status=True)
-    # This binary settings block participates in shape qualification only.
-    # Its body may contain CR and arbitrary high bytes; never strip/truncate it.
-    return {"short_ascii_mp_length": len(frame)}
+    body = frame[1:-2]
+    return {
+        "short_ascii_mp_length": len(frame),
+        "mp_operating_mode": _mp_label(_MP_OPERATING_MODE, body[1]),
+        "mp_battery_type": _mp_label(_MP_BATTERY_TYPE, body[2]),
+        "mp_mains_charge_current": body[5],
+        "mp_buzzer": _mp_label(_MP_ON_OFF, body[6]),
+        "mp_energy_saving_percent": body[7],
+        # body[8]: a single byte is not published as an AC voltage.
+        "mp_frequency_setting": body[9],
+        "mp_mains_charge_allowed": _mp_label(_MP_MAINS_CHARGE, body[12]),
+        # body[13], body[14]: a single byte is not published as an AC voltage.
+        "mp_mains_frequency_low": body[15],
+        "mp_mains_frequency_high": body[16],
+        "mp_short_circuit_restart": _mp_label(_MP_ON_OFF, body[19]),
+        "mp_generator_mode": _mp_label(_MP_ON_OFF, body[22]),
+        "mp_solar_charge_current_limit": body[25],
+    }
 
 
 def parse_f(frame: bytes) -> dict[str, object]:
@@ -79,12 +124,20 @@ def parse_f(frame: bytes) -> dict[str, object]:
     }
 
 
+# Choice rows publish the known string for 0 and 1. Any other code stays decimal
+# so a single unknown byte does not drop the rest of the frame, including byte 8.
+_RH_MAINS_AUTO_START = {0: "Allow automatic startup", 1: "Do not allow automatic startup"}
+_RH_CLOCK_SWITCH = {0: "Do not enable time control", 1: "Enable time control"}
+_RH_AC_OUTPUT_ENHANCE = {0: "Prohibit enhanced mode", 1: "Enable enhanced mode"}
+
+
 def parse_rh(frame: bytes) -> dict[str, object]:
     """Qualified RH settings block: 27-byte body, sum8, trailing CR.
 
-    Live proxy captures match vendor 19B4 segment-5 length/checksum. Only the
-    BMS current-display-accuracy enum (``rh_crtu_39``) is decoded: ``0`` =
-    without decimals, ``1`` = with decimals. Other RH fields stay unpublished.
+    Live proxy captures match vendor 19B4 segment-5 length/checksum. Byte 8 is
+    BMS current display accuracy (``0`` without decimals, ``1`` with decimals).
+    Bytes 10, 11, and 13 publish the known string for 0 or 1 and the decimal
+    otherwise. Byte 12 is the integer switch count. Reserved bytes stay unpublished.
     """
     _envelope(frame, length=30, status=True)
     body = frame[1:-2]
@@ -93,7 +146,13 @@ def parse_rh(frame: bytes) -> dict[str, object]:
     accuracy = body[8]
     if accuracy not in (0, 1):
         raise ShortAsciiError("short_ascii_rh_field")
-    return {"short_ascii_bms_current_display_accuracy": accuracy}
+    return {
+        "short_ascii_bms_current_display_accuracy": accuracy,
+        "rh_mains_auto_start": _mp_label(_RH_MAINS_AUTO_START, body[10]),
+        "rh_clock_switch": _mp_label(_RH_CLOCK_SWITCH, body[11]),
+        "rh_battery_priority_switch_count": body[12],
+        "rh_ac_output_enhance": _mp_label(_RH_AC_OUTPUT_ENHANCE, body[13]),
+    }
 
 
 def parse_rb(frame: bytes) -> dict[str, object]:
@@ -165,9 +224,37 @@ Q1_ERROR_LABELS = {
     8: "excess temperature",
     9: "Output low voltage",
     11: "temperature is too low or the temperature control fails",
+    13: "Low temperature shutdown",
     14: "Open fan circuit",
     15: "mains input relay is faulty",
     16: "mains input is too high",
+    19: "Weak/decaying battery or HC function limit",
+    # Extra codes: manual Exx text with E stripped. One Q1 ErrCode byte — no BMS vs
+    # inverter provenance. Both texts are kept for 21 because the wire cannot choose
+    # one (inverter overload discharge protection, and BMS single-core voltage
+    # consistency).
+    21: "Overload discharge protection or single-core voltage consistency",
+    22: "MOSFET high temperature alarm",
+    23: "Low temperature of a single core alarm",
+    24: "Alarm for high temperature of single core",
+    25: "Single-core voltage low alarm",
+    26: "Single-core voltage high alarm",
+    27: "The total voltage of the module is low",
+    28: "The total voltage of the module is high",
+    35: "Intercom error alarms",
+    36: "Discharge over current alarm",
+    37: "Charging over current alarm",
+    38: "Single-core temperature consistency alarm",
+    42: "MOSFET over-temperature protection",
+    43: "Single-core temperature under-temperature protection",
+    44: "Single-core temperature over-temperature protection",
+    45: "Single-core voltage under-voltage protection",
+    46: "Single-core voltage over voltage protection",
+    47: "Module total voltage undervoltage protection",
+    48: "Module total voltage over voltage protection",
+    54: "System fail-safe protection",
+    56: "Discharge over current protection",
+    57: "Charging over current protection",
 }
 
 

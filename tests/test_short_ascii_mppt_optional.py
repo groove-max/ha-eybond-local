@@ -1,4 +1,4 @@
-"""Optional MPPT aux solicitation: documented 0200 only, OptionalSample TTL."""
+"""Optional MPPT aux solicitation: 0200 runtime, separate 0202 settings."""
 
 from __future__ import annotations
 
@@ -139,6 +139,41 @@ class MpptSchemaAdmissionTests(unittest.TestCase):
             self.schema.measurement_description("temperature").name,
         )
 
+    def test_new_mp_rh_and_settings_rows_default_off(self):
+        quiet_on = {"mppt_error_code", "mppt_error", "short_ascii_fault_code", "short_ascii_fault"}
+        gated = (
+            "mp_operating_mode",
+            "mp_battery_type",
+            "mp_mains_charge_current",
+            "mp_buzzer",
+            "mp_energy_saving_percent",
+            "mp_frequency_setting",
+            "mp_mains_charge_allowed",
+            "mp_mains_frequency_low",
+            "mp_mains_frequency_high",
+            "mp_short_circuit_restart",
+            "mp_generator_mode",
+            "mp_solar_charge_current_limit",
+            "rh_mains_auto_start",
+            "rh_clock_switch",
+            "rh_battery_priority_switch_count",
+            "rh_ac_output_enhance",
+            "mppt_settings_charge_current",
+            "mppt_settings_battery_type",
+            "mppt_settings_constant_voltage",
+            "mppt_settings_float_voltage",
+            "mppt_settings_lamp_current",
+            "mppt_settings_lamp_undervoltage",
+            "mppt_settings_lamp_recovery_voltage",
+        )
+        for key in gated:
+            with self.subTest(key=key):
+                self.assertFalse(self.schema.measurement_description(key).enabled_default)
+        for key in quiet_on:
+            with self.subTest(key=key):
+                self.assertTrue(self.schema.measurement_description(key).enabled_default)
+        self.assertTrue(self.schema.binary_sensor_description("inverter_fault").enabled_default)
+
 
 class MpptOptionalReadTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -172,9 +207,36 @@ class MpptOptionalReadTests(unittest.IsolatedAsyncioTestCase):
         for now in (0, 1, 2, 3, 4):
             result = await self.read(now)
         self.assertEqual(self.transport.aux_requests, [])
+        self.assertNotIn(b"MP\x01\r", self.transport.requests)
         self.assertNotIn("pv_power", result.values)
+        self.assertNotIn("mp_operating_mode", result.values)
+        reads = self.state[STATE_KEY]
+        self.assertEqual(reads.mp_values, {})
+        self.assertIsNone(reads.mp_sampled_at)
+        self.assertEqual(reads.mp_next_due, 0)
+        self.assertFalse(reads.mp_failed)
         self.assertIn("MPPT=not_admitted", result.diagnostics["short_ascii_optional_status"])
         self.assertEqual(result.diagnostics.get("short_ascii_mppt_admission"), ADMIT_OPTION_KEY)
+
+    async def test_false_admit_does_not_publish_held_mp_or_0202(self):
+        await self.read(0)
+        reads = self.state[STATE_KEY]
+        reads.mp_values = {"mp_operating_mode": "Mains priority"}
+        reads.mp_sampled_at = 0
+        reads.mppt_settings_values = {"mppt_settings_constant_voltage": 56.0}
+        reads.mppt_settings_sampled_at = 0
+        self.state[ADMIT_OPTION_KEY] = False
+        for sample in reads.samples:
+            sample.next_due = 10_000
+        self.transport.requests.clear()
+        result = await self.read(1)
+        self.assertNotIn(b"MP\x01\r", self.transport.requests)
+        self.assertNotIn("mp_operating_mode", result.values)
+        self.assertNotIn("mppt_settings_constant_voltage", result.values)
+        self.assertEqual(reads.mp_values["mp_operating_mode"], "Mains priority")
+        self.assertEqual(reads.mppt_settings_values["mppt_settings_constant_voltage"], 56.0)
+        self.assertEqual(reads.mp_sampled_at, 0)
+        self.assertEqual(reads.mppt_settings_sampled_at, 0)
 
     async def test_solicits_documented_0200_on_stale_rb_collision(self):
         """Admitted MPPT: first stale RB collision solicits documented 0200."""
@@ -203,12 +265,186 @@ class MpptOptionalReadTests(unittest.IsolatedAsyncioTestCase):
         for key in expired.values:
             self.assertFalse(key.startswith("aabb_last_"))
 
-    async def test_never_sends_settings_0202_even_when_aux_configured(self):
-        self.transport.aux_responses[_settings_query()] = runtime_frame(subtype=0x0202).wire
-        result = await self.read(0)
+    async def test_settings_0202_waits_for_an_idle_cycle_and_a_failure_does_not_poison_0200(self):
+        from custom_components.eybond_local.drivers.short_ascii_mppt_optional import SETTINGS_QUERY_0202
+
+        body = bytearray(18)
+        body[0:2] = b"\x02\x02"
+        body[2] = 80
+        body[3] = 4
+        body[4:6] = (560).to_bytes(2, "big")
+        body[6:8] = (536).to_bytes(2, "big")
+        settings = b"\xaa\xbb" + bytes(body) + bytes([sum(body) & 255])
+        self.transport.aux_responses[SETTINGS_QUERY_0202] = settings
+        busy = await self.read(0)
         self.assertEqual(self.transport.aux_requests, [RUNTIME_QUERY_0200])
-        self.assertNotIn(_settings_query(), self.transport.aux_requests)
-        self.assertEqual(result.values["pv_power"], 370)
+        self.assertNotIn("mppt_settings_constant_voltage", busy.values)
+        self.assertEqual(busy.values["pv_power"], 370)
+        for sample in self.state[STATE_KEY].samples:
+            sample.next_due = 10_000
+        self.state[STATE_KEY].mp_next_due = 10_000
+        self.transport.aux_requests.clear()
+        idle = await self.read(1)
+        self.assertEqual(self.transport.aux_requests, [SETTINGS_QUERY_0202])
+        self.assertEqual(idle.values["mppt_settings_constant_voltage"], 56.0)
+        self.assertEqual(idle.values["pv_power"], 370)
+        self.assertEqual(mppt_health_for(self.state).state, HEALTH_HEALTHY)
+        self.transport.aux_responses.pop(SETTINGS_QUERY_0202)
+        mppt_health_for(self.state).settings_next_due = 0
+        self.transport.aux_requests.clear()
+        failed = await self.read(2)
+        self.assertEqual(failed.diagnostics["mppt_settings_outcome"], "failed")
+        self.assertEqual(mppt_health_for(self.state).state, HEALTH_HEALTHY)
+        self.assertEqual(failed.values["pv_power"], 370)
+        self.assertNotIn("mppt_settings_constant_voltage", failed.values)
+        held = self.state[STATE_KEY]
+        self.assertEqual(held.mppt_settings_values, {})
+        self.assertIsNone(held.mppt_settings_sampled_at)
+
+    async def test_settings_0202_connection_loss_raises_without_poisoning_0200(self):
+        """0202 ConnectionError or a disconnected transport is a link failure."""
+        from custom_components.eybond_local.drivers.short_ascii_mppt_optional import SETTINGS_QUERY_0202
+
+        cases = (
+            ("connection_error", ConnectionError("collector_disconnected"), True),
+            ("disconnected", asyncio.TimeoutError(), False),
+        )
+        for name, failure, connected in cases:
+            with self.subTest(name=name):
+                await self.asyncSetUp()
+                await self.read(0)
+                for sample in self.state[STATE_KEY].samples:
+                    sample.next_due = 10_000
+                self.state[STATE_KEY].mp_next_due = 10_000
+                info = self.transport.collector_info
+                previous_latch = info.mppt_framing_failure_latch
+                info.mppt_framing_failure_latch = "binary_frame_ambiguous"
+                self.transport.aux_responses[SETTINGS_QUERY_0202] = failure
+                self.transport.connected = connected
+                self.transport.aux_requests.clear()
+                try:
+                    with self.assertRaises(ConnectionError) as caught:
+                        await self.read(1)
+                    self.assertEqual(
+                        str(caught.exception), "short_ascii_optional_connection_lost",
+                    )
+                    self.assertEqual(self.transport.aux_requests, [SETTINGS_QUERY_0202])
+                    health = mppt_health_for(self.state)
+                    self.assertEqual(health.state, HEALTH_HEALTHY)
+                    self.assertFalse(health.is_poisoned())
+                    self.assertEqual(
+                        info.mppt_framing_failure_latch, "binary_frame_ambiguous",
+                    )
+                finally:
+                    info.mppt_framing_failure_latch = previous_latch
+
+    async def test_0202_socket_close_backoff_survives_clear_and_health_reset(self):
+        """A closed-socket 0202 failure keeps its deadline on MpptHealth."""
+        from custom_components.eybond_local.drivers.short_ascii_mppt_optional import (
+            SETTINGS_INTERVAL, SETTINGS_QUERY_0202,
+        )
+
+        body = bytearray(18)
+        body[0:2] = b"\x02\x02"
+        body[2] = 80
+        body[3] = 4
+        body[4:6] = (560).to_bytes(2, "big")
+        body[6:8] = (536).to_bytes(2, "big")
+        settings = b"\xaa\xbb" + bytes(body) + bytes([sum(body) & 255])
+        await self.read(0)
+        for sample in self.state[STATE_KEY].samples:
+            sample.next_due = 10_000
+        self.state[STATE_KEY].mp_next_due = 10_000
+        self.transport.aux_responses[SETTINGS_QUERY_0202] = asyncio.TimeoutError()
+        self.transport.connected = False
+        self.transport.aux_requests.clear()
+        with self.assertRaises(ConnectionError) as caught:
+            await self.read(1)
+        self.assertEqual(str(caught.exception), "short_ascii_optional_connection_lost")
+        self.assertEqual(self.transport.aux_requests, [SETTINGS_QUERY_0202])
+        health = mppt_health_for(self.state)
+        self.assertEqual(health.state, HEALTH_HEALTHY)
+        self.assertFalse(health.is_poisoned())
+        self.assertAlmostEqual(health.settings_next_due, 1 + SETTINGS_INTERVAL, delta=2)
+        due = health.settings_next_due
+        health.mark_poisoned()
+        health.mark_healthy()
+        self.assertEqual(health.settings_next_due, due)
+        self.assertEqual(health.state, HEALTH_HEALTHY)
+        self.state[STATE_KEY].clear()
+        self.assertEqual(health.settings_next_due, due)
+        self.state.clear()
+        self.state[HEALTH_KEY] = health
+        self.state[ADMIT_OPTION_KEY] = True
+        self.assertIs(mppt_health_for(self.state), health)
+
+        self.transport.connected = True
+        self.transport.aux_responses[SETTINGS_QUERY_0202] = settings
+        self.transport.aux_requests.clear()
+        await self.read(2)
+        reads = self.state[STATE_KEY]
+        for sample in reads.samples:
+            sample.next_due = due + 10_000
+        reads.mp_next_due = due + 10_000
+        self.transport.aux_requests.clear()
+        early = await self.read(due - 1)
+        self.assertNotIn(SETTINGS_QUERY_0202, self.transport.aux_requests)
+        self.assertNotIn("mppt_settings_outcome", early.diagnostics)
+        self.transport.aux_requests.clear()
+        sent = await self.read(due)
+        self.assertEqual(self.transport.aux_requests, [SETTINGS_QUERY_0202])
+        self.assertEqual(sent.values["mppt_settings_constant_voltage"], 56.0)
+        self.assertEqual(health.state, HEALTH_HEALTHY)
+        self.assertFalse(health.is_poisoned())
+
+    async def test_failed_mp_leaves_the_next_idle_cycle_for_0202(self):
+        """A failed MP stays retryable, but the next due idle slot goes to 0202."""
+        from custom_components.eybond_local.drivers.short_ascii_mppt_optional import SETTINGS_QUERY_0202
+
+        busy = await self.read(0)
+        self.assertEqual(self.transport.aux_requests, [RUNTIME_QUERY_0200])
+        self.assertNotIn(SETTINGS_QUERY_0202, self.transport.aux_requests)
+        for sample in self.state[STATE_KEY].samples:
+            sample.next_due = 10_000
+        self.transport.responses["MP"] = b"NAK\r"
+        self.transport.requests.clear()
+        self.transport.aux_requests.clear()
+        failed = await self.read(1)
+        self.assertEqual(failed.diagnostics["mp_outcome"], "failed")
+        self.assertEqual(self.transport.requests, [b"Q1\x01\r", b"MP\x01\r"])
+        self.assertEqual(self.transport.aux_requests, [])
+        self.assertNotIn("short_ascii:MP", failed.diagnostics["driver_unsupported_commands"])
+        self.assertEqual(mppt_health_for(self.state).state, HEALTH_HEALTHY)
+        # Past the ~30 s failure backoff, so MP is due again and would starve 0202.
+        self.transport.requests.clear()
+        self.transport.aux_requests.clear()
+        yielded = await self.read(40)
+        self.assertEqual(self.transport.requests, [b"Q1\x01\r"])
+        self.assertEqual(self.transport.aux_requests, [SETTINGS_QUERY_0202])
+        self.assertNotIn("mp_outcome", yielded.diagnostics)
+        self.assertEqual(mppt_health_for(self.state).state, HEALTH_HEALTHY)
+
+    async def test_mp_connection_loss_raises(self):
+        """MP ConnectionError or a disconnected transport is a link failure."""
+        cases = (
+            ("connection_error", ConnectionError("collector_disconnected"), True),
+            ("disconnected", asyncio.TimeoutError(), False),
+        )
+        for name, failure, connected in cases:
+            with self.subTest(name=name):
+                await self.asyncSetUp()
+                await self.read(0)
+                for sample in self.state[STATE_KEY].samples:
+                    sample.next_due = 10_000
+                self.transport.responses["MP"] = failure
+                self.transport.connected = connected
+                self.transport.requests.clear()
+                with self.assertRaises(ConnectionError) as caught:
+                    await self.read(1)
+                self.assertEqual(
+                    str(caught.exception), "short_ascii_optional_connection_lost",
+                )
+                self.assertEqual(self.transport.requests, [b"Q1\x01\r", b"MP\x01\r"])
 
     async def test_no_tip_harvest_or_waiter_state(self):
         result = await self.read(0)

@@ -1,8 +1,11 @@
-"""Optional live MPPT via the documented auxiliary 0200 read only.
+"""Optional live MPPT via the documented auxiliary reads.
 
+0200 is live telemetry. 0202 is a separate settings read; ``request_runtime_sample``
+still refuses it so a settings reply cannot be decoded as PV watts.
 Solicits through ``link_transport.async_auxiliary_read`` (framed/AT facade).
-Does not harvest tip AABB, wait on EyeBond TID ambiguity, or merge settings
-0202. The poll stays off until ``admit_short_ascii_mppt`` is true.
+Does not harvest tip AABB or wait on EyeBond TID ambiguity.
+Both polls stay off until ``admit_short_ascii_mppt`` is true.
+Idle Device Control MP uses the same check and stays off until then.
 ``enabled_default: false`` alone only hides entities.
 Live PV/MPPT measurement keys stay opt-in (``enabled_default: false``);
 quiet ``mppt_error_code`` / ``mppt_error`` diagnostics default on in
@@ -16,10 +19,16 @@ import time
 from dataclasses import dataclass
 
 from ..link_transport import async_auxiliary_read
-from ..payload.short_ascii_mppt import mppt_error_label, parse_mppt_runtime_wire
+from ..payload.short_ascii_mppt import (
+    mppt_error_label, parse_mppt_runtime_wire, parse_mppt_settings_wire,
+)
 
 # Exact 21-byte read allow-listed by AuxiliaryReadSession._READ_QUERIES.
 RUNTIME_QUERY_0200 = b"\x5a\xa5\x02\x00" + bytes(16) + b"\x02"
+# Separate allow-listed read. A failed send still closes the shared aux socket
+# inside AuxiliaryReadSession; callers must not also poison 0200 health.
+SETTINGS_QUERY_0202 = b"\x5a\xa5\x02\x02" + bytes(16) + b"\x04"
+SETTINGS_INTERVAL = 300.0
 COMMAND = "MPPT"
 # Config-entry options / runtime_state key. Default absent/false = no poll.
 ADMIT_OPTION_KEY = "admit_short_ascii_mppt"
@@ -58,7 +67,10 @@ HEALTH_POISONED = "poisoned"
 
 
 def is_admitted(runtime_state: dict) -> bool:
-    """True only when the site explicitly admits aux 0200 (not entity enable)."""
+    """True when PV 0200, Device Control MP, and settings 0202 are admitted.
+
+    Entity enable alone does not admit those polls.
+    """
 
     return runtime_state.get(ADMIT_OPTION_KEY) is True
 
@@ -83,6 +95,15 @@ def values_from_reply(wire: bytes) -> dict[str, object]:
     values = {key: getattr(sample, attr) for key, attr in _VALUE_KEYS}
     values["mppt_error"] = mppt_error_label(sample.fault_code)
     return values
+
+
+async def request_settings_sample(transport: object) -> dict[str, object]:
+    """Solicit 0202. Caller isolates failures from the 0200 health machine."""
+
+    wire = await async_auxiliary_read(
+        transport, SETTINGS_QUERY_0202, request_timeout=REQUEST_TIMEOUT,
+    )
+    return parse_mppt_settings_wire(wire)
 
 
 async def request_runtime_sample(transport: object) -> dict[str, object]:
@@ -175,6 +196,8 @@ class MpptHealth:
 
     state: str = HEALTH_HEALTHY
     poisoned_until: float = 0.0  # time.monotonic() deadline while poisoned
+    # 0202 idle backoff, in the driver's clock. Not the 0200 poison.
+    settings_next_due: float = 0.0
 
     def is_poisoned(self, mono: float | None = None) -> bool:
         if self.state != HEALTH_POISONED:

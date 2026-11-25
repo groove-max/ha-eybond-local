@@ -235,8 +235,9 @@ parser awaits inside that guard; do not wrap only the inner socket read of a
 `payload/short_ascii_mppt.py` now decodes an explicitly framed AABB/0200 sample
 into an immutable, unit-labelled value object. It does not choose the grammar,
 send requests, supply a register schema or populate live telemetry. Settings
-0202 are rejected. MPPT voltage/temperature/DC load current remain distinct
-from BMS/reference voltage, main-inverter temperature and AC load power.
+0202 are decoded only by `parse_mppt_settings_wire`. MPPT voltage,
+temperature, and DC load current remain distinct from BMS/reference
+voltage, main-inverter temperature and AC load power.
 Unknown enums remain raw codes; zero/maximum words are decoded wire values,
 not a proved availability or sentinel policy. The sample has no timestamp or
 freshness claim. See the [offline inspector](../../tools/README.md#inspect-a-short-ascii-mppt-frame-offline)
@@ -370,7 +371,11 @@ optional FC4 failures alongside a successful Q1 count towards the shared
 four-strike command cache; the existing re-check action re-enables requests.
 Support Archive capture may include correlated `0200_request` / `0200` hex
 when a framed or AT aux facade is available (user-initiated evidence, not a
-stock poll). The poll runs only when that option is true.
+stock poll). The poll runs only when that option is true. Idle Device Control
+`MP` and settings `0202` use the same option. Without it, `MP` is not sent
+and its hold is left unchanged. With it, a failed `MP` still yields the next
+idle cycle to `0202` when that read is due and `0200` is not poisoned. The
+Device Control MP rows, named RH rows, and `0202` settings rows default off.
 
 An RB reply with zero voltage and zero SOC explicitly withdraws **all** BMS
 measurements/path flags, including nonzero trailing fields seen in the capture.
@@ -402,9 +407,10 @@ diagnostic. Live keys are omitted on link-loss, hard reject, and MPPT soft miss.
   refresh hub freshness with stale V/SoC/I. Checksum/length fail → drop.
   Optional RB TTL remains ~60 s for normal samples.
 
-Live PV is request-gated by `admit_short_ascii_mppt`, which the options flow
-writes, as above; inverter controls remain separate work. Do not report full
-PR/device support based on these fields or a saved-wire replay alone.
+Live PV, Device Control MP, and MPPT settings are request-gated by
+`admit_short_ascii_mppt`, which the options flow writes, as above; inverter
+controls remain separate work. Do not report full PR/device support based on
+these fields or a saved-wire replay alone.
 
 The preferred workflow is:
 

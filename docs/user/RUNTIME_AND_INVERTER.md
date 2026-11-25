@@ -515,8 +515,9 @@ that request is skipped. Use **Re-check supported commands** to try it again,
 for example after connecting a BMS. Missing optional data does not prevent
 basic inverter monitoring.
 
-Stock installs do not poll PV until the options flow admits the short-ASCII
-auxiliary 0200 poll. That step writes `admit_short_ascii_mppt` (off until
+Stock installs do not poll PV, Device Control MP, or MPPT settings until the
+options flow admits the short-ASCII auxiliary poll. That step writes
+`admit_short_ascii_mppt` (off until
 enabled; other drivers ignore it). Live PV keys stay unavailable until a sample
 arrives, and a soft miss omits them. Labelled held-estimate entities may
 retain the last sample. Held PV entities are off by default. This profile

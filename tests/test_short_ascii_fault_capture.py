@@ -35,9 +35,17 @@ HEX_CAPTURE_KEYS = ("q1_raw_hex", "rb_raw_hex", "rb_tail_hex", "rb_body_len")
 class FaultLabelTests(unittest.TestCase):
     def test_q1_labels_cover_19b4_table_including_excess_temperature(self):
         self.assertEqual(q1_error_label(0), "normal")
+        self.assertEqual(q1_error_label(6), "Output load short circuit")
         self.assertEqual(q1_error_label(8), "excess temperature")
         self.assertEqual(Q1_ERROR_LABELS[8], "excess temperature")
-        self.assertEqual(q1_error_label(42), "unknown(42)")
+        self.assertEqual(
+            q1_error_label(21),
+            "Overload discharge protection or single-core voltage consistency",
+        )
+        self.assertEqual(q1_error_label(26), "Single-core voltage high alarm")
+        self.assertEqual(q1_error_label(28), "The total voltage of the module is high")
+        self.assertEqual(q1_error_label(46), "Single-core voltage over voltage protection")
+        self.assertEqual(q1_error_label(99), "unknown(99)")
 
     def test_mppt_labels_cover_19b4_table(self):
         self.assertEqual(mppt_error_label(0), "normal")
@@ -46,6 +54,8 @@ class FaultLabelTests(unittest.TestCase):
         )
         self.assertEqual(MPPT_ERROR_LABELS[1], "MPPT internal temperature is too high")
         self.assertEqual(mppt_error_label(4), "unknown(4)")
+        self.assertEqual(mppt_error_label(10), "unknown(10)")
+        self.assertNotIn(10, MPPT_ERROR_LABELS)
 
     def test_mppt_optional_publishes_quiet_label(self):
         values = values_from_reply(runtime_frame(fault=0).wire)

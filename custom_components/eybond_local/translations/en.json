@@ -473,12 +473,12 @@
       },
       "short_ascii_mppt": {
         "title": "Short-ASCII MPPT poll",
-        "description": "This only changes the short-ASCII auxiliary 0200 poll. Other drivers ignore it. Stock stays off until enabled.",
+        "description": "This admits short-ASCII PV 0200, Device Control MP, and MPPT settings 0202. Other drivers ignore it. Off until enabled.",
         "data": {
-          "admit_short_ascii_mppt": "Admit the short-ASCII auxiliary 0200 poll"
+          "admit_short_ascii_mppt": "Admit PV 0200, Device Control MP, and MPPT settings 0202"
         },
         "data_description": {
-          "admit_short_ascii_mppt": "Off until enabled. This asks the short-ASCII driver to poll auxiliary 0200. Other inverter drivers ignore this option."
+          "admit_short_ascii_mppt": "Off until enabled. This asks the short-ASCII driver to poll PV 0200, Device Control MP, and MPPT settings 0202. Other inverter drivers ignore this option."
         }
       },
       "cloud_tools": {

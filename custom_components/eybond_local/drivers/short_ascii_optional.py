@@ -8,7 +8,7 @@ from typing import Callable
 
 from ..payload.short_ascii import (
     RB_CURRENT_POWER_KEYS, ShortAsciiError, ShortAsciiSession,
-    parse_f, parse_rb, parse_rh,
+    parse_f, parse_mp, parse_rb, parse_rh,
 )
 from .command_support import (
     command_skipped_as_unsupported, commit_cycle_failures, record_command_failure,
@@ -18,9 +18,10 @@ from .short_ascii_battery_dc import battery_dc_power_values
 from .short_ascii_mppt_held import mppt_held_for
 from .short_ascii_mppt_optional import (
     ADMIT_OPTION_KEY, COMMAND as MPPT_COMMAND, HEALTH_HEALTHY, HEALTH_POISONED,
-    INTERVAL as MPPT_INTERVAL, STRUCTURAL_BACKOFF, TTL as MPPT_TTL, MpptPollDiag,
-    is_admitted, mppt_health_for, peek_mppt_framing_failure_latch,
-    request_runtime_sample, should_poison_mppt_aux, take_mppt_framing_failure_latch,
+    INTERVAL as MPPT_INTERVAL, SETTINGS_INTERVAL, STRUCTURAL_BACKOFF, TTL as MPPT_TTL,
+    MpptPollDiag, is_admitted, mppt_health_for, peek_mppt_framing_failure_latch,
+    request_runtime_sample, request_settings_sample, should_poison_mppt_aux,
+    take_mppt_framing_failure_latch,
 )
 from .short_ascii_rb_filter import RbPublishFilter
 
@@ -73,6 +74,22 @@ class OptionalReads:
     rb_live_read: bool = False
     # Quiet stuck-aux counters. Survive optional.clear() on a Q1 miss.
     mppt_diag: MpptPollDiag = field(default_factory=MpptPollDiag)
+    # 0202 is not a sample in ``samples``: it must not take the one FC4/0200 slot
+    # and must not mark the 0200 channel poisoned. The next-due deadline lives
+    # on MpptHealth, which clear() and a hub reset both keep. The aux socket
+    # is still shared.
+    mppt_settings_sampled_at: float | None = None
+    mppt_settings_values: dict[str, object] = field(default_factory=dict)
+    # Device Control menu. Idle only, and only when admit_short_ascii_mppt is
+    # true, so RB keeps the 30 s slot. Held for three intervals, same shape
+    # as 0202. A failure is not "unsupported": it is due again in ~30 s, but
+    # the next idle cycle where 0202 is eligible is left for that one settings
+    # read. Without admission the hold is left as-is, MP is not queried, and
+    # neither hold is copied into the published values.
+    mp_next_due: float = 0
+    mp_sampled_at: float | None = None
+    mp_values: dict[str, object] = field(default_factory=dict)
+    mp_failed: bool = False
 
     def clear(self) -> None:
         for sample in self.samples:
@@ -80,6 +97,12 @@ class OptionalReads:
             sample.next_due = 0
             sample.outcome = "not_checked"
         self.rb_filter.clear()
+        self.mppt_settings_values.clear()
+        self.mppt_settings_sampled_at = None
+        self.mp_values.clear()
+        self.mp_sampled_at = None
+        self.mp_next_due = 0
+        self.mp_failed = False
 
     def _sample(self, command: str) -> OptionalSample | None:
         for sample in self.samples:
@@ -335,6 +358,7 @@ class OptionalReads:
         # by our caller, and from here to commit there are no suspension points.
         record_command_success(runtime_state, _PREFIX + "Q1")
         commit_cycle_failures(runtime_state)
+        queried = sample
         now = clock()
         self.last_clock = now
         values, diagnostics = {}, {}
@@ -344,8 +368,9 @@ class OptionalReads:
                 # Re-gate every cycle: RH/F expiry must strip I/P from held RB.
                 fresh = self._strip_ungated_currents(fresh, now)
             elif sample.command == "RH":
-                # Settings gate only — do not publish RH fields as sensors.
-                fresh = {}
+                # Accuracy stays on the sample for the RB decimal gate.
+                # Publish the named RH rows only.
+                fresh.pop("short_ascii_bms_current_display_accuracy", None)
             if sample.command == MPPT_COMMAND:
                 held = mppt_held_for(runtime_state)
                 # Cached TTL replay must not restamp age to 0 / mode live.
@@ -365,6 +390,74 @@ class OptionalReads:
         )
         diagnostics.update(self.rb_filter.diagnostic_counters())
         diagnostics.update(diag.as_diagnostics(now))
+        settings_due = (
+            queried is None
+            and mppt_admitted
+            and not health.is_poisoned()
+            and now >= health.settings_next_due
+        )
+        # One extra idle query, only when MPPT is admitted. When it is not,
+        # leave the MP hold untouched and do not query. When it is, MP still
+        # goes first, including after a success that waits out its longer
+        # interval. A failed MP is due again in ~30 s and is not marked
+        # unsupported; yield that later idle slot to 0202 when the settings
+        # read is eligible so a device that keeps failing MP still sends 0202.
+        if (
+            mppt_admitted
+            and queried is None
+            and now >= self.mp_next_due
+            and not (self.mp_failed and settings_due)
+        ):
+            try:
+                parsed = parse_mp(await session.request("MP"))
+            except _SOFT_ERRORS as exc:
+                self.mp_values.clear()
+                self.mp_sampled_at = None
+                self.mp_next_due = clock() + 30
+                self.mp_failed = True
+                diagnostics["mp_outcome"] = "failed"
+                if isinstance(exc, ConnectionError) or not session.transport.connected:
+                    raise ConnectionError("short_ascii_optional_connection_lost") from None
+            else:
+                parsed.pop("short_ascii_mp_length", None)
+                self.mp_values = parsed
+                self.mp_sampled_at = now
+                self.mp_next_due = now + 300
+                self.mp_failed = False
+                diagnostics["mp_outcome"] = "ok"
+        elif settings_due:
+            # Own backoff. Do not touch 0200 health or the framing latch: a
+            # settings failure must not add the 0200 structural backoff. The
+            # transport still closes the shared aux socket if the exchange fails.
+            try:
+                parsed = await request_settings_sample(self.transport)
+            except _SOFT_ERRORS as exc:
+                self.mppt_settings_values.clear()
+                self.mppt_settings_sampled_at = None
+                # Before any raise. clear() and a hub reset keep MpptHealth.
+                health.settings_next_due = now + SETTINGS_INTERVAL
+                diagnostics["mppt_settings_outcome"] = "failed"
+                # Shared aux socket: a disconnect must not return as a healthy
+                # poll. Do not poison 0200 or touch the framing latch.
+                if isinstance(exc, ConnectionError) or not session.transport.connected:
+                    raise ConnectionError("short_ascii_optional_connection_lost") from None
+            else:
+                self.mppt_settings_values = dict(parsed)
+                self.mppt_settings_sampled_at = now
+                health.settings_next_due = now + SETTINGS_INTERVAL
+                diagnostics["mppt_settings_outcome"] = "ok"
+        if (
+            mppt_admitted
+            and self.mppt_settings_sampled_at is not None
+            and 0 <= now - self.mppt_settings_sampled_at < SETTINGS_INTERVAL * 3
+        ):
+            values.update(self.mppt_settings_values)
+        if (
+            mppt_admitted
+            and self.mp_sampled_at is not None
+            and 0 <= now - self.mp_sampled_at < 900
+        ):
+            values.update(self.mp_values)
         if not mppt_admitted:
             diagnostics["short_ascii_mppt_admission"] = ADMIT_OPTION_KEY
         return values, diagnostics

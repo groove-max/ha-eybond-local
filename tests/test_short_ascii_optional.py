@@ -76,10 +76,12 @@ class OptionalPayloadTests(unittest.TestCase):
     def test_rh_parses_display_accuracy_and_rejects_corrupt_frames(self):
         self.assertEqual(parse_rh(_rh(accuracy=1)), {
             "short_ascii_bms_current_display_accuracy": 1,
+            "rh_mains_auto_start": "Allow automatic startup",
+            "rh_clock_switch": "Do not enable time control",
+            "rh_battery_priority_switch_count": 0,
+            "rh_ac_output_enhance": "Prohibit enhanced mode",
         })
-        self.assertEqual(parse_rh(_rh(accuracy=0)), {
-            "short_ascii_bms_current_display_accuracy": 0,
-        })
+        self.assertEqual(parse_rh(_rh(accuracy=0))["short_ascii_bms_current_display_accuracy"], 0)
         # Live proxy capture (RH=1, remaining settings zero).
         live = bytes.fromhex(
             "01000000000000000001000000000000000000000000000000000000010d"
@@ -97,6 +99,14 @@ class OptionalPayloadTests(unittest.TestCase):
         wire[-2] ^= 1
         with self.assertRaises(ShortAsciiError):
             parse_rh(bytes(wire))
+
+    def test_rh_unknown_mains_auto_start_keeps_accuracy(self):
+        frame = bytearray(_rh(accuracy=1))
+        frame[11] = 2  # body[10]
+        frame[-2] = sum(frame[1:-2]) & 255
+        values = parse_rh(bytes(frame))
+        self.assertEqual(values["short_ascii_bms_current_display_accuracy"], 1)
+        self.assertEqual(values["rh_mains_auto_start"], "2")
 
     def test_rb_current_scale_matches_documented_decimal_fields(self):
         values = parse_rb(_rb(charge_raw=294, discharge_raw=1510))
@@ -170,8 +180,8 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.values["battery_soc"], 80)
         third = await self.read(2)
         self.assertEqual(third.values["battery_soc"], 80)
-        # RH is gate-only: accuracy must not appear as a sensor key.
         self.assertNotIn("short_ascii_bms_current_display_accuracy", third.values)
+        self.assertEqual(third.values["rh_mains_auto_start"], "Allow automatic startup")
         fourth = await self.read(3)
         self.assertEqual(fourth.values["battery_soc"], 80)
         self.assertEqual(
@@ -183,6 +193,8 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
                 b"Q1\x01\r",
             ],
         )
+        self.assertNotIn(b"MP\x01\r", self.transport.requests)
+        self.assertNotIn("mp_operating_mode", fourth.values)
         self.assertGreater(fourth.diagnostics["short_ascii_rb_age_seconds"], 2.9)
         self.assertLess(fourth.diagnostics["short_ascii_rb_age_seconds"], 3.1)
 
@@ -269,6 +281,12 @@ class OptionalReadTests(unittest.IsolatedAsyncioTestCase):
         result = await self.read(0)
         self.assertEqual(self.transport.requests, [b"Q1\x01\r"])
         self.assertNotIn("battery_soc", result.values)
+        self.assertNotIn("mp_operating_mode", result.values)
+        reads = self.state[STATE_KEY]
+        self.assertEqual(reads.mp_values, {})
+        self.assertIsNone(reads.mp_sampled_at)
+        self.assertEqual(reads.mp_next_due, 0)
+        self.assertFalse(reads.mp_failed)
         self.assertEqual(
             result.diagnostics["short_ascii_optional_status"],
             "RB=unsupported; F=unsupported; RH=unsupported; MPPT=not_admitted",
