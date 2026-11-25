@@ -20,7 +20,8 @@ class RuntimeInventoryTests(unittest.TestCase):
     def test_profile_names_are_derived_from_compiled_runtime_surfaces(self) -> None:
         names = runtime_profile_names()
 
-        self.assertEqual(len(names), 34)
+        self.assertEqual(len(names), 35)
+        self.assertIn("modbus_catalog/fgi_5ku.json", names)
         self.assertIn("srne_modbus/smx_ii.json", names)
         self.assertIn("pi30_ascii/models/vmii_6200_31_07.json", names)
         self.assertIn("must_pv_ph18/base.json", names)
@@ -55,8 +56,8 @@ class RuntimeInventoryTests(unittest.TestCase):
         summary = inventory["summary"]
 
         self.assertEqual(summary["profiles"], len(inventory["profiles"]))
-        self.assertEqual(summary["profiles"], 34)
-        self.assertEqual(summary["capabilities"], 1278)
+        self.assertEqual(summary["profiles"], 35)
+        self.assertEqual(summary["capabilities"], 1352)
         # The separate PV3300 surface adds 27 controls: four owner-confirmed,
         # 23 untested. The common MUST surface remains wholly untested.
         # Exact Aninerel promotion adds five conditional, untested controls;
@@ -66,13 +67,18 @@ class RuntimeInventoryTests(unittest.TestCase):
         # Issue #88 adds nine model-scoped controls, retaining untested status.
         # The exact EASUN SMX-II restoration adds 35 legacy controls:
         # two previously tested and 33 conditional/untested. DF00 is deferred.
-        self.assertEqual(summary["validation_state_counts"], {"tested": 460, "untested": 818})
+        # The 5KU write replay independently pins the tested subset.
+        self.assertEqual(summary["validation_state_counts"], {"tested": 503, "untested": 849})
         self.assertEqual(
             summary["support_tier_counts"],
-            {"blocked": 31, "conditional": 845, "standard": 402},
+            {"blocked": 31, "conditional": 852, "standard": 469},
         )
 
         profile_by_key = {item["profile_key"]: item for item in inventory["profiles"]}
+        self.assertEqual(
+            profile_by_key["modbus_catalog/fgi_5ku.json"]["validation_state_counts"],
+            {"tested": 43, "untested": 31},
+        )
         self.assertEqual(
             profile_by_key["srne_modbus/smx_ii.json"]["validation_state_counts"],
             {"tested": 2, "untested": 33},

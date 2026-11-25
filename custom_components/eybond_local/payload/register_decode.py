@@ -138,7 +138,13 @@ def decode_block(
     registers = {start_register + index: int(value) for index, value in enumerate(words)}
     decoded: dict[str, Any] = {}
     for spec in specs:
+        if spec.validity_register is not None and registers.get(spec.validity_register) not in spec.validity_values:
+            decoded[spec.key] = None
+            continue
         raw = decode_raw_value(registers, spec, ascii_style=ascii_style)
+        if raw in spec.unavailable_values:
+            decoded[spec.key] = None
+            continue
         if spec.bitmask is not None and isinstance(raw, int):
             shift = (spec.bitmask & -spec.bitmask).bit_length() - 1
             raw = (raw & spec.bitmask) >> shift

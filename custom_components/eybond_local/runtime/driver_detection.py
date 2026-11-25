@@ -12,7 +12,7 @@ from ..drivers.catalog_identity import (
     ERROR_INVERTER_LINK_DOWN,
     InverterIdentityNoDataError,
 )
-from ..drivers.probe_evidence import DriverProbeNoMatchError
+from ..drivers.probe_evidence import DriverProbeIncomplete, DriverProbeNoMatchError
 from ..drivers.registry import iter_drivers
 from ..metadata.compiled_detection_catalog import (
     CompiledDeviceDescriptor,
@@ -346,7 +346,7 @@ async def async_detect_inverter(
                 {"driver": pending.key, "elapsed_ms": 0, "outcome": "skipped_budget_exhausted"}
                 for pending, _ in driver_targets[index:]
             )
-            break
+            raise DriverProbeIncomplete("detection_budget_exhausted", probe_log=tuple(probe_log))
         probe_started = loop.time()
         tracked = _ResponseTrackingTransport(transport)
         try:
@@ -369,6 +369,13 @@ async def async_detect_inverter(
                 loop=loop,
             )
             logger.debug("Probe timed out driver=%s timeout=%s", driver.key, driver.probe_timeout)
+            if deadline.expired():
+                raise DriverProbeIncomplete("detection_budget_exhausted", probe_log=tuple(probe_log))
+            continue
+        except DriverProbeIncomplete:
+            _append_probe_log(probe_log, driver=driver, started=probe_started,
+                              outcome="probe_incomplete", saw_response=tracked.saw_response,
+                              routes=tracked.route_records, loop=loop)
             continue
         except InverterIdentityNoDataError:
             # The identity registers read as zeros: the collector currently has
@@ -452,6 +459,9 @@ async def async_detect_inverter(
 
     _require_detection_link(transport)
     silent = not saw_any_response
+    if any(e["outcome"] == "probe_incomplete" for e in probe_log):
+        raise DriverProbeIncomplete("detection_incomplete", probe_log=tuple(probe_log),
+                                    silent=not any(e.get("saw_response") for e in probe_log))
     if inverter_link_down:
         raise DriverSweepNoMatch(
             ERROR_INVERTER_LINK_DOWN,
@@ -571,6 +581,12 @@ async def async_detect_inverter_candidates(
                 routes=tracked.route_records,
             )
             logger.debug("Probe timed out driver=%s timeout=%s", driver.key, driver.probe_timeout)
+            if deadline.expired():
+                budget_exhausted = True
+            continue
+        except DriverProbeIncomplete:
+            _log_probe(driver, probe_started, "probe_incomplete", saw_response=tracked.saw_response,
+                       routes=tracked.route_records)
             continue
         except InverterIdentityNoDataError:
             errors.append(f"{driver.key}:{ERROR_INVERTER_LINK_DOWN}")
@@ -654,6 +670,8 @@ async def async_detect_inverter_candidates(
             probe_log=tuple(probe_log),
         )
     silent = not any(entry.get("saw_response") for entry in probe_log)
+    if any(e["outcome"] == "probe_incomplete" for e in probe_log):
+        raise DriverProbeIncomplete("detection_incomplete", probe_log=tuple(probe_log), silent=silent)
     if inverter_link_down:
         raise DriverSweepNoMatch(
             ERROR_INVERTER_LINK_DOWN, silent=silent, probe_log=tuple(probe_log)
@@ -867,6 +885,7 @@ async def _async_probe_driver_targets(
     targets: tuple[ProbeTarget, ...],
 ) -> DetectedInverter | None:
     typed_no_match: DriverProbeNoMatchError | None = None
+    incomplete: DriverProbeIncomplete | None = None
     for target in targets:
         _require_detection_link(transport)
         try:
@@ -887,6 +906,9 @@ async def _async_probe_driver_targets(
         except DriverProbeNoMatchError as exc:
             typed_no_match = exc
             continue
+        except DriverProbeIncomplete as exc:
+            incomplete = exc
+            continue
         except Exception as exc:
             logger.debug("Probe failed driver=%s target=%s error=%s", driver.key, target, exc)
             continue
@@ -895,6 +917,8 @@ async def _async_probe_driver_targets(
         if inverter is not None:
             return inverter
     _require_detection_link(transport)
+    if incomplete is not None:
+        raise incomplete
     if typed_no_match is not None:
         raise typed_no_match
     return None

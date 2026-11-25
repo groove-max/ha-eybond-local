@@ -9,6 +9,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Detect the 24 V **Anern FGI-S5000 (5KU)** and expose its Modbus telemetry
+  and user settings through the external WIFI stick port. See the
+  [ESP32-C3 collector wiring and setup example](https://github.com/groove-max/esp-eybond-collector/blob/main/docs/integrations/anern-fgi-s5000/README.md)
+  and [register coverage](docs/maintainer/FGI_5KU.md). Of 74 controls, 43 have
+  independent change-and-restore readbacks; the other 31 require Full control.
+
 - Add a manual-only **Q1-compatible (experimental; read-only)** driver for the
   captured Q1-only device in #97. One FC4 `Q1` request supplies input/output
   voltage, load percentage, reported AC frequency and temperature. Battery

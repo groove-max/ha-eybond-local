@@ -20,6 +20,7 @@ class RegisterBlockLayout:
     count: int
     # Modbus read function code: 3 = holding registers, 4 = input registers.
     function: int = 3
+    prime_controls: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -719,7 +719,7 @@
   {
    "key": "modbus_catalog",
    "transport_key": "eybond_modbus",
-   "probe_timeout": 6.0,
+   "default_action_timeout": 6.0,
    "probe_targets": [
     {
      "devcode": 1,
@@ -728,6 +728,69 @@
     }
    ],
    "probe_actions": [
+    {
+     "key": "modbus_catalog.fgi_version",
+     "kind": "modbus_read",
+     "register": 16,
+     "count": 2,
+     "function": 3,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.fgi_version_major",
+       "source_key": "fgi_version_major",
+       "register": 16,
+       "words": 1
+      },
+      {
+       "key": "identity.fgi_version_minor",
+       "source_key": "fgi_version_minor",
+       "register": 17,
+       "words": 1
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.fgi_model",
+     "kind": "modbus_read",
+     "register": 56,
+     "count": 2,
+     "function": 3,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.fgi_model_hi",
+       "source_key": "fgi_model_hi",
+       "register": 56,
+       "words": 1
+      },
+      {
+       "key": "identity.fgi_model_lo",
+       "source_key": "fgi_model_lo",
+       "register": 57,
+       "words": 1
+      }
+     ]
+    },
+    {
+     "key": "modbus_catalog.fgi_software",
+     "kind": "modbus_read",
+     "register": 64,
+     "count": 1,
+     "function": 3,
+     "cost": 1,
+     "optional": true,
+     "evidence_fields": [
+      {
+       "key": "identity.fgi_software",
+       "source_key": "fgi_software",
+       "register": 64,
+       "words": 1
+      }
+     ]
+    },
     {
      "key": "modbus_catalog.aohai_identity_battery",
      "kind": "modbus_read",
@@ -1596,6 +1659,10 @@
     "Solis/Ginlong ESINV energy-storage telemetry is all input registers (function 4) in the 33xxx area; 35000 is the model/protocol definition word. Fixed 9600 8N1, >300 ms inter-frame gap, max 50 registers per read. The protocol document is the read-only ESINV-33000ID translation."
    ]
   },
+  "fgi_5ku": {
+   "ranges": [[16, 2], [56, 2], [64, 10], [80, 14], [128, 6], [624, 13], [16640, 16], [16672, 16]],
+   "notes": ["FC03 only. Excludes serial numbers, BMS exception boundary, calibration and installer/service pages."]
+  },
   "deye_lv": {
    "ranges": [
     [
@@ -2197,6 +2264,17 @@
    "tier": "partial",
    "read_only": true,
    "support_capture_policy": "solis_esinv"
+  },
+  {
+   "key": "fgi_5ku",
+   "protocol_key": "modbus_catalog",
+   "driver_key": "modbus_catalog",
+   "variant_key": "fgi_5ku",
+   "profile_name": "modbus_catalog/fgi_5ku.json",
+   "register_schema_name": "fgi_5ku/base.json",
+   "tier": "full",
+   "read_only": false,
+   "support_capture_policy": "fgi_5ku"
   },
   {
    "key": "deye_lv_untested",
@@ -3802,6 +3880,46 @@
      "ESINV-33000ID hybrid RS485 Modbus RTU protocol V002B000D01B (read-only translation, 2020-09-15; fixed 9600 8N1). Model-definition word 35000 documents hybrid variants as hex 2030/2031/2040/2050/2060; the anchor accepts both the hex-decoded and literal-decimal readings until hardware confirms which the firmware reports."
     ],
     "confidence": "datasheet-unconfirmed"
+   }
+  },
+  {
+   "entry_key": "fgi_5ku_v1_7",
+   "surface_key": "fgi_5ku",
+   "model_name": "FGI-S5000 compatible (5KU)",
+   "priority": 119,
+   "family_fallback": true,
+   "anchors": [
+    {
+     "key": "identity.fgi_version_major",
+     "equals": 1,
+     "cost": 1
+    },
+    {
+     "key": "identity.fgi_version_minor",
+     "equals": 7,
+     "cost": 1
+    },
+    {
+     "key": "identity.fgi_model_hi",
+     "equals": 0,
+     "cost": 1
+    },
+    {
+     "key": "identity.fgi_model_lo",
+     "equals": 32,
+     "cost": 1
+    },
+    {
+     "key": "identity.fgi_software",
+     "equals": 256,
+     "cost": 1
+    }
+   ],
+   "provenance": {
+    "sources": [
+     "INV-Modbus V1.20; independently captured FC03 signature on the Anern FGI-S5000. The 5KU identification describes this register layout, not an OEM brand."
+    ],
+    "confidence": "hardware-confirmed"
    }
   },
   {

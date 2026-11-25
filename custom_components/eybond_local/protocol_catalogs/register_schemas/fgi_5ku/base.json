@@ -1,0 +1,954 @@
+{
+  "schema_key": "fgi_5ku_base",
+  "title": "FGI-S5000 / 5KU single-phase (INV-Modbus)",
+  "driver_key": "modbus_catalog",
+  "protocol_family": "fgi_5ku",
+  "blocks": [
+    {"key": "status", "start": 64, "count": 10},
+    {"key": "ac", "start": 80, "count": 14},
+    {"key": "battery", "start": 128, "count": 6},
+    {"key": "solar", "start": 150, "count": 3},
+    {"key": "control_dc", "start": 336, "count": 10},
+    {"key": "control_charger", "start": 374, "count": 7},
+    {"key": "control_mains_energy", "start": 439, "count": 16},
+    {"key": "control_output_energy", "start": 545, "count": 8},
+    {"key": "control_solar_energy", "start": 627, "count": 10},
+    {"key": "control_inverter_ac", "start": 682, "count": 4},
+    {"key": "control_cooling", "start": 800, "count": 2},
+    {"key": "control_temperatures", "start": 816, "count": 6},
+    {"key": "control_function_flags", "start": 848, "count": 2},
+    {"key": "control_bms_link", "start": 400, "count": 16},
+    {"key": "control_user_1", "start": 16640, "count": 16, "prime_controls": true},
+    {"key": "control_user_2", "start": 16656, "count": 16, "prime_controls": true},
+    {"key": "control_user_3", "start": 16672, "count": 16, "prime_controls": true},
+    {"key": "control_user_4", "start": 16688, "count": 16, "prime_controls": true},
+    {"key": "control_user_5", "start": 16704, "count": 13, "prime_controls": true},
+    {"key": "control_work_mode", "start": 320, "count": 5}
+  ],
+  "enum_tables": {
+    "charge_stage": {
+      "0": "Idle",
+      "1": "Bulk / absorption",
+      "2": "Float",
+      "3": "Equalization"
+    },
+    "operating_input_mode": {
+      "0": "APP",
+      "1": "UPS",
+      "2": "GEN"
+    },
+    "topology_mode": {
+      "0": "Single-phase",
+      "1": "Parallel single-phase",
+      "2": "Parallel A",
+      "3": "Parallel B",
+      "4": "Parallel C"
+    },
+    "active_charge_priority": {
+      "0": "PNG",
+      "1": "OPV",
+      "2": "PVF"
+    },
+    "work_mode": {
+      "0": "Power on",
+      "1": "Initializing",
+      "2": "Standby",
+      "3": "Utility",
+      "4": "Solar",
+      "5": "Battery",
+      "6": "Generator",
+      "7": "Fault",
+      "8": "Off",
+      "9": "Factory",
+      "10": "Updating"
+    },
+    "condition": {
+      "0": "Clear",
+      "1": "Active"
+    }
+  },
+  "spec_sets": {
+    "runtime": [
+      {"key": "software_version_word", "register": 64},
+      {"key": "bms_link_mode", "register": 65},
+      {"key": "work_state_code", "register": 66},
+      {"key": "energy_terminal_bits", "register": 67},
+      {"key": "energy_flow_bits", "register": 68},
+      {"key": "parallel_state_code", "register": 69},
+      {"key": "fault_word_1", "register": 70},
+      {"key": "fault_word_2", "register": 71},
+      {"key": "alarm_word_1", "register": 72},
+      {"key": "alarm_word_2", "register": 73},
+      {"key": "grid_voltage", "register": 80, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "grid_current", "register": 81, "signed": true, "divisor": 100, "decimals": 2},
+      {"key": "grid_frequency", "register": 82, "signed": true, "divisor": 100, "decimals": 2},
+      {"key": "grid_power", "register": 83, "signed": true},
+      {"key": "output_voltage", "register": 88, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "output_current", "register": 89, "signed": true, "divisor": 100, "decimals": 2},
+      {"key": "output_frequency", "register": 90, "signed": true, "divisor": 100, "decimals": 2},
+      {"key": "output_power", "register": 91, "signed": true},
+      {"key": "output_apparent_power", "register": 92, "signed": true},
+      {"key": "output_load_percent", "register": 93, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "battery_voltage", "register": 128, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "battery_current", "register": 129, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "battery_soc_raw", "register": 132, "signed": true},
+      {"key": "battery_power", "register": 133, "signed": true},
+      {"key": "pv1_voltage", "register": 150, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "pv1_current", "register": 151, "signed": true, "divisor": 100, "decimals": 2},
+      {"key": "pv_power", "register": 152, "signed": true},
+      {"key": "alarm_battery_absent", "register": 72, "bitmask": 1, "enum_table": "condition"},
+      {"key": "alarm_battery_undervoltage", "register": 72, "bitmask": 2, "enum_table": "condition"},
+      {"key": "alarm_battery_low", "register": 72, "bitmask": 4, "enum_table": "condition"},
+      {"key": "alarm_battery_overcharge", "register": 72, "bitmask": 32, "enum_table": "condition"},
+      {"key": "alarm_bms_link_lost", "register": 72, "bitmask": 64, "enum_table": "condition"},
+      {"key": "alarm_overtemperature", "register": 72, "bitmask": 128, "enum_table": "condition"},
+      {"key": "alarm_fan_stalled", "register": 72, "bitmask": 256, "enum_table": "condition"},
+      {"key": "alarm_eeprom_fault", "register": 72, "bitmask": 512, "enum_table": "condition"},
+      {"key": "alarm_overload", "register": 72, "bitmask": 1024, "enum_table": "condition"}
+    ],
+    "controls": [
+      {"key":"setting_equalize_now","register":16663,"unavailable_values":[65535]},
+      {"key":"control_bms_id_word","register":16671,"unavailable_values":[65535]},
+      {"key":"control_low_shutdown_soc_word","register":16672,"unavailable_values":[65535]},
+      {"key":"control_return_to_battery_soc_word","register":16673,"unavailable_values":[65535]},
+      {"key":"control_transfer_to_grid_soc_word","register":16674,"unavailable_values":[65535]},
+      {"key":"control_secondary_cutoff_soc_word","register":16715,"unavailable_values":[65535]},
+      {"key":"control_supply_start_1_word","register":16698,"unavailable_values":[65535]},
+      {"key":"control_supply_end_1_word","register":16699,"unavailable_values":[65535]},
+      {"key":"control_supply_start_2_word","register":16700,"unavailable_values":[65535]},
+      {"key":"control_supply_end_2_word","register":16701,"unavailable_values":[65535]},
+      {"key":"control_output_on_hour_word","register":16702,"unavailable_values":[65535]},
+      {"key":"control_output_off_hour_word","register":16703,"unavailable_values":[65535]},
+      {"key":"control_discharge_current_code_word","register":16706,"unavailable_values":[65535]},
+      {"key":"setting_secondary_duration_mode_word","register":16665,"unavailable_values":[65535]},
+      {"key": "battery_soc_reported", "register": 338, "signed": true},
+      {"key": "dc_bus_voltage", "register": 340, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "battery_discharge_current", "register": 342, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "battery_charge_current", "register": 343, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "battery_overvoltage_alarm", "register": 344, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "battery_undervoltage_alarm", "register": 345, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "charger_bulk_voltage", "register": 375, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "charger_float_voltage", "register": 376, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "charger_bulk_current", "register": 377, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "charger_float_current", "register": 378, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "inverter_voltage", "register": 682, "signed": true, "divisor": 10, "decimals": 1},
+      {"key": "inverter_frequency", "register": 683, "signed": true, "divisor": 100, "decimals": 2},
+      {"key": "inverter_current", "register": 684, "signed": true, "divisor": 100, "decimals": 2},
+      {"key": "inverter_dc_component", "register": 685, "signed": true},
+      {"key": "fan_speed", "register": 800},
+      {"key": "charge_stage", "register": 374, "enum_table": "charge_stage"},
+      {"key": "bms_protocol_code", "register": 400},
+      {"key": "bms_status_code", "register": 401},
+      {"key":"bms_voltage","register":403,"signed":true,"divisor":10,"valid_when":{"register":401,"values":[1,2]},"unavailable_values":[32767]},
+      {"key":"bms_current","register":404,"signed":true,"divisor":10,"valid_when":{"register":401,"values":[1,2]},"unavailable_values":[32767]},
+      {"key":"bms_temperature","register":405,"signed":true,"valid_when":{"register":401,"values":[1,2]},"unavailable_values":[32767]},
+      {"key":"bms_soc","register":406,"signed":true,"valid_when":{"register":401,"values":[1,2]},"unavailable_values":[32767]},
+      {"key":"bms_soh","register":407,"signed":true,"valid_when":{"register":401,"values":[1,2]},"unavailable_values":[32767]},
+      {"key":"bms_charge_voltage_limit","register":410,"signed":true,"divisor":10,"valid_when":{"register":401,"values":[1,2]},"unavailable_values":[32767]},
+      {"key":"bms_charge_current_limit","register":411,"signed":true,"divisor":100,"valid_when":{"register":401,"values":[1,2]},"unavailable_values":[32767]},
+      {"key":"bms_discharge_current_limit","register":412,"signed":true,"divisor":100,"valid_when":{"register":401,"values":[1,2]},"unavailable_values":[32767]},
+      {"key":"bms_soc_warning_threshold","register":413,"signed":true,"valid_when":{"register":401,"values":[1,2]},"unavailable_values":[32767]},
+      {"key":"bms_soc_shutdown_threshold","register":414,"signed":true,"valid_when":{"register":401,"values":[1,2]},"unavailable_values":[32767]},
+      {"key": "pv1_tracking_code", "register": 627, "signed": true},
+      {"key": "pv1_charge_code", "register": 628, "signed": true},
+      {"key": "fan_state_code", "register": 801},
+      {
+        "key": "function_flags_high",
+        "register": 848,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "function_flags_low",
+        "register": 849,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {"key": "ntc_pv_raw", "register": 816},
+      {"key": "ntc_inverter_raw", "register": 817},
+      {"key": "ntc_charger_raw", "register": 818},
+      {"key": "ntc_charger_2_raw", "register": 819},
+      {"key": "ntc_ambient_raw", "register": 820},
+      {"key": "ntc_discharge_raw", "register": 821},
+      {"key": "grid_feed_day", "register": 439, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "grid_feed_month", "register": 441, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "grid_feed_year", "register": 443, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "grid_feed_total", "register": 445, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "grid_import_day", "register": 447, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "grid_import_month", "register": 449, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "grid_import_year", "register": 451, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "grid_import_total", "register": 453, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "load_energy_day", "register": 545, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "load_energy_month", "register": 547, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "load_energy_year", "register": 549, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "load_energy_total", "register": 551, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "pv1_energy_day", "register": 629, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "pv1_energy_month", "register": 631, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "pv1_energy_year", "register": 633, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {"key": "pv1_energy_total", "register": 635, "word_count": 2, "combine": "u32_high_first", "divisor": 100, "decimals": 2},
+      {
+        "key": "setting_output_voltage_selection",
+        "enum_map": {"0":"208 V","1":"220 V","2":"230 V","3":"240 V"},
+        "register": 16640,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_output_frequency_selection",
+        "enum_map": {"0":"50 Hz","1":"60 Hz"},
+        "register": 16641,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_output_priority",
+        "enum_map": {"0":"GPB","1":"PGB","2":"PBG","3":"MKS"},
+        "register": 16642,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_input_mode",
+        "enum_map": {"0":"APP","1":"UPS"},
+        "register": 16643,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_charging_priority",
+        "enum_map": {"0":"PNG","1":"OPV","2":"PVF"},
+        "register": 16644,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_ac_charge_limit",
+        "register": 16645,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_max_charge_current_code",
+        "enum_map": {"0":"2 A","1":"10 A","2":"20 A","3":"30 A","4":"40 A","5":"50 A","6":"60 A","7":"70 A","8":"80 A","9":"90 A","10":"100 A","11":"110 A","12":"120 A"},
+        "register": 16646,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_battery_type",
+        "enum_map": {"0":"Lead acid","1":"Flooded","2":"Li-ion","3":"LiFePO4","4":"User defined"},
+        "register": 16647,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_battery_low_warning",
+        "register": 16648,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "setting_battery_low_cutoff",
+        "register": 16649,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "setting_bulk_voltage",
+        "register": 16650,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "setting_float_voltage",
+        "register": 16651,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "setting_transfer_to_grid_voltage",
+        "register": 16652,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "setting_return_to_battery_voltage",
+        "register": 16653,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "setting_grid_low_threshold",
+        "register": 16654,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_grid_high_threshold",
+        "register": 16655,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_parallel_mode",
+        "enum_map": {"0":"Single-phase","1":"Parallel single-phase","2":"Parallel A","3":"Parallel B","4":"Parallel C"},
+        "register": 16656,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_parallel_id",
+        "register": 16657,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_equalization_enabled",
+        "register": 16658,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_equalization_voltage",
+        "register": 16659,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "setting_equalization_duration",
+        "register": 16660,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_equalization_timeout",
+        "register": 16661,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_equalization_interval",
+        "register": 16662,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_secondary_cutoff_voltage",
+        "register": 16664,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "setting_secondary_duration",
+        "register": 16665,
+        "unavailable_values": [
+          65535,
+          65521,
+          65522
+        ]
+      },
+      {
+        "key": "setting_generator_enabled",
+        "register": 16666,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_generator_rated_limit",
+        "register": 16667,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "setting_generator_max_limit",
+        "register": 16668,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "setting_bms_protocol",
+        "register": 16670,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_bms_id",
+        "register": 16671,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_low_shutdown_soc",
+        "register": 16672,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_return_to_battery_soc",
+        "register": 16673,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_transfer_to_grid_soc",
+        "register": 16674,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_remote_power_state",
+        "register": 16675,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_charging_disabled",
+        "register": 16676,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_backlight_auto_off",
+        "enum_map": {"0":"Off","1":"On"},
+        "register": 16677,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_overtemperature_restart",
+        "register": 16679,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_overload_restart",
+        "register": 16680,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_overload_bypass",
+        "register": 16681,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_power_saving",
+        "register": 16682,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_auto_grid_frequency",
+        "register": 16683,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_soft_start",
+        "register": 16684,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_battery_open_warning",
+        "register": 16685,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_grid_feed_mode",
+        "register": 16686,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_grid_feed_limit",
+        "register": 16687,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "setting_buzzer_muted",
+        "enum_map": {"0":"Off","1":"On"},
+        "register": 16688,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_display_auto_return",
+        "enum_map": {"0":"Off","1":"On"},
+        "register": 16689,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_grid_change_warning",
+        "enum_map": {"0":"Off","1":"On"},
+        "register": 16690,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_rtc_second",
+        "register": 16692,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_rtc_minute",
+        "register": 16693,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_rtc_hour",
+        "register": 16694,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_rtc_day",
+        "register": 16695,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_rtc_month",
+        "register": 16696,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_rtc_year",
+        "register": 16697,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_supply_start_1",
+        "register": 16698,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_supply_end_1",
+        "register": 16699,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_supply_start_2",
+        "register": 16700,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_supply_end_2",
+        "register": 16701,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_output_on_hour",
+        "register": 16702,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_output_off_hour",
+        "register": 16703,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_model_configuration",
+        "register": 16704,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_screen_type",
+        "register": 16705,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_discharge_current_code",
+        "register": 16706,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_grid_feed_hour_1",
+        "register": 16708,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_grid_feed_hour_2",
+        "register": 16709,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_grid_feed_limit_1",
+        "register": 16710,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "setting_grid_feed_limit_2",
+        "register": 16711,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 10,
+        "decimals": 1
+      },
+      {
+        "key": "setting_fan_shutdown_mode",
+        "register": 16712,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_inverter_current_reference",
+        "register": 16713,
+        "unavailable_values": [
+          65535
+        ],
+        "divisor": 100,
+        "decimals": 2
+      },
+      {
+        "key": "setting_reverse_page_keys",
+        "enum_map": {"0":"Normal","1":"Reversed"},
+        "register": 16714,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "setting_secondary_cutoff_soc",
+        "register": 16715,
+        "unavailable_values": [
+          65535,
+          65521
+        ]
+      },
+      {
+        "key": "setting_shutdown_override",
+        "register": 16716,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "operating_input_mode",
+        "register": 320,
+        "enum_table": "operating_input_mode",
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "topology_mode",
+        "register": 321,
+        "enum_table": "topology_mode",
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "active_output_priority_code",
+        "register": 322,
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "active_charge_priority",
+        "register": 323,
+        "enum_table": "active_charge_priority",
+        "unavailable_values": [
+          65535
+        ]
+      },
+      {
+        "key": "work_mode",
+        "register": 324,
+        "enum_table": "work_mode",
+        "unavailable_values": [
+          65535
+        ]
+      }
+    ]
+  },
+  "measurement_descriptions": [
+    {"key": "software_version_word", "name": "Software version word", "diagnostic": true},
+    {"key": "bms_link_mode", "name": "Bms link mode", "diagnostic": true},
+    {"key": "work_state_code", "name": "Work state code", "diagnostic": true},
+    {"key": "energy_terminal_bits", "name": "Energy terminal bits", "diagnostic": true},
+    {"key": "energy_flow_bits", "name": "Energy flow bits", "diagnostic": true},
+    {"key": "parallel_state_code", "name": "Parallel state code", "diagnostic": true},
+    {"key": "fault_word_1", "name": "Fault word 1", "diagnostic": true},
+    {"key": "fault_word_2", "name": "Fault word 2", "diagnostic": true},
+    {"key": "alarm_word_1", "name": "Alarm word 1", "diagnostic": true},
+    {"key": "alarm_word_2", "name": "Alarm word 2", "diagnostic": true},
+    {"key": "grid_voltage", "name": "Grid voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "grid_current", "name": "Grid current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+    {"key": "grid_frequency", "name": "Grid frequency", "unit": "Hz", "device_class": "frequency", "state_class": "measurement"},
+    {"key": "grid_power", "name": "Grid power", "unit": "W", "device_class": "power", "state_class": "measurement"},
+    {"key": "output_voltage", "name": "Output voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "output_current", "name": "Output current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+    {"key": "output_frequency", "name": "Output frequency", "unit": "Hz", "device_class": "frequency", "state_class": "measurement"},
+    {"key": "output_power", "name": "Output power", "unit": "W", "device_class": "power", "state_class": "measurement"},
+    {"key": "output_apparent_power", "name": "Output apparent power", "unit": "VA", "device_class": "apparent_power", "state_class": "measurement"},
+    {"key": "output_load_percent", "name": "Output load percent", "unit": "%", "state_class": "measurement"},
+    {"key": "battery_voltage", "name": "Battery voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "battery_current", "name": "Battery current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+    {"key": "battery_soc_raw", "name": "Battery soc raw", "diagnostic": true, "enabled_default": false},
+    {"key": "battery_power", "name": "Battery power", "unit": "W", "device_class": "power", "state_class": "measurement"},
+    {"key": "pv1_voltage", "name": "Pv1 voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "pv1_current", "name": "Pv1 current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+    {"key": "pv_power", "name": "Pv power", "unit": "W", "device_class": "power", "state_class": "measurement"},
+    {"key": "battery_soc_reported", "name": "Battery soc reported", "unit": "%", "diagnostic": true, "enabled_default": false},
+    {"key": "dc_bus_voltage", "name": "Dc bus voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "battery_discharge_current", "name": "Battery discharge current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+    {"key": "battery_charge_current", "name": "Battery charge current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+    {"key": "battery_overvoltage_alarm", "name": "Battery overvoltage alarm", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "battery_undervoltage_alarm", "name": "Battery undervoltage alarm", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "charger_bulk_voltage", "name": "Charger bulk voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "charger_float_voltage", "name": "Charger float voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "charger_bulk_current", "name": "Charger bulk current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+    {"key": "charger_float_current", "name": "Charger float current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+    {"key": "inverter_voltage", "name": "Inverter voltage", "unit": "V", "device_class": "voltage", "state_class": "measurement"},
+    {"key": "inverter_frequency", "name": "Inverter frequency", "unit": "Hz", "device_class": "frequency", "state_class": "measurement"},
+    {"key": "inverter_current", "name": "Inverter current", "unit": "A", "device_class": "current", "state_class": "measurement"},
+    {"key": "inverter_dc_component", "name": "Inverter dc component", "unit": "mV", "state_class": "measurement"},
+    {"key": "fan_speed", "name": "Fan speed", "unit": "%", "state_class": "measurement"},
+    {"key": "charge_stage", "name": "Charge stage"},
+    {"key": "bms_protocol_code", "name": "Bms protocol code", "diagnostic": true},
+    {"key": "bms_status_code", "name": "Bms status code", "diagnostic": true},
+    {"key":"bms_voltage","name":"BMS voltage","unit":"V","device_class":"voltage","diagnostic":true,"enabled_default":false},
+    {"key":"bms_current","name":"BMS current","unit":"A","device_class":"current","diagnostic":true,"enabled_default":false},
+    {"key":"bms_temperature","name":"BMS temperature","unit":"°C","device_class":"temperature","diagnostic":true,"enabled_default":false},
+    {"key":"bms_soc","name":"BMS soc","unit":"%","device_class":"battery","diagnostic":true,"enabled_default":false},
+    {"key":"bms_soh","name":"BMS soh","unit":"%","diagnostic":true,"enabled_default":false},
+    {"key":"bms_charge_voltage_limit","name":"BMS charge voltage limit","unit":"V","device_class":"voltage","diagnostic":true,"enabled_default":false},
+    {"key":"bms_charge_current_limit","name":"BMS charge current limit","unit":"A","device_class":"current","diagnostic":true,"enabled_default":false},
+    {"key":"bms_discharge_current_limit","name":"BMS discharge current limit","unit":"A","device_class":"current","diagnostic":true,"enabled_default":false},
+    {"key":"bms_soc_warning_threshold","name":"BMS soc warning threshold","unit":"%","diagnostic":true,"enabled_default":false},
+    {"key":"bms_soc_shutdown_threshold","name":"BMS soc shutdown threshold","unit":"%","diagnostic":true,"enabled_default":false},
+    {"key": "pv1_tracking_code", "name": "Pv1 tracking code", "diagnostic": true},
+    {"key": "pv1_charge_code", "name": "Pv1 charge code", "diagnostic": true},
+    {"key": "fan_state_code", "name": "Fan state code", "diagnostic": true},
+    {"key": "function_flags_high", "name": "Function flags high", "diagnostic": true},
+    {"key": "function_flags_low", "name": "Function flags low", "diagnostic": true},
+    {"key": "ntc_pv_raw", "name": "Ntc pv raw", "diagnostic": true, "enabled_default": false},
+    {"key": "ntc_inverter_raw", "name": "Ntc inverter raw", "diagnostic": true, "enabled_default": false},
+    {"key": "ntc_charger_raw", "name": "Ntc charger raw", "diagnostic": true, "enabled_default": false},
+    {"key": "ntc_charger_2_raw", "name": "Ntc charger 2 raw", "diagnostic": true, "enabled_default": false},
+    {"key": "ntc_ambient_raw", "name": "Ntc ambient raw", "diagnostic": true, "enabled_default": false},
+    {"key": "ntc_discharge_raw", "name": "Ntc discharge raw", "diagnostic": true, "enabled_default": false},
+    {"key": "grid_feed_day", "name": "Grid feed day", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "grid_feed_month", "name": "Grid feed month", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "grid_feed_year", "name": "Grid feed year", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "grid_feed_total", "name": "Grid feed total", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "grid_import_day", "name": "Grid import day", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "grid_import_month", "name": "Grid import month", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "grid_import_year", "name": "Grid import year", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "grid_import_total", "name": "Grid import total", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "load_energy_day", "name": "Load energy day", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "load_energy_month", "name": "Load energy month", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "load_energy_year", "name": "Load energy year", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "load_energy_total", "name": "Load energy total", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "pv1_energy_day", "name": "Pv1 energy day", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "pv1_energy_month", "name": "Pv1 energy month", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "pv1_energy_year", "name": "Pv1 energy year", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "pv1_energy_total", "name": "Pv1 energy total", "unit": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    {"key": "setting_ac_charge_limit", "name": "Setting: Ac charge limit", "unit": "A", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_max_charge_current_code", "name": "Setting: Max charge current code", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_battery_type", "name": "Setting: Battery type", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_battery_low_warning", "name": "Setting: Battery low warning", "unit": "V", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_battery_low_cutoff", "name": "Setting: Battery low cutoff", "unit": "V", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_bulk_voltage", "name": "Setting: Bulk voltage", "unit": "V", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_float_voltage", "name": "Setting: Float voltage", "unit": "V", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_transfer_to_grid_voltage", "name": "Setting: Transfer to grid voltage", "unit": "V", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_return_to_battery_voltage", "name": "Setting: Return to battery voltage", "unit": "V", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_grid_low_threshold", "name": "Setting: Grid low threshold", "unit": "V", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_grid_high_threshold", "name": "Setting: Grid high threshold", "unit": "V", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_parallel_mode", "name": "Setting: Parallel mode", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_parallel_id", "name": "Setting: Parallel id", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_equalization_enabled", "name": "Setting: Equalization enabled", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_equalization_voltage", "name": "Setting: Equalization voltage", "unit": "V", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_equalization_duration", "name": "Setting: Equalization duration", "unit": "min", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_equalization_timeout", "name": "Setting: Equalization timeout", "unit": "min", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_equalization_interval", "name": "Setting: Equalization interval", "unit": "d", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_secondary_cutoff_voltage", "name": "Setting: Secondary cutoff voltage", "unit": "V", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_secondary_duration", "name": "Setting: Secondary duration", "unit": "min", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_secondary_duration_mode_word", "name": "Secondary output duration (raw mode or minutes)", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_generator_enabled", "name": "Setting: Generator enabled", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_generator_rated_limit", "name": "Setting: Generator rated limit", "unit": "kW", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_generator_max_limit", "name": "Setting: Generator max limit", "unit": "kW", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_bms_protocol", "name": "Setting: Bms protocol", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_bms_id", "name": "Setting: Bms id", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_low_shutdown_soc", "name": "Setting: Low shutdown soc", "unit": "%", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_return_to_battery_soc", "name": "Setting: Return to battery soc", "unit": "%", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_transfer_to_grid_soc", "name": "Setting: Transfer to grid soc", "unit": "%", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_remote_power_state", "name": "Setting: Remote power state", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_charging_disabled", "name": "Setting: Charging disabled", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_overtemperature_restart", "name": "Setting: Overtemperature restart", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_overload_restart", "name": "Setting: Overload restart", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_overload_bypass", "name": "Setting: Overload bypass", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_power_saving", "name": "Setting: Power saving", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_auto_grid_frequency", "name": "Setting: Auto grid frequency", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_soft_start", "name": "Setting: Soft start", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_battery_open_warning", "name": "Setting: Battery open warning", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_grid_feed_mode", "name": "Setting: Grid feed mode", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_grid_feed_limit", "name": "Setting: Grid feed limit", "unit": "kW", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_rtc_second", "name": "Setting: Rtc second", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_rtc_minute", "name": "Setting: Rtc minute", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_rtc_hour", "name": "Setting: Rtc hour", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_rtc_day", "name": "Setting: Rtc day", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_rtc_month", "name": "Setting: Rtc month", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_rtc_year", "name": "Setting: Rtc year", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_supply_start_1", "name": "Setting: Supply start 1", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_supply_end_1", "name": "Setting: Supply end 1", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_supply_start_2", "name": "Setting: Supply start 2", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_supply_end_2", "name": "Setting: Supply end 2", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_output_on_hour", "name": "Setting: Output on hour", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_output_off_hour", "name": "Setting: Output off hour", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_model_configuration", "name": "Setting: Model configuration", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_screen_type", "name": "Setting: Screen type", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_discharge_current_code", "name": "Setting: Discharge current code", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_grid_feed_hour_1", "name": "Setting: Grid feed hour 1", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_grid_feed_hour_2", "name": "Setting: Grid feed hour 2", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_grid_feed_limit_1", "name": "Setting: Grid feed limit 1", "unit": "kW", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_grid_feed_limit_2", "name": "Setting: Grid feed limit 2", "unit": "kW", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_fan_shutdown_mode", "name": "Setting: Fan shutdown mode", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_inverter_current_reference", "name": "Setting: Inverter current reference", "unit": "A", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_secondary_cutoff_soc", "name": "Setting: Secondary cutoff soc", "unit": "%", "diagnostic": true, "enabled_default": false},
+    {"key": "setting_shutdown_override", "name": "Setting: Shutdown override", "diagnostic": true, "enabled_default": false},
+    {"key": "operating_input_mode", "name": "Operating input mode", "diagnostic": true},
+    {"key": "topology_mode", "name": "Topology mode", "diagnostic": true},
+    {"key": "active_output_priority_code", "name": "Active output priority code", "diagnostic": true},
+    {"key": "active_charge_priority", "name": "Active charge priority", "diagnostic": true},
+    {"key": "work_mode", "name": "Work mode"},
+    {"key": "alarm_battery_absent", "name": "Alarm battery absent", "diagnostic": true, "enabled_default": false},
+    {"key": "alarm_battery_undervoltage", "name": "Alarm battery undervoltage", "diagnostic": true, "enabled_default": false},
+    {"key": "alarm_battery_low", "name": "Alarm battery low", "diagnostic": true, "enabled_default": false},
+    {"key": "alarm_battery_overcharge", "name": "Alarm battery overcharge", "diagnostic": true, "enabled_default": false},
+    {"key": "alarm_bms_link_lost", "name": "Alarm bms link lost", "diagnostic": true, "enabled_default": false},
+    {"key": "alarm_overtemperature", "name": "Alarm overtemperature", "diagnostic": true, "enabled_default": false},
+    {"key": "alarm_fan_stalled", "name": "Alarm fan stalled", "diagnostic": true, "enabled_default": false},
+    {"key": "alarm_eeprom_fault", "name": "Alarm eeprom fault", "diagnostic": true, "enabled_default": false},
+    {"key": "alarm_overload", "name": "Alarm overload", "diagnostic": true, "enabled_default": false}
+  ]
+}

@@ -269,11 +269,15 @@ def _parse_block(raw: Mapping[str, Any]) -> RegisterBlockLayout:
     function = int(raw.get("function", 3))
     if function not in (3, 4):
         raise ValueError(f"unsupported_block_function:{function}")
+    prime_controls = raw.get("prime_controls", False)
+    if type(prime_controls) is not bool or (prime_controls and not str(raw["key"]).startswith("control_")):
+        raise ValueError(f"invalid_control_priming:{raw['key']}")
     return RegisterBlockLayout(
         key=str(raw["key"]),
         start=int(raw["start"]),
         count=int(raw["count"]),
         function=function,
+        prime_controls=prime_controls,
     )
 
 
@@ -316,6 +320,16 @@ def _parse_spec(
     elif isinstance(raw.get("enum_map"), Mapping):
         enum_map = {_parse_enum_key(key): str(value) for key, value in raw["enum_map"].items()}
 
+    validity = raw.get("valid_when")
+    if validity is not None and (
+        not isinstance(validity, Mapping)
+        or type(validity.get("register")) is not int
+        or not 0 <= validity["register"] <= 65535
+        or not isinstance(validity.get("values"), list)
+        or not validity["values"]
+        or any(type(v) is not int or not 0 <= v <= 65535 for v in validity["values"])
+    ):
+        raise ValueError(f"invalid_register_validity_condition:{raw['key']}")
     return RegisterValueSpec(
         key=str(raw["key"]),
         register=int(raw["register"]),
@@ -329,6 +343,9 @@ def _parse_spec(
         bitmask=_optional_bitmask(raw.get("bitmask"), spec_key=str(raw["key"])),
         enum_map=enum_map,
         function=_parse_read_function(raw.get("function", 3)),
+        unavailable_values=tuple(int(v) for v in raw.get("unavailable_values", ())),
+        validity_register=validity["register"] if validity is not None else None,
+        validity_values=tuple(validity["values"]) if validity is not None else (),
     )
 
 

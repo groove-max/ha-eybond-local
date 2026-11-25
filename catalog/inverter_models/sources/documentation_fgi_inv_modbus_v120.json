@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "source_key": "documentation_fgi_inv_modbus_v120",
+  "kind": "register_map",
+  "title": "INV-Modbus V1.20 family register table",
+  "reference": "https://github.com/pr0ma/icaura/blob/41a78f40d71ffc473c9915a1ba1fab295dfa50f9/INV-ModbusV1.20.xlsx",
+  "captured_at": "2026-11-24",
+  "visibility": "public",
+  "summary": "FC03 telemetry and FC16 single-setting writes, distinct from the inverter firmware version.",
+  "assertions": [
+    "register_map"
+  ]
+}

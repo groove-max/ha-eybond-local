@@ -1,0 +1,1031 @@
+address,worksheet,row,field,fc03_evidence,runtime_keys,write_policy
+0x0000,Version,3,Identifier word (not exposed),crc_ok,,none
+0x0001,Version,4,Identifier word (not exposed),crc_ok,,none
+0x0002,Version,5,Identifier word (not exposed),crc_ok,,none
+0x0003,Version,6,Identifier word (not exposed),crc_ok,,none
+0x0004,Version,7,Identifier word (not exposed),crc_ok,,none
+0x0005,Version,8,Identifier word (not exposed),crc_ok,,none
+0x0006,Version,9,Identifier word (not exposed),crc_ok,,none
+0x0007,Version,10,Identifier word (not exposed),crc_ok,,none
+0x0008,Version,11,Identifier word (not exposed),crc_ok,,none
+0x0009,Version,12,Identifier word (not exposed),crc_ok,,none
+0x000A,Version,13,reserve,not_probed,,none
+0x000B,Version,14,reserve,not_probed,,none
+0x000C,Version,15,reserve,not_probed,,none
+0x000D,Version,16,reserve,not_probed,,none
+0x000E,Version,17,reserve,not_probed,,none
+0x000F,Version,18,SN code lock,not_probed,,none
+0x0010,Version,19,Protocol version_H,crc_ok,,none
+0x0011,Version,20,Protocol version_L,crc_ok,,none
+0x0012,Version,21,Power board hardware version_H,crc_ok,,none
+0x0013,Version,22,Power board hardware version_L,crc_ok,,none
+0x0014,Version,23,Control board hardware version_H,crc_ok,,none
+0x0015,Version,24,Control board hardware version_L,crc_ok,,none
+0x0016,Version,25,Centralized control version hardware version H,crc_ok,,none
+0x0017,Version,26,Centralized control version hardware version L,crc_ok,,none
+0x0018,Version,27,Power board software version_H,crc_ok,,none
+0x0019,Version,28,Power board software version_L,crc_ok,,none
+0x001A,Version,29,Control board software version_H,crc_ok,,none
+0x001B,Version,30,Control board software version_L,crc_ok,,none
+0x001C,Version,31,Centralized control software version H,crc_ok,,none
+0x001D,Version,32,Centralized control software version L,crc_ok,,none
+0x001E,Version,33,Version Time_H,crc_ok,,none
+0x001F,Version,34,Version Time_L,crc_ok,,none
+0x0020,Version,35,CheckSum_H,crc_ok,,none
+0x0021,Version,36,CheckSum_L,crc_ok,,none
+0x0022,Version,37,PC communication protocol version,crc_ok,,none
+0x0023,Version,38,WiFi communication protocol version,crc_ok,,none
+0x0024,Version,39,BMS communication protocol version,crc_ok,,none
+0x0025,Version,40,Parallel communication protocol version,crc_ok,,none
+0x0026,Version,41,Reserved / unspecified,not_probed,,none
+0x0027,Version,42,Reserved / unspecified,not_probed,,none
+0x0028,Version,43,Reserved / unspecified,not_probed,,none
+0x0029,Version,44,Reserved / unspecified,not_probed,,none
+0x002A,Version,45,Reserved / unspecified,not_probed,,none
+0x002B,Version,46,Reserved / unspecified,not_probed,,none
+0x002C,Version,47,Reserved / unspecified,not_probed,,none
+0x002D,Version,48,Reserved / unspecified,not_probed,,none
+0x002E,Version,49,Reserved / unspecified,not_probed,,none
+0x002F,Version,50,Reserved / unspecified,not_probed,,none
+0x0030,Version,51,Reserved / unspecified,not_probed,,none
+0x0031,Version,52,Reserved / unspecified,not_probed,,none
+0x0032,Version,53,Reserved / unspecified,not_probed,,none
+0x0033,Version,54,Reserved / unspecified,not_probed,,none
+0x0034,Version,55,Reserved / unspecified,not_probed,,none
+0x0035,Version,56,Reserved / unspecified,not_probed,,none
+0x0036,Version,57,Reserved / unspecified,not_probed,,none
+0x0037,Version,58,Reserved / unspecified,not_probed,,none
+0x0038,Version,59,Protocol Identifier_A,crc_ok,,none
+0x0039,Version,60,Protocol Identifier_B,crc_ok,,none
+0x003A,Version,61,Protocol Identifier_C,crc_ok,,none
+0x003B,Version,62,Protocol Identifier_D,crc_ok,,none
+0x003C,Version,63,Device Type_H,crc_ok,,none
+0x003D,Version,64,Equipment type_L,crc_ok,,none
+0x003E,Version,65,Company Information_H,crc_ok,,none
+0x003F,Version,66,Company Information_L,crc_ok,,none
+0x0040,Simplify,3,Software version (major & minor),crc_ok,software_version_word,none
+0x0041,Simplify,4,BMS connection status,crc_ok,bms_link_mode,none
+0x0042,Simplify,5,State machine states,crc_ok,work_state_code,none
+0x0043,Simplify,6,Energy terminal status,crc_ok,energy_terminal_bits,none
+0x0044,Simplify,7,Energy flow state,crc_ok,energy_flow_bits,none
+0x0045,Simplify,8,Parallel operation,crc_ok,parallel_state_code,none
+0x0046,Simplify,9,Fault Code 1,crc_ok,fault_word_1,none
+0x0047,Simplify,10,Fault Code 2,crc_ok,fault_word_2,none
+0x0048,Simplify,11,Alarm code 1,crc_ok,alarm_word_1;alarm_battery_absent;alarm_battery_undervoltage;alarm_battery_low;alarm_battery_overcharge;alarm_bms_link_lost;alarm_overtemperature;alarm_fan_stalled;alarm_eeprom_fault;alarm_overload,none
+0x0049,Simplify,12,Alarm code 2,crc_ok,alarm_word_2,none
+0x004A,Simplify,13,Reserved / unspecified,crc_ok,,none
+0x004B,Simplify,14,Reserved / unspecified,crc_ok,,none
+0x004C,Simplify,15,Reserved / unspecified,crc_ok,,none
+0x004D,Simplify,16,Reserved / unspecified,crc_ok,,none
+0x004E,Simplify,17,Reserved / unspecified,crc_ok,,none
+0x004F,Simplify,18,Reserved / unspecified,crc_ok,,none
+0x0050,Simplify,19,Phase A mains voltage,crc_ok,grid_voltage,none
+0x0051,Simplify,20,Phase A mains current,crc_ok,grid_current,none
+0x0052,Simplify,21,Phase A mains frequency,crc_ok,grid_frequency,none
+0x0053,Simplify,22,Phase A mains power,crc_ok,grid_power,none
+0x0054,Simplify,23,Phase A generator voltage,crc_ok,,none
+0x0055,Simplify,24,Phase A generator current,crc_ok,,none
+0x0056,Simplify,25,Phase A generator frequency,crc_ok,,none
+0x0057,Simplify,26,A-phase generator power,crc_ok,,none
+0x0058,Simplify,27,Phase A load voltage,crc_ok,output_voltage,none
+0x0059,Simplify,28,Phase A load current,crc_ok,output_current,none
+0x005A,Simplify,29,Phase A load frequency,crc_ok,output_frequency,none
+0x005B,Simplify,30,Phase A load active power,crc_ok,output_power,none
+0x005C,Simplify,31,Apparent power of phase A load,crc_ok,output_apparent_power,none
+0x005D,Simplify,32,Phase A load percentage,crc_ok,output_load_percent,none
+0x005E,Simplify,33,Reserved / unspecified,crc_ok,,none
+0x005F,Simplify,34,Reserved / unspecified,crc_ok,,none
+0x0060,Simplify,35,Phase B mains voltage,crc_ok,,none
+0x0061,Simplify,36,Phase B mains current,crc_ok,,none
+0x0062,Simplify,37,Phase B mains frequency,crc_ok,,none
+0x0063,Simplify,38,Phase B AC power,crc_ok,,none
+0x0064,Simplify,39,B-phase generator voltage,crc_ok,,none
+0x0065,Simplify,40,B-phase generator current,crc_ok,,none
+0x0066,Simplify,41,B-phase generator frequency,crc_ok,,none
+0x0067,Simplify,42,B-phase generator power,crc_ok,,none
+0x0068,Simplify,43,Phase B load voltage,crc_ok,,none
+0x0069,Simplify,44,B-phase load current,crc_ok,,none
+0x006A,Simplify,45,Phase B load frequency,crc_ok,,none
+0x006B,Simplify,46,B-phase load active power,crc_ok,,none
+0x006C,Simplify,47,Apparent power of phase B load,crc_ok,,none
+0x006D,Simplify,48,Phase B load percentage,crc_ok,,none
+0x006E,Simplify,49,Reserved / unspecified,crc_ok,,none
+0x006F,Simplify,50,Reserved / unspecified,crc_ok,,none
+0x0070,Simplify,51,C-phase mains voltage,crc_ok,,none
+0x0071,Simplify,52,C-phase mains current,crc_ok,,none
+0x0072,Simplify,53,C-phase mains frequency,crc_ok,,none
+0x0073,Simplify,54,C-phase mains power,crc_ok,,none
+0x0074,Simplify,55,C-phase generator voltage,crc_ok,,none
+0x0075,Simplify,56,C-phase generator current,crc_ok,,none
+0x0076,Simplify,57,C-phase generator frequency,crc_ok,,none
+0x0077,Simplify,58,C-phase generator power,crc_ok,,none
+0x0078,Simplify,59,C-phase load voltage,crc_ok,,none
+0x0079,Simplify,60,C-phase load current,crc_ok,,none
+0x007A,Simplify,61,C-phase load frequency,crc_ok,,none
+0x007B,Simplify,62,C-phase load active power,crc_ok,,none
+0x007C,Simplify,63,Apparent power of C-phase load,crc_ok,,none
+0x007D,Simplify,64,C-phase load percentage,crc_ok,,none
+0x007E,Simplify,65,Reserved / unspecified,crc_ok,,none
+0x007F,Simplify,66,Reserved / unspecified,crc_ok,,none
+0x0080,Simplify,67,Positive terminal battery voltage,crc_ok,battery_voltage,none
+0x0081,Simplify,68,Positive terminal battery current,crc_ok,battery_current,none
+0x0082,Simplify,69,Negative battery voltage,crc_ok,,none
+0x0083,Simplify,70,Negative battery current,crc_ok,,none
+0x0084,Simplify,71,Battery capacity percentage,crc_ok,battery_soc_raw,none
+0x0085,Simplify,72,Battery power,crc_ok,battery_power,none
+0x0086,Simplify,73,Reserved / unspecified,crc_ok,,none
+0x0087,Simplify,74,Reserved / unspecified,crc_ok,,none
+0x0088,Simplify,75,BMS Battery Voltage,crc_ok,,none
+0x0089,Simplify,76,BMS Battery Current,crc_ok,,none
+0x008A,Simplify,77,BMS SOC,crc_ok,,none
+0x008B,Simplify,78,BMS Temperature,crc_ok,,none
+0x008C,Simplify,79,BMS constant pressure point (CV point),crc_ok,,none
+0x008D,Simplify,80,Rated capacity,crc_ok,,none
+0x008E,Simplify,81,Current capacity,crc_ok,,none
+0x008F,Simplify,82,BMS communication status,crc_ok,,none
+0x0090,Simplify,83,Lithium battery network status,crc_ok,,none
+0x0091,Simplify,84,BMS failure,crc_ok,,none
+0x0092,Simplify,85,BMS Alarms,crc_ok,,none
+0x0093,Simplify,86,Reserved / unspecified,crc_ok,,none
+0x0094,Simplify,87,Reserved / unspecified,crc_ok,,none
+0x0095,Simplify,88,Reserved / unspecified,crc_ok,,none
+0x0096,Simplify,89,Photovoltaic voltage 1,crc_ok,pv1_voltage,none
+0x0097,Simplify,90,Photovoltaic 1 current,crc_ok,pv1_current,none
+0x0098,Simplify,91,Photovoltaic power,crc_ok,pv_power,none
+0x0099,Simplify,92,Photovoltaic 2 voltage,crc_ok,,none
+0x009A,Simplify,93,Photovoltaic 2 Current,crc_ok,,none
+0x009B,Simplify,94,Photovoltaic 2 power,crc_ok,,none
+0x009C,Simplify,95,Photovoltaic power generation on that day,crc_ok,,none
+0x009D,Simplify,96,Total photovoltaic power generation,crc_ok,,none
+0x009E,Simplify,97,Reserved / unspecified,crc_ok,,none
+0x009F,Simplify,98,Reserved / unspecified,crc_ok,,none
+0x0140,WorkMode,3,Output mode,crc_ok,operating_input_mode,none
+0x0141,WorkMode,4,Parallel mode,crc_ok,topology_mode,none
+0x0142,WorkMode,5,Output priority,crc_ok,active_output_priority_code,none
+0x0143,WorkMode,6,Charging priority,crc_ok,active_charge_priority,none
+0x0144,WorkMode,7,State machine states,crc_ok,work_mode,none
+0x0145,WorkMode,8,Reserved / unspecified,crc_ok,,none
+0x0146,WorkMode,9,Reserved / unspecified,crc_ok,,none
+0x0147,WorkMode,10,Reserved / unspecified,crc_ok,,none
+0x0148,WorkMode,11,Reserved / unspecified,crc_ok,,none
+0x0149,WorkMode,12,Reserved / unspecified,crc_ok,,none
+0x014A,WorkMode,13,Reserved / unspecified,crc_ok,,none
+0x014B,WorkMode,14,Reserved / unspecified,crc_ok,,none
+0x014C,WorkMode,15,Reserved / unspecified,crc_ok,,none
+0x014D,WorkMode,16,Reserved / unspecified,crc_ok,,none
+0x014E,WorkMode,17,Reserved / unspecified,crc_ok,,none
+0x014F,WorkMode,18,Reserved / unspecified,crc_ok,,none
+0x0150,BAT,3,Battery Type,crc_ok,,none
+0x0151,BAT,4,Reserved / unspecified,crc_ok,,none
+0x0152,BAT,5,Battery percentage,crc_ok,battery_soc_reported,none
+0x0153,BAT,6,Reserved / unspecified,crc_ok,,none
+0x0154,BAT,7,Positive bus voltage,crc_ok,dc_bus_voltage,none
+0x0155,BAT,8,Positive terminal battery voltage,crc_ok,,none
+0x0156,BAT,9,Negative battery discharge current,crc_ok,battery_discharge_current,none
+0x0157,BAT,10,Positive terminal battery charging current,crc_ok,battery_charge_current,none
+0x0158,BAT,11,Positive overvoltage alarm voltage,crc_ok,battery_overvoltage_alarm,none
+0x0159,BAT,12,Positive terminal low voltage alarm voltage,crc_ok,battery_undervoltage_alarm,none
+0x015A,BAT,13,Reserved / unspecified,crc_ok,,none
+0x015B,BAT,14,Reserved / unspecified,crc_ok,,none
+0x015C,BAT,15,Positive terminal dual-channel output cutoff voltage,crc_ok,,none
+0x015D,BAT,16,Positive dual-channel output cutoff time,crc_ok,,none
+0x015E,BAT,17,Positive battery power,crc_ok,,none
+0x015F,BAT,18,Reserved / unspecified,crc_ok,,none
+0x0160,BAT,19,Reserved / unspecified,crc_ok,,none
+0x0161,BAT,20,Reserved / unspecified,crc_ok,,none
+0x0162,BAT,21,Reserved / unspecified,crc_ok,,none
+0x0163,BAT,22,Reserved / unspecified,crc_ok,,none
+0x0164,BAT,23,Negative bus voltage,crc_ok,,none
+0x0165,BAT,24,Negative battery voltage,crc_ok,,none
+0x0166,BAT,25,Negative battery discharge current,crc_ok,,none
+0x0167,BAT,26,Negative battery charging current,crc_ok,,none
+0x0168,BAT,27,Overvoltage alarm voltage at negative terminal,crc_ok,,none
+0x0169,BAT,28,Negative terminal low voltage alarm voltage,crc_ok,,none
+0x016A,BAT,29,Reserved / unspecified,crc_ok,,none
+0x016B,BAT,30,Reserved / unspecified,crc_ok,,none
+0x016C,BAT,31,Negative terminal dual-channel output cutoff voltage,crc_ok,,none
+0x016D,BAT,32,Negative-end dual-channel output cutoff time,crc_ok,,none
+0x016E,BAT,33,Negative battery power,crc_ok,,none
+0x016F,BAT,34,Reserved / unspecified,crc_ok,,none
+0x0170,BAT,35,Reserved / unspecified,crc_ok,,none
+0x0171,BAT,36,Reserved / unspecified,crc_ok,,none
+0x0172,BAT,37,Reserved / unspecified,crc_ok,,none
+0x0173,BAT,38,Reserved / unspecified,crc_ok,,none
+0x0174,BAT,39,Reserved / unspecified,crc_ok,,none
+0x0175,BAT,40,Reserved / unspecified,crc_ok,,none
+0x0176,BAT,41,Charging status,crc_ok,charge_stage,none
+0x0177,BAT,42,Constant voltage charging,crc_ok,charger_bulk_voltage,none
+0x0178,BAT,43,Float charging voltage,crc_ok,charger_float_voltage,none
+0x0179,BAT,44,Constant voltage charging current,crc_ok,charger_bulk_current,none
+0x017A,BAT,45,float charging current,crc_ok,charger_float_current,none
+0x017B,BAT,46,Longest constant current charging time,crc_ok,,none
+0x017C,BAT,47,Longest constant voltage charging time,crc_ok,,none
+0x017D,BAT,48,Reserved / unspecified,crc_ok,,none
+0x017E,BAT,49,Equalizing charging voltage,crc_ok,,none
+0x017F,BAT,50,Equalization charging time,crc_ok,,none
+0x0180,BAT,51,Equalization charging delay time,crc_ok,,none
+0x0181,BAT,52,Equalizing charging interval time,crc_ok,,none
+0x0182,BAT,53,Reserved / unspecified,crc_ok,,none
+0x0183,BAT,54,Equalization Interval Time Counter,crc_ok,,none
+0x0184,BAT,55,Reserved / unspecified,crc_ok,,none
+0x0185,BAT,56,Reserved / unspecified,crc_ok,,none
+0x0186,BAT,57,Reserved / unspecified,crc_ok,,none
+0x0187,BAT,58,Reserved / unspecified,crc_ok,,none
+0x0188,BAT,59,Reserved / unspecified,crc_ok,,none
+0x0189,BAT,60,Reserved / unspecified,crc_ok,,none
+0x018A,BAT,61,Reserved / unspecified,crc_ok,,none
+0x018B,BAT,62,Reserved / unspecified,crc_ok,,none
+0x018C,BAT,63,Reserved / unspecified,crc_ok,,none
+0x018D,BAT,64,Reserved / unspecified,crc_ok,,none
+0x018E,BAT,65,Reserved / unspecified,crc_ok,,none
+0x018F,BAT,66,Reserved / unspecified,crc_ok,,none
+0x0190,BMS,3,Communication Protocol,crc_ok,bms_protocol_code,none
+0x0191,BMS,4,Communication status,crc_ok,bms_status_code,none
+0x0192,BMS,5,Package ID,crc_ok,,none
+0x0193,BMS,6,Voltage,crc_ok,bms_voltage,none
+0x0194,BMS,7,Current,crc_ok,bms_current,none
+0x0195,BMS,8,temperature,crc_ok,bms_temperature,none
+0x0196,BMS,9,SOC,crc_ok,bms_soc,none
+0x0197,BMS,10,SOH,crc_ok,bms_soh,none
+0x0198,BMS,11,Current capacity,crc_ok,,none
+0x0199,BMS,12,Full charge capacity,crc_ok,,none
+0x019A,BMS,13,CV points,crc_ok,bms_charge_voltage_limit,none
+0x019B,BMS,14,Maximum charging current,crc_ok,bms_charge_current_limit,none
+0x019C,BMS,15,Maximum discharge current,crc_ok,bms_discharge_current_limit,none
+0x019D,BMS,16,Low SOC alarm points,crc_ok,bms_soc_warning_threshold,none
+0x019E,BMS,17,Low SOC shutdown point,crc_ok,bms_soc_shutdown_threshold,none
+0x019F,BMS,18,Low SOC switching point,crc_ok,,none
+0x01A0,BMS,19,High SOC cut battery power,crc_ok,,none
+0x01A1,BMS,20,Alarm,crc_ok,,none
+0x01A2,BMS,21,mistake,crc_ok,,none
+0x01A3,BMS,22,Reserved / unspecified,exception_4,,none
+0x01A4,BMS,23,Reserved / unspecified,exception_4,,none
+0x01A5,BMS,24,Reserved / unspecified,exception_4,,none
+0x01A6,BMS,25,Reserved / unspecified,exception_4,,none
+0x01A7,BMS,26,Reserved / unspecified,exception_4,,none
+0x01A8,BMS,27,Reserved / unspecified,exception_4,,none
+0x01A9,BMS,28,Reserved / unspecified,exception_4,,none
+0x01AA,BMS,29,Reserved / unspecified,exception_4,,none
+0x01AB,BMS,30,Reserved / unspecified,exception_4,,none
+0x01AC,BMS,31,Reserved / unspecified,exception_4,,none
+0x01AD,BMS,32,Reserved / unspecified,exception_4,,none
+0x01AE,BMS,33,Reserved / unspecified,exception_4,,none
+0x01AF,BMS,34,Reserved / unspecified,exception_4,,none
+0x01B0,LINE,3,Phase A mains voltage,crc_ok,,none
+0x01B1,LINE,4,Phase A mains current,crc_ok,,none
+0x01B2,LINE,5,Phase A mains frequency,crc_ok,,none
+0x01B3,LINE,6,Phase A mains power,crc_ok,,none
+0x01B4,LINE,7,Phase A AC power (electricity consumption only),crc_ok,,none
+0x01B5,LINE,8,Reserved / unspecified,crc_ok,,none
+0x01B6,LINE,9,Reserved / unspecified,crc_ok,,none
+0x01B7,LINE,10,A. Equivalent daily municipal power grid supply H,crc_ok,grid_feed_day,none
+0x01B8,LINE,11,A. Equivalent daily municipal power grid total L,crc_ok,grid_feed_day,none
+0x01B9,LINE,12,A is equivalent to the total monthly municipal power grid supply H,crc_ok,grid_feed_month,none
+0x01BA,LINE,13,A is equivalent to the total monthly power grid supply L,crc_ok,grid_feed_month,none
+0x01BB,LINE,14,A is equivalent to the total annual municipal power grid supply H,crc_ok,grid_feed_year,none
+0x01BC,LINE,15,A is equivalent to the total amount of municipal power grid feeder in a given year.,crc_ok,grid_feed_year,none
+0x01BD,LINE,16,The total power supply to the mains grid in phase A is H,crc_ok,grid_feed_total,none
+0x01BE,LINE,17,Total A-phase mains power supply L,crc_ok,grid_feed_total,none
+0x01BF,LINE,18,A. Equivalent daily electricity consumption H,crc_ok,grid_import_day,none
+0x01C0,LINE,19,A is equivalent to the total daily electricity consumption L,crc_ok,grid_import_day,none
+0x01C1,LINE,20,"A is equivalent to H, the total monthly electricity consumption.",crc_ok,grid_import_month,none
+0x01C2,LINE,21,A is equivalent to the total monthly electricity consumption L,crc_ok,grid_import_month,none
+0x01C3,LINE,22,A. Equivalent annual total municipal electricity consumption H,crc_ok,grid_import_year,none
+0x01C4,LINE,23,A is equivalent to the total annual electricity consumption of the municipality.,crc_ok,grid_import_year,none
+0x01C5,LINE,24,Total electricity consumption of phase A by the mains H,crc_ok,grid_import_total,none
+0x01C6,LINE,25,Total electricity consumption of phase A (L),crc_ok,grid_import_total,none
+0x01C7,LINE,26,Reserved / unspecified,crc_ok,,none
+0x01C8,LINE,27,Reserved / unspecified,crc_ok,,none
+0x01C9,LINE,28,Reserved / unspecified,crc_ok,,none
+0x01CA,LINE,29,Reserved / unspecified,crc_ok,,none
+0x01CB,LINE,30,Reserved / unspecified,crc_ok,,none
+0x01CC,LINE,31,Reserved / unspecified,crc_ok,,none
+0x01CD,LINE,32,Reserved / unspecified,crc_ok,,none
+0x01CE,LINE,33,Reserved / unspecified,crc_ok,,none
+0x01CF,LINE,34,Reserved / unspecified,crc_ok,,none
+0x01D0,LINE,35,Phase B mains voltage,crc_ok,,none
+0x01D1,LINE,36,Phase B mains current,crc_ok,,none
+0x01D2,LINE,37,Phase B mains frequency,crc_ok,,none
+0x01D3,LINE,38,Phase B AC power,crc_ok,,none
+0x01D4,LINE,39,Phase B AC power (power consumption only),crc_ok,,none
+0x01D5,LINE,40,Reserved / unspecified,crc_ok,,none
+0x01D6,LINE,41,Reserved / unspecified,crc_ok,,none
+0x01D7,LINE,42,B is equivalent to the total daily power supply to the municipal power grid.,crc_ok,,none
+0x01D8,LINE,43,B is equivalent to the total daily power supply to the municipal power grid.,crc_ok,,none
+0x01D9,LINE,44,B is equivalent to the total monthly power grid supply H,crc_ok,,none
+0x01DA,LINE,45,B is equivalent to the total monthly power grid supply L,crc_ok,,none
+0x01DB,LINE,46,B is equivalent to the total annual municipal power grid supply H,crc_ok,,none
+0x01DC,LINE,47,B is equivalent to the total annual municipal power grid supply L,crc_ok,,none
+0x01DD,LINE,48,Total B-phase mains power supply H,crc_ok,,none
+0x01DE,LINE,49,Total B-phase mains power supply L,crc_ok,,none
+0x01DF,LINE,50,B is equivalent to H's daily total electricity consumption.,crc_ok,,none
+0x01E0,LINE,51,B is equivalent to the daily total electricity consumption L,crc_ok,,none
+0x01E1,LINE,52,B is equivalent to the total monthly electricity consumption H.,crc_ok,,none
+0x01E2,LINE,53,B is equivalent to the total monthly electricity consumption L.,crc_ok,,none
+0x01E3,LINE,54,B is equivalent to the total annual municipal electricity consumption H,crc_ok,,none
+0x01E4,LINE,55,B is equivalent to the total annual electricity consumption of the municipality.,crc_ok,,none
+0x01E5,LINE,56,Total electricity consumption of phase B from the mains H,crc_ok,,none
+0x01E6,LINE,57,Total electricity consumption of phase B (L),crc_ok,,none
+0x01E7,LINE,58,Reserved / unspecified,crc_ok,,none
+0x01E8,LINE,59,Reserved / unspecified,crc_ok,,none
+0x01E9,LINE,60,Reserved / unspecified,crc_ok,,none
+0x01EA,LINE,61,Reserved / unspecified,crc_ok,,none
+0x01EB,LINE,62,Reserved / unspecified,crc_ok,,none
+0x01EC,LINE,63,Reserved / unspecified,crc_ok,,none
+0x01ED,LINE,64,Reserved / unspecified,crc_ok,,none
+0x01EE,LINE,65,Reserved / unspecified,crc_ok,,none
+0x01EF,LINE,66,Reserved / unspecified,crc_ok,,none
+0x01F0,LINE,67,C-phase mains voltage,crc_ok,,none
+0x01F1,LINE,68,C-phase mains current,crc_ok,,none
+0x01F2,LINE,69,C-phase mains frequency,crc_ok,,none
+0x01F3,LINE,70,C-phase mains power,crc_ok,,none
+0x01F4,LINE,71,C-phase AC power (power consumption only),crc_ok,,none
+0x01F5,LINE,72,Reserved / unspecified,crc_ok,,none
+0x01F6,LINE,73,Reserved / unspecified,crc_ok,,none
+0x01F7,LINE,74,C Equivalent daily municipal power grid total H,crc_ok,,none
+0x01F8,LINE,75,C Equivalent daily municipal power grid total L,crc_ok,,none
+0x01F9,LINE,76,C is equivalent to the total monthly municipal power grid supply H,crc_ok,,none
+0x01FA,LINE,77,C is equivalent to the total monthly municipal power grid supply L,crc_ok,,none
+0x01FB,LINE,78,C is equivalent to the total annual municipal power grid supply H,crc_ok,,none
+0x01FC,LINE,79,is equivalent to the total annual municipal power grid supply L,crc_ok,,none
+0x01FD,LINE,80,Total C-phase mains power supply H,crc_ok,,none
+0x01FE,LINE,81,Total C-phase mains power supply L,crc_ok,,none
+0x01FF,LINE,82,C Equivalent daily electricity consumption H,crc_ok,,none
+0x0200,LINE,83,C is equivalent to the total daily electricity consumption L,crc_ok,,none
+0x0201,LINE,84,C is equivalent to the total monthly electricity consumption H,crc_ok,,none
+0x0202,LINE,85,C is equivalent to the total monthly electricity consumption L,crc_ok,,none
+0x0203,LINE,86,C is equivalent to the total annual electricity consumption of the municipality.,crc_ok,,none
+0x0204,LINE,87,C is equivalent to the total annual electricity consumption of the municipality.,crc_ok,,none
+0x0205,LINE,88,Total C-phase mains power consumption H,crc_ok,,none
+0x0206,LINE,89,Total C-phase mains power consumption L,crc_ok,,none
+0x0207,LINE,90,Reserved / unspecified,crc_ok,,none
+0x0208,LINE,91,Reserved / unspecified,crc_ok,,none
+0x0209,LINE,92,Reserved / unspecified,crc_ok,,none
+0x020A,LINE,93,Reserved / unspecified,crc_ok,,none
+0x020B,LINE,94,Reserved / unspecified,crc_ok,,none
+0x020C,LINE,95,Reserved / unspecified,crc_ok,,none
+0x020D,LINE,96,Reserved / unspecified,crc_ok,,none
+0x020E,LINE,97,Reserved / unspecified,crc_ok,,none
+0x020F,LINE,98,Reserved / unspecified,crc_ok,,none
+0x0210,OP,3,Output priority,crc_ok,,none
+0x0211,OP,4,Operating mode,crc_ok,,none
+0x0212,OP,5,Reserved / unspecified,crc_ok,,none
+0x0213,OP,6,Reserved / unspecified,crc_ok,,none
+0x0214,OP,7,Reserved / unspecified,crc_ok,,none
+0x0215,OP,8,Reserved / unspecified,crc_ok,,none
+0x0216,OP,9,Reserved / unspecified,crc_ok,,none
+0x0217,OP,10,Reserved / unspecified,crc_ok,,none
+0x0218,OP,11,A-phase output voltage,crc_ok,,none
+0x0219,OP,12,Phase A output frequency,crc_ok,,none
+0x021A,OP,13,Phase A output current,crc_ok,,none
+0x021B,OP,14,Phase A outputs a small current.,crc_ok,,none
+0x021C,OP,15,Phase A output active power,crc_ok,,none
+0x021D,OP,16,Apparent power output of phase A,crc_ok,,none
+0x021E,OP,17,Reserved / unspecified,crc_ok,,none
+0x021F,OP,18,Reserved / unspecified,crc_ok,,none
+0x0220,OP,19,Phase A load percentage,crc_ok,,none
+0x0221,OP,20,A equivalent daily output power H,crc_ok,load_energy_day,none
+0x0222,OP,21,A equivalent daily output power L,crc_ok,load_energy_day,none
+0x0223,OP,22,A is equivalent to monthly output power H,crc_ok,load_energy_month,none
+0x0224,OP,23,A is equivalent to monthly power output L,crc_ok,load_energy_month,none
+0x0225,OP,24,A equivalent annual power output H,crc_ok,load_energy_year,none
+0x0226,OP,25,A equivalent annual power output L,crc_ok,load_energy_year,none
+0x0227,OP,26,Phase A total output power H,crc_ok,load_energy_total,none
+0x0228,OP,27,Phase A total output power L,crc_ok,load_energy_total,none
+0x0229,OP,28,Reserved / unspecified,crc_ok,,none
+0x022A,OP,29,Reserved / unspecified,crc_ok,,none
+0x022B,OP,30,Reserved / unspecified,crc_ok,,none
+0x022C,OP,31,Reserved / unspecified,crc_ok,,none
+0x022D,OP,32,Reserved / unspecified,crc_ok,,none
+0x022E,OP,33,Reserved / unspecified,crc_ok,,none
+0x022F,OP,34,Reserved / unspecified,crc_ok,,none
+0x0230,OP,35,B-phase output voltage,crc_ok,,none
+0x0231,OP,36,B-phase output frequency,crc_ok,,none
+0x0232,OP,37,B-phase output current,crc_ok,,none
+0x0233,OP,38,B-phase outputs a small current.,crc_ok,,none
+0x0234,OP,39,Phase B output active power,crc_ok,,none
+0x0235,OP,40,Phase B output apparent power,crc_ok,,none
+0x0236,OP,41,Reserved / unspecified,crc_ok,,none
+0x0237,OP,42,Reserved / unspecified,crc_ok,,none
+0x0238,OP,43,Phase B load percentage,crc_ok,,none
+0x0239,OP,44,B is equivalent to daily output power H,crc_ok,,none
+0x023A,OP,45,B is equivalent to daily output power L,crc_ok,,none
+0x023B,OP,46,B is equivalent to monthly output power H,crc_ok,,none
+0x023C,OP,47,B is equivalent to monthly output power L,crc_ok,,none
+0x023D,OP,48,B is equivalent to annual power output H,crc_ok,,none
+0x023E,OP,49,B is equivalent to annual power output L,crc_ok,,none
+0x023F,OP,50,Phase B total output power H,crc_ok,,none
+0x0240,OP,51,Phase B total output power L,crc_ok,,none
+0x0241,OP,52,Reserved / unspecified,crc_ok,,none
+0x0242,OP,53,Reserved / unspecified,crc_ok,,none
+0x0243,OP,54,Reserved / unspecified,crc_ok,,none
+0x0244,OP,55,Reserved / unspecified,crc_ok,,none
+0x0245,OP,56,Reserved / unspecified,crc_ok,,none
+0x0246,OP,57,Reserved / unspecified,crc_ok,,none
+0x0247,OP,58,Reserved / unspecified,crc_ok,,none
+0x0248,OP,59,C-phase output voltage,crc_ok,,none
+0x0249,OP,60,C-phase output frequency,crc_ok,,none
+0x024A,OP,61,C-phase output current,crc_ok,,none
+0x024B,OP,62,C-phase outputs a small current.,crc_ok,,none
+0x024C,OP,63,C-phase output active power,crc_ok,,none
+0x024D,OP,64,C-phase output apparent power,crc_ok,,none
+0x024E,OP,65,Reserved / unspecified,crc_ok,,none
+0x024F,OP,66,Reserved / unspecified,crc_ok,,none
+0x0250,OP,67,C-phase load percentage,crc_ok,,none
+0x0251,OP,68,C is equivalent to daily output power H,crc_ok,,none
+0x0252,OP,69,C Equivalent daily output power L,crc_ok,,none
+0x0253,OP,70,C is equivalent to monthly output power H,crc_ok,,none
+0x0254,OP,71,C is equivalent to monthly output power L,crc_ok,,none
+0x0255,OP,72,C equivalent annual power output H,crc_ok,,none
+0x0256,OP,73,C is equivalent to annual power output L,crc_ok,,none
+0x0257,OP,74,C-phase total output power H,crc_ok,,none
+0x0258,OP,75,C-phase total output power L,crc_ok,,none
+0x0259,OP,76,Reserved / unspecified,crc_ok,,none
+0x025A,OP,77,Reserved / unspecified,crc_ok,,none
+0x025B,OP,78,Reserved / unspecified,crc_ok,,none
+0x025C,OP,79,Reserved / unspecified,crc_ok,,none
+0x025D,OP,80,Reserved / unspecified,crc_ok,,none
+0x025E,OP,81,Reserved / unspecified,crc_ok,,none
+0x025F,OP,82,Reserved / unspecified,crc_ok,,none
+0x0260,PV,3,Total photovoltaic voltage,crc_ok,,none
+0x0261,PV,4,Total photovoltaic current H,crc_ok,,none
+0x0262,PV,5,Total photovoltaic current L,crc_ok,,none
+0x0263,PV,6,Total photovoltaic power H,crc_ok,,none
+0x0264,PV,7,Total photovoltaic power L,crc_ok,,none
+0x0265,PV,8,Total Solar Tracking Status,crc_ok,,none
+0x0266,PV,9,Total state of solar power rechargeability,crc_ok,,none
+0x0267,PV,10,Total photovoltaic power generation H,crc_ok,,none
+0x0268,PV,11,Total photovoltaic power generation L,crc_ok,,none
+0x0269,PV,12,Total photovoltaic power generation H,crc_ok,,none
+0x026A,PV,13,Total photovoltaic power generation L,crc_ok,,none
+0x026B,PV,14,Total photovoltaic power generation H,crc_ok,,none
+0x026C,PV,15,Total photovoltaic power generation L,crc_ok,,none
+0x026D,PV,16,Total photovoltaic power generation H,crc_ok,,none
+0x026E,PV,17,Total photovoltaic power generation L,crc_ok,,none
+0x026F,PV,18,Reserved / unspecified,crc_ok,,none
+0x0270,PV,19,Photovoltaic voltage 1,crc_ok,,none
+0x0271,PV,20,Photovoltaic 1 current,crc_ok,,none
+0x0272,PV,21,Photovoltaic power,crc_ok,,none
+0x0273,PV,22,Photovoltaic 1 tracking status,crc_ok,pv1_tracking_code,none
+0x0274,PV,23,Photovoltaic 1 Rechargeable State,crc_ok,pv1_charge_code,none
+0x0275,PV,24,Photovoltaic power generation H on the day,crc_ok,pv1_energy_day,none
+0x0276,PV,25,Photovoltaic power generation L on the day,crc_ok,pv1_energy_day,none
+0x0277,PV,26,Photovoltaic power generation H in the current month,crc_ok,pv1_energy_month,none
+0x0278,PV,27,Photovoltaic power generation L in the current month,crc_ok,pv1_energy_month,none
+0x0279,PV,28,Photovoltaic power generation H in the current year,crc_ok,pv1_energy_year,none
+0x027A,PV,29,Photovoltaic power generation L in the current year,crc_ok,pv1_energy_year,none
+0x027B,PV,30,Total power generation H of photovoltaic 1,crc_ok,pv1_energy_total,none
+0x027C,PV,31,Photovoltaic 1 Total Power Generation L,crc_ok,pv1_energy_total,none
+0x027D,PV,32,Reserved / unspecified,crc_ok,,none
+0x027E,PV,33,Reserved / unspecified,crc_ok,,none
+0x027F,PV,34,Reserved / unspecified,crc_ok,,none
+0x0280,PV,35,Photovoltaic 2 voltage,crc_ok,,none
+0x0281,PV,36,Photovoltaic 2 Current,crc_ok,,none
+0x0282,PV,37,Photovoltaic 2 power,crc_ok,,none
+0x0283,PV,38,Photovoltaic 2 tracking status,crc_ok,,none
+0x0284,PV,39,Photovoltaic 2 Rechargeable State,crc_ok,,none
+0x0285,PV,40,Photovoltaic 2's daily power generation H,crc_ok,,none
+0x0286,PV,41,Photovoltaic 2's daily power generation L,crc_ok,,none
+0x0287,PV,42,Photovoltaic power generation H in the current month,crc_ok,,none
+0x0288,PV,43,Photovoltaic power generation L in the current month,crc_ok,,none
+0x0289,PV,44,Photovoltaic 2's annual power generation H,crc_ok,,none
+0x028A,PV,45,Photovoltaic 2's annual power generation L,crc_ok,,none
+0x028B,PV,46,Photovoltaic 2 Total Power Generation H,crc_ok,,none
+0x028C,PV,47,Photovoltaic 2 Total Power Generation L,crc_ok,,none
+0x028D,PV,48,Reserved / unspecified,crc_ok,,none
+0x028E,PV,49,Reserved / unspecified,crc_ok,,none
+0x028F,PV,50,Reserved / unspecified,crc_ok,,none
+0x0290,PV,51,Reserved / unspecified,crc_ok,,none
+0x0291,PV,52,Reserved / unspecified,crc_ok,,none
+0x0292,PV,53,Reserved / unspecified,crc_ok,,none
+0x0293,PV,54,Reserved / unspecified,crc_ok,,none
+0x0294,PV,55,Reserved / unspecified,crc_ok,,none
+0x0295,PV,56,Reserved / unspecified,crc_ok,,none
+0x0296,PV,57,Reserved / unspecified,crc_ok,,none
+0x0297,PV,58,Reserved / unspecified,crc_ok,,none
+0x0298,PV,59,Reserved / unspecified,crc_ok,,none
+0x0299,PV,60,Reserved / unspecified,crc_ok,,none
+0x029A,PV,61,Reserved / unspecified,crc_ok,,none
+0x029B,PV,62,Reserved / unspecified,crc_ok,,none
+0x029C,PV,63,Reserved / unspecified,crc_ok,,none
+0x029D,PV,64,Reserved / unspecified,crc_ok,,none
+0x029E,PV,65,Reserved / unspecified,crc_ok,,none
+0x029F,PV,66,Reserved / unspecified,crc_ok,,none
+0x02A0,INV,3,Inverter voltage setting value,crc_ok,,none
+0x02A1,INV,4,Inverter frequency setting value,crc_ok,,none
+0x02A2,INV,5,Reserved / unspecified,crc_ok,,none
+0x02A3,INV,6,Reserved / unspecified,crc_ok,,none
+0x02A4,INV,7,Reserved / unspecified,crc_ok,,none
+0x02A5,INV,8,Reserved / unspecified,crc_ok,,none
+0x02A6,INV,9,Reserved / unspecified,crc_ok,,none
+0x02A7,INV,10,Reserved / unspecified,crc_ok,,none
+0x02A8,INV,11,Reserved / unspecified,crc_ok,,none
+0x02A9,INV,12,Reserved / unspecified,crc_ok,,none
+0x02AA,INV,13,A-phase inverter voltage,crc_ok,inverter_voltage,none
+0x02AB,INV,14,A-phase inverter frequency,crc_ok,inverter_frequency,none
+0x02AC,INV,15,A-phase inverter current,crc_ok,inverter_current,none
+0x02AD,INV,16,Phase A DC component,crc_ok,inverter_dc_component,none
+0x02AE,INV,17,Phase A Daily Input Power H,crc_ok,,none
+0x02AF,INV,18,Phase A Daily Input Power L,crc_ok,,none
+0x02B0,INV,19,Phase A Monthly Input Power H,crc_ok,,none
+0x02B1,INV,20,Phase A Monthly Input Power L,crc_ok,,none
+0x02B2,INV,21,Phase A total input power H,crc_ok,,none
+0x02B3,INV,22,Phase A total input power L,crc_ok,,none
+0x02B4,INV,23,Phase A daily output power H,crc_ok,,none
+0x02B5,INV,24,Phase A daily output power L,crc_ok,,none
+0x02B6,INV,25,Phase A output power H,crc_ok,,none
+0x02B7,INV,26,Phase A output power L,crc_ok,,none
+0x02B8,INV,27,Phase A total output power H,crc_ok,,none
+0x02B9,INV,28,Phase A total output power L,crc_ok,,none
+0x02BA,INV,29,B-phase inverter voltage,crc_ok,,none
+0x02BB,INV,30,B-phase inverter frequency,crc_ok,,none
+0x02BC,INV,31,B-phase inverter current,crc_ok,,none
+0x02BD,INV,32,Phase B DC component,crc_ok,,none
+0x02BE,INV,33,Reserved / unspecified,crc_ok,,none
+0x02BF,INV,34,Reserved / unspecified,crc_ok,,none
+0x02C0,INV,35,B-phase daily feeder power H,crc_ok,,none
+0x02C1,INV,36,B-phase daily feeder power L,crc_ok,,none
+0x02C2,INV,37,B-phase monthly feeder power H,crc_ok,,none
+0x02C3,INV,38,B-phase monthly feeder power L,crc_ok,,none
+0x02C4,INV,39,B-phase total grid power H,crc_ok,,none
+0x02C5,INV,40,B-phase total power supply L,crc_ok,,none
+0x02C6,INV,41,Reserved / unspecified,crc_ok,,none
+0x02C7,INV,42,Reserved / unspecified,crc_ok,,none
+0x02C8,INV,43,Reserved / unspecified,crc_ok,,none
+0x02C9,INV,44,Reserved / unspecified,crc_ok,,none
+0x02CA,INV,45,C-phase inverter voltage,crc_ok,,none
+0x02CB,INV,46,C-phase inverter frequency,crc_ok,,none
+0x02CC,INV,47,C-phase inverter current,crc_ok,,none
+0x02CD,INV,48,C-phase DC component,crc_ok,,none
+0x02CE,INV,49,Reserved / unspecified,crc_ok,,none
+0x02CF,INV,50,Reserved / unspecified,crc_ok,,none
+0x02D0,INV,51,C-phase daily feeder power H,crc_ok,,none
+0x02D1,INV,52,C-phase daily feeder power L,crc_ok,,none
+0x02D2,INV,53,C-phase monthly feeder power H,crc_ok,,none
+0x02D3,INV,54,C-phase monthly power supply L,crc_ok,,none
+0x02D4,INV,55,C-phase total grid power H,crc_ok,,none
+0x02D5,INV,56,C-phase total grid power L,crc_ok,,none
+0x02D6,INV,57,Reserved / unspecified,crc_ok,,none
+0x02D7,INV,58,Reserved / unspecified,crc_ok,,none
+0x02D8,INV,59,Reserved / unspecified,crc_ok,,none
+0x02D9,INV,60,Reserved / unspecified,crc_ok,,none
+0x02DA,INV,61,Reserved / unspecified,crc_ok,,none
+0x02DB,INV,62,Reserved / unspecified,crc_ok,,none
+0x02DC,INV,63,Reserved / unspecified,crc_ok,,none
+0x02DD,INV,64,Reserved / unspecified,crc_ok,,none
+0x02DE,INV,65,Reserved / unspecified,crc_ok,,none
+0x02DF,INV,66,Reserved / unspecified,crc_ok,,none
+0x0320,FAN,3,Fan speed,crc_ok,fan_speed,none
+0x0321,FAN,4,Fan status,crc_ok,fan_state_code,none
+0x0322,FAN,5,Reserved / unspecified,crc_ok,,none
+0x0323,FAN,6,Reserved / unspecified,crc_ok,,none
+0x0330,NTC,3,PV temperature,crc_ok,ntc_pv_raw,none
+0x0331,NTC,4,INV temperature,crc_ok,ntc_inverter_raw,none
+0x0332,NTC,5,CHG temperature,crc_ok,ntc_charger_raw,none
+0x0333,NTC,6,CHG2 temperature,crc_ok,ntc_charger_2_raw,none
+0x0334,NTC,7,Ambient temperature,crc_ok,ntc_ambient_raw,none
+0x0335,NTC,8,DIS_CHG temperature,crc_ok,ntc_discharge_raw,none
+0x0336,NTC,9,Reserved / unspecified,crc_ok,,none
+0x0337,NTC,10,Reserved / unspecified,crc_ok,,none
+0x0338,NTC,11,Reserved / unspecified,crc_ok,,none
+0x0339,NTC,12,Reserved / unspecified,crc_ok,,none
+0x033A,NTC,13,Reserved / unspecified,crc_ok,,none
+0x033B,NTC,14,Reserved / unspecified,crc_ok,,none
+0x033C,NTC,15,Reserved / unspecified,crc_ok,,none
+0x033D,NTC,16,Reserved / unspecified,crc_ok,,none
+0x033E,NTC,17,Reserved / unspecified,crc_ok,,none
+0x033F,NTC,18,Reserved / unspecified,crc_ok,,none
+0x0350,FunctionSwitch,3,Factory reset function0 H,crc_ok,function_flags_high,none
+0x0351,FunctionSwitch,4,Factory reset function available.,crc_ok,function_flags_low,none
+0x0352,FunctionSwitch,5,Factory reset function1 H,crc_ok,,none
+0x0353,FunctionSwitch,6,Factory reset function 1 L,crc_ok,,none
+0x0354,FunctionSwitch,7,Factory reset function0 H,crc_ok,,none
+0x0355,FunctionSwitch,8,Factory reset function is not available.,crc_ok,,none
+0x0356,FunctionSwitch,9,Factory reset function1 H,crc_ok,,none
+0x0357,FunctionSwitch,10,Unrestored factory settings function 1 L,crc_ok,,none
+0x0358,FunctionSwitch,11,Reserved / unspecified,crc_ok,,none
+0x0359,FunctionSwitch,12,Reserved / unspecified,crc_ok,,none
+0x035A,FunctionSwitch,13,Reserved / unspecified,crc_ok,,none
+0x035B,FunctionSwitch,14,Reserved / unspecified,crc_ok,,none
+0x035C,FunctionSwitch,15,Reserved / unspecified,crc_ok,,none
+0x035D,FunctionSwitch,16,Reserved / unspecified,crc_ok,,none
+0x035E,FunctionSwitch,17,Reserved / unspecified,crc_ok,,none
+0x035F,FunctionSwitch,18,Reserved / unspecified,crc_ok,,none
+0x0360,Time,3,Year,crc_ok,,none
+0x0361,Time,4,moon,crc_ok,,none
+0x0362,Time,5,day,crc_ok,,none
+0x0363,Time,6,hour,crc_ok,,none
+0x0364,Time,7,point,crc_ok,,none
+0x0365,Time,8,Second,crc_ok,,none
+0x0366,Time,9,Reserved / unspecified,crc_ok,,none
+0x0367,Time,10,Reserved / unspecified,crc_ok,,none
+0x0400,PARA,3,Reserved / unspecified,not_probed,,none
+0x1000,Admin,3,Service area (not exposed),not_probed,,none
+0x1001,Admin,4,Service area (not exposed),not_probed,,none
+0x1002,Admin,5,Service area (not exposed),not_probed,,none
+0x1003,Admin,6,Service area (not exposed),not_probed,,none
+0x1004,Admin,7,Service area (not exposed),not_probed,,none
+0x1005,Admin,8,Service area (not exposed),not_probed,,none
+0x1006,Admin,9,Service area (not exposed),not_probed,,none
+0x1007,Admin,10,Service area (not exposed),not_probed,,none
+0x1008,Admin,11,Service area (not exposed),not_probed,,none
+0x1009,Admin,12,Service area (not exposed),not_probed,,none
+0x100A,Admin,13,Service area (not exposed),not_probed,,none
+0x100B,Admin,14,Service area (not exposed),not_probed,,none
+0x100C,Admin,15,Service area (not exposed),not_probed,,none
+0x100D,Admin,16,Service area (not exposed),not_probed,,none
+0x100E,Admin,17,Service area (not exposed),not_probed,,none
+0x100F,Admin,18,Service area (not exposed),not_probed,,none
+0x1010,Admin,19,Service area (not exposed),not_probed,,none
+0x1011,Admin,20,Service area (not exposed),not_probed,,none
+0x1012,Admin,21,Service area (not exposed),not_probed,,none
+0x1013,Admin,22,Service area (not exposed),not_probed,,none
+0x1014,Admin,23,Service area (not exposed),not_probed,,none
+0x1015,Admin,24,Service area (not exposed),not_probed,,none
+0x1016,Admin,25,Service area (not exposed),not_probed,,none
+0x1017,Admin,26,Service area (not exposed),not_probed,,none
+0x1018,Admin,27,Service area (not exposed),not_probed,,none
+0x1019,Admin,28,Service area (not exposed),not_probed,,none
+0x101A,Admin,29,Service area (not exposed),not_probed,,none
+0x101B,Admin,30,Service area (not exposed),not_probed,,none
+0x101C,Admin,31,Service area (not exposed),not_probed,,none
+0x101D,Admin,32,Service area (not exposed),not_probed,,none
+0x101E,Admin,33,Service area (not exposed),not_probed,,none
+0x101F,Admin,34,Service area (not exposed),not_probed,,none
+0x1020,Admin,35,Service area (not exposed),crc_ok,,none
+0x1021,Admin,36,Service area (not exposed),crc_ok,,none
+0x1022,Admin,37,Service area (not exposed),crc_ok,,none
+0x1023,Admin,38,Service area (not exposed),crc_ok,,none
+0x1024,Admin,39,Service area (not exposed),crc_ok,,none
+0x1025,Admin,40,Service area (not exposed),crc_ok,,none
+0x1026,Admin,41,Service area (not exposed),crc_ok,,none
+0x1027,Admin,42,Service area (not exposed),crc_ok,,none
+0x1028,Admin,43,Service area (not exposed),crc_ok,,none
+0x1029,Admin,44,Service area (not exposed),crc_ok,,none
+0x102A,Admin,45,Service area (not exposed),crc_ok,,none
+0x102B,Admin,46,Service area (not exposed),crc_ok,,none
+0x102C,Admin,47,Service area (not exposed),crc_ok,,none
+0x102D,Admin,48,Service area (not exposed),crc_ok,,none
+0x102E,Admin,49,Service area (not exposed),crc_ok,,none
+0x1100,FCT,3,Service area (not exposed),not_probed,,none
+0x1101,FCT,4,Service area (not exposed),not_probed,,none
+0x1102,FCT,5,Service area (not exposed),not_probed,,none
+0x1103,FCT,6,Service area (not exposed),not_probed,,none
+0x1104,FCT,7,Service area (not exposed),not_probed,,none
+0x1105,FCT,8,Service area (not exposed),not_probed,,none
+0x1106,FCT,9,Service area (not exposed),not_probed,,none
+0x1107,FCT,10,Service area (not exposed),not_probed,,none
+0x1108,FCT,11,Service area (not exposed),not_probed,,none
+0x1109,FCT,12,Service area (not exposed),not_probed,,none
+0x110A,FCT,13,Service area (not exposed),not_probed,,none
+0x110B,FCT,14,Service area (not exposed),not_probed,,none
+0x110C,FCT,15,Service area (not exposed),not_probed,,none
+0x110D,FCT,16,Service area (not exposed),not_probed,,none
+0x110E,FCT,17,Service area (not exposed),not_probed,,none
+0x110F,FCT,18,Service area (not exposed),not_probed,,none
+0x1110,FCT,19,Service area (not exposed),not_probed,,none
+0x1111,FCT,20,Service area (not exposed),not_probed,,none
+0x1112,FCT,21,Service area (not exposed),not_probed,,none
+0x1200,Calibration,3,Service area (not exposed),not_probed,,none
+0x1201,Calibration,4,Service area (not exposed),not_probed,,none
+0x1202,Calibration,5,Service area (not exposed),not_probed,,none
+0x1203,Calibration,6,Service area (not exposed),not_probed,,none
+0x1204,Calibration,7,Service area (not exposed),not_probed,,none
+0x1205,Calibration,8,Service area (not exposed),not_probed,,none
+0x1206,Calibration,9,Service area (not exposed),not_probed,,none
+0x1207,Calibration,10,Service area (not exposed),not_probed,,none
+0x1208,Calibration,11,Service area (not exposed),not_probed,,none
+0x1209,Calibration,12,Service area (not exposed),not_probed,,none
+0x120A,Calibration,13,Service area (not exposed),not_probed,,none
+0x120B,Calibration,14,Service area (not exposed),not_probed,,none
+0x120C,Calibration,15,Service area (not exposed),not_probed,,none
+0x120D,Calibration,16,Service area (not exposed),not_probed,,none
+0x120E,Calibration,17,Service area (not exposed),not_probed,,none
+0x120F,Calibration,18,Service area (not exposed),not_probed,,none
+0x1210,Calibration,19,Service area (not exposed),not_probed,,none
+0x1211,Calibration,20,Service area (not exposed),not_probed,,none
+0x1212,Calibration,21,Service area (not exposed),not_probed,,none
+0x1213,Calibration,22,Service area (not exposed),not_probed,,none
+0x1214,Calibration,23,Service area (not exposed),not_probed,,none
+0x1215,Calibration,24,Service area (not exposed),not_probed,,none
+0x1216,Calibration,25,Service area (not exposed),not_probed,,none
+0x1217,Calibration,26,Service area (not exposed),not_probed,,none
+0x1218,Calibration,27,Service area (not exposed),not_probed,,none
+0x1219,Calibration,28,Service area (not exposed),not_probed,,none
+0x121A,Calibration,29,Service area (not exposed),not_probed,,none
+0x121B,Calibration,30,Service area (not exposed),not_probed,,none
+0x121C,Calibration,31,Service area (not exposed),not_probed,,none
+0x121D,Calibration,32,Service area (not exposed),not_probed,,none
+0x121E,Calibration,33,Service area (not exposed),not_probed,,none
+0x121F,Calibration,34,Service area (not exposed),not_probed,,none
+0x2000,Generator,3,Phase A generator voltage,crc_ok,,none
+0x2001,Generator,4,Phase A generator current,crc_ok,,none
+0x2002,Generator,5,Phase A generator frequency,crc_ok,,none
+0x2003,Generator,6,A-phase generator power,crc_ok,,none
+0x2004,Generator,7,Reserved / unspecified,crc_ok,,none
+0x2005,Generator,8,Reserved / unspecified,crc_ok,,none
+0x2006,Generator,9,Reserved / unspecified,crc_ok,,none
+0x2007,Generator,10,Reserved / unspecified,crc_ok,,none
+0x2008,Generator,11,Reserved / unspecified,crc_ok,,none
+0x2009,Generator,12,Reserved / unspecified,crc_ok,,none
+0x200A,Generator,13,Reserved / unspecified,crc_ok,,none
+0x200B,Generator,14,Reserved / unspecified,crc_ok,,none
+0x200C,Generator,15,Reserved / unspecified,crc_ok,,none
+0x200D,Generator,16,Reserved / unspecified,crc_ok,,none
+0x200E,Generator,17,Reserved / unspecified,crc_ok,,none
+0x200F,Generator,18,Reserved / unspecified,crc_ok,,none
+0x4000,OTA,3,Service area (not exposed),not_probed,,none
+0x4001,OTA,4,Service area (not exposed),not_probed,,none
+0x4002,OTA,5,Service area (not exposed),not_probed,,none
+0x4003,OTA,6,Service area (not exposed),not_probed,,none
+0x4004,OTA,7,Service area (not exposed),not_probed,,none
+0x4005,OTA,8,Service area (not exposed),not_probed,,none
+0x4006,OTA,9,Service area (not exposed),not_probed,,none
+0x4007,OTA,10,Service area (not exposed),not_probed,,none
+0x4008,OTA,11,Service area (not exposed),not_probed,,none
+0x4009,OTA,12,Service area (not exposed),not_probed,,none
+0x400A,OTA,13,Service area (not exposed),not_probed,,none
+0x400B,OTA,14,Service area (not exposed),not_probed,,none
+0x400C,OTA,15,Service area (not exposed),not_probed,,none
+0x400D,OTA,16,Service area (not exposed),not_probed,,none
+0x400E,OTA,17,Service area (not exposed),not_probed,,none
+0x400F,OTA,18,Service area (not exposed),not_probed,,none
+0x4010,OTA,19,Service area (not exposed),not_probed,,none
+0x4011,OTA,20,Service area (not exposed),not_probed,,none
+0x4012,OTA,21,Service area (not exposed),not_probed,,none
+0x4013,OTA,22,Service area (not exposed),not_probed,,none
+0x4014,OTA,23,Service area (not exposed),not_probed,,none
+0x4015,OTA,24,Service area (not exposed),not_probed,,none
+0x4016,OTA,25,Service area (not exposed),not_probed,,none
+0x4017,OTA,26,Service area (not exposed),not_probed,,none
+0x4018,OTA,27,Service area (not exposed),not_probed,,none
+0x4019,OTA,28,Service area (not exposed),not_probed,,none
+0x401A,OTA,29,Service area (not exposed),not_probed,,none
+0x401B,OTA,30,Service area (not exposed),not_probed,,none
+0x401C,OTA,31,Service area (not exposed),not_probed,,none
+0x401D,OTA,32,Service area (not exposed),not_probed,,none
+0x401E,OTA,33,Service area (not exposed),not_probed,,none
+0x401F,OTA,34,Service area (not exposed),not_probed,,none
+0x4020,OTA,35,Service area (not exposed),not_probed,,none
+0x4021,OTA,36,Service area (not exposed),not_probed,,none
+0x4022,OTA,37,Service area (not exposed),not_probed,,none
+0x4023,OTA,38,Service area (not exposed),not_probed,,none
+0x4024,OTA,39,Service area (not exposed),not_probed,,none
+0x4025,OTA,40,Service area (not exposed),not_probed,,none
+0x4026,OTA,41,Service area (not exposed),not_probed,,none
+0x4027,OTA,42,Service area (not exposed),not_probed,,none
+0x4028,OTA,43,Service area (not exposed),not_probed,,none
+0x4029,OTA,44,Service area (not exposed),not_probed,,none
+0x402A,OTA,45,Service area (not exposed),not_probed,,none
+0x402B,OTA,46,Service area (not exposed),not_probed,,none
+0x402C,OTA,47,Service area (not exposed),not_probed,,none
+0x402D,OTA,48,Service area (not exposed),not_probed,,none
+0x402E,OTA,49,Service area (not exposed),not_probed,,none
+0x402F,OTA,50,Service area (not exposed),not_probed,,none
+0x4030,OTA,51,Service area (not exposed),not_probed,,none
+0x4031,OTA,52,Service area (not exposed),not_probed,,none
+0x4032,OTA,53,Service area (not exposed),not_probed,,none
+0x4033,OTA,54,Service area (not exposed),not_probed,,none
+0x4034,OTA,55,Service area (not exposed),not_probed,,none
+0x4035,OTA,56,Service area (not exposed),not_probed,,none
+0x4036,OTA,57,Service area (not exposed),not_probed,,none
+0x4037,OTA,58,Service area (not exposed),not_probed,,none
+0x4038,OTA,59,Service area (not exposed),not_probed,,none
+0x4039,OTA,60,Service area (not exposed),not_probed,,none
+0x403A,OTA,61,Service area (not exposed),not_probed,,none
+0x403B,OTA,62,Service area (not exposed),not_probed,,none
+0x403C,OTA,63,Service area (not exposed),not_probed,,none
+0x403D,OTA,64,Service area (not exposed),not_probed,,none
+0x403E,OTA,65,Service area (not exposed),not_probed,,none
+0x403F,OTA,66,Service area (not exposed),not_probed,,none
+0x4040,OTA,67,Service area (not exposed),not_probed,,none
+0x4041,OTA,68,Service area (not exposed),not_probed,,none
+0x4042,OTA,69,Service area (not exposed),not_probed,,none
+0x4043,OTA,70,Service area (not exposed),not_probed,,none
+0x4044,OTA,71,Service area (not exposed),not_probed,,none
+0x4045,OTA,72,Service area (not exposed),not_probed,,none
+0x4046,OTA,73,Service area (not exposed),not_probed,,none
+0x4047,OTA,74,Service area (not exposed),not_probed,,none
+0x4048,OTA,75,Service area (not exposed),not_probed,,none
+0x4049,OTA,76,Service area (not exposed),not_probed,,none
+0x404A,OTA,77,Service area (not exposed),not_probed,,none
+0x404B,OTA,78,Service area (not exposed),not_probed,,none
+0x404C,OTA,79,Service area (not exposed),not_probed,,none
+0x404D,OTA,80,Service area (not exposed),not_probed,,none
+0x404E,OTA,81,Service area (not exposed),not_probed,,none
+0x404F,OTA,82,Service area (not exposed),not_probed,,none
+0x4050,OTA,83,Service area (not exposed),not_probed,,none
+0x4051,OTA,84,Service area (not exposed),not_probed,,none
+0x4052,OTA,85,Service area (not exposed),not_probed,,none
+0x4053,OTA,86,Service area (not exposed),not_probed,,none
+0x4054,OTA,87,Service area (not exposed),not_probed,,none
+0x4055,OTA,88,Service area (not exposed),not_probed,,none
+0x4056,OTA,89,Service area (not exposed),not_probed,,none
+0x4057,OTA,90,Service area (not exposed),not_probed,,none
+0x4058,OTA,91,Service area (not exposed),not_probed,,none
+0x4059,OTA,92,Service area (not exposed),not_probed,,none
+0x405A,OTA,93,Service area (not exposed),not_probed,,none
+0x405B,OTA,94,Service area (not exposed),not_probed,,none
+0x405C,OTA,95,Service area (not exposed),not_probed,,none
+0x405D,OTA,96,Service area (not exposed),not_probed,,none
+0x405E,OTA,97,Service area (not exposed),not_probed,,none
+0x405F,OTA,98,Service area (not exposed),not_probed,,none
+0x4060,OTA,99,Service area (not exposed),not_probed,,none
+0x4061,OTA,100,Service area (not exposed),not_probed,,none
+0x4062,OTA,101,Service area (not exposed),not_probed,,none
+0x4063,OTA,102,Service area (not exposed),not_probed,,none
+0x4064,OTA,103,Service area (not exposed),not_probed,,none
+0x4065,OTA,104,Service area (not exposed),not_probed,,none
+0x4066,OTA,105,Service area (not exposed),not_probed,,none
+0x4067,OTA,106,Service area (not exposed),not_probed,,none
+0x4068,OTA,107,Service area (not exposed),not_probed,,none
+0x4069,OTA,108,Service area (not exposed),not_probed,,none
+0x406A,OTA,109,Service area (not exposed),not_probed,,none
+0x406B,OTA,110,Service area (not exposed),not_probed,,none
+0x406C,OTA,111,Service area (not exposed),not_probed,,none
+0x406D,OTA,112,Service area (not exposed),not_probed,,none
+0x406E,OTA,113,Service area (not exposed),not_probed,,none
+0x406F,OTA,114,Service area (not exposed),not_probed,,none
+0x4070,OTA,115,Service area (not exposed),not_probed,,none
+0x4071,OTA,116,Service area (not exposed),not_probed,,none
+0x4072,OTA,117,Service area (not exposed),not_probed,,none
+0x4073,OTA,118,Service area (not exposed),not_probed,,none
+0x4074,OTA,119,Service area (not exposed),not_probed,,none
+0x4075,OTA,120,Service area (not exposed),not_probed,,none
+0x4076,OTA,121,Service area (not exposed),not_probed,,none
+0x4077,OTA,122,Service area (not exposed),not_probed,,none
+0x4078,OTA,123,Service area (not exposed),not_probed,,none
+0x4079,OTA,124,Service area (not exposed),not_probed,,none
+0x407A,OTA,125,Service area (not exposed),not_probed,,none
+0x407B,OTA,126,Service area (not exposed),not_probed,,none
+0x407C,OTA,127,Service area (not exposed),not_probed,,none
+0x407D,OTA,128,Service area (not exposed),not_probed,,none
+0x407E,OTA,129,Service area (not exposed),not_probed,,none
+0x407F,OTA,130,Service area (not exposed),not_probed,,none
+0x4080,OTA,131,Service area (not exposed),not_probed,,none
+0x4081,OTA,132,Service area (not exposed),not_probed,,none
+0x4082,OTA,133,Service area (not exposed),not_probed,,none
+0x4083,OTA,134,Service area (not exposed),not_probed,,none
+0x4084,OTA,135,Service area (not exposed),not_probed,,none
+0x4085,OTA,136,Service area (not exposed),not_probed,,none
+0x4086,OTA,137,Service area (not exposed),not_probed,,none
+0x4087,OTA,138,Service area (not exposed),not_probed,,none
+0x4088,OTA,139,Service area (not exposed),not_probed,,none
+0x4089,OTA,140,Service area (not exposed),not_probed,,none
+0x408A,OTA,141,Service area (not exposed),not_probed,,none
+0x408B,OTA,142,Service area (not exposed),not_probed,,none
+0x408C,OTA,143,Service area (not exposed),not_probed,,none
+0x408D,OTA,144,Service area (not exposed),not_probed,,none
+0x408E,OTA,145,Service area (not exposed),not_probed,,none
+0x408F,OTA,146,Service area (not exposed),not_probed,,none
+0x4090,OTA,147,Service area (not exposed),not_probed,,none
+0x4091,OTA,148,Service area (not exposed),not_probed,,none
+0x4092,OTA,149,Service area (not exposed),not_probed,,none
+0x4093,OTA,150,Service area (not exposed),not_probed,,none
+0x4094,OTA,151,Service area (not exposed),not_probed,,none
+0x4095,OTA,152,Service area (not exposed),not_probed,,none
+0x4096,OTA,153,Service area (not exposed),not_probed,,none
+0x4097,OTA,154,Service area (not exposed),not_probed,,none
+0x4098,OTA,155,Service area (not exposed),not_probed,,none
+0x4099,OTA,156,Service area (not exposed),not_probed,,none
+0x409A,OTA,157,Service area (not exposed),not_probed,,none
+0x409B,OTA,158,Service area (not exposed),not_probed,,none
+0x409C,OTA,159,Service area (not exposed),not_probed,,none
+0x409D,OTA,160,Service area (not exposed),not_probed,,none
+0x409E,OTA,161,Service area (not exposed),not_probed,,none
+0x409F,OTA,162,Service area (not exposed),not_probed,,none
+0x40A0,OTA,163,Service area (not exposed),not_probed,,none
+0x40A1,OTA,164,Service area (not exposed),not_probed,,none
+0x40A2,OTA,165,Service area (not exposed),not_probed,,none
+0x40A3,OTA,166,Service area (not exposed),not_probed,,none
+0x40A4,OTA,167,Service area (not exposed),not_probed,,none
+0x40A5,OTA,168,Service area (not exposed),not_probed,,none
+0x40A6,OTA,169,Service area (not exposed),not_probed,,none
+0x40A7,OTA,170,Service area (not exposed),not_probed,,none
+0x40A8,OTA,171,Service area (not exposed),not_probed,,none
+0x40A9,OTA,172,Service area (not exposed),not_probed,,none
+0x40AA,OTA,173,Service area (not exposed),not_probed,,none
+0x40AB,OTA,174,Service area (not exposed),not_probed,,none
+0x40AC,OTA,175,Service area (not exposed),not_probed,,none
+0x40AD,OTA,176,Service area (not exposed),not_probed,,none
+0x40AE,OTA,177,Service area (not exposed),not_probed,,none
+0x40AF,OTA,178,Service area (not exposed),not_probed,,none
+0x40B0,OTA,179,Service area (not exposed),not_probed,,none
+0x40B1,OTA,180,Service area (not exposed),not_probed,,none
+0x40B2,OTA,181,Service area (not exposed),not_probed,,none
+0x40B3,OTA,182,Service area (not exposed),not_probed,,none
+0x40B4,OTA,183,Service area (not exposed),not_probed,,none
+0x40B5,OTA,184,Service area (not exposed),not_probed,,none
+0x40B6,OTA,185,Service area (not exposed),not_probed,,none
+0x40B7,OTA,186,Service area (not exposed),not_probed,,none
+0x40B8,OTA,187,Service area (not exposed),not_probed,,none
+0x40B9,OTA,188,Service area (not exposed),not_probed,,none
+0x40BA,OTA,189,Service area (not exposed),not_probed,,none
+0x40BB,OTA,190,Service area (not exposed),not_probed,,none
+0x40BC,OTA,191,Service area (not exposed),not_probed,,none
+0x40BD,OTA,192,Service area (not exposed),not_probed,,none
+0x40BE,OTA,193,Service area (not exposed),not_probed,,none
+0x40BF,OTA,194,Service area (not exposed),not_probed,,none
+0x40C0,OTA,195,Service area (not exposed),not_probed,,none
+0x40C1,OTA,196,Service area (not exposed),not_probed,,none
+0x40C2,OTA,197,Service area (not exposed),not_probed,,none
+0x40C3,OTA,198,Service area (not exposed),not_probed,,none
+0x40C4,OTA,199,Service area (not exposed),not_probed,,none
+0x40C5,OTA,200,Service area (not exposed),not_probed,,none
+0x40C6,OTA,201,Service area (not exposed),not_probed,,none
+0x40C7,OTA,202,Service area (not exposed),not_probed,,none
+0x40C8,OTA,203,Service area (not exposed),not_probed,,none
+0x40C9,OTA,204,Service area (not exposed),not_probed,,none
+0x40CA,OTA,205,Service area (not exposed),not_probed,,none
+0x40CB,OTA,206,Service area (not exposed),not_probed,,none
+0x40CC,OTA,207,Service area (not exposed),not_probed,,none
+0x40CD,OTA,208,Service area (not exposed),not_probed,,none
+0x40CE,OTA,209,Service area (not exposed),not_probed,,none
+0x40CF,OTA,210,Service area (not exposed),not_probed,,none
+0x40D0,OTA,211,Service area (not exposed),not_probed,,none
+0x40D1,OTA,212,Service area (not exposed),not_probed,,none
+0x40D2,OTA,213,Service area (not exposed),not_probed,,none
+0x40D3,OTA,214,Service area (not exposed),not_probed,,none
+0x40D4,OTA,215,Service area (not exposed),not_probed,,none
+0x40D5,OTA,216,Service area (not exposed),not_probed,,none
+0x40D6,OTA,217,Service area (not exposed),not_probed,,none
+0x40D7,OTA,218,Service area (not exposed),not_probed,,none
+0x40D8,OTA,219,Service area (not exposed),not_probed,,none
+0x40D9,OTA,220,Service area (not exposed),not_probed,,none
+0x4100,UserSet,3,Output voltage,crc_ok,setting_output_voltage_selection,verified
+0x4101,UserSet,4,Output frequency,crc_ok,setting_output_frequency_selection,verified
+0x4102,UserSet,5,Output priority,crc_ok,setting_output_priority,verified
+0x4103,UserSet,6,Operating mode,crc_ok,setting_input_mode,verified
+0x4104,UserSet,7,Charging priority,crc_ok,setting_charging_priority,verified
+0x4105,UserSet,8,AC charging current,crc_ok,setting_ac_charge_limit,verified
+0x4106,UserSet,9,Maximum charging current,crc_ok,setting_max_charge_current_code,verified
+0x4107,UserSet,10,Battery Type,crc_ok,setting_battery_type,documented-opt-in
+0x4108,UserSet,11,Battery low voltage point,crc_ok,setting_battery_low_warning,verified
+0x4109,UserSet,12,Battery low voltage point (battery shutdown point),crc_ok,setting_battery_low_cutoff,verified
+0x410A,UserSet,13,constant pressure point,crc_ok,setting_bulk_voltage,verified
+0x410B,UserSet,14,float point,crc_ok,setting_float_voltage,verified
+0x410C,UserSet,15,Battery to AC voltage point,crc_ok,setting_transfer_to_grid_voltage,verified
+0x410D,UserSet,16,Return to battery mode voltage point,crc_ok,setting_return_to_battery_voltage,verified
+0x410E,UserSet,17,Low voltage point of mains power,crc_ok,setting_grid_low_threshold,verified
+0x410F,UserSet,18,High voltage point of mains power,crc_ok,setting_grid_high_threshold,verified
+0x4110,UserSet,19,Parallel mode,crc_ok,setting_parallel_mode,documented-opt-in
+0x4111,UserSet,20,Parallel serial number,crc_ok,setting_parallel_id,verified
+0x4112,UserSet,21,Enable equalization mode for charging,crc_ok,setting_equalization_enabled,documented-opt-in
+0x4113,UserSet,22,Equalization voltage point,crc_ok,setting_equalization_voltage,verified
+0x4114,UserSet,23,Equalization charging time,crc_ok,setting_equalization_duration,verified
+0x4115,UserSet,24,Equalization delay time,crc_ok,setting_equalization_timeout,verified
+0x4116,UserSet,25,Equalization interval time,crc_ok,setting_equalization_interval,verified
+0x4117,UserSet,26,Enable Balance Now,crc_ok,setting_equalize_now,documented-opt-in
+0x4118,UserSet,27,Dual-channel output cutoff voltage,crc_ok,setting_secondary_cutoff_voltage,verified
+0x4119,UserSet,28,Dual-channel output time,crc_ok,setting_secondary_duration;setting_secondary_duration_mode_word,verified
+0x411A,UserSet,29,Generator enable,crc_ok,setting_generator_enabled,documented-opt-in
+0x411B,UserSet,30,Generator rated power,crc_ok,setting_generator_rated_limit,documented-opt-in
+0x411C,UserSet,31,Generator maximum power,crc_ok,setting_generator_max_limit,documented-opt-in
+0x411D,UserSet,32,Generator alarm clearing,crc_ok,,none
+0x411E,UserSet,33,BMS Protocol Selection,crc_ok,setting_bms_protocol,verified
+0x411F,UserSet,34,BMS ID Selection,crc_ok,setting_bms_id;control_bms_id_word,verified
+0x4120,UserSet,35,Low SOC shutdown SOC settings,crc_ok,setting_low_shutdown_soc;control_low_shutdown_soc_word,verified
+0x4121,UserSet,36,Battery SOC settings,crc_ok,setting_return_to_battery_soc;control_return_to_battery_soc_word,verified
+0x4122,UserSet,37,SOC settings for switching to AC power,crc_ok,setting_transfer_to_grid_soc;control_transfer_to_grid_soc_word,verified
+0x4123,UserSet,38,Remote power on/off enable,crc_ok,setting_remote_power_state,documented-opt-in
+0x4124,UserSet,39,Turn off charging,crc_ok,setting_charging_disabled,documented-opt-in
+0x4125,UserSet,40,Self-extinguishing backlight,crc_ok,setting_backlight_auto_off,verified
+0x4126,UserSet,41,Reserved,crc_ok,,none
+0x4127,UserSet,42,Overheating restart,crc_ok,setting_overtemperature_restart,verified
+0x4128,UserSet,43,Overload restart,crc_ok,setting_overload_restart,verified
+0x4129,UserSet,44,Overload bypass,crc_ok,setting_overload_bypass,verified
+0x412A,UserSet,45,Low power consumption and energy saving,crc_ok,setting_power_saving,verified
+0x412B,UserSet,46,Automatic detection of mains frequency,crc_ok,setting_auto_grid_frequency,verified
+0x412C,UserSet,47,"After the output relay is closed, the inverter soft starter is activated.",crc_ok,setting_soft_start,verified
+0x412D,UserSet,48,Battery open circuit warning,crc_ok,setting_battery_open_warning,verified
+0x412E,UserSet,49,Feeder Function Enable,crc_ok,setting_grid_feed_mode,documented-opt-in
+0x412F,UserSet,50,Feeder power,crc_ok,setting_grid_feed_limit,documented-opt-in
+0x4130,UserSet,51,Buzzer muted,crc_ok,setting_buzzer_muted,verified
+0x4131,UserSet,52,Default return to main interface settings,crc_ok,setting_display_auto_return,verified
+0x4132,UserSet,53,Warning of main input change,crc_ok,setting_grid_change_warning,verified
+0x4133,UserSet,54,Restore default settings,crc_ok,,none
+0x4134,UserSet,55,Seconds setting,crc_ok,setting_rtc_second,documented-opt-in
+0x4135,UserSet,56,point,crc_ok,setting_rtc_minute,documented-opt-in
+0x4136,UserSet,57,hour,crc_ok,setting_rtc_hour,documented-opt-in
+0x4137,UserSet,58,day,crc_ok,setting_rtc_day,documented-opt-in
+0x4138,UserSet,59,moon,crc_ok,setting_rtc_month,documented-opt-in
+0x4139,UserSet,60,Year,crc_ok,setting_rtc_year,documented-opt-in
+0x413A,UserSet,61,Power Supply 1,crc_ok,setting_supply_start_1;control_supply_start_1_word,documented-opt-in
+0x413B,UserSet,62,Selling electricity 1,crc_ok,setting_supply_end_1;control_supply_end_1_word,documented-opt-in
+0x413C,UserSet,63,Power Supply 2,crc_ok,setting_supply_start_2;control_supply_start_2_word,documented-opt-in
+0x413D,UserSet,64,Selling Electricity 2,crc_ok,setting_supply_end_2;control_supply_end_2_word,documented-opt-in
+0x413E,UserSet,65,Power on,crc_ok,setting_output_on_hour;control_output_on_hour_word,documented-opt-in
+0x413F,UserSet,66,Power off,crc_ok,setting_output_off_hour;control_output_off_hour_word,documented-opt-in
+0x4140,UserSet,67,Model Configuration,crc_ok,setting_model_configuration,documented-opt-in
+0x4141,UserSet,68,Screen type,crc_ok,setting_screen_type,documented-opt-in
+0x4142,UserSet,69,Maximum discharge current,crc_ok,setting_discharge_current_code;control_discharge_current_code_word,documented-opt-in
+0x4143,UserSet,70,Wi-Fi connection status,crc_ok,,none
+0x4144,UserSet,71,Automatic switching of feeder power time 1,crc_ok,setting_grid_feed_hour_1,documented-opt-in
+0x4145,UserSet,72,Automatic switching of feeder power time 2,crc_ok,setting_grid_feed_hour_2,documented-opt-in
+0x4146,UserSet,73,Automatic switching of feeder power1,crc_ok,setting_grid_feed_limit_1,documented-opt-in
+0x4147,UserSet,74,Automatic switching of feeder power 2,crc_ok,setting_grid_feed_limit_2,documented-opt-in
+0x4148,UserSet,75,Set the fan speed to 100 before shutting down.,crc_ok,setting_fan_shutdown_mode,none
+0x4149,UserSet,76,Set the reference value for inverter current when the output power is less than 50W.,crc_ok,setting_inverter_current_reference,verified
+0x414A,UserSet,77,Set button reverse,crc_ok,setting_reverse_page_keys,verified
+0x414B,UserSet,78,Set dual-output cutoff SOC,crc_ok,setting_secondary_cutoff_soc;control_secondary_cutoff_soc_word,verified
+0x414C,UserSet,79,Do not let the power go out,crc_ok,setting_shutdown_override,documented-opt-in

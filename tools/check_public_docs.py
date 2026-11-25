@@ -47,6 +47,7 @@ MAINTAINER_MARKDOWN = (
     REPO_ROOT / "docs" / "maintainer" / "ISSUE_TRIAGE.md",
     REPO_ROOT / "docs" / "maintainer" / "LEARNING_RECOVERY.md",
     REPO_ROOT / "docs" / "maintainer" / "LVYUAN_EVIDENCE.md",
+    REPO_ROOT / "docs" / "maintainer" / "FGI_5KU.md",
     REPO_ROOT / "docs" / "maintainer" / "RELEASING.md",
     REPO_ROOT / "docs" / "maintainer" / "VALIDATION.md",
 )

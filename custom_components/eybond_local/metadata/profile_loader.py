@@ -283,6 +283,19 @@ def _parse_capability(
     enum_map = _parse_enum_map(resolved_raw.get("enum_map"))
     command_map = _parse_command_map(resolved_raw.get("command_map"))
     tested = bool(resolved_raw.get("tested", False))
+    settle_ms = resolved_raw.get("write_settle_ms", 0)
+    if type(settle_ms) is not int or not 0 <= settle_ms <= 5000:
+        raise ValueError(f"invalid_write_settle_ms:{resolved_raw['key']}")
+    quantum = resolved_raw.get("write_step_words", 1)
+    if type(quantum) is not int or not 1 <= quantum <= 65535:
+        raise ValueError(f"invalid_write_step_words:{resolved_raw['key']}")
+    ticking = resolved_raw.get("ticking_seconds_readback", False)
+    if type(ticking) is not bool or (ticking and (
+        resolved_raw.get("value_kind") != "u16" or resolved_raw.get("minimum") != 0
+        or resolved_raw.get("maximum") != 59 or resolved_raw.get("word_count", 1) != 1
+        or resolved_raw.get("bitmask") or quantum != 1
+    )):
+        raise ValueError(f"invalid_ticking_seconds_readback:{resolved_raw['key']}")
     provenance = _parse_capability_provenance(resolved_raw.get("provenance"), tested=tested)
     return WriteCapability(
         key=str(resolved_raw["key"]),
@@ -299,6 +312,9 @@ def _parse_capability(
             word_count=int(resolved_raw.get("word_count", 1)),
         ),
         tested=tested,
+        write_settle_ms=settle_ms,
+        write_step_words=quantum,
+        ticking_seconds_readback=ticking,
         provenance=provenance,
         support_tier=str(resolved_raw.get("support_tier", "")),
         support_notes=str(resolved_raw.get("support_notes", "")),

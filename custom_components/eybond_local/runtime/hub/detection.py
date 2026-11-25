@@ -1,8 +1,10 @@
 """HubDetectionMixin ownership slice for the runtime hub."""
 
 from __future__ import annotations
+
 from functools import wraps
 
+from ...drivers.probe_evidence import DriverProbeIncomplete
 from .common import (
     DRIVER_DETECTION_FULL_SCAN,
     DRIVER_HINT_AUTO,
@@ -249,7 +251,7 @@ class HubDetectionMixin:
                         allowed_driver_keys=allowed,
                         remaining_seconds=remaining_seconds,
                     )
-                except DriverSweepNoMatch:
+                except (DriverSweepNoMatch, DriverProbeIncomplete):
                     return None
 
             outcome = await async_run_link_baud_sweep(
@@ -371,12 +373,12 @@ class HubDetectionMixin:
         except asyncio.CancelledError:
             parent_cancel_requested = True
             raise
-        except DriverSweepNoMatch as exc:
+        except (DriverSweepNoMatch, DriverProbeIncomplete) as exc:
             if reason := interrupted_reason():
                 return reason
             self._record_inverter_detection_probe_log(
                 exc.probe_log,
-                budget_exhausted=False,
+                budget_exhausted=str(exc) == "detection_budget_exhausted",
                 generation=detection_generation,
             )
             if not (detect_all_candidates and exc.silent):
@@ -458,6 +460,8 @@ class HubDetectionMixin:
                 )
                 return "inverter_protocol_ambiguous"
             if not contexts:
+                if detection_result.budget_exhausted:
+                    return "detection_budget_exhausted"
                 return "no_supported_driver_matched"
             context: DetectedDriverContext = contexts[0]
 

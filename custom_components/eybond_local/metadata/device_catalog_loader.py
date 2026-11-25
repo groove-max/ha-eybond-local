@@ -522,11 +522,16 @@ def _binding_matches(candidate: CatalogBinding, requested: CatalogBinding) -> bo
 
 
 def _parse_protocol(raw: dict[str, object]) -> CatalogProtocol:
+    # An extensible family catalog is a finite walk of different wire reads,
+    # not one wire transaction. A caller can still bound the entire scan.
+    default_timeout = float(raw.get("default_action_timeout", 0))
+    if not 0 <= default_timeout <= 60:
+        raise ValueError(f"invalid_default_action_timeout:{raw['key']}")
     return CatalogProtocol(
         key=str(raw["key"]).strip(),
         transport_key=str(raw["transport_key"]).strip(),
         probe_actions=tuple(
-            _parse_probe_action(item)
+            _parse_probe_action(item, default_timeout=default_timeout)
             for item in raw.get("probe_actions", [])
             if isinstance(item, dict)
         ),
@@ -554,13 +559,13 @@ def _parse_link_baud_hints(raw: object) -> tuple[int, ...]:
     return tuple(int(value) for value in bauds if int(value) > 0)
 
 
-def _parse_probe_action(raw: dict[str, object]) -> CatalogProbeAction:
+def _parse_probe_action(raw: dict[str, object], *, default_timeout: float = 0) -> CatalogProbeAction:
     return CatalogProbeAction(
         key=str(raw["key"]).strip(),
         kind=str(raw["kind"]).strip(),
         cost=int(raw.get("cost", 1)),
         optional=bool(raw.get("optional", False)),
-        timeout=float(raw.get("timeout", 0.0)),
+        timeout=float(raw.get("timeout", default_timeout)),
         retries=max(int(raw.get("retries", 0)), 0),
         register=_optional_int(raw.get("register")),
         count=_optional_int(raw.get("count")),

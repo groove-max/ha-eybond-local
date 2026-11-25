@@ -257,6 +257,16 @@ class DriverProbeEvidence:
         return result
 
 
+class DriverProbeIncomplete(RuntimeError):
+    """Insufficient wire evidence; never a negative model match."""
+
+    def __init__(self, reason: str, *, probe_log: tuple[dict[str, object], ...] = (),
+                 silent: bool = False) -> None:
+        super().__init__(reason)
+        self.probe_log = probe_log
+        self.silent = silent
+
+
 class DriverProbeNoMatchError(RuntimeError):
     """A normal no-match outcome carrying typed, non-sensitive evidence."""
 

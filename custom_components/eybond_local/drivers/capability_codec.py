@@ -226,6 +226,8 @@ def _encode_u16_value(capability: WriteCapability, value: Any) -> int:
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid_integer_value:{capability.key}:{value}") from exc
 
+    if capability.write_step_words != 1 and float(value) != raw_value:
+        raise ValueError(f"invalid_integer_value:{capability.key}:{value}")
     _validate_range(capability, raw_value)
     return raw_value
 
@@ -326,3 +328,5 @@ def _validate_range(capability: WriteCapability, raw_value: int) -> None:
         raise ValueError(f"value_below_minimum:{capability.key}:{raw_value}")
     if capability.maximum is not None and raw_value > capability.maximum:
         raise ValueError(f"value_above_maximum:{capability.key}:{raw_value}")
+    if (raw_value - (capability.minimum or 0)) % capability.write_step_words:
+        raise ValueError(f"value_outside_step:{capability.key}:{raw_value}")

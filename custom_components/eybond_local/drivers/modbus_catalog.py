@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from typing import Any
 
 from ..metadata.compiled_detection_catalog import (
@@ -27,7 +28,8 @@ from ..metadata.compiled_detection_catalog import (
 from ..metadata.profile_loader import load_driver_profile
 from ..metadata.register_schema_loader import load_register_schema
 from ..models import DetectedInverter, ProbeTarget
-from ..payload.modbus import ModbusSession
+from ..payload.modbus import ModbusError, ModbusSession
+from .probe_evidence import DriverProbeIncomplete
 from ..payload.register_decode import (
     decode_block,
     decode_ascii_low_bytes,
@@ -117,11 +119,21 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
         session = self._session(transport, target)
         evidence: dict[str, object] = {}
         raw_values: dict[str, object] = {}
+        incomplete = False
 
         async def _execute(action) -> str:
+            nonlocal incomplete
             if action.register is None or action.count is None:
                 return "failed"
-            words = await self._read_action(session, action)
+            try:
+                words = await self._read_action(session, action)
+            except ConnectionError as exc:
+                raise DriverProbeIncomplete("catalog_link_interrupted") from exc
+            except DriverProbeIncomplete:
+                # An unanswered foreign page must not prevent a positive match
+                # on another page, but it also cannot prove lack of support.
+                incomplete = True
+                return "failed"
             if words is None:
                 return "failed"
             registers = {
@@ -145,6 +157,8 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
         evaluation = walk.evaluation
 
         if evaluation.status != "resolved":
+            if incomplete:
+                raise DriverProbeIncomplete("catalog_probe_incomplete")
             return None
         resolution = catalog.resolution_for_candidates(
             protocol_key=PROTOCOL_KEY,
@@ -272,6 +286,7 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
         raw_words = encode_capability_words(capability, value)
         session = self._session(transport, inverter.probe_target)
         requested_words = list(raw_words)
+        clock_start = asyncio.get_running_loop().time() if capability.ticking_seconds_readback else None
         if capability.write_function == 6:
             # Firmwares like Growatt SPF only accept single-register writes
             # for their holding config block.
@@ -303,6 +318,8 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
                     [int(word) for word in raw_words],
                 )
 
+        if capability.write_settle_ms:
+            await asyncio.sleep(capability.write_settle_ms / 1000)
         try:
             observed_words = list(
                 await session.read_holding(capability.register, capability.word_count)
@@ -321,7 +338,11 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
             comparable_words = [observed_field]
         else:
             comparable_words = observed_words
-        if comparable_words != requested_words:
+        if comparable_words != requested_words and not (
+            clock_start is not None and _clock_advanced(
+                requested_words[0], comparable_words[0], asyncio.get_running_loop().time() - clock_start
+            )
+        ):
             raise RuntimeError(
                 f"capability_write_readback_mismatch:{capability.key}:"
                 f"requested={requested_words}:observed={comparable_words}"
@@ -330,6 +351,12 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
         native_value = decode_capability_value(capability, comparable_words)
         if runtime_state is not None:
             _control_value_cache(runtime_state)[capability.value_key] = native_value
+            if capability.affects:
+                # Firmware may silently adjust other setpoints on different pages.
+                # A pack with priming pages will refresh their authoritative values.
+                schema = load_register_schema(inverter.register_schema_name or self.register_schema_name)
+                if any(b.prime_controls for b in schema.blocks):
+                    runtime_state.pop(_CONTROL_ROTATION_KEY, None)
         return native_value
 
     async def async_capture_support_evidence(
@@ -461,8 +488,15 @@ class ModbusCatalogDriver(ModbusWriteErrorMixin, InverterDriver):
                     if action.timeout > 0
                     else await request
                 )
+            except ConnectionError:
+                raise
             except Exception as exc:  # pylint: disable=broad-except
                 last_error = exc
+        if isinstance(last_error, (asyncio.TimeoutError, TimeoutError)) or (
+            isinstance(last_error, ModbusError)
+            and str(last_error) not in {"exception_code:1", "exception_code:2"}
+        ):
+            raise DriverProbeIncomplete("catalog_read_inconclusive") from last_error
         logger.debug(
             "modbus_catalog identity action failed action=%s error=%s",
             action.key,
@@ -482,6 +516,12 @@ def _profile_for_name(profile_name: str):
     except Exception:
         logger.warning("Failed to load catalog pack profile %s", name, exc_info=True)
         return None
+
+
+def _clock_advanced(requested: int, observed: int, elapsed: float) -> bool:
+    """Allow only ticks physically possible during a short RTC seconds transaction."""
+    return (0 <= observed < 60 and 0 <= elapsed < 5
+            and (observed - requested) % 60 <= math.ceil(elapsed))
 
 
 async def _read_control_settings(
@@ -506,13 +546,16 @@ async def _read_control_settings(
     if not blocks:
         return {}
 
+    priming = False
     if runtime_state is None:
         selected_blocks = blocks
     else:
         raw_index = runtime_state.get(_CONTROL_ROTATION_KEY, 0)
         index = raw_index if type(raw_index) is int and raw_index >= 0 else 0
-        selected_blocks = (blocks[index % len(blocks)],)
-        runtime_state[_CONTROL_ROTATION_KEY] = (index + 1) % len(blocks)
+        prime_blocks = tuple(b for b in blocks if getattr(b, "prime_controls", False))[:5]
+        priming = bool(prime_blocks and _CONTROL_ROTATION_KEY not in runtime_state)
+        selected_blocks = prime_blocks if priming else (blocks[index % len(blocks)],)
+        runtime_state[_CONTROL_ROTATION_KEY] = 0 if priming else (index + 1) % len(blocks)
 
     values: dict[str, Any] = {}
     for block in selected_blocks:
@@ -532,6 +575,9 @@ async def _read_control_settings(
                 function=block.function,
             )
         except Exception:  # pylint: disable=broad-except
+            if priming:
+                # Keep already read values; normal rotation revisits missed pages.
+                break
             continue
         values.update(
             decode_block(

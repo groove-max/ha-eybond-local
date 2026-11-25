@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "model_key": "anern_fgi_s5000",
+  "manufacturer": "Anern",
+  "model": "FGI-S5000",
+  "aliases": [],
+  "lifecycle": "experimental",
+  "variants": [
+    {
+      "variant_key": "fgi_5ku",
+      "label": "Single-phase 5KU (observed protocol 1.7)",
+      "device_descriptor_keys": [
+        "fgi_5ku_v1_7"
+      ]
+    }
+  ],
+  "validation": {
+    "hardware": "confirmed",
+    "telemetry": "partial",
+    "controls": "partial"
+  },
+  "coverage": {
+    "runtime_control_surface": "available",
+    "smartess_control_surface": "unknown",
+    "vendor_register_map": "documented",
+    "notes": [
+      "On the tested 24 V unit without a factory logger, Auto identified the 5KU family via [ESP EyeBond Collector](https://github.com/groove-max/esp-eybond-collector), using the ESP32-C3 SuperMini and a MAX3232 on the external WIFI stick socket. See the [worked example: annotated socket, wiring, firmware and HA setup](https://github.com/groove-max/esp-eybond-collector/blob/main/docs/integrations/anern-fgi-s5000/README.md).",
+      "Modbus RTU at 9600 8N1, slave 1, forwarded through the collector. The profile defines 159 measurement fields, including settings readbacks and diagnostics. All 20 polling blocks answered on mains with no load; that does not mean every field had a meaningful value.",
+      "74 HA controls cover 72 user-setting words. For 43 controls, a changed value and its restoration were independently read back; 31 documented-only controls require Full control. This does not establish the electrical effect of a setting."
+    ]
+  },
+  "known_limitations": [
+    "The observed signature identifies the register family, not the retail brand. This test does not establish compatibility with a factory Wi-Fi stick or other hardware revisions. No battery, load, PV or BMS was connected."
+  ],
+  "knowledge_summary": "Anern FGI-S5000 supports local Modbus RTU via an RS-232 collector on the Wi-Fi stick port. The BMS connector is not this interface.",
+  "source_keys": [
+    "documentation_fgi_inv_modbus_v120",
+    "maintainer_fgi_5ku_20261125"
+  ]
+}

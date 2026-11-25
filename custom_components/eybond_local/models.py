@@ -78,6 +78,12 @@ class RegisterValueSpec:
     # Input and holding registers are distinct address spaces, so specs are
     # only decoded from blocks read with the same function.
     function: int = 3
+    # Exact, unscaled values denoting absence on this register only.
+    unavailable_values: tuple[int, ...] = ()
+    # A peripheral may leave plausible stale values while its link is down.
+    # The status word must come from the same successful FC03/FC04 response.
+    validity_register: int | None = None
+    validity_values: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +248,11 @@ class WriteCapability:
     # writes (0x06) for their config registers. None keeps the driver default
     # (multiple-register write, 0x10).
     write_function: int | None = None
+    # Minimum settling time after a successful write, before reading it back.
+    write_settle_ms: int = 0
+    # Optional register-level quantum, anchored at minimum (or zero).
+    write_step_words: int = 1
+    ticking_seconds_readback: bool = False
     # Whether normal polling may add a dedicated read solely to project this
     # capability's value. Exact write confirmation is independent of this flag.
     poll_readback: bool = True

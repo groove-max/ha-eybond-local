@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source_key": "maintainer_fgi_5ku_20261125",
+  "kind": "maintainer_test",
+  "title": "FGI-S5000 serial capture and reversible user-setting writes",
+  "reference": "maintainer:fgi-5ku-20261125",
+  "captured_at": "2026-11-25",
+  "visibility": "private",
+  "summary_publishable": true,
+  "summary": "FGI-S5000 on mains without a battery, PV or load. The FC16 / FC03 replay records changed and restored setpoints as well as acknowledged writes that had no effect. Includes 24 V thresholds, SOC, timer sentinels, priorities, display and restart settings.",
+  "assertions": [
+    "hardware_test",
+    "fingerprint",
+    "write_validation",
+    "control_behavior",
+    "register_map"
+  ]
+}

@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from custom_components.eybond_local.drivers.modbus_catalog import ModbusCatalogDriver
+from custom_components.eybond_local.drivers.probe_evidence import DriverProbeIncomplete
 from custom_components.eybond_local.drivers.registry import prime_metadata_caches
 from custom_components.eybond_local.fixtures.transport import FixtureTransport
 from custom_components.eybond_local.metadata.compiled_detection_catalog import (
@@ -292,7 +293,9 @@ class SumryGesReadTests(unittest.IsolatedAsyncioTestCase):
                 return response
 
         transport = TruncatedIdentityTransport(_qualified_identity_registers())
-        self.assertIsNone(await ModbusCatalogDriver().async_probe(transport, TARGET))
+        # A corrupted identity cannot bind or establish an authoritative no-match.
+        with self.assertRaisesRegex(DriverProbeIncomplete, "catalog_probe_incomplete"):
+            await ModbusCatalogDriver().async_probe(transport, TARGET)
 
     async def test_identity_bad_crc_does_not_bind(self) -> None:
         class BadCrcIdentityTransport(ReadOnlyTransport):
@@ -304,7 +307,8 @@ class SumryGesReadTests(unittest.IsolatedAsyncioTestCase):
                 return response
 
         transport = BadCrcIdentityTransport(_qualified_identity_registers())
-        self.assertIsNone(await ModbusCatalogDriver().async_probe(transport, TARGET))
+        with self.assertRaisesRegex(DriverProbeIncomplete, "catalog_probe_incomplete"):
+            await ModbusCatalogDriver().async_probe(transport, TARGET)
 
 
 if __name__ == "__main__":

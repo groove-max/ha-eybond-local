@@ -573,7 +573,7 @@ class DetectionLinkDownTest(unittest.IsolatedAsyncioTestCase):
                     remaining_seconds=lambda: 0.0,
                 )
 
-        self.assertEqual(str(ctx.exception), "no_supported_driver_matched")
+        self.assertEqual(str(ctx.exception), "detection_budget_exhausted")
         self.assertEqual(
             [(entry["driver"], entry["outcome"]) for entry in ctx.exception.probe_log],
             [("pi30", "skipped_budget_exhausted")],
