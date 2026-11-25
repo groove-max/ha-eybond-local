@@ -76,6 +76,8 @@ from .probe_evidence import DriverProbeEvidence, ProbeActionFailure, ProbeReadSe
 
 _SMG_FAMILY_FALLBACK_VARIANT = "family_fallback"
 _SMG_FAMILY_FALLBACK_PROFILE_NAME = "modbus_smg/family_fallback.json"
+_ANENJI_ANJ_5KW_48V_WIFI_VARIANT = "anenji_anj_5kw_48v_wifi"
+_ANENJI_MAINS_BATTERY_LOAD_THRESHOLD_W = 50
 
 
 def _runtime_validation_no_match_evidence(
@@ -629,7 +631,7 @@ class SmgModbusDriver(ModbusWriteErrorMixin, InverterDriver):
         if isinstance(battery_voltage, (int, float)) and battery_voltage <= 0:
             values.pop("battery_voltage", None)
 
-        values.update(_derive_runtime_states(values))
+        values.update(_derive_runtime_states(values, variant_key=inverter.variant_key))
         # Read-back for controls that have a register but no decode spec -- notably
         # learned-overlay controls, which otherwise toggle but report no current state. This
         # never changes the schema/scope, so the write-exposure proof is unaffected.
@@ -1295,7 +1297,11 @@ def _power_flow_charge_source_state(*, mains_charging: bool, pv_charging: bool) 
     return "Idle"
 
 
-def _derive_runtime_states(values: dict[str, Any]) -> dict[str, Any]:
+def _derive_runtime_states(
+    values: dict[str, Any],
+    *,
+    variant_key: str = "",
+) -> dict[str, Any]:
     """Derive human-readable runtime states from already decoded SMG values."""
 
     derived: dict[str, Any] = {}
@@ -1364,6 +1370,12 @@ def _derive_runtime_states(values: dict[str, Any]) -> dict[str, Any]:
     derived["load_active"] = _is_active_power(values.get("output_power"))
     derived["battery_charging"] = _is_active_power(values.get("battery_average_power"))
     derived["battery_discharging"] = _is_active_power(values.get("battery_average_power"), negative=True)
+    battery_supplying_load = _battery_supplies_load(
+        operating_mode=operating_mode,
+        variant_key=variant_key,
+        battery_average_power=values.get("battery_average_power"),
+        battery_discharging=derived["battery_discharging"],
+    )
     derived["battery_power_direction"] = _direction_from_power(
         values.get("battery_average_power"),
         positive_label="Charging",
@@ -1449,12 +1461,14 @@ def _derive_runtime_states(values: dict[str, Any]) -> dict[str, Any]:
         output_state=derived["output_state"],
         grid_power_direction=derived["grid_power_direction"],
         battery_discharging=derived["battery_discharging"],
+        battery_supplying_load=battery_supplying_load,
         pv_producing=derived["pv_producing"],
     )
     derived["battery_role_state"] = _battery_role_state(
         battery_connected=battery_connected,
         battery_charging=derived["battery_charging"],
         battery_discharging=derived["battery_discharging"],
+        battery_supplying_load=battery_supplying_load,
         charging_source_state=derived["charging_source_state"],
         load_active=derived["load_active"],
     )
@@ -1576,6 +1590,37 @@ def _is_active_power(
     if negative:
         return raw_value <= -threshold
     return raw_value >= threshold
+
+
+def _battery_supplies_load(
+    *,
+    operating_mode: Any,
+    variant_key: str,
+    battery_average_power: Any,
+    battery_discharging: bool,
+) -> bool:
+    """Return whether discharge can be presented as supply to the AC load.
+
+    The standard 20 W threshold remains the low-level discharge indicator for
+    every SMG inverter.  The identified ANENJI ANJ-5KW-48V-WIFI reports a
+    small DC discharge while in Mains mode that is not enough evidence to
+    present the battery as feeding the household AC load.  Only this
+    model/mode presentation path therefore requires at least 50 W of signed
+    discharge; all other variants and modes preserve the existing behavior.
+    """
+
+    if not battery_discharging:
+        return False
+    if (
+        operating_mode != "Mains"
+        or str(variant_key or "").strip() != _ANENJI_ANJ_5KW_48V_WIFI_VARIANT
+    ):
+        return True
+    return _is_active_power(
+        battery_average_power,
+        threshold=_ANENJI_MAINS_BATTERY_LOAD_THRESHOLD_W,
+        negative=True,
+    )
 
 
 def _direction_from_power(
@@ -1823,6 +1868,7 @@ def _load_supply_state(
     output_state: Any,
     grid_power_direction: Any,
     battery_discharging: bool,
+    battery_supplying_load: bool | None = None,
     pv_producing: bool,
 ) -> str:
     """Summarize which sources appear to be feeding the load."""
@@ -1832,11 +1878,16 @@ def _load_supply_state(
     if operating_mode == "Bypass":
         return "Utility Bypass"
     if operating_mode == "Mains":
-        if pv_producing and battery_discharging:
+        battery_supplies_load = (
+            battery_discharging
+            if battery_supplying_load is None
+            else battery_supplying_load
+        )
+        if pv_producing and battery_supplies_load:
             return "Utility + PV + Battery"
         if pv_producing:
             return "Utility + PV"
-        if battery_discharging:
+        if battery_supplies_load:
             return "Utility + Battery"
         return "Utility"
     if operating_mode == "Off-Grid":
@@ -1863,6 +1914,7 @@ def _battery_role_state(
     battery_connected: bool,
     battery_charging: bool,
     battery_discharging: bool,
+    battery_supplying_load: bool | None = None,
     charging_source_state: Any,
     load_active: bool,
 ) -> str:
@@ -1879,7 +1931,13 @@ def _battery_role_state(
             return "Charging from PV + Utility"
         return "Charging"
     if battery_discharging:
-        if load_active:
+        if battery_supplying_load is False:
+            return "Idle"
+        if load_active and (
+            battery_discharging
+            if battery_supplying_load is None
+            else battery_supplying_load
+        ):
             return "Supplying Load"
         return "Discharging"
     return "Idle"

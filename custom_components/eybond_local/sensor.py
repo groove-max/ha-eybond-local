@@ -387,6 +387,19 @@ class EybondValueSensor(CoordinatorEntity[EybondLocalCoordinator], SensorEntity)
             values = snapshot.runtime_values()
             for attribute_key, value_key in fields:
                 value = values.get(value_key)
+                # Keep the summary attribute present and stable for ANENJI's
+                # small Mains-mode DC discharge, without changing the raw
+                # battery-direction sensor or masking missing readings.
+                if (
+                    self._description.key == "power_flow_summary"
+                    and attribute_key == "battery_direction"
+                    and getattr(snapshot.inverter, "variant_key", "")
+                    == "anenji_anj_5kw_48v_wifi"
+                    and values.get("operating_mode") == "Mains"
+                    and values.get("battery_role_state") == "Idle"
+                    and value == "Discharging"
+                ):
+                    value = "Idle"
                 if value is None or value == "":
                     continue
                 attributes[attribute_key] = value

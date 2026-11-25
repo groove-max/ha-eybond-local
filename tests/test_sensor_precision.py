@@ -361,6 +361,69 @@ class SensorPrecisionTests(unittest.TestCase):
             },
         )
 
+    def test_anenji_mains_power_flow_keeps_battery_direction_attribute(self) -> None:
+        from custom_components.eybond_local.drivers.smg import _derive_runtime_states
+
+        variant_key = "anenji_anj_5kw_48v_wifi"
+        coordinator = _FakeCoordinator("power_flow_summary", "")
+        coordinator.data.inverter = types.SimpleNamespace(variant_key=variant_key)
+        summary = EybondValueSensor(
+            coordinator,
+            MeasurementDescription(key="power_flow_summary", name="Power flow"),
+        )
+        raw_direction = EybondValueSensor(
+            coordinator,
+            MeasurementDescription(key="battery_power_direction", name="Battery direction"),
+        )
+        base_values = {
+            "operating_mode": "Mains",
+            "battery_connected": True,
+            "output_power": 850.0,
+            "grid_power": 854.0,
+            "pv_power": 0.0,
+        }
+        cases = (
+            (0.0, "Idle", "Idle", False, "Utility"),
+            (-38.0, "Idle", "Discharging", True, "Utility"),
+            (0.0, "Idle", "Idle", False, "Utility"),
+            (None, "Unknown", "Unknown", False, "Utility"),
+            (-50.0, "Discharging", "Discharging", True, "Utility + Battery"),
+        )
+        stable_states = []
+        for battery_power, summary_direction, measured_direction, discharging, load_supply in cases:
+            with self.subTest(battery_average_power=battery_power):
+                values = {**base_values, "battery_average_power": battery_power}
+                derived = _derive_runtime_states(values, variant_key=variant_key)
+                coordinator.data.values = {**values, **derived}
+                attributes = summary.extra_state_attributes
+                self.assertIsNotNone(attributes)
+                assert attributes is not None
+                self.assertIn("battery_direction", attributes)
+                self.assertEqual(attributes["battery_direction"], summary_direction)
+                self.assertEqual(raw_direction.native_value, measured_direction)
+                self.assertEqual(derived["battery_discharging"], discharging)
+                self.assertEqual(derived["load_supply_state"], load_supply)
+                if battery_power in (0.0, -38.0):
+                    stable_states.append((summary.native_value, attributes))
+        self.assertEqual(stable_states[0], stable_states[1])
+        self.assertEqual(stable_states[1], stable_states[2])
+
+        # Other models retain the measured direction in their summary.
+        coordinator.data.inverter.variant_key = "default"
+        values = {**base_values, "battery_average_power": -38.0}
+        derived = _derive_runtime_states(values, variant_key="default")
+        coordinator.data.values = {**values, **derived}
+        self.assertEqual(summary.extra_state_attributes["battery_direction"], "Discharging")
+        self.assertEqual(derived["battery_role_state"], "Supplying Load")
+
+        # Off-Grid retains the regular 20 W discharge threshold.
+        coordinator.data.inverter.variant_key = variant_key
+        values["operating_mode"] = "Off-Grid"
+        derived = _derive_runtime_states(values, variant_key=variant_key)
+        coordinator.data.values = {**values, **derived}
+        self.assertEqual(summary.extra_state_attributes["battery_direction"], "Discharging")
+        self.assertEqual(derived["load_supply_state"], "Battery")
+
     def test_explicit_precision_overrides_float_fallback(self) -> None:
         coordinator = _FakeCoordinator("battery_voltage", 52.0)
         description = MeasurementDescription(
