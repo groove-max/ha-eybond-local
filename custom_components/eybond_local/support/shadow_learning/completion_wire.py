@@ -104,7 +104,7 @@ def classify_request(frame: bytes, carrier: str, protocol: str | None):
     return adapter.key
 
 
-def validate_wire_receipt(record: dict):
+def validate_wire_receipt(record: dict, *, allow_missing_reply: bool = False):
     """Return stable route and optional wire transaction identity."""
     request = bytes.fromhex(record["request_hex"])
     response = bytes.fromhex(record["response_hex"])
@@ -113,6 +113,13 @@ def validate_wire_receipt(record: dict):
         raise ValueError("completion_not_write")
     transport, adapter = _CARRIERS[carrier], _CODECS[protocol]
     write = adapter.decode_write_request(transport.request(request))
+    if allow_missing_reply and not response:
+        # An observed request is not a transmitted refusal. Preserve its
+        # route/TID without inventing response bytes for a delivery failure.
+        if carrier == "frame":
+            _, header = transport.unpack(request)
+            return (carrier, protocol, header.devcode, header.devaddr, write.unit), header.tid
+        return (carrier, protocol, write.unit), None
     payload, route, transaction = transport.response(request, response)
     if payload != adapter.build_write_exception_response(write, exception_code=1):
         raise ValueError("completion_response_not_refusal")

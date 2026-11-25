@@ -414,6 +414,10 @@ class ShadowLearningRuntimeMixin:
         if not callable(publish):
             return {}
         state = dict(self._shadow_learning_state or {})
+        if (state.get("discovery") or {}).get("recovery_view_only"):
+            # A reopened wizard has no run result of its own. Support export
+            # already includes the coordinator's artifacts and live recovery state.
+            return {}
         plan = dict(state.get("plan") or {})
         orchestration = dict(state.get("orchestration") or {})
         if not orchestration:

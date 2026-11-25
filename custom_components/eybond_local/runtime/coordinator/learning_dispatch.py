@@ -112,6 +112,8 @@ async def async_dispatch_owned_shadow_action(
                 != (run.entry_id, run.route_owner_id.removeprefix("shadow_learning:"), collector_pn)):
             completion = None
         if completion is not None:
+            if completion.unexpected_write or completion.closing:
+                raise CloudLearningProtectionRequired("cloud_learning_unexpected_write")
             completion.begin(run.source, action_kwargs)
         try:
             envelope = await async_dispatch_cloud_action(callable_, **action_kwargs)

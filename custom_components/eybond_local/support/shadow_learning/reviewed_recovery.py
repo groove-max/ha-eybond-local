@@ -80,7 +80,64 @@ def _view(state) -> dict:
     return {k: v for k, v in asdict(state).items() if k not in _VOLATILE}
 
 
-def _check_trace_scope(data, state) -> None:
+_NOT_DISPATCHED = "not-dispatched"  # explicit maintainer finding; never inferred from elapsed time
+
+# Known read, transport and bookkeeping events are compatible with a separate
+# sender-side finding. They do not themselves establish that nothing was sent.
+_NO_DISPATCH_TRACE_EVENTS = frozenset({
+    "shadow_at_query", "shadow_at_response", "shadow_protocol_evidence",
+    "shadow_modbus_read_request", "shadow_modbus_read_response",
+    "shadow_protocol_read_request", "shadow_protocol_read_response",
+    "shadow_proxy_started", "shadow_proxy_connected", "shadow_proxy_disconnected",
+    "shadow_proxy_identity_verified", "shadow_proxy_protocol_prepared",
+    "shadow_proxy_cloud_chunk", "shadow_proxy_collector_chunk",
+    "shadow_proxy_intercept_cloud_at", "shadow_proxy_forward_cloud_at",
+    "shadow_proxy_forward_collector_at", "shadow_proxy_forward_collector_frame",
+    "shadow_proxy_forward_collector_modbus", "shadow_proxy_forward_collector_ascii",
+    "shadow_proxy_forward_cloud_heartbeat", "shadow_proxy_forward_cloud_metadata_query",
+    "shadow_proxy_forward_cloud_correlated_response",
+})
+
+
+def _compatible_with_no_dispatch(kind, payload) -> bool:
+    if kind == "shadow_at_write":
+        return isinstance(payload, dict) and payload.get("command") in ("SYST", "UART")
+    return isinstance(kind, str) and kind in _NO_DISPATCH_TRACE_EVENTS
+
+
+def _require_sender_evidence(data: bytes) -> None:
+    # Reviewers inspect the sending-side log/result itself, not another copy
+    # of the collector trace or an opaque support ZIP. Content/attribution of
+    # the sender record is still a human review, not a machine receipt.
+    invalid = "review_no_dispatch_requires_independent_evidence"
+    if not data.strip() or b"\x00" in data or data.startswith(b"PK\x03\x04"):
+        raise ValueError(invalid)
+    try:
+        text = data.decode("utf-8-sig").lstrip()
+    except UnicodeError as exc:
+        raise ValueError(invalid) from exc
+    if not text:
+        raise ValueError(invalid)
+    if text[0] not in "{[":
+        return  # Ordinary HA text log; attribution still requires human review.
+    try:
+        record = json.loads(text.partition("\n")[0])  # JSONL trace manifest
+    except ValueError:
+        try:
+            record = json.loads(text)  # pretty-printed support or runner JSON
+        except ValueError:
+            return  # e.g. a multiline, timestamp-prefixed HA log
+    first = record[0] if isinstance(record, list) and record else record
+    if isinstance(first, dict) and (
+        str(first.get("kind", "")).startswith("shadow_")
+        or {"bundle_version", "entry", "evidence"} <= first.keys()
+        or {"archive_version", "archive_members"} <= first.keys()
+        or {"history_sha256", "runs"} <= first.keys()
+    ):
+        raise ValueError(invalid)
+
+
+def _check_trace_scope(data, state, *, not_dispatched=False) -> None:
     """Bind original local trace to a stopped run; this is NOT terminal proof."""
     phase = "manifest"
     for line in io.BytesIO(data):
@@ -102,10 +159,17 @@ def _check_trace_scope(data, state) -> None:
         elif phase == "active":
             if kind == "shadow_session_stopped":
                 phase = "summary"
+            elif not_dispatched and not _compatible_with_no_dispatch(kind, event.get("payload")):
+                raise ValueError("review_no_dispatch_conflicts_with_trace")
         elif phase == "summary":
             if (kind != "shadow_completion_summary" or type(event.get("payload")) is not dict
                     or event["payload"].get("pending") is not False):
                 raise ValueError("review_trace_not_drained")
+            summary = event["payload"]
+            if not_dispatched and (summary.get("complete") is not False
+                    or type(summary.get("confirmed_commands")) is not int
+                    or summary["confirmed_commands"] != 0 or summary.get("blocked_reason") != ""):
+                raise ValueError("review_no_dispatch_conflicts_with_trace")
             phase = "done"
         else:
             raise ValueError("review_trace_not_drained")
@@ -123,7 +187,7 @@ class ReviewedLearningRecoveryStore(CloudLearningProtectionStore):
     def _current(self, entry_id):
         return _state(_json(session._owned_session_path(self._config_dir, entry_id)))
 
-    def _history(self, hold, current, *, trace_byte_budget=None, trace_snapshots=None) -> list[dict]:
+    def _history(self, hold, current, *, trace_byte_budget=None, trace_snapshots=None, no_dispatch=()) -> list[dict]:
         root = session.shadow_learning_session_root(self._config_dir).resolve()
         archive = root / "retained_runs"
         if archive.is_symlink():
@@ -181,7 +245,7 @@ class ReviewedLearningRecoveryStore(CloudLearningProtectionStore):
                 trace_byte_budget -= len(data)
             if not data:
                 raise ValueError("review_trace_empty")
-            _check_trace_scope(data, state)
+            _check_trace_scope(data, state, not_dispatched=index in no_dispatch)
             history.append({"state": _view(state), "trace_sha256": hashlib.sha256(data).hexdigest()})
             if trace_snapshots is not None:
                 trace_snapshots.append(data)
@@ -194,16 +258,26 @@ class ReviewedLearningRecoveryStore(CloudLearningProtectionStore):
         if (hold is None or hold.entry_id != entry_id or hold.study_id != study_id
                 or current.collector_pn != collector_pn or current.status != "restore_failed"):
             raise ValueError("review_scope_mismatch")
-        history = self._history(hold, current)
-        if (len(evidence_files) != len(history) or len(command_counts) != len(history)
-                or any(type(n) is not int or not 1 <= n <= 10000 for n in command_counts)):
+        no_dispatch = {i for i, n in enumerate(command_counts) if n == _NOT_DISPATCHED}
+        if (0 in no_dispatch or any(i not in no_dispatch and (type(n) is not int or not 1 <= n <= 10000)
+                                    for i, n in enumerate(command_counts))):
+            raise ValueError("review_every_run_required")
+        history = self._history(hold, current, no_dispatch=no_dispatch)
+        if len(evidence_files) != len(history) or len(command_counts) != len(history):
             raise ValueError("review_every_run_required")
         evidence = []
-        for path, count in zip(evidence_files, command_counts, strict=True):
+        for i, (path, count) in enumerate(zip(evidence_files, command_counts, strict=True)):
             data = _read(Path(path), _MAX_TRACE)
             if not data:
                 raise ValueError("review_evidence_empty")
-            evidence.append({"sha256": hashlib.sha256(data).hexdigest(), "reviewed_commands": count})
+            digest = hashlib.sha256(data).hexdigest()
+            if i in no_dispatch:
+                _require_sender_evidence(data)
+                if digest == history[i]["trace_sha256"]:
+                    raise ValueError("review_no_dispatch_requires_independent_evidence")
+                evidence.append({"sha256": digest, "reviewed_commands": 0, "basis": _NOT_DISPATCHED})
+            else:
+                evidence.append({"sha256": digest, "reviewed_commands": count})
         return {"schema_version": 1, "outcome": "maintainer_reviewed_terminal_history",
                 "hold": hold.to_record(), "history": history, "evidence": evidence}
 
@@ -284,12 +358,20 @@ class ReviewedLearningRecoveryStore(CloudLearningProtectionStore):
                 or type(plan["history"]) is not list or not 1 <= len(plan["history"]) <= _MAX_RUNS
                 or type(plan["evidence"]) is not list or len(plan["evidence"]) != len(plan["history"])):
             raise ValueError("review_receipt_invalid")
-        for proof in plan["evidence"]:
-            if (type(proof) is not dict or set(proof) != {"sha256", "reviewed_commands"}
+        no_dispatch = set()
+        for i, proof in enumerate(plan["evidence"]):
+            empty_retry = type(proof) is dict and proof.get("basis") == _NOT_DISPATCHED
+            keys = {"sha256", "reviewed_commands", "basis"} if empty_retry else {"sha256", "reviewed_commands"}
+            if (type(proof) is not dict or set(proof) != keys
                     or type(proof["sha256"]) is not str or len(proof["sha256"]) != 64
                     or any(c not in "0123456789abcdef" for c in proof["sha256"])
-                    or type(proof["reviewed_commands"]) is not int
-                    or not 1 <= proof["reviewed_commands"] <= 10000):
+                    or type(proof["reviewed_commands"]) is not int):
+                raise ValueError("review_evidence_invalid")
+            if empty_retry:
+                if i == 0 or proof["reviewed_commands"] != 0:
+                    raise ValueError("review_evidence_invalid")
+                no_dispatch.add(i)
+            elif not 1 <= proof["reviewed_commands"] <= 10000:
                 raise ValueError("review_evidence_invalid")
         for run in plan["history"]:
             if (type(run) is not dict or set(run) != {"state", "trace_sha256"}
@@ -310,8 +392,10 @@ class ReviewedLearningRecoveryStore(CloudLearningProtectionStore):
         # Reconstruct only the pre-migration local journal view, not a live wire
         # ledger. Its actual trace and every retained record must still match.
         previous = replace(current, **before)
-        if self._history(hold, previous) != plan["history"]:
+        if self._history(hold, previous, no_dispatch=no_dispatch) != plan["history"]:
             raise ValueError("review_history_changed")
+        if any(plan["history"][i]["trace_sha256"] == plan["evidence"][i]["sha256"] for i in no_dispatch):
+            raise ValueError("review_no_dispatch_requires_independent_evidence")
 
     def require_review(self, state) -> tuple[dict, CloudLearningHold]:
         plan = _json(self._review_path(state))

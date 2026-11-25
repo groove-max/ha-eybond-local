@@ -11,16 +11,57 @@ import pytest
 
 from test_ha_cloud_learning_dispatch import dispatch_context
 from test_ha_config_flow import collector_entry
+from tests.test_reviewed_learning_empty_retry import five_run_fixture
 from tests.test_reviewed_learning_recovery import history_fixture, plan_for, approve
 
 
-@pytest.fixture
-async def reviewed_context(dispatch_context, monkeypatch):
+async def test_cold_setup_restores_five_run_history_without_review_or_sender_logs(dispatch_context, monkeypatch):
+    """#94: the fourth retry remembers only the local address, not the original cloud one."""
+    from custom_components.eybond_local.runtime.coordinator.cloud_tools import CoordinatorCloudToolsMixin
     ctx = dispatch_context
     c = ctx.coordinator
-    ctx.store, ctx.hold, ctx.history, evidence = await c.hass.async_add_executor_job(
-        lambda: history_fixture(Path(c.hass.config.config_dir), entry_id=c.config_entry.entry_id, pn=ctx.pn))
-    ctx.plan = await c.hass.async_add_executor_job(lambda: plan_for(ctx.store, ctx.hold, evidence))
+    root = Path(c.hass.config.config_dir)
+    store, hold, states, _ = await c.hass.async_add_executor_job(
+        lambda: history_fixture(root, retries=4, entry_id=c.config_entry.entry_id, pn=ctx.pn)
+    )
+    assert states[-1].original_endpoint == states[-1].proxy_endpoint and not states[-1].restore_required
+    assert states[0].original_endpoint != states[-1].original_endpoint
+    assert not store.receipt_present(states[-1])
+    # Only a new coordinator sees the persisted state; never run an actual cloud action.
+    monkeypatch.setattr(c, "_async_cancel_cloud_tool_preparation", AsyncMock())
+    monkeypatch.setattr(c, "async_stop_shadow_learning", AsyncMock())
+    ctx.authority.release(ctx.token.entry_id, ctx.token)
+    restore = AsyncMock(return_value=states[0].original_endpoint)
+    verify = AsyncMock(return_value={"restore_confirmed": True, "observed_endpoint": states[0].original_endpoint})
+    monkeypatch.setattr(CoordinatorCloudToolsMixin, "_async_restore_proxy_capture_endpoint", restore)
+    monkeypatch.setattr(CoordinatorCloudToolsMixin, "_async_verify_restored_collector_endpoint", verify)
+    assert await c.hass.config_entries.async_reload(c.config_entry.entry_id)
+    await c.hass.async_block_till_done()
+    new = c.hass.config_entries.async_get_entry(c.config_entry.entry_id).runtime_data
+    restore.assert_awaited_once_with(states[0].original_endpoint)
+    verify.assert_awaited_once_with(states[0].original_endpoint)
+    assert await new._async_active_shadow_learning_state(require_process=False) is None
+    assert await c.hass.async_add_executor_job(store.load, hold.collector_pn) is None
+    assert new._protected_learning_run is None
+    assert not list((store._root / "completed_receipts").glob("*.json"))
+
+
+@pytest.fixture
+async def reviewed_context(dispatch_context, monkeypatch, request):
+    ctx = dispatch_context
+    c = ctx.coordinator
+    def prepare():
+        root = Path(c.hass.config.config_dir)
+        scope = dict(entry_id=c.config_entry.entry_id, pn=ctx.pn)
+        if getattr(request, "param", None) == "empty_retries":
+            store, hold, states, _, proofs, counts = five_run_fixture(root, **scope)
+            plan = store.prepare(collector_pn=ctx.pn, entry_id=hold.entry_id, study_id=hold.study_id,
+                                 evidence_files=proofs, command_counts=counts)
+        else:
+            store, hold, states, evidence = history_fixture(root, **scope)
+            plan = plan_for(store, hold, evidence)
+        return store, hold, states, plan
+    ctx.store, ctx.hold, ctx.history, ctx.plan = await c.hass.async_add_executor_job(prepare)
     await c.hass.async_add_executor_job(lambda: approve(ctx.store, ctx.plan))
     monkeypatch.delattr(c, "_async_active_shadow_learning_state")
     c._shadow_learning_session_state_loaded = False
@@ -39,7 +80,8 @@ async def reviewed_context(dispatch_context, monkeypatch):
     return ctx
 
 
-async def test_approved_retry_recovers_original_endpoint_through_normal_stop(reviewed_context):
+@pytest.mark.parametrize(("reviewed_context", "expected_runs"), [(None, 2), ("empty_retries", 5)], indirect=["reviewed_context"])
+async def test_approved_retry_recovers_original_endpoint_through_normal_stop(reviewed_context, expected_runs):
     ctx = reviewed_context; c = ctx.coordinator
     assert await c._async_cloud_learning_hold_reason()
     await c.async_stop_shadow_learning(request_refresh=False)
@@ -49,7 +91,7 @@ async def test_approved_retry_recovers_original_endpoint_through_normal_stop(rev
     assert not await c._async_cloud_learning_hold_reason()
     assert await c._async_active_shadow_learning_state(require_process=False) is None
     assert c.data.values["cloud_learning_protection_release_method"] == "maintainer_reviewed_terminal_history"
-    assert c.data.values["cloud_learning_protection_reviewed_run_count"] == 2
+    assert c.data.values["cloud_learning_protection_reviewed_run_count"] == expected_runs
     assert c.data.values["cloud_learning_protection_reviewed_command_count"] == 180
 
 
@@ -75,6 +117,12 @@ async def test_changed_review_never_restores_cloud(reviewed_context, fault):
         ctx.restore.assert_not_awaited()
         return
     result = await c.async_stop_shadow_learning(request_refresh=False)
+    if fault == "receipt_missing":
+        # No manual approval needed to return a proven original endpoint.
+        assert result["status"] == "stopped"
+        ctx.restore.assert_awaited_once_with(ctx.history[0].original_endpoint)
+        assert c.data.values["cloud_learning_protection_release_method"] == "stopped_with_unconfirmed_delivery"
+        return
     assert result["status"] == "cloud_held"
     ctx.restore.assert_not_awaited()
     assert await c._async_cloud_learning_hold_reason()

@@ -53,11 +53,9 @@ chosen profile separately from telemetry.
 
 ## Recovery and protected retry
 
-In current 0.3 test code, automatic restoration requires verified completion
-for every sent test command. If any result is uncertain, the collector can
-remain local, **even after a successful scan or HA restart**. Local telemetry
-and supported controls remain available, but vendor-cloud access may stay off
-pending reviewed recovery. This is not Cloud Bridge.
+After active learning, HA stops sending test commands and restores the collector's previous endpoint. If a reply is missing or delivery is unclear, HA keeps filtering briefly (normally 30 seconds; at most 60 seconds of observation if more writes arrive). The command is not retried or marked as confirmed. After an HA restart, recovery uses the saved endpoint without restarting learning.
+
+Endpoint verification checks the collector's settings, not the freshness of vendor-cloud telemetry. If the collector is unreachable or the saved destination cannot be verified, use **Retry restoring the collector connection** or share a Support Archive.
 
 Use a protected retry only when the wizard offers it. Do not delete recovery
 files, force a cloud endpoint, or repeatedly restart to remove the hold.

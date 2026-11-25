@@ -96,21 +96,17 @@ Active learning requires explicit interception and cloud-outage consent. It
 verifies a permanent local endpoint, then temporarily adds a filtered cloud
 route to that listener before asking the selected API for bounded test commands.
 The local writes are captured and blocked. Before the first command, both the
-command intent and an independent per-PN protection hold are durable. After
-that point, a successful scan without completion receipts retains the local
-endpoint rather than restoring direct cloud access. A cloud success without an exact post-action local
-observation is treated as a possible unproxied write and stops the run.
-
-A persisted recovery record blocks an ordinary new active run. Recovery before
-any possible cloud test command may restore the saved endpoint; a protection
-hold takes precedence and survives cancellation, unverified completion and restart.
-Retirement requires an exact operation-owned no-request receipt or a completed
-study receipt. Completion policy is provider/codec-neutral: provider adapters bind
+command intent and an independent per-PN protection hold are durable. A cloud
+success without an exact post-action local observation stops the run. A saved
+recovery record blocks new dispatch, not eventual restoration of a known route.
+Returning the collector to its saved endpoint is independent of issuing
+a receipt that confirms what happened to a command. Provider adapters bind
 the outbound action and validate terminal evidence; wire adapters validate the
 request/refusal through the existing learning codecs. SmartESS/DESSMonitor wire
 echoes support Modbus, PI30 and GASCII, framed or raw. A raw exchange requires
-single-flight dispatch, ordered receipts and one connection epoch; framed
-exchanges also require unique transaction IDs and a stable wrapper route.
+single-flight dispatch and ordered receipts; no exchange spans two physical
+sockets. A reconnect between commands is fine. Framed exchanges additionally
+require transaction IDs unique within each connection and a stable wrapper route.
 Unknown formats or acceptance-only API results cannot produce a terminal receipt.
 For the recorded SMG6200 bare FC16 path, SmartESS parses the exception reply
 instead of echoing it. Its exact typed `ERR_FAIL(Read-Only Register)` result is
@@ -120,12 +116,29 @@ wire evidence are not completion. Collector SYST/UART bootstrap settings are
 answered inside the shadow only, not counted as inverter test commands; unknown
 AT writes remain unproven. The final trace includes a diagnostic completion
 summary, which is never itself authority to retire a hold.
+
+The SmartESS adapter also recognizes the exact signed-action API rejection
+`err=1, ERR_FAIL(send failed)`. On an SMG 6200 bench, an offline control
+returned in under one second. For two controls observed on a live cloud link
+with their replies deliberately withheld, the API returned that rejection
+in 11.35 s and 11.97 s. Neither command repeated during the observation,
+including a fresh upstream connection. This is empirical, not a vendor TTL.
+Stop the series after that result, preserve the request/reply bytes actually
+observed (possibly neither), and retain the filtering route for 30 seconds
+from the result. A late write, vendor timeout or missing HTTP result can prevent
+a completed-study receipt, but not routine restoration. After dispatch stops,
+uncertain delivery gets a 30-second observation window; late writes extend it
+to at most 60 seconds from stop. Unsupported terminal formats do not become
+qualified by waiting.
 The version-2 receipt binds provider, carrier, codec, epoch, sequence and API
 evidence; the store revalidates these against the hold source. No schema-1 trace
 is reinterpreted as universal evidence. All HTTP actions and proxy pumps must be
 drained, with no unparsed cloud tail. Persistence order is receipt, journal correction, hold archive, mutation
-fence acknowledgement, then ordinary verified endpoint restoration. Neither path
-can retire an earlier run's hold. Interrupted legacy records are quarantined.
+fence acknowledgement, then ordinary verified endpoint restoration. When delivery
+is unknown, no receipt is created. Under the same operation lease, the stopped
+route's exact journal (the archived original for a retry) supplies the restore
+destination. Restart resumes endpoint recovery, never HTTP dispatch. Missing,
+corrupt or foreign routing records are not authority to change an endpoint.
 
 An explicit protected retry can retain the original hold while checking the
 same entry, PN, local endpoint and fresh payload. It archives the previous

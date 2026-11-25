@@ -10606,6 +10606,23 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(failure["management_failure"]["operation_context"], error.operation_context)
                 self.assertEqual(failure["stage"], "connecting")
 
+                if restore_pending:
+                    coordinator.async_shadow_learning_start_blocker = AsyncMock(return_value="shadow_learning_restore_pending")
+                    self.assertTrue(await options._async_control_discovery_restore_pending(coordinator))
+                    options._publish_shadow_learning_artifacts(coordinator)
+                    self.assertEqual(coordinator.published[-1]["orchestration"]["failure"], failure)
+                    coordinator.async_stop_shadow_learning = AsyncMock(return_value={"restore_confirmed": True})
+                    self.assertTrue(await options._async_control_discovery_retry_restore(coordinator))
+                    options._publish_shadow_learning_artifacts(coordinator)
+                    self.assertEqual(coordinator.published[-1]["orchestration"]["failure"]["management_failure"],
+                                     failure["management_failure"])
+                    # A newly opened recovery-only screen has no independent study.
+                    previous = list(coordinator.published)
+                    fresh = self._runner_options_flow(coordinator)
+                    self.assertTrue(await fresh._async_control_discovery_restore_pending(coordinator))
+                    fresh._publish_shadow_learning_artifacts(coordinator)
+                    self.assertEqual(coordinator.published, previous)
+
     async def test_valuecloud_failure_survives_failed_endpoint_recovery(self) -> None:
         from custom_components.eybond_local.valuecloud_cloud import ValueCloudError
         from custom_components.eybond_local.support.cloud_api_adapters import ValueCloudApiAdapter

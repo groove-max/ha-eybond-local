@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from custom_components.eybond_local.collector.protocol import build_collector_request
 from custom_components.eybond_local.dessmonitor_cloud import DessMonitorApiEnvelope, DessMonitorDeviceIdentity
@@ -56,6 +57,133 @@ def deliver(book, source="dessmonitor", codec="pi30_ascii", framed=True, tid=11)
 
 
 class CompletionAdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unknown_delivery_observation_is_bounded_and_never_a_receipt(self):
+        from custom_components.eybond_local.support.shadow_learning import completion
+        for arrivals, elapsed in (([], 30), ([125], 55), ([129, 158], 60)):
+            with self.subTest(arrivals=arrivals), patch.object(completion, "monotonic", return_value=100) as clock:
+                book = ledger()
+                book.invalidate()
+                book.start_closing()
+                _, write, _, _, carrier = exchange("smartess", "modbus_rtu", True)
+                remaining = iter(arrivals)
+                async def sleep(seconds):
+                    deadline = clock.return_value + seconds
+                    arrival = next(remaining, None)
+                    if arrival is not None:
+                        self.assertLessEqual(arrival, deadline)
+                        clock.return_value = arrival
+                        book.request(write, carrier=carrier, protocol="modbus_rtu")
+                    clock.return_value = deadline
+                with patch.object(completion.asyncio, "sleep", sleep):
+                    await book.observe_before_detach(uncertain_stop=True)
+                self.assertEqual(clock.return_value, 100 + elapsed)
+                self.assertEqual(book.unexpected_write, bool(arrivals))
+                self.assertIsNone(close(book))
+
+    async def test_vendor_failed_delivery_quiet_window_and_late_frames(self):
+        from custom_components.eybond_local.support.shadow_learning import completion
+        failure = SmartEssActionRejectedError(err=1, desc="ERR_FAIL(send failed)")
+        for wire in ("none", "intercepted", "refused"):
+            for outcome in ("quiet", "late", "forced_stop"):
+                with self.subTest(wire=wire, outcome=outcome), patch.object(completion, "monotonic", return_value=100) as clock:
+                    book = ledger()
+                    action, req, reply, _, carrier = exchange("smartess", "modbus_rtu", True)
+                    book.begin("smartess", action)
+                    if wire != "none":
+                        book.request(req, carrier=carrier, protocol="modbus_rtu")
+                    if wire == "refused":
+                        book.replied(reply)
+                    book.connection_closed()
+                    book.finish(failure)
+                    book.start_closing()
+                    self.assertEqual(book.remaining_quiet_time(), 30)
+                    if outcome == "late":
+                        book.connection_opened(2)
+                        book.request(req, carrier=carrier, protocol="modbus_rtu")
+                    elif outcome == "forced_stop":
+                        book.route_detaching()
+                    clock.return_value = 131
+                    await book.observe_before_detach()
+                    book.route_detaching()
+                    records = close(book)
+                    if outcome != "quiet":
+                        self.assertIsNone(records)
+                        continue
+                    self.assertEqual(records[0]["request_hex"], "" if wire == "none" else req.hex())
+                    self.assertEqual(records[0]["response_hex"], reply.hex() if wire == "refused" else "")
+                    for mutation in ({"source":"dessmonitor"}, {"terminal":{"kind":"dispatch_failed","result":"ERR_TIMEOUT"}},
+                                     {"response_hex":"00"}):
+                        row = {**records[0], **mutation}
+                        with self.assertRaises(ValueError):
+                            validate_completed_commands([row])
+
+    def test_no_local_frame_requires_exact_vendor_delivery_failure(self):
+        for e in (SmartEssActionRejectedError(err=2, desc="ERR_TIMEOUT"),
+                  SmartEssActionRejectedError(err=2, desc="ERR_FAIL(send failed)"),
+                  SmartEssActionRejectedError(err=1, desc="ERR_FAIL"), TimeoutError(),
+                  RuntimeError("ERR_FAIL(send failed)")):
+            book = ledger()
+            book.begin("smartess", exchange("smartess")[0])
+            book.finish(e)
+            self.assertIsNone(close(book))
+
+    async def test_smg_bench_lcd_requests_record_no_fictitious_reply(self):
+        from custom_components.eybond_local.payload.modbus import build_write_multiple_request
+        from custom_components.eybond_local.support.shadow_learning import completion
+        # Bare FC16 / register 305. Two separate submissions on the bench;
+        # neither reached the inverter, and neither had a Modbus response.
+        for value in (0, 1):
+            with patch.object(completion, "monotonic", return_value=100) as clock:
+                book = ledger()
+                action = build_device_control_action(pn=PN, sn="TEST", devcode=2376, devaddr=1,
+                    field_id="sys_eybond_ctrl_53", value=str(value))
+                book.begin("smartess", action)
+                request = build_write_multiple_request(1, 0x0131, [value])
+                self.assertTrue(book.request(request, carrier="modbus", protocol="modbus_rtu"))
+                book.finish(SmartEssActionRejectedError(err=1, desc="ERR_FAIL(send failed)"))
+                book.start_closing()
+                clock.return_value = 130
+                await book.observe_before_detach()
+                book.route_detaching()
+                record, = close(book)
+                self.assertEqual((record["request_hex"], record["response_hex"]), (request.hex(), ""))
+
+    async def test_late_tcp_write_during_observation_is_filtered_and_blocks_restore(self):
+        from custom_components.eybond_local.support.shadow_learning import completion
+        from custom_components.eybond_local.support.shadow_learning.proxy import InProcessFailClosedShadowProxyHandler
+        from tests.test_shadow_learning_proxy_e2e import _seed
+        upstream = asyncio.Queue()
+        async with await asyncio.start_server(lambda r,w: upstream.put_nowait((r,w)), "127.0.0.1", 0) as server:
+            with tempfile.TemporaryDirectory() as tmp, patch.object(completion, "DISPATCH_FAILURE_QUIET_SECONDS", .1):
+                h = InProcessFailClosedShadowProxyHandler(upstream_host="127.0.0.1",
+                    upstream_port=server.sockets[0].getsockname()[1], seed=replace(_seed(), collector_pn=PN),
+                    output_path=Path(tmp)/"test.jsonl")
+                await h.start()
+                try:
+                    async with await asyncio.start_server(h.handle_client, "127.0.0.1", 0) as proxy, asyncio.timeout(5):
+                        dev, peer = await asyncio.open_connection("127.0.0.1", proxy.sockets[0].getsockname()[1])
+                        ping = build_collector_request(1, b"ping", devcode=1, collector_addr=5, fcode=1)
+                        peer.write(ping); await peer.drain()
+                        cloud, writer = await upstream.get()
+                        try:
+                            self.assertEqual(await cloud.readexactly(len(ping)), ping)
+                            action, request, refusal, _, _ = exchange("smartess", "modbus_rtu", True)
+                            h.completion.begin("smartess", action)
+                            h.completion.finish(SmartEssActionRejectedError(err=1, desc="ERR_FAIL(send failed)"))
+                            h.completion.start_closing()
+                            observing = asyncio.create_task(h.completion.observe_before_detach())
+                            writer.write(request); await writer.drain()
+                            self.assertEqual(await cloud.readexactly(len(refusal)), refusal)
+                            await observing
+                            await h.stop()
+                            self.assertEqual(await dev.read(), b"")
+                            self.assertIsNone(h.completion.completed_commands())
+                        finally:
+                            peer.close(); writer.close()
+                            await asyncio.gather(peer.wait_closed(), writer.wait_closed())
+                finally:
+                    await h.stop()
+
     def test_all_89_recorded_smg_refusals_complete_without_api_byte_echo(self):
         data = json.loads((Path(__file__).parent / "fixtures/smartess_smg_recorded_refusals.json").read_text())
         book = ledger()
@@ -138,14 +266,59 @@ class CompletionAdapterTests(unittest.IsolatedAsyncioTestCase):
                 book.request(request, carrier=carrier, protocol="pi30_ascii")
                 if fault == "duplicate":
                     book.request(request, carrier=carrier, protocol="pi30_ascii")
+                if fault == "connection":
+                    book.connection_opened(2)
                 book.replied(response)
                 if fault == "double_response":
                     book.replied(response)
                 book.finish(exchange("smartess", framed=False)[3] if fault == "wrong_provider" else envelope)
                 if fault == "late":
                     book.request(request, carrier=carrier, protocol="pi30_ascii")
-                if fault == "connection":
-                    book.connection_opened(2)
+                self.assertIsNone(close(book))
+
+    def test_idle_reconnect_does_not_revoke_terminal_commands(self):
+        for framed in (True, False):
+            book = ledger()
+            deliver(book, framed=framed)
+            book.connection_opened(2)
+            deliver(book, framed=framed)  # same TID on a distinct socket
+            book.connection_opened(3)     # idle close after the last command
+            records = close(book)
+            self.assertEqual([row["epoch"] for row in records], [1, 2])
+            for bad in ((0, 1, True) if framed else (0, True)):
+                changed = deepcopy(records)
+                changed[1]["epoch"] = bad
+                with self.assertRaises(ValueError):
+                    validate_completed_commands(changed)
+            reversed_epochs = deepcopy(records)
+            reversed_epochs[0]["epoch"] = 3
+            with self.assertRaises(ValueError):
+                validate_completed_commands(reversed_epochs)
+
+    def test_disconnected_dispatch_and_reused_epoch_cannot_complete(self):
+        for reconnect in (False, True):
+            book = ledger()
+            book.connection_closed()
+            if reconnect:
+                book.connection_opened(1)
+            deliver(book)
+            self.assertIsNone(close(book))
+
+    def test_closed_after_drain_still_requires_the_provider_result(self):
+        for outcome in ("terminal", "timeout", "replay"):
+            book = ledger()
+            action, request, response, envelope, carrier = exchange()
+            book.begin("dessmonitor", action)
+            book.request(request, carrier=carrier, protocol="pi30_ascii")
+            book.replied(response)
+            book.connection_closed()
+            book.connection_opened(2)
+            if outcome == "replay":
+                book.request(request, carrier=carrier, protocol="pi30_ascii")
+            book.finish(TimeoutError() if outcome == "timeout" else envelope)
+            if outcome == "terminal":
+                self.assertEqual([r["epoch"] for r in close(book)], [1])
+            else:
                 self.assertIsNone(close(book))
 
     def test_preparation_reads_and_at_queries_do_not_poison_completion(self):
@@ -196,7 +369,7 @@ class CompletionAdapterTests(unittest.IsolatedAsyncioTestCase):
         book = ledger(); deliver(book); deliver(book, tid=12)
         records = close(book)
         for key, value in (("source", "valuecloud"), ("protocol", "modbus_rtu"),
-                           ("carrier", "pi30"), ("epoch", 2), ("sequence", 1),
+                           ("carrier", "pi30"), ("epoch", 0), ("sequence", 1),
                            ("terminal", {"kind": "accepted"})):
             with self.subTest(key=key):
                 mutated = deepcopy(records); mutated[1][key] = value
@@ -204,6 +377,50 @@ class CompletionAdapterTests(unittest.IsolatedAsyncioTestCase):
                     validate_completed_commands(mutated)
         with self.assertRaises(ValueError):
             validate_completed_commands(records, source="smartess")
+
+    async def test_two_real_sockets_preserve_drained_refusals_across_reconnect(self):
+        from tests.test_shadow_learning_proxy_e2e import _seed
+        from custom_components.eybond_local.support.shadow_learning.proxy import InProcessFailClosedShadowProxyHandler
+
+        action, request, refusal, envelope, _ = exchange(codec="modbus_rtu")
+        # Control the two upstream sockets directly; the same TID is valid on both.
+        upstream = asyncio.Queue()
+        async with await asyncio.start_server(
+                lambda r, w: upstream.put_nowait((r, w)), "127.0.0.1", 0) as server:
+            with tempfile.TemporaryDirectory() as tmp:
+                handler = InProcessFailClosedShadowProxyHandler(
+                    upstream_host="127.0.0.1", upstream_port=server.sockets[0].getsockname()[1],
+                    seed=replace(_seed(), collector_pn=PN), output_path=Path(tmp) / "trace.jsonl")
+                await handler.start()
+                try:
+                    async with await asyncio.start_server(handler.handle_client, "127.0.0.1", 0) as proxy:
+                        async with asyncio.timeout(5):
+                            for _ in range(2):
+                                device, peer = await asyncio.open_connection("127.0.0.1", proxy.sockets[0].getsockname()[1])
+                                heartbeat = build_collector_request(1, b"ping", devcode=1, collector_addr=5, fcode=1)
+                                peer.write(heartbeat)
+                                await peer.drain()
+                                cloud, writer = await upstream.get()
+                                try:
+                                    self.assertEqual(await cloud.readexactly(len(heartbeat)), heartbeat)
+                                    handler.completion.begin("dessmonitor", action)
+                                    writer.write(request)
+                                    await writer.drain()
+                                    self.assertEqual(await cloud.readexactly(len(refusal)), refusal)
+                                    writer.close()
+                                    await writer.wait_closed()
+                                    self.assertEqual(await device.read(), b"")
+                                finally:
+                                    peer.close()
+                                    await peer.wait_closed()
+                                    writer.close()
+                                while handler._tasks:
+                                    await asyncio.sleep(.005)
+                                handler.completion.finish(envelope)  # arrives AFTER disconnect
+                            await handler.stop()
+                            self.assertEqual([c["epoch"] for c in handler.completion.completed_commands()], [1, 2])
+                finally:
+                    await handler.stop()
 
     async def test_loopback_proxy_drains_all_carriers_without_inverter_write(self):
         from tests.test_shadow_learning_proxy_e2e import _seed

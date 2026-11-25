@@ -162,24 +162,12 @@ class TranslationShapeTests(unittest.TestCase):
                 )
 
     def test_active_learning_consent_names_the_complete_endpoint_transaction(self) -> None:
-        """Consent covers routing, interception and the non-expiring cloud hold."""
+        """Consent covers interception, automatic restoration and a genuine recovery failure."""
 
         markers = {
-            "en": ("endpoint", "test commands", "blocks test commands", "completion receipts", "Otherwise"),
-            "ru": (
-                "endpoint",
-                "тестовые команды",
-                "заблокирует",
-                "подтверждении завершения",
-                "Иначе",
-            ),
-            "uk": (
-                "endpoint",
-                "тестові команди",
-                "заблокує",
-                "підтвердження завершення",
-                "Інакше",
-            ),
+            "en": ("endpoint", "test commands", "restores and checks", "unreachable"),
+            "ru": ("endpoint", "тестовые команды", "возвращает и проверяет", "недоступен"),
+            "uk": ("endpoint", "тестові команди", "повертає та перевіряє", "недоступний"),
         }
         for path in FLOW_TRANSLATION_FILES:
             with self.subTest(path=path.name):

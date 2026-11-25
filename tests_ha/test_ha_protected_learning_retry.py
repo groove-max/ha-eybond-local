@@ -73,6 +73,9 @@ async def retry_context(dispatch_context, monkeypatch):
     monkeypatch.setattr(c._runtime, "async_start_shadow_learning_route", start, raising=False)
     monkeypatch.setattr(c._runtime, "async_stop_shadow_learning_route", stop, raising=False)
     ctx.start = lambda: c.async_retry_shadow_learning(confirm_cloud_outage=True, cloud_source="dessmonitor")
+    ctx.restore = AsyncMock(return_value=ctx.previous.original_endpoint)
+    monkeypatch.setattr(c, "_async_restore_proxy_capture_endpoint", ctx.restore)
+    monkeypatch.setattr(c, "_async_verify_restored_collector_endpoint", AsyncMock(return_value={"restore_confirmed": True}))
     return ctx
 
 
@@ -94,10 +97,11 @@ async def test_retry_keeps_hold_changes_owner_and_rejects_old_dispatch(retry_con
     assert await c.async_dispatch_shadow_learning_cloud_action(http, collector_pn=ctx.pn,
         route_owner_id=result["session_id"]) == "ok"
     stopped = await c.async_stop_shadow_learning(request_refresh=False)
-    assert stopped["status"] == "cloud_held"
+    assert stopped["status"] == "stopped"
     assert not ctx.running
-    assert await c.async_shadow_learning_retry_available()
-    assert await c.hass.async_add_executor_job(ctx.store.load, ctx.pn) == ctx.hold
+    ctx.restore.assert_awaited_once_with(ctx.previous.original_endpoint)
+    assert not await c.async_shadow_learning_retry_available()
+    assert await c.hass.async_add_executor_job(ctx.store.load, ctx.pn) is None
 
 
 @pytest.mark.parametrize("change", ["endpoint", "identity", "no_trusted_session", "pending_reset", "stale_payload", "changed_after_capture", "foreign_owner", "consent"])
@@ -126,17 +130,16 @@ async def test_retry_rejects_unproven_context_without_opening_cloud(retry_contex
     assert await ctx.coordinator.hass.async_add_executor_job(ctx.store.load, ctx.pn) == ctx.hold
 
 
-async def test_retry_ready_failure_keeps_new_journal_and_hold(retry_context, monkeypatch):
+async def test_retry_ready_failure_restores_original_endpoint(retry_context, monkeypatch):
     ctx = retry_context
     monkeypatch.setattr(ctx.coordinator, "_async_wait_for_shadow_learning_ready", AsyncMock(side_effect=TimeoutError()))
     with pytest.raises(TimeoutError):
         await ctx.start()
     state = await ctx.coordinator._async_active_shadow_learning_state(require_process=False)
-    assert state.route_owner_id != ctx.owner
-    assert state.status == "restore_failed" and state.cloud_commands_possible
-    assert ctx.coordinator.data.values["shadow_learning_trace_path"] == state.trace_path
+    assert state is None
+    ctx.restore.assert_awaited_once_with(ctx.previous.original_endpoint)
     assert not ctx.running
-    assert await ctx.coordinator.hass.async_add_executor_job(ctx.store.load, ctx.pn) == ctx.hold
+    assert await ctx.coordinator.hass.async_add_executor_job(ctx.store.load, ctx.pn) is None
 
 
 async def test_retry_request_failure_cannot_retire_original_hold_as_no_send(retry_context, monkeypatch):
@@ -153,7 +156,8 @@ async def test_retry_request_failure_cannot_retire_original_hold_as_no_send(retr
         )
     no_send.assert_not_awaited()
     assert await ctx.coordinator.hass.async_add_executor_job(ctx.store.load, ctx.pn) == ctx.hold
-    assert (await ctx.coordinator.async_stop_shadow_learning(request_refresh=False))["status"] == "cloud_held"
+    assert (await ctx.coordinator.async_stop_shadow_learning(request_refresh=False))["status"] == "stopped"
+    ctx.restore.assert_awaited_once_with(ctx.previous.original_endpoint)
 
 
 async def test_repeated_cancel_during_journal_rollover_waits_and_keeps_new_owner(retry_context, monkeypatch):
@@ -179,11 +183,11 @@ async def test_repeated_cancel_during_journal_rollover_waits_and_keeps_new_owner
         release.set()
     with pytest.raises(asyncio.CancelledError): await task
     state = await ctx.coordinator._async_active_shadow_learning_state(require_process=False)
-    assert state.status == "restore_failed" and state.route_owner_id != ctx.owner
+    assert state is None
+    ctx.restore.assert_awaited_once_with(ctx.previous.original_endpoint)
     assert not ctx.authority.owns(ctx.token)
-    assert ctx.authority.adopt(state.entry_id, "shadow_learning", state.route_owner_id) is not None
     assert not ctx.starts
-    assert await ctx.coordinator.hass.async_add_executor_job(ctx.store.load, ctx.pn) == ctx.hold
+    assert await ctx.coordinator.hass.async_add_executor_job(ctx.store.load, ctx.pn) is None
 
 
 async def test_directory_sync_error_after_journal_replace_does_not_orphan_owner(retry_context, monkeypatch):

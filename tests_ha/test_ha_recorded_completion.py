@@ -129,16 +129,17 @@ async def test_recorded_command_proxy_and_retirement(dispatch_context, monkeypat
         assert await asyncio.wait_for(reader.read(), 3) == b""  # no inverter writes
         await asyncio.wait_for(cloud_done.wait(), 3)
         assert not cloud_errors
+        assert result["status"] == "stopped" and result["restore_confirmed"]
+        assert not await c._async_cloud_learning_hold_reason()
+        restore.assert_awaited_once_with(ctx.state.original_endpoint)
+        store = CompletedLearningStore(Path(c.hass.config.config_dir))
         if last_echo_missing:
-            assert result["status"] == "cloud_held"
             assert len(handler.completion.commands) == len(rows)-1
-            assert await c._async_cloud_learning_hold_reason()
-            restore.assert_not_awaited()
+            assert handler.completion.completed_commands() is None
+            assert not list((store._root/"completed_receipts").glob("*.json"))
+            assert c.data.values["cloud_learning_protection_release_method"] == "stopped_with_unconfirmed_delivery"
         else:
             assert len(handler.completion.completed_commands()) == len(rows)
-            assert not await c._async_cloud_learning_hold_reason()
-            restore.assert_awaited_once_with(ctx.state.original_endpoint)
-            store = CompletedLearningStore(Path(c.hass.config.config_dir))
             receipt = json.loads(next((store._root/"completed_receipts").glob("*.json")).read_text())
             assert len(receipt["commands"]) == len(rows)
             assert all(command["protocol"] == "modbus_rtu" for command in receipt["commands"])

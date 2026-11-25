@@ -163,8 +163,10 @@ async def async_start_protected_retry(c, *, confirm_cloud_outage, cloud_source, 
                     c._cached_shadow_learning_session_state = state
                     c._shadow_learning_session_state_loaded = True
 
+        rollover_complete = False
         try:
             _, cancellation = await c._run_finalization_shielded(rollover)
+            rollover_complete = True
             if cancellation is not None:
                 raise cancellation
             state = replace(state, status="starting")
@@ -205,6 +207,12 @@ async def async_start_protected_retry(c, *, confirm_cloud_outage, cloud_source, 
             async def cleanup():
                 actual = await c._async_active_shadow_learning_state(require_process=False)
                 if actual is not None and actual.route_owner_id == state.route_owner_id:
+                    if rollover_complete:
+                        await c._async_stop_shadow_learning_once(
+                            reason="protected_retry_interrupted", request_refresh=False,
+                            raise_when_not_running=False, clear_failed_restore=False,
+                        )
+                        return
                     try:
                         await c._runtime.async_stop_shadow_learning_route(owner_id=state.route_owner_id)
                     finally:

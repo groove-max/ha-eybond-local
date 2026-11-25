@@ -69,7 +69,7 @@ async def test_persistence_and_ownership_failures_never_escape_to_http(dispatch_
         assert await c._async_cloud_learning_hold_reason()
 
 
-async def test_held_stop_force_clear_reload_keep_local_route_and_forbid_resuming(dispatch_context, monkeypatch):
+async def test_stop_restores_known_route_and_reload_cannot_resume_dispatch(dispatch_context, monkeypatch):
     from custom_components.eybond_local.connection.cloud_learning_protection import CloudLearningProtectionRequired
     ctx = dispatch_context
     c = ctx.coordinator
@@ -77,21 +77,22 @@ async def test_held_stop_force_clear_reload_keep_local_route_and_forbid_resuming
     monkeypatch.delattr(c, "_async_active_shadow_learning_state")
     await dispatch(ctx, lambda: "accepted")
     stop = AsyncMock()
-    restore = AsyncMock(side_effect=AssertionError("must not restore cloud"))
+    restore = AsyncMock(return_value=ctx.state.original_endpoint)
+    monkeypatch.setattr(c, "_async_verify_restored_collector_endpoint", AsyncMock(return_value={"restore_confirmed": True}))
     monkeypatch.setattr(c._runtime, "async_stop_shadow_learning_route", stop)
     monkeypatch.setattr(c, "_async_restore_proxy_capture_endpoint", restore)
     result = await c.async_stop_shadow_learning(clear_failed_restore=True, request_refresh=False)
-    assert result["status"] == "cloud_held"
+    assert result["status"] == "stopped" and result["restore_confirmed"]
     assert c._protected_learning_run is None
     stop.assert_awaited_once()
-    restore.assert_not_awaited()
-    await c.async_request_refresh()  # local runtime remains usable with the hold
+    restore.assert_awaited_once_with(ctx.state.original_endpoint)
+    await c.async_request_refresh()
     state = await c._async_active_shadow_learning_state(require_process=False)
-    assert state.cloud_commands_possible and state.protection_version == 1
+    assert state is None
     assert await c.hass.config_entries.async_reload(ctx.token.entry_id)
     await c.hass.async_block_till_done()
     new = c.hass.config_entries.async_get_entry(ctx.token.entry_id).runtime_data
-    assert await new._async_cloud_learning_hold_reason()
+    assert not await new._async_cloud_learning_hold_reason()
     with pytest.raises(CloudLearningProtectionRequired):
         await new.async_dispatch_shadow_learning_cloud_action(
             lambda: pytest.fail("resumed HTTP after restart"), collector_pn=ctx.pn, route_owner_id=ctx.owner,
@@ -153,11 +154,12 @@ async def test_cancel_after_durable_intent_drains_worker_and_stop_quarantines(di
     with pytest.raises(asyncio.CancelledError):
         await task
     assert not calls
-    restore = AsyncMock(side_effect=AssertionError("uncertain intent must not restore cloud"))
+    restore = AsyncMock(return_value=ctx.state.original_endpoint)
+    monkeypatch.setattr(c, "_async_verify_restored_collector_endpoint", AsyncMock(return_value={"restore_confirmed": True}))
     monkeypatch.setattr(c, "_async_restore_proxy_capture_endpoint", restore)
     result = await c.async_stop_shadow_learning(request_refresh=False)
-    assert result["status"] == "cloud_held"
-    restore.assert_not_awaited()
+    assert result["status"] == "stopped"
+    restore.assert_awaited_once_with(ctx.state.original_endpoint)
 
 
 @pytest.mark.parametrize("changed", ["missing", "corrupt"])

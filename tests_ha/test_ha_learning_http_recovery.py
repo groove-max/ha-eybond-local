@@ -143,10 +143,7 @@ async def test_provider_http_outcome_preserves_exact_run_recovery(
     assert c._cloud_tool_preparation_task is None
     assert not c._runtime_operation_lock.locked()
 
-    no_request = failure == "connect"
-    restore = AsyncMock(return_value=ctx.state.original_endpoint) if no_request else AsyncMock(
-        side_effect=AssertionError("held run must not restore direct cloud"),
-    )
+    restore = AsyncMock(return_value=ctx.state.original_endpoint)
     monkeypatch.setattr(c, "_async_restore_proxy_capture_endpoint", restore)
     monkeypatch.setattr(c, "_async_verify_restored_collector_endpoint", AsyncMock(return_value={
         "restore_confirmed": True, "observed_endpoint": ctx.state.original_endpoint,
@@ -154,15 +151,12 @@ async def test_provider_http_outcome_preserves_exact_run_recovery(
     stop = AsyncMock()
     monkeypatch.setattr(c._runtime, "async_stop_shadow_learning_route", stop)
     result = await c.async_stop_shadow_learning(request_refresh=False)
-    assert result["status"] == ("stopped" if no_request else "cloud_held")
-    if no_request:
-        restore.assert_awaited_once_with(ctx.state.original_endpoint)
-        assert await c._async_active_shadow_learning_state(require_process=False) is None
-    else:
-        restore.assert_not_awaited()
+    assert result["status"] == "stopped" and result["restore_confirmed"]
+    restore.assert_awaited_once_with(ctx.state.original_endpoint)
+    assert await c._async_active_shadow_learning_state(require_process=False) is None
     stop.assert_awaited_once()
     assert c._protected_learning_run is None
-    assert (store.load(ctx.pn) is None) is no_request
+    assert store.load(ctx.pn) is None
     await c.async_request_refresh()
     assert c.last_update_success
 
@@ -235,7 +229,8 @@ async def test_cancelled_connect_is_joined_before_no_request_retirement(dispatch
     assert not (await c._async_active_shadow_learning_state(require_process=False)).cloud_commands_possible
 
 
-async def test_cold_setup_completes_no_request_receipt_before_endpoint_recovery(dispatch_context, monkeypatch):
+@pytest.mark.parametrize("receipt", [True, False])
+async def test_cold_setup_restores_known_endpoint_without_repeating_learning(dispatch_context, monkeypatch, receipt):
     from test_ha_cloud_learning_dispatch import dispatch
     from custom_components.eybond_local.runtime.coordinator.cloud_tools import CoordinatorCloudToolsMixin
     from custom_components.eybond_local.support.shadow_learning.protection_store import CloudLearningProtectionStore
@@ -250,7 +245,8 @@ async def test_cold_setup_completes_no_request_receipt_before_endpoint_recovery(
     # shutdown recovery so only the new coordinator sees and completes it.
     monkeypatch.setattr(c, "_async_cancel_cloud_tool_preparation", AsyncMock())
     monkeypatch.setattr(c, "async_stop_shadow_learning", AsyncMock())
-    await c.hass.async_add_executor_job(store.record_no_request, hold)
+    if receipt:
+        await c.hass.async_add_executor_job(store.record_no_request, hold)
     restore = AsyncMock(return_value=ctx.state.original_endpoint)
     monkeypatch.setattr(CoordinatorCloudToolsMixin, "_async_restore_proxy_capture_endpoint", restore)
     monkeypatch.setattr(CoordinatorCloudToolsMixin, "_async_verify_restored_collector_endpoint", AsyncMock(return_value={

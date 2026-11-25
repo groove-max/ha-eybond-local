@@ -1286,7 +1286,7 @@ class CoordinatorCloudToolsMixin:
         raise_when_not_running: bool,
         clear_failed_restore: bool,
     ) -> dict[str, object]:
-        """Drain interception; retire only exact completed or no-request studies."""
+        """Drain interception and restore the owned endpoint, independent of delivery evidence."""
 
         from .learning_recovery import async_preserve_interrupted_learning_hold
 
@@ -1349,8 +1349,18 @@ class CoordinatorCloudToolsMixin:
         from ...support.shadow_learning.completion import CloudCommandCompletion
         from .learning_completion import async_complete_live_study
         run = getattr(self, "_protected_learning_run", None)
+        pending_stop = state is not None and hold_reason == "cloud_learning_hold_pending"
+        own_ledger = (type(completion) is CloudCommandCompletion and state is not None and
+                      (completion.entry_id, completion.collector_pn, "shadow_learning:" + completion.study_id)
+                      == (state.entry_id, state.collector_pn, route_owner_id))
         if type(completion) is CloudCommandCompletion:
             completion.start_closing()
+            await completion.observe_before_detach(uncertain_stop=pending_stop and own_ledger)
+        elif pending_stop:
+            # After process loss the collector is still on its saved local
+            # endpoint; no new HTTP worker may start under the preparation lock.
+            from ...support.shadow_learning.completion import DISPATCH_FAILURE_QUIET_SECONDS
+            await asyncio.sleep(DISPATCH_FAILURE_QUIET_SECONDS)
 
         if route_owner_id:
             await self._runtime.async_stop_shadow_learning_route(
@@ -1358,6 +1368,7 @@ class CoordinatorCloudToolsMixin:
             )
         else:
             await self._runtime.async_stop_shadow_learning_route()
+        recovery_error = False
         if state is not None:
             try:
                 async def finish_completed():
@@ -1369,6 +1380,7 @@ class CoordinatorCloudToolsMixin:
                     state = stopping_state = await self._async_active_shadow_learning_state(require_process=False)
                     hold_reason = await self._async_cloud_learning_hold_reason()
             except Exception as exc:
+                recovery_error = True
                 logger.warning("Completed learning receipt could not be finalized: %s", type(exc).__name__)
         self._protected_learning_run = None
 
@@ -1384,6 +1396,7 @@ class CoordinatorCloudToolsMixin:
                 if pending_cancel is not None:
                     raise pending_cancel
             except Exception as exc:
+                recovery_error = True
                 logger.warning("Reviewed learning recovery could not be finalized: %s", type(exc).__name__)
             finally:
                 # A failed directory sync can follow a successful journal rename.
@@ -1391,8 +1404,7 @@ class CoordinatorCloudToolsMixin:
                 hold_reason = await self._async_cloud_learning_hold_reason()
 
         # The cloud route is now closed; do not keep serving snapshot telemetry.
-        # An unconfirmed hold survives retries, force-clear and restart.
-        # Retain the exact endpoint-operation ownership and restoration evidence.
+        # Keep recovery data on actual storage/ownership failures.
         # Protected runs already proved the normal listener and persistent local
         # endpoint before sending commands. Releasing the temporary reservation
         # returns future connections to normal runtime; no endpoint write needed.
@@ -1407,6 +1419,21 @@ class CoordinatorCloudToolsMixin:
             return self._publish_cloud_learning_hold(reason)
 
         hold_reason = hold_reason or await self._async_cloud_learning_hold_reason()
+        if (not recovery_error and pending_stop and hold_reason == "cloud_learning_hold_pending"
+                and (completion is None or own_ledger)):
+            from .learning_completion import async_restore_after_uncertain_study
+            async def finish_uncertain():
+                return await async_restore_after_uncertain_study(self, state, _op_token)
+            try:
+                _, pending_cancel = await self._run_finalization_shielded(finish_uncertain)
+                if pending_cancel is not None:
+                    raise pending_cancel
+            except (OSError, RuntimeError) as exc:
+                logger.warning("Stopped learning recovery could not be finalized: %s", type(exc).__name__)
+                self._shadow_learning_session_state_loaded = False
+            finally:
+                state = stopping_state = await self._async_active_shadow_learning_state(require_process=False)
+                hold_reason = await self._async_cloud_learning_hold_reason()
         if hold_reason:
             return await retain_hold(hold_reason)
 

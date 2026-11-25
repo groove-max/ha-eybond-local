@@ -11,6 +11,12 @@ from pathlib import Path
 import sys
 
 
+def _reviewed_commands(value):
+    if value == "not-dispatched":
+        return value
+    return int(value)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config-dir", type=Path, required=True)
@@ -19,7 +25,9 @@ def main():
     parser.add_argument("--study-id")
     parser.add_argument("--inspect", action="store_true", help="Read-only, shareable history inventory; no approval")
     parser.add_argument("--evidence-file", type=Path, action="append")
-    parser.add_argument("--reviewed-commands", type=int, action="append")
+    parser.add_argument("--reviewed-commands", type=_reviewed_commands, action="append",
+                        metavar="COUNT|not-dispatched", help="Positive terminal count, or independently "
+                        "verified not-dispatched for a retry; never infer this from an empty proxy trace")
     parser.add_argument("--approve-sha256")
     parser.add_argument("--confirm-all-runs-terminal", action="store_true")
     args = parser.parse_args()
@@ -42,7 +50,8 @@ def main():
                          command_counts=args.reviewed_commands)
     digest = store.review_digest(plan)
     print(f"Review SHA256: {digest}")
-    print(f"Runs: {len(plan['history'])}; reviewed commands: {sum(args.reviewed_commands)}")
+    counts = [p["reviewed_commands"] for p in plan["evidence"]]
+    print(f"Runs: {len(counts)}; reviewed commands: {sum(counts)}; reviewed no-dispatch retries: {counts.count(0)}")
     print(f"Original endpoint (private): {plan['history'][0]['state']['original_endpoint']!r}")
     if args.approve_sha256:
         store.approve(plan=plan, expected_digest=args.approve_sha256,

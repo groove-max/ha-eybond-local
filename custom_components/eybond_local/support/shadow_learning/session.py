@@ -312,6 +312,60 @@ def load_shadow_learning_session_state(config_dir: Path, *, entry_id: str = "") 
     return _load_session_path(path)
 
 
+def persist_stopped_learning_restore(config_dir: Path, state: ShadowLearningSessionState, hold) -> bool:
+    """Change a stopped, owned journal into a restore obligation, not a delivery receipt."""
+    from dataclasses import replace
+    from .protection_store import CloudLearningProtectionStore
+    if hold is None:
+        return False
+    with _SESSION_RECORD_LOCK:
+        CloudLearningProtectionStore(config_dir).require_exact_hold(hold)
+        target = _stopped_learning_destination(config_dir, state, hold)
+        if target is None:
+            return False
+        corrected = replace(state, original_endpoint=target[0], restore_required=target[1],
+                            protection_version=1, cloud_commands_possible=False, last_restore_error="")
+        _save_shadow_learning_session_state(config_dir=config_dir, state=corrected, entry_id=state.entry_id)
+        return True
+
+
+def _stopped_learning_destination(config_dir: Path, state, hold):
+    """Resolve the pre-study endpoint, never a retry's temporary local endpoint."""
+    import hashlib
+    if (hold is None or state.entry_id != hold.entry_id or state.collector_pn != hold.collector_pn
+            or state.status != "restoring" or not state.route_owner_id.startswith("shadow_learning:")
+            or load_shadow_learning_session_state(config_dir, entry_id=state.entry_id) != state):
+        return None
+    owner = "shadow_learning:" + hold.study_id
+    if hold.source == "legacy":
+        digest = hashlib.sha256(state.route_owner_id.encode()).hexdigest()
+        if hold.study_id != "recovery_" + digest:
+            return None
+        original = state
+    elif owner == state.route_owner_id:
+        if state.cloud_source != hold.source:
+            return None
+        original = state
+    else:
+        folder = shadow_learning_session_root(config_dir) / "retained_runs"
+        path = folder / (hashlib.sha256(owner.encode()).hexdigest() + ".json")
+        if folder.is_symlink() or path.is_symlink():
+            return None
+        original = _load_session_path(path)
+        if (original is None or original.route_owner_id != owner or original.status != "restore_failed"
+                or original.entry_id != state.entry_id or original.collector_pn != state.collector_pn
+                or original.cloud_source != hold.source or original.proxy_endpoint != state.proxy_endpoint
+                or original.upstream_endpoint != state.upstream_endpoint
+                or not ((state.original_endpoint == state.proxy_endpoint and not state.restore_required)
+                        or (not state.cloud_commands_possible and state.original_endpoint == original.original_endpoint
+                            and state.restore_required == original.restore_required))):
+            return None
+    if (not original.original_endpoint or not original.proxy_endpoint
+            or original.restore_required != (original.original_endpoint != original.proxy_endpoint)):
+        return None
+    return original.original_endpoint, original.restore_required
+
+
 def find_shadow_learning_session_for_collector(config_dir: Path, *, collector_pn: str):
     """Find retained intent after entry recreation; this grants no ownership."""
     matches = []

@@ -2,8 +2,10 @@
 
 This is a maintainer-directed repair of **old, stopped** learning histories,
 not a user-facing force-clear, cloud command expiry, or new learning method.
-Routine new studies continue to use the live completion ledger. Updating alone
-does not approve any historical hold.
+Routine stop/restart restores a known, owned endpoint after bounded isolation;
+it needs no historical review merely because HTTP delivery is uncertain. The
+live completion ledger and explicit historical reviews concern evidence of
+command outcomes. Returning the previous endpoint does not approve an outcome.
 
 ## Preconditions and review
 
@@ -51,6 +53,21 @@ provide it separately during the supervised repair.
    This is a no-write preview. Repeat both options for additional runs. The
    entry and original study are derived from the exact active hold; optional
    `--entry-id` and `--study-id` require explicit matches.
+
+   A protected retry inherits the earlier hold even if it stops before issuing
+   an inverter command. For **that retry only**, use `--reviewed-commands
+   not-dispatched` with an evidence file from the sending side: for example, a
+   retained runner result that positively identifies this run and its stop
+   before the first control submission. The maintainer must check the evidence
+   and its scope; the tool binds the file digest and rejects a contradictory
+   local trace. Supply the specific sender log/result (UTF-8 text or JSON),
+   not a support bundle, manifest, or history index. Unclassified commands,
+   parser errors and unknown events are not treated as reads. An empty wire
+   trace (also when packaged in a share ZIP), quiet
+   cloud traffic, or the absence of a log entry is not independent evidence.
+   If dispatch was attempted and timed out, do not use this disposition.
+   The original run still needs terminal evidence for its commands.
+   No extra waiting period or repeat learning is required after review.
 4. Only after explicit agreement on that complete review, repeat the preview
    with `--approve-sha256 REVIEW_SHA256 --confirm-all-runs-terminal`.
    The freshly computed plan must match. This creates a private, create-only

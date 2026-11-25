@@ -15,6 +15,8 @@ from test_ha_config_flow import collector_entry
 
 @pytest.fixture
 async def dispatch_context(hass, collector_entry, fake_runtime, monkeypatch, tmp_path):
+    from custom_components.eybond_local.support.shadow_learning import completion
+    monkeypatch.setattr(completion, "DISPATCH_FAILURE_QUIET_SECONDS", .01)
     from custom_components.eybond_local.connection import collector_endpoint_operation as operations
     from custom_components.eybond_local.support.shadow_learning.session import build_shadow_learning_session_state
     from custom_components.eybond_local.runtime.coordinator.learning_isolation import ProtectedLearningRun

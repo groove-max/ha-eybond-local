@@ -271,6 +271,17 @@ class CloudLearningMutationFence:
             return str(exc)
         return ""
 
+    async def retire_after_stopped_study(self, hold: CloudLearningHold) -> None:
+        """End the operation lease; this says nothing about command delivery."""
+        if hold.collector_pn != self._collector_pn or self._blocked_reason not in ("", "cloud_learning_hold_pending"):
+            raise CloudLearningProtectionRequired("cloud_learning_stop_fence_conflict")
+        await async_run_owned_worker(self._store._archive_hold, hold=hold)
+        await async_run_owned_worker(self._store.require_no_hold, collector_pn=self._collector_pn)
+        if self._blocked_reason not in ("", "cloud_learning_hold_pending"):
+            raise CloudLearningProtectionRequired("cloud_learning_stop_fence_conflict")
+        self._release_generation += 1
+        self._blocked_reason = ""
+
     async def accept_reviewed_retirement(self, state) -> None:
         """Explicit historical review is distinct from automatic wire completion."""
         from .reviewed_recovery import ReviewedLearningRecoveryStore

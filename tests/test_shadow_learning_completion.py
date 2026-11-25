@@ -17,7 +17,9 @@ PN = "Q0000000000001"
 
 
 def ledger():
-    return CloudCommandCompletion(entry_id="entry", study_id="study", collector_pn=PN)
+    book = CloudCommandCompletion(entry_id="entry", study_id="study", collector_pn=PN)
+    book.connection_opened(1)
+    return book
 
 
 def sample(index=0):

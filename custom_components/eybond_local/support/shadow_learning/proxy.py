@@ -234,6 +234,7 @@ class InProcessFailClosedShadowProxyHandler:
             "collector_connection_sequence": self._collector_connection_sequence,
             "completion_evidence": {
                 "confirmed_commands": len(self.completion.commands),
+                "failed_sends": sum(r["terminal"]["kind"] == "dispatch_failed" for r in self.completion.commands),
                 "pending": self.completion.active,
                 "blocked_reason": self.completion.reason,
             },
@@ -315,6 +316,7 @@ class InProcessFailClosedShadowProxyHandler:
         """Cancel active client tasks and close trace streams."""
 
         self.completion.start_closing()
+        self.completion.route_detaching()
         self._running = False
         tasks = tuple(self._tasks)
         for task in tasks:
@@ -379,8 +381,9 @@ class InProcessFailClosedShadowProxyHandler:
             await self._handle_client(collector_reader, collector_writer)
         finally:
             async def finish_client() -> None:
-                if not self.completion.closing and (self.completion.active or self.completion.commands):
-                    self.completion.invalidate()
+                # An idle disconnect cannot undo a provider-confirmed refusal.
+                # A lost exchange still needs its own terminal disposition.
+                self.completion.connection_closed()
                 self._identity_verified = False
                 self._collector_connected = False
                 self._collector_protocol_ingress = False

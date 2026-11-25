@@ -6,7 +6,7 @@ import threading
 import time
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +68,21 @@ class ShadowLearningOrchestratorTests(unittest.TestCase):
                 self.assertIs(raised.exception, error)
                 self.assertEqual(len(calls), 1)
                 self.assertEqual(classify_smartess_cloud_error(error), "timeout")
+
+    def test_server_send_failed_stops_both_series_without_learning_a_control(self):
+        for asynchronous in (False, True):
+            fetch = Mock(side_effect=SmartEssActionRejectedError(err=1, desc="ERR_FAIL(send failed)"))
+            kwargs = dict(settings_dat={"field":[{"id":"f", "name":"Mode", "item":[
+                {"key":"0", "val":"A"}, {"key":"1", "val":"B"}]}]},
+                session=SessionCredentials(token="token", secret="secret"), pn="E50000200000000001",
+                sn="TEST", devcode=2376, devaddr=1, dry_run=False, confirm_cloud_write=True,
+                field_ids=[], include_numeric=False, all_choice_values=True, continue_on_error=True, fetch_action=fetch)
+            result = (asyncio.run(async_orchestrate_shadow_learning_settings(
+                **kwargs, shadow_session_state="ready", is_session_ready=lambda: True))
+                if asynchronous else orchestrate_shadow_learning_settings(**kwargs, shadow_session_ready=True))
+            self.assertEqual(fetch.call_count, 1)
+            self.assertEqual(result["results"][0]["delivery_outcome"], "cloud_send_failed")
+            self.assertEqual(result["captured_not_applied_count"], 0)
 
     def test_control_discovery_bundle_excludes_unconsumed_energy_flow(self) -> None:
         identity_dat = {

@@ -677,11 +677,11 @@
         "description": "{control_discovery_hint}",
         "data": {
           "shadow_learning_confirm_cloud_write": "Yes, temporarily reroute the collector, send bounded cloud test commands, and intercept them locally",
-          "shadow_learning_confirm_cloud_outage": "I agree that cloud telemetry and cloud control will remain disconnected after active learning"
+          "shadow_learning_confirm_cloud_outage": "I agree to a temporary interruption of cloud telemetry and control"
         },
         "data_description": {
-          "shadow_learning_confirm_cloud_write": "Home Assistant verifies the permanent local connection and intercepts test commands. After the first command, automatic return to the cloud is blocked, even on success or restart. Local Home Assistant remains available. There is no automatic timeout or self-service reset; safe cloud recovery requires review. Do not reconnect the collector to the cloud manually.",
-          "shadow_learning_confirm_cloud_outage": "Home Assistant verifies the permanent local connection and intercepts test commands. After the first command, automatic return to the cloud is blocked, even on success or restart. Local Home Assistant remains available. There is no automatic timeout or self-service reset; safe cloud recovery requires review. Do not reconnect the collector to the cloud manually."
+          "shadow_learning_confirm_cloud_write": "HA intercepts test commands locally; they must not reach the inverter.",
+          "shadow_learning_confirm_cloud_outage": "After learning stops, HA restores and checks the previous collector endpoint. If it cannot confirm restoration, it keeps the recovery information so you can retry without repeating learning."
         }
       },
       "shadow_learning_credentials": {

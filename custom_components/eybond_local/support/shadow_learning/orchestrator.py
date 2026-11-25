@@ -25,6 +25,7 @@ from ...smartess_cloud import (
 )
 from . import ShadowWriteObservation, utc_now_iso
 from .cloud_dispatch import async_dispatch_cloud_action
+from .completion_provider import is_smartess_send_failed
 
 
 logger = logging.getLogger(__name__)
@@ -150,6 +151,10 @@ def orchestrate_shadow_learning_settings(
                 "err": exc.err,
                 "desc": exc.desc,
             }
+            if is_smartess_send_failed(exc):
+                attempt["delivery_outcome"] = "cloud_send_failed"
+                attempts.append(attempt)
+                break
         except Exception as exc:
             logger.warning(
                 "Shadow cloud action delivery indeterminate sequence=%s total=%s "
@@ -349,6 +354,10 @@ async def async_orchestrate_shadow_learning_settings(
                 "err": exc.err,
                 "desc": exc.desc,
             }
+            if is_smartess_send_failed(exc):
+                attempt["delivery_outcome"] = "cloud_send_failed"
+                attempts.append(attempt)
+                break
         except Exception as exc:
             # The request may have reached SmartESS even though its terminal
             # result is unknown. Starting another action would allow a late

@@ -26,6 +26,13 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Restore the previous collector connection after active Shadow Learning even
+  when a cloud command times out or its reply is lost. Stop dispatch and briefly
+  filter late writes; do not retry or mark an uncertain command as confirmed.
+  Recovery after restart uses the original saved route, including protected
+  retries (#94). Reopening the recovery wizard no longer replaces the original
+  learning error in a support export with a generic recovery status (#95).
+
 - Include all retained, stopped Shadow Learning runs in the support ZIP when
   an active protection hold needs historical review (#94), not just the latest
   trace. Read the same bounded, identity-checked history as the inventory and

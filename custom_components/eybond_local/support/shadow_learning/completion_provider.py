@@ -19,6 +19,10 @@ class WireEchoProvider:
     def __init__(self, envelope_type):
         self.envelope_type = envelope_type
 
+    @staticmethod
+    def dispatch_failure(envelope):
+        return None
+
     def action_digest(self, arguments, pn):
         action = arguments.get("action") if type(arguments) is dict else arguments
         if type(action) is not str or len(action) > 4096:
@@ -62,7 +66,18 @@ class DessMonitorCompletionProvider(WireEchoProvider):
         return super().action_digest(action, pn)
 
 
+def is_smartess_send_failed(envelope) -> bool:
+    return (type(envelope) is SmartEssActionRejectedError and envelope.err == 1
+            and envelope.desc == "ERR_FAIL(send failed)")
+
+
 class SmartEssCompletionProvider(WireEchoProvider):
+    @staticmethod
+    def dispatch_failure(envelope):
+        if is_smartess_send_failed(envelope):
+            return {"kind": "dispatch_failed", "result": "ERR_FAIL(send failed)"}
+        return None
+
     @staticmethod
     def _wrapped_modbus_refusal(echo: bytes, response: bytes):
         # Issue #94: SmartESS returned a synthetic FC4 envelope around our
@@ -105,6 +120,8 @@ class SmartEssCompletionProvider(WireEchoProvider):
         return super().terminal_receipt(envelope, response)
 
     def validate_receipt(self, receipt, response):
+        if receipt == {"kind": "dispatch_failed", "result": "ERR_FAIL(send failed)"}:
+            return
         if type(receipt) is dict and receipt.get("kind") == "smartess_fc4_refusal_echo":
             echo = receipt.get("api_response_hex")
             if (type(echo) is not str or len(echo) != 26
@@ -119,6 +136,10 @@ class SmartEssCompletionProvider(WireEchoProvider):
 
 
 class AcceptanceOnlyProvider:
+    @staticmethod
+    def dispatch_failure(envelope):
+        return None
+
     def action_digest(self, arguments, pn):
         raise ValueError("completion_terminal_evidence_unavailable")
 

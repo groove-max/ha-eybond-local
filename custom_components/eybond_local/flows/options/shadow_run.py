@@ -120,6 +120,15 @@ def _metadata_with_local_coverage(
 class ShadowLearningRunMixin:
     """ShadowLearningRun lifecycle."""
 
+    def _set_learning_recovery_result(self, reason: str) -> None:
+        """Show the current recovery status without replacing evidence from the failed study."""
+        previous = self._shadow_learning_state.get("discovery") or {}
+        diagnostics = previous.get("diagnostics") if previous.get("status") == "error" else None
+        self._shadow_learning_state["discovery"] = {
+            "status": "error", "reason": reason,
+            **({"diagnostics": diagnostics} if diagnostics else {"recovery_view_only": True}),
+        }
+
     async def _async_control_discovery_restore_pending(
         self, coordinator, *, allow_read_only_selection: bool = False,
     ) -> bool:
@@ -141,27 +150,21 @@ class ShadowLearningRunMixin:
             self._shadow_learning_state.pop("wizard_outage_consent", None)
             if self._shadow_learning_state.get("discovery", {}).get("status") == "ok":
                 return True
-            self._shadow_learning_state["discovery"] = {
-                "status": "error", "reason": blocker_reason,
-            }
+            self._set_learning_recovery_result(blocker_reason)
             return True
         # A reviewed zero-request receipt can retire the hold while an old form
         # is still open. Presentation follows the fresh coordinator decision.
         self._shadow_learning_state.pop("protection_held", None)
         self._shadow_learning_state.pop("protected_retry_available", None)
         if self._shadow_learning_state.get("discovery", {}).get("reason") == "cloud_learning_protection_held":
-            self._shadow_learning_state["discovery"] = {
-                "status": "error", "reason": CONTROL_DISCOVERY_FAILURE_GENERIC,
-            }
+            self._set_learning_recovery_result(CONTROL_DISCOVERY_FAILURE_GENERIC)
         pending = (
             blocker_reason == "shadow_learning_restore_pending"
         ) or bool(getattr(coordinator, "shadow_learning_restore_pending", False))
         if pending:
             self._shadow_learning_state.pop("wizard_credentials", None)
             self._shadow_learning_state.pop("wizard_consent", None)
-            self._shadow_learning_state["discovery"] = {
-                "status": "error", "reason": "shadow_learning_restore_pending",
-            }
+            self._set_learning_recovery_result("shadow_learning_restore_pending")
         return pending
 
     @staticmethod
@@ -327,11 +330,9 @@ class ShadowLearningRunMixin:
             **dict(self._shadow_learning_state.get("session") or {}), **result,
         }
         confirmed = result.get("restore_confirmed") is True
-        self._shadow_learning_state["discovery"] = {
-            "status": "error",
-            "reason": CONTROL_DISCOVERY_FAILURE_GENERIC if confirmed
-            else "shadow_learning_restore_pending",
-        }
+        self._set_learning_recovery_result(
+            CONTROL_DISCOVERY_FAILURE_GENERIC if confirmed else "shadow_learning_restore_pending"
+        )
         return confirmed
 
     @_with_translation_bundle

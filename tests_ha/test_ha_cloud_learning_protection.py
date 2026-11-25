@@ -16,6 +16,8 @@ from test_ha_config_flow import collector_entry
 
 @pytest.fixture(autouse=True)
 def isolated_config_dir(hass, tmp_path, monkeypatch):
+    from custom_components.eybond_local.support.shadow_learning import completion
+    monkeypatch.setattr(completion, "DISPATCH_FAILURE_QUIET_SECONDS", .01)
     monkeypatch.setattr(hass.config, "config_dir", str(tmp_path))
 
 
